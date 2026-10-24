@@ -120,7 +120,11 @@ Discard), leave with Esc, never with Tab+Enter, and before any Enter capture the
 with its highlight (`tmux capture-pane -e`) and read it. A guess about the focus is a
 guess about what runs.
 
-*Evidence: E102.*
+The same holds for a flag: before running a command "only to see the plan", read in
+its own help or code which form plans and which executes. Leaving out `--yes` is not
+a dry run unless the command says so.
+
+*Evidence: E102, E103.*
 
 ### R9, R10, R11 — on running suites
 
@@ -1931,6 +1935,22 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E103 — the one-command relation form ran without --yes (2026-10-24, R14)
+**2026-10-24, rebuilding the lab relation `pve9` that E102 removed.**
+
+*Genesis.* To see the plan before rebuilding `pve9` on pve10 I ran the one-command form
+(`zfs-backup.sh --source=... --target=... --profile=... --install`) without `--yes`,
+expecting a plan. It asked nothing (plink gave it no terminal) and executed: it created client `pve9` (state `pending_enroll`) and ran
+`--join-remotely` on pve9. The join stopped at `git pull --ff-only`, because pve9's
+checkout held another session's unmerged commits, so nothing changed on pve9.
+
+*Cause.* I carried "no `--yes` = plan" over from the verbs where it is true
+(`delete-relation`, `set-tiers`) to a form where `--install` is the request to act.
+One hour after E102, the same shape: acting on an assumption about what an input does.
+
+*Rule.* R14, widened: before running a mutating command to look at its plan, read which
+form plans and which executes.
 
 ### E102 — Tab+Enter on a plan window ran delete-relation on the lab (2026-10-24, R14)
 **2026-10-24, live walk of the English GUI (P3) on pve10.**

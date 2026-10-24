@@ -105,7 +105,7 @@ if [ "$ACTION" = delete ]; then
         cat "$TMPD/dplan.txt"
         if [ "$USED" -gt 0 ]; then
             echo
-            T 'Relacje zbudowane z tego szablonu zostają; ich późniejsze '\''Zmień relację -> Szablon'\'' nie będzie miało z czego odświeżyć.'; echo
+            T 'Relacje utworzone z tego szablonu zostaną i będą działać dalej. Później nie odświeżysz ich jednak przez '\''Zmień relację -> Szablon'\'', bo tego szablonu już nie będzie.'; echo
         fi
     } >"$TMPD/dtext.txt"
     yesno_text "$TMPD/dtext.txt" "$(Tv 'Usunięcie szablonu $NAME' '$NAME' "$NAME")" "$(T Usuń)" "$(T Wstecz)" --defaultno || exit 1
@@ -338,7 +338,7 @@ PYEOF
         T 'Opis: %s' "${DESC:-$(T '(brak)')}"; echo
         if [ "$ACTION" = edit ]; then Tv 'Zbudowano z niego relacji: $USED -- one zostają, jak są.' '$USED' "$USED"; echo; fi
         echo
-        T 'Zbudowane relacje się nie zmieniają; szablon jest dla nowych relacji (i dla '\''Zmień relację -> Szablon'\'').'; echo
+        T 'Zbudowane relacje na podstawie szablonu pozostają niezmienione; szablon jest dla nowych relacji (i dla '\''Zmień relację -> Szablon'\'').'; echo
         echo
         printf '%s  ' "$(T 'Komenda:')"; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done; echo
     } >"$TMPD/plan.txt"

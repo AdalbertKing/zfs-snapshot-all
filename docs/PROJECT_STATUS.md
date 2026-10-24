@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e897b3905af60a35 -->
+<!-- status-covers-digest: dd889e94833b60f4 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -40,6 +40,20 @@
   Testy: `zfsbackup` (rekord, odmowy, seed, sonda lustra, eksport/import, `family_newest`) i `tui` (okno,
   `--own-snapshots`, tekst planu). Dalej: usuwanie relacji sprząta jej migawki na źródle (C) i „przejmij
   migawki” w zmianie relacji (migracja z snapsend.sh).
+
+- **GUI: polskie brzmienia właściciela w kodzie i okna replik po angielsku (P4, `tr/p4-replica`).** Tabela
+  tłumaczeń miała poprawki właściciela do polskich tekstów (`pl`) obok tekstu z kodu (`pl_code`), ale do kodu
+  trafiał tylko angielski. Teraz 106 z nich jest w kodzie. Dysk wymienny jest „podłączony / odłączony / po
+  podłączeniu”, a zdania są prostsze. `pl_code` idzie za nimi, więc klucze katalogu się zgadzają. Pomoc F1 jest
+  złożona z tych poprawek w jeden blok z wcięciami, a angielski idzie linia w linię. Długie brzmienia wymusiły
+  trzy poprawki układu: na F6 kolumna „Kiedy” zwęża się zamiast znikać, okno rodzaju nośnika w kreatorze repliki
+  jest wyższe, a legenda drzewa i komunikat trybu testowego są krótsze. `tui/replica.sh` i
+  `tui/replica-delete.sh` idą przez `T`/`Tv`. Testy `tui` szukają nowych polskich brzmień, a test U67 dostaje
+  `T`/`Tv` razem z wyciętą funkcją. Katalog ma 1831 wpisów, z czego 555 w `en.extra.json`; wpisy dodane w P3-P4 czekają
+  na akceptację właściciela. Na żywo na pve10 po angielsku przeszły F6, kreator repliki do kroku 5 (bez
+  formatowania), karta zmiany repliki z planem zapisu i porzuceniem zmian oraz F1. Po polsku przeszły F6 i F1.
+  Relacja labu `pve9` (hdd/enc), usunięta przez pomyłkę w P3, jest odbudowana: konto na pve9, zakres hdd/enc
+  z zamrażaniem, seed przyrostowy z własną bazą (`--own-snapshots`), stan `active` (E103). `tui` 409/0 (pve9).
 
 - **GUI po angielsku -- zmiana i usuwanie relacji, szablony, ustawienia F10 (P3, `tr/p3-windows`).** Teksty
   `tui/edit-relation.sh`, `tui/delete-relation.sh`, `tui/template.sh`, `tui/retention-lib.sh` i `tui/settings.sh`

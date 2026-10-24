@@ -138,7 +138,7 @@ def main(argv):
     if rows:
         out = [u"UWAGA: relacja ma ustawienia inne niż jej szablon (tabela, silnik albo ręcznie w configu).",
                u"Szablon zastąpi je swoimi:"] + rows + \
-              [u"Chcesz je zachować? Wstecz -- zmieniaj liczby w 'Harmonogram i retencja', nie szablonem.", u""]
+              [u"Chcesz zachować swoje wartości? Wróć (Wstecz) i popraw liczby w 'Harmonogram i retencja' zamiast zmieniać szablon.", u""]
         sys.stdout.write(u"\n".join(out) + u"\n")
     return 0
 

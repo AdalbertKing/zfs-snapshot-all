@@ -402,9 +402,10 @@ PYEOF
         if [ "$TYP" = volume ]; then step=3; else step=4; fi ;;
     3)  # ---- DYSK VM: urządzenie migawki, partycja, klucz ---------------------------------
         undo_or_warn ""
-        info "$TITLE" "Wystawiam migawkę dysku jako urządzenie tylko do odczytu..."
+        info "$TITLE" "Udostępniam dysk VM z migawki tylko do odczytu..."
         if ! expose_snapdev "$DS" 2>"$TMPD/sd.err"; then
-            wt --title "$TITLE" --msgbox "Nie mogę wystawić migawki $DS@$SNAP jako urządzenia:\n$(head -2 "$TMPD/sd.err")" 10 "$W"
+            wt --title "$TITLE" --msgbox "Nie udało się udostępnić dysku z migawki $DS@$SNAP do odczytu:
+$(head -2 "$TMPD/sd.err")" 10 "$W"
             undo_or_warn ""
             step=2; continue
         fi
