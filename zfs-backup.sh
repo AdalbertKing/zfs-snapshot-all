@@ -15657,13 +15657,13 @@ settings_row() {   # <key> -> "default|kind|applies|help" or rc 1
     return 1
 }
 
-# -> "<value>\t<source>" ; source: plik | zfs-alert.conf | domyślne
+# -> "<value>\t<source>" ; source: file | zfs-alert.conf | default
 settings_effective() {
     local k="$1" row def v cv
     row=$(settings_row "$k") || return 1
     def="${row%%|*}"
     v=$(settings_get "$k" "")
-    if [ -n "$v" ]; then printf '%s\tplik\n' "$v"; return 0; fi
+    if [ -n "$v" ]; then printf '%s\tfile\n' "$v"; return 0; fi
     cv=$(settings_alert_conf_var "$k")
     if [ -n "$cv" ] && [ -r /etc/zfs-alert.conf ]; then
         v=$( ( . /etc/zfs-alert.conf >/dev/null 2>&1; eval "printf '%s' \"\${$cv:-}\"" ) )
@@ -15672,7 +15672,7 @@ settings_effective() {
             printf '%s\tzfs-alert.conf\n' "$v"; return 0
         fi
     fi
-    printf '%s\tdomyślne\n' "$def"
+    printf '%s\tdefault\n' "$def"
 }
 
 settings_validate() {   # <key> <value> -> 0, or the reason on stdout and rc 1
@@ -15760,7 +15760,7 @@ cmd_settings() {
             return $? ;;
         ""|--tsv)
             local line k row
-            [ "$sub" = --tsv ] || echo "Host settings: $SETTINGS_FILE   (source: plik = file | zfs-alert.conf | domyślne = default)"
+            [ "$sub" = --tsv ] || echo "Host settings: $SETTINGS_FILE   (source: file | zfs-alert.conf | default)"
             while IFS= read -r line; do
                 k="${line%%|*}"; row="${line#*|}"
                 if [ "$sub" = --tsv ]; then
@@ -15802,7 +15802,7 @@ cmd_settings() {
     for i in "${!keys[@]}"; do
         ev=$(settings_effective "${keys[$i]}")
         applies=$(settings_row "${keys[$i]}" | cut -d'|' -f3)
-        if [ "${ev%%$'\t'*}" = "${vals[$i]}" ] && [ "${ev#*$'\t'}" = plik ]; then
+        if [ "${ev%%$'\t'*}" = "${vals[$i]}" ] && [ "${ev#*$'\t'}" = file ]; then
             printf '  %-24s %s (no change)\n' "${keys[$i]}" "${vals[$i]}"
             continue
         fi

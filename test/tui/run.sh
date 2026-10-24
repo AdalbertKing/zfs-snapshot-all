@@ -3245,9 +3245,9 @@ cat > "$NR/bin/zb-set" <<'EOF'
 #!/bin/bash
 [ "$1" = settings ] || exit 9
 case "$2" in
-    --tsv) printf 'gui.language\ten\tdomyślne\tenum:en,pl\tjęzyk okien GUI\n'
+    --tsv) printf 'gui.language\ten\tdefault\tenum:en,pl\tjęzyk okien GUI\n'
            printf 'alerts.email\troot\tzfs-alert.conf\temail\tkto dostaje maile\n'
-           printf 'alerts.digest_time\t07:00\tdomyślne\ttime\to której wychodzi dzienny mail\n'; exit 0 ;;
+           printf 'alerts.digest_time\t07:00\tdefault\ttime\to której wychodzi dzienny mail\n'; exit 0 ;;
     set) printf '%s\n' "$*" >> "$NR_DIR/argv"
          case " $* " in *" --yes "*) echo "settings: zapisane i zastosowane."; exit 0 ;; esac
          echo "  alerts.digest_time       07:00 -> 06:30"; echo "plan only. Re-run with --yes to do it. Nothing was changed."; exit 0 ;;
@@ -3283,7 +3283,7 @@ fi
 [ "$1" = settings ] || exit 9
 case "$2" in
     --tsv) printf 'alerts.email\troot\tzfs-alert.conf\temail\tkto dostaje maile\n'
-           printf 'new_relation.template\tdefault\tdomyślne\tprofile\tszablon proponowany nowej relacji\n'; exit 0 ;;
+           printf 'new_relation.template\tdefault\tdefault\tprofile\tszablon proponowany nowej relacji\n'; exit 0 ;;
     set) printf '%s\n' "$*" >> "$NR_DIR/argv"
          case " $* " in *" --yes "*) echo "settings: zapisane."; exit 0 ;; esac
          echo "plan only. Nothing was changed."; exit 0 ;;

@@ -13253,7 +13253,7 @@ printf '[alerts]\nemail = a@b.pl\n' > "$ST/settings.ini"
 SP1=$(st_run); SP2=$(st_run set alerts.digest_time=06:30 monitor.interval=10m); SP3=$(st_run set alerts.digest_time=25:00)
 SP4=$(st_run set alerts.digest_time=06:30 monitor.interval=10m capacity.threshold=85 --yes)
 SP5=$(st_run set nosuch.key=1); SP6=$(st_run get alerts.digest_time)
-if printf '%s' "$SP1" | grep -qE 'alerts\.email +a@b\.pl +\(plik\)' && printf '%s' "$SP1" | grep -qE 'alerts\.digest_time +07:00 +\(domyślne\)' \
+if printf '%s' "$SP1" | grep -qE 'alerts\.email +a@b\.pl +\(file\)' && printf '%s' "$SP1" | grep -qE 'alerts\.digest_time +07:00 +\(default\)' \
    && printf '%s' "$SP2" | grep -q 'alerts.digest_time       07:00 -> 06:30' && printf '%s' "$SP2" | grep -q '^plan only' && ! printf '%s' "$SP2" | grep -q APPLY \
    && printf '%s' "$SP3" | grep -q 'HH:MM' && printf '%s' "$SP5" | grep -q 'unknown key' \
    && printf '%s' "$SP4" | grep -q '^APPLY cron$' && printf '%s' "$SP4" | grep -q '^APPLY host /alert-digest.sh 30 6 \* \* \*$' \
