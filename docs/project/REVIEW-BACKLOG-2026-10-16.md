@@ -112,6 +112,23 @@ przechodzi z pustym zapisem wywołań silnika, pairgate ma 92/92, restore 335/33
 jest zielone. Nie otwarto REV: luka historycznego dowodu jest naprawiona w
 bieżącym kodzie, a dla F23 nie istnieje review, które można ponownie otworzyć.
 
+**Rozstrzygnięcie recenzenta 2026-10-24 — PR #539 i PR #541.** Oba stare
+zgłoszenia odtworzono na dokładnych bazach i oba są naprawione w bieżącym
+kodzie. Dla #539 publiczne `restore rdl --plan` na
+`ebb1fcf42eb88a8bda5c210e8210fb612db330e4` zwraca rc 1 i zero bajtów; na
+bieżącym main zwraca rc 0 oraz plan tylko do odczytu. Dla #541 poprawiony test
+uruchomiony na `616b6716ca90a918fc64850b11bc9e58152f844b` wykrywa brak rollbacku,
+fałszywy sukces z nowszą migawką i brak odmowy bez przypiętej wspólnej bazy;
+pięć odpowiadających asercji przechodzi obecnie. `test/restore` ma 335/335,
+`test/deadcode` 7/7, właściwe asercje `localbackup` i `restoregrant` przechodzą,
+oba wybory `impact` oraz `impact --verify` są zielone, a CI dokładnych headów
+PR-ów przeszło (run 38701660631 i 38710218351). Bieżąca implementacja #541
+ogranicza rollback do głębokości silnika i datasetów mających odpowiednik,
+odmawia bez jednoznacznej bazy oraz po rc 0 mierzy GUID, najnowszą migawkę i
+`referenced`. Nie otwarto REV: nie ma obecnej reprodukcji błędu ani nowego kodu
+przeczącego poprawkom. Następny zakres recenzji: poszerzona delegacja odzysku
+w PR #553.
+
 ## 3. Uprawnienia, zgody, operacje niszczące
 
 Kolejność: odzysk (najwięcej nowych uprawnień), potem wdrożenie.
