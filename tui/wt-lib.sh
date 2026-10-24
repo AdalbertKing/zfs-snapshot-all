@@ -25,6 +25,33 @@ export PYTHONIOENCODING=utf-8 PYTHONDONTWRITEBYTECODE=1    # import tui/zfs-tui.
 export NEWT_COLORS="${NEWT_COLORS:-root=,blue window=black,white border=black,white title=black,white listbox=black,white actlistbox=white,black sellistbox=black,white actsellistbox=white,black checkbox=black,white actcheckbox=white,black button=black,cyan actbutton=white,red textbox=black,white entry=black,white label=black,white}"
 
 
+# JĘZYK OKIEN (jak w zfs-tui.py): ZFS_TUI_LANG z GUI, inaczej [gui] language w settings.ini,
+# domyślnie polski. T <tekst polski> [argumenty printf] -> tekst w tym języku; bez wpisu w
+# tui/lang/<język>.json -- polski. Katalog to DANE: czytany jako pary NUL-owe, nic się nie
+# wykonuje; szablon z %s dostaje argumenty przez printf, nigdy przez eval.
+if [ -z "${ZFS_TUI_LANG:-}" ]; then
+    ZFS_TUI_LANG="$(awk -F= 'BEGIN{s="engine"} {sub(/#.*/,"")} /^[ \t]*\[[A-Za-z0-9_]+\][ \t]*$/{s=$0; gsub(/[][ \t]/,"",s); next}
+        s=="gui" { k=$1; gsub(/[ \t]/,"",k); if (k=="language") { v=$2; gsub(/[ \t]/,"",v); print v; exit } }' \
+        "${SETTINGS_FILE:-/etc/zfs-snapshot-all/settings.ini}" 2>/dev/null)"
+fi
+case "${ZFS_TUI_LANG:-}" in pl|en) ;; *) ZFS_TUI_LANG=pl ;; esac
+export ZFS_TUI_LANG
+declare -A TCAT=()
+_tcat="$(dirname "${BASH_SOURCE[0]}")/lang/$ZFS_TUI_LANG.json"
+if [ "$ZFS_TUI_LANG" != pl ] && [ -r "$_tcat" ]; then
+    while IFS= read -r -d '' _tk && IFS= read -r -d '' _tv; do TCAT["$_tk"]="$_tv"; done < <("$PY" -c '
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+sys.stdout.buffer.write(b"".join(k.encode("utf-8") + b"\0" + v.encode("utf-8") + b"\0"
+                                 for k, v in d.items() if k and "\0" not in k + v))' "$_tcat")
+fi
+unset _tcat _tk _tv
+T() {   # <tekst polski / szablon printf> [argumenty]
+    local k="$1" v; shift
+    v="${TCAT[$k]-$k}"
+    if [ $# -gt 0 ]; then printf -- "$v" "$@"; else printf '%s' "$v"; fi
+}
+
 geom() {   # H W LH z bieżącego terminala
     local l c
     l=$(tput lines 2>/dev/null) || l=24; c=$(tput cols 2>/dev/null) || c=80

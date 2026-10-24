@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 40aec79ad580622b -->
+<!-- status-covers-digest: 2aa880f38193ccd5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,19 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **GUI po angielsku -- mechanizm i pilot (P0, `feat/gui-lang-p0`).** Tekst polski w kodzie jest kluczem; katalog
+  `tui/lang/en.json` (1374 wpisów) jest zbudowany z tabeli przeglądu właściciela
+  (`docs/project/i18n/GUI-PL-EN-2026-10-24.json`) przez `tui/lang/build.py`, z dopiskami spoza tabeli w
+  `tui/lang/en.extra.json` (Odśwież, Eksport/Import, Klucz, „Jaka relacja?” -- do potwierdzenia). Brak wpisu =
+  tekst polski. Język: `zfs-backup gui --lang=en`, potem `ZFS_TUI_LANG` (dziedziczą go okna whiptail), potem
+  `[gui] language` w `settings.ini` (F10; domyślna wartość zmieniona z `en` na `pl` -- nikt jej dotąd nie czytał),
+  domyślnie polski. Funkcje: `_()` w `tui/zfs-tui.py`, `T` w `tui/wt-lib.sh` (szablon z `%s` przez printf; katalog
+  czytany jako dane, bez eval). Pilot: pasek klawiszy F (też skróty przy 80 kolumnach) i krok 1 kreatora relacji;
+  przy okazji opis kroku 1 mieści się w oknie (linia o migawkach zdalnych była ucięta) i nie ma w nim listy
+  klawiszy. Komunikaty poleceń (CLI) zostają po angielsku. Test `test/tui/lang_catalog.py` (każdy tekst podany do
+  `T`/`_()` ma wpis) i przypadki pl/en w `test/tui/run.sh`; suita okien przypina `ZFS_TUI_LANG=pl`. Reszta okien
+  (P1-P6) -- kolejne paczki. Nie sprawdzone na żywo: hosty labu niedostępne z tej stacji (brak klucza w Pageant).
 
 - **FINISZ U49: kopia lokalna na snapget; lokalne `-q` w snapget (2026-10-20; `finisz/lokalna-snapget`).**
   Właściciel: „Przenieś kopię lokalną na snapget przed 1.0 (jak replikę)”, „Przenieś do snapget. Odmroź i pilne

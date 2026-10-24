@@ -51,6 +51,56 @@ if hasattr(sys.stdout, "reconfigure"):
 MIN_WIDTH = 80
 
 # ---------------------------------------------------------------------------
+# JĘZYK OKIEN (publikacja 1.0, właściciel 2026-10-23/24: GUI PL+EN, „sprytnie, bez dmuchania
+# kodu”; komunikaty CLI zostają po angielsku). Tekst polski w kodzie jest KLUCZEM; katalog
+# tui/lang/en.json (z tabeli przeglądu właściciela, tui/lang/build.py) daje angielski. Brak
+# wpisu = tekst polski, nic się nie psuje. Język: --lang, potem ZFS_TUI_LANG (dziedziczą go
+# okna whiptail), potem [gui] language w settings.ini (F10 Ustawienia), domyślnie polski.
+# Katalog to DANE: json.load, nic nie jest wykonywane.
+# ---------------------------------------------------------------------------
+LANGS = ("pl", "en")
+LANG_CAT = {}
+
+
+def ui_lang(explicit=None):
+    for v in (explicit, os.environ.get("ZFS_TUI_LANG")):
+        if v in LANGS:
+            return v
+    path = os.environ.get("SETTINGS_FILE") or "/etc/zfs-snapshot-all/settings.ini"
+    sec = "engine"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.split("#", 1)[0].strip()
+                if line.startswith("[") and line.endswith("]"):
+                    sec = line[1:-1].strip()
+                elif sec == "gui" and "=" in line and line.split("=", 1)[0].strip() == "language":
+                    v = line.split("=", 1)[1].strip()
+                    if v in LANGS:
+                        return v
+    except (OSError, UnicodeError):
+        pass
+    return "pl"
+
+
+def load_lang(lang):
+    """Wczytaj katalog języka (pl = pusty: klucz jest tekstem)."""
+    global LANG_CAT
+    LANG_CAT = {}
+    if lang != "pl":
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lang", lang + ".json"),
+                      encoding="utf-8") as fh:
+                LANG_CAT = json.load(fh)
+        except (OSError, ValueError):
+            LANG_CAT = {}
+
+
+def _(s):
+    """Tekst okna w bieżącym języku; bez wpisu w katalogu -- polski."""
+    return LANG_CAT.get(s, s)
+
+# ---------------------------------------------------------------------------
 # SLOWNIK EKRANU
 # ---------------------------------------------------------------------------
 # Werdykt monitora -> (slowo na ekranie, para kolorow curses).
@@ -2469,6 +2519,10 @@ def key_bar_parts(active, width, actions=()):
     # rog) -- pasek musi sie zmiescic w width - 1 (kampania 3: F4 ucinal "Ctrl-R Odświe").
     room = width - 1
     tight = {"F4": u"Hist", "F5": u"Szabl", "F10": u"Ust", "F12": u"Wyjdź", "F6": u"Repl", "F3": u"Rel"}
+    if LANG_CAT:
+        tight = {"F4": u"Hist", "F5": u"Tmpl", "F10": u"Set", "F12": u"Quit", "F6": u"Repl", "F3": u"Rel"}
+    items = [(fk, _(label), key) for fk, label, key in items]
+    short = dict((k, _(v)) for k, v in short.items())
     for compact, sep, brief in ((False, u" ", False), (True, u" ", False), (True, u"", False), (True, u"", True),
                                 (True, u"", "tight")):
         line, marks = u" ", []
@@ -2489,7 +2543,7 @@ def key_bar_parts(active, width, actions=()):
         if len(line) <= room:
             break
     if room >= len(line) + 16:
-        line += u"  Ctrl-R Odśwież"
+        line += u"  Ctrl-R " + _(u"Odśwież")
     return fit(fit(line, room), width), marks   # dopelniona do width: kazdy wiersz ma szerokosc ekranu
 
 
@@ -5961,7 +6015,11 @@ def main(argv):
     ap.add_argument("--check-source", help="czytaj check-source HOST --json z pliku (kreator: diagnoza hosta)")
     ap.add_argument("--offline", action="store_true", help="nie uruchamiaj czasownikow; zrodla bez pliku sa puste")
     ap.add_argument("--host-ip", help="R3-1: IP hosta w pasku tytulu (testy/offline; na zywo liczony z trasy domyslnej)")
+    ap.add_argument("--lang", choices=LANGS, help="język okien (domyślnie: [gui] language w settings.ini, potem pl)")
     a = ap.parse_args(argv)
+    # Okna whiptail (tui/*.sh) dziedziczą język przez środowisko.
+    os.environ["ZFS_TUI_LANG"] = ui_lang(a.lang)
+    load_lang(os.environ["ZFS_TUI_LANG"])
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     files = {"status": a.status, "jobs": a.jobs, "monitors": a.monitors, "progress": a.progress,
              "replicas": a.replicas, "stats": a.stats, "config": a.config, "profiles": a.profiles, "offline": a.offline,

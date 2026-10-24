@@ -1,0 +1,8 @@
+{
+"_note": "Texts the review table did not contain (the extractor missed short ASCII words). Added 2026-10-24, to be confirmed by the owner. build.py merges this file into en.json.",
+"Eksport/Import": "Export/Import",
+"Klucz": "Key",
+"Odśwież": "Refresh",
+"Jaka relacja?": "Which relation?",
+"Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\\nKopia lokalna: kopia na tym samym hoście, np. rpool/data -> hdd/backup.\\nMigawki lokalne: migawki i ich sprzątanie w datasetach tego hosta, bez kopii.\\nMigawki zdalne: ten host robi i sprząta migawki NA innym hoście, bez kopii.":"Backup: this host PULLS snapshots from the source and keeps them.\\nMirror: the same datasets under the same path and the same snapshots:\\nwhat disappears at the source disappears here too (no retention of its own).\\nLocal copy: a copy on the same host, e.g. rpool/data -> hdd/backup.\\nLocal snapshots: snapshots and their prune in this host's datasets, no copies.\\nRemote snapshots: this host makes and prunes snapshots ON another host, no copies."
+}
