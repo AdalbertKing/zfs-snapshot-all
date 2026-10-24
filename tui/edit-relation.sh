@@ -32,8 +32,10 @@ ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/retention-lib.sh" || { echo "edit-relation: brak $HERE/tui/retention-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 . "$HERE/tui/basket-lib.sh" || { echo "edit-relation: brak $HERE/tui/basket-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 NAME="${1:-}"
-[ -n "$NAME" ] || { echo "użycie: edit-relation.sh NAZWA" >&2; exit 2; }
-WT_BACKTITLE="Zmiana relacji $NAME -- kolektor $(hostname)"
+[ -n "$NAME" ] || { echo "usage: edit-relation.sh NAME" >&2; exit 2; }
+WT_BACKTITLE="$(Tv 'Zmiana relacji $NAME -- kolektor $(hostname)' '$NAME' "$NAME" '$(hostname)' "$(hostname)")"
+T_CHG="$(Tv 'Zmień relację $NAME' '$NAME' "$NAME")"
+T_ADR="$(Tv 'Adres hosta: $NAME' '$NAME' "$NAME")"
 # U65: 'c' (ręczna edycja) i 's' (zapisz jako szablon) w oknie relacji na F3 otwierają TĘ
 # czynność od razu (EDIT_DO), bez listy zmian; po niej okno się kończy.
 FORCE_ACTION=""; DIRECT=0
@@ -62,6 +64,7 @@ load_lists() {
 import sys, json, re, importlib.util
 spec = importlib.util.spec_from_file_location("zfs_tui", sys.argv[3])
 tui = importlib.util.module_from_spec(spec); spec.loader.exec_module(tui)
+tui.load_lang(tui.ui_lang())     # słowa w języku okna (ZFS_TUI_LANG z wt-lib.sh)
 tmpd, hname = sys.argv[4], sys.argv[5]
 try:
     st = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -105,9 +108,9 @@ PYEOF
 }
 
 geom
-info "Zmień relację $NAME" "Czytam relację i szablony..."
+info "$T_CHG" "$(T 'Czytam relację i szablony...')"
 "$ZB" status "$NAME" --json >"$TMPD/st.json" 2>/dev/null
-load_lists || { wt --title "Szablony niedostępne" --msgbox "list-profiles nie odpowiedział:\n$(tail -3 "$TMPD/prof.err")" 12 "$W"; exit 1; }
+load_lists || { wt --title "$(T 'Szablony niedostępne')" --msgbox "$(T 'list-profiles nie odpowiedział:\n')$(tail -3 "$TMPD/prof.err")" 12 "$W"; exit 1; }
 IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS MIRROR TGT RMODE ACCT_U <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; MIRROR=0; TGT=-; RMODE=-; ACCT_U=-; }
 ACCT_U="${ACCT_U%$'\r'}"
 # MIGAWKI ZDALNIE (snaponly, REV-20261017-152 runda 3; właściciel 2026-10-18: ta sama
@@ -118,7 +121,7 @@ SNAPONLY=0; [ "${RMODE:-}" = snaponly ] && SNAPONLY=1
 # Relacja lokalna (bez peera): źródłem jest ten host -- lista datasetów bez adresu.
 SRCHOST="$PEER"; LDS_ARGS=("$PEER"); HOST="$PEER"
 SRCNAME="$PEER"
-if [ "$PEER" = - ]; then SRCHOST="tego hosta ($(hostname -s 2>/dev/null || hostname))"; LDS_ARGS=(); HOST="$SRCHOST"; SRCNAME="$(hostname -s 2>/dev/null || hostname)"; fi
+if [ "$PEER" = - ]; then SRCHOST="$(T 'tego hosta') ($(hostname -s 2>/dev/null || hostname))"; LDS_ARGS=(); HOST="$SRCHOST"; SRCNAME="$(hostname -s 2>/dev/null || hostname)"; fi
 [ "$CUR_P" = - ] && CUR_P=""; [ "$CUR_S" = - ] && CUR_S=""
 # ADRES HOSTA (właściciel 2026-10-17): kolektor wyniesiony za VPN, źródło widać pod
 # innym IP. Jedno pole, jedno WYKONAJ, potem zwykłe `activate --host=NOWY
@@ -135,12 +138,12 @@ address_flow() {
     case "$cur" in *:*) ;; *) cur="$PEER" ;; esac
     while :; do
         geom
-        wt --title "Adres hosta: $NAME" --ok-button "Dalej" --cancel-button "Wstecz" \
-           --inputbox "Nowy adres źródła $SRCNAME po przeniesieniu kolektora:\nIP albo nazwa, opcjonalnie :port.\n\nZapisany: ${cur:--}   Cron idzie przez: ${inst:--}\n\nUżywaj PO przeniesieniu, gdy nowy adres już odpowiada." 14 "$W" "${P_HOST:-$cur}" || return 0
+        wt --title "$T_ADR" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
+           --inputbox "$(Tv 'Nowy adres źródła $SRCNAME po przeniesieniu kolektora:\nIP albo nazwa, opcjonalnie :port.\n\nZapisany: ${cur:--}   Cron idzie przez: ${inst:--}\n\nUżywaj PO przeniesieniu, gdy nowy adres już odpowiada.' '$SRCNAME' "$SRCNAME" '${cur:--}' "${cur:--}" '${inst:--}' "${inst:--}")" 14 "$W" "${P_HOST:-$cur}" || return 0
         new="${WT_OUT// /}"
         [ -n "$new" ] || continue
         case "$new" in
-            *[!A-Za-z0-9.:_-]*) wt --title "Zły adres" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, myślnik, podkreślenie i :port." 8 "$W"; continue ;;
+            *[!A-Za-z0-9.:_-]*) wt --title "$(T 'Zły adres')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- tylko litery, cyfry, kropka, myślnik, podkreślenie i :port.' '$WT_OUT' "$WT_OUT")" 8 "$W"; continue ;;
         esac
         # LISTA ZMIAN (właściciel 2026-10-19: "nie można zmienić wiele ustawień i na końcu
         # zaimplementować, tylko po jednym kroku"): adres czeka na liście, WYKONAJ jest jedno,
@@ -153,13 +156,10 @@ address_flow() {
         # sprawdzenie tożsamości -- to robi activate (klucz hosta, wspólna migawka).
         local ph="${new%%:*}" pp=22
         case "$new" in *:*) pp="${new##*:}" ;; esac
-        info "Adres hosta: $NAME" "Sprawdzam, czy pod $ph:$pp ktoś odpowiada (do 5 s)..."
+        info "$T_ADR" "$(Tv 'Sprawdzam, czy pod $ph:$pp ktoś odpowiada (do 5 s)...' '$ph' "$ph" '$pp' "$pp")"
         # ADDR_PROBE: tylko testy (atrapa "odpowiada"/"nie odpowiada"); na hoście nieustawione.
         if ! { if [ -n "${ADDR_PROBE:-}" ]; then $ADDR_PROBE "$ph" "$pp"; else timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$ph" "$pp"; fi; } 2>/dev/null; then
-            wt --title "Adres hosta: $NAME -- brak odpowiedzi" --msgbox "Pod $ph:$pp nic nie odpowiada (połączenie TCP, 5 s).
-
-Adres NIE został zmieniony. Sprawdź adres i czy host jest
-włączony (z linii poleceń GUI: ping $ph), potem wpisz go jeszcze raz." 12 "$W"
+            wt --title "$(Tv 'Adres hosta: $NAME -- brak odpowiedzi' '$NAME' "$NAME")" --msgbox "$(Tv 'Pod $ph:$pp nic nie odpowiada (połączenie TCP, 5 s).\n\nAdres NIE został zmieniony. Sprawdź adres i czy host jest\nwłączony (z linii poleceń GUI: ping $ph), potem wpisz go jeszcze raz.' '$ph' "$ph" '$pp' "$pp")" 12 "$W"
             continue
         fi
         P_HOST="$new"
@@ -180,25 +180,25 @@ if { [ "$STATE" = endpoint_change_pending ] || [ "$STATE" = endpoint_verified ];
     P_HOST=""
     address_flow
     [ -n "${P_HOST:-}" ] || exit 0
-    wt --title "Adres hosta: $NAME" --yes-button "WYKONAJ" --no-button "Wstecz" --defaultno \
-       --yesno "Relacja $NAME: nowy adres źródła $P_HOST.\nSprawdzenie, że to ten sam host, potem cron przez nowy adres.\n\nKomenda: $(shq "$ZB") activate $NAME --host=$P_HOST --skip-final-catchup --yes" 12 "$W" || exit 1
+    wt --title "$T_ADR" --yes-button "$(T WYKONAJ)" --no-button "$(T Wstecz)" --defaultno \
+       --yesno "$(Tv 'Relacja $NAME: nowy adres źródła $P_HOST.\nSprawdzenie, że to ten sam host, potem cron przez nowy adres.\n\nKomenda:' '$NAME' "$NAME" '$P_HOST' "$P_HOST") $(shq "$ZB") activate $NAME --host=$P_HOST --skip-final-catchup --yes" 12 "$W" || exit 1
     clear 2>/dev/null
     address_apply; rc=$?
     echo
-    if [ "$rc" -eq 0 ]; then echo "=== Gotowe: relacja $NAME działa przez $P_HOST."
-    else echo "=== Przerwane (rc=$rc) -- przyczyna wyżej. Cron dalej idzie starym adresem. Popraw adres: e na relacji."; fi
-    echo "Enter = dalej"; [ -t 0 ] && read -r _
+    if [ "$rc" -eq 0 ]; then echo "$(Tv '=== Gotowe: relacja $NAME działa przez $P_HOST.' '$NAME' "$NAME" '$P_HOST' "$P_HOST")"
+    else echo "$(Tv '=== Przerwane (rc=$rc) -- przyczyna wyżej. Cron dalej idzie starym adresem. Popraw adres: e na relacji.' '$rc' "$rc")"; fi
+    echo "$(T 'Enter = dalej')"; [ -t 0 ] && read -r _
     exit "$rc"
 fi
 if [ "$STATE" != active ]; then
-    wt --title "Nie da się zmienić '$NAME'" --msgbox "Relacja '$NAME' jest w stanie '${STATE}'.\nZmieniać można tylko relację zainstalowaną (active)." 10 "$W"
+    wt --title "$(Tv 'Nie da się zmienić '\''$NAME'\''' '$NAME' "$NAME")" --msgbox "$(Tv 'Relacja '\''$NAME'\'' jest w stanie '\''${STATE}'\''.\nZmieniać można tylko relację zainstalowaną (active).' '$NAME' "$NAME" '${STATE}' "${STATE}")" 10 "$W"
     exit 1
 fi
 # Koszyk (basket-lib.sh) w "Datasety": nagłówek okien, bez "Sposób" i bez "Wyjątków".
 RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=1
-title() { printf 'Zmień relację %s -- %s' "$NAME" "$2"; }
+title() { T 'Zmień relację %s -- %s' "$NAME" "$2"; }
 cur_words() {   # słowa o obecnym szablonie celu
-    if [ "$CUR_P" = "$HNAME" ]; then echo "własne ustawienia relacji (tabela szczebli)"; else echo "${CUR_P:-<nie zapisany>}"; fi
+    if [ "$CUR_P" = "$HNAME" ]; then echo "$(T 'własne ustawienia relacji (tabela szczebli)')"; else echo "${CUR_P:-$(T '<nie zapisany>')}"; fi
 }
 
 # X24 (właściciel 2026-10-14): "szablon nadpisuje zmiany -- to logiczne. Brać liczby z
@@ -210,8 +210,11 @@ src_override_warning() {
     "$ZB" show-tiers "$NAME" --json >"$TMPD/stw.json" 2>/dev/null || return 0
     "$PY" - "$TMPD/stw.json" "$TMPD/prof.json.tiers" "$PROFILE" <<'PYEOF' | tr -d '\r' >"$TMPD/srcwarn.txt"
 import sys, json
-W = {"hourly": "godzinowe", "daily": "dobowe", "weekly": "tygodniowe", "monthly": "miesięczne", "yearly": "roczne"}
-U = {"h": "godz.", "d": "dni", "w": "tyg.", "m": "mies.", "y": "lat"}
+import os as _os
+_C = json.load(open(_os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if _os.environ.get("ZFS_TUI_CAT") else {}
+def _(s): return _C.get(s, s)
+W = {"hourly": _(u"godzinowe"), "daily": _(u"dobowe"), "weekly": _(u"tygodniowe"), "monthly": _(u"miesięczne"), "yearly": _(u"roczne")}
+U = {"h": _(u"godz."), "d": _(u"dni"), "w": _(u"tyg."), "m": _(u"mies."), "y": _(u"lat")}
 key = lambda n: (n or "").split("_")[-1]
 try:
     src = json.load(open(sys.argv[1], encoding="utf-8")).get("source") or []
@@ -234,9 +237,9 @@ for t in src:
     seen.append(k)
     w = W.get(k, k)
     if k not in tpl:
-        print("  %-11s źródło trzyma %s, szablon nie ma tego szczebla" % (w, c))
+        print(_(u"  %-11s źródło trzyma %s, szablon nie ma tego szczebla") % (w, c))
     elif tpl[k] != c:
-        print("  %-11s źródło trzyma %s, szablon da %s" % (w, c, tpl[k]))
+        print(_(u"  %-11s źródło trzyma %s, szablon da %s") % (w, c, tpl[k]))
 PYEOF
 }
 
@@ -354,9 +357,9 @@ PYEOF
 # (P_RARGS, P_SARGS) i idą jednym set-tiers.
 harm_flow() {
     local hs=1 rc only_src="${1:-}"
-    info "Harmonogram i retencja" "Czytam szczeble relacji z configu..."
+    info "$(T 'Harmonogram i retencja')" "$(T 'Czytam szczeble relacji z configu...')"
     if ! "$ZB" show-tiers "$NAME" --json >"$TMPD/rt.json" 2>"$TMPD/rt.err"; then
-        wt --title "Nie da się odczytać szczebli" --msgbox "$(grep -E 'FATAL' "$TMPD/rt.err" | tail -1 | sed 's/^FATAL: //')" 10 "$W"
+        wt --title "$(T 'Nie da się odczytać szczebli')" --msgbox "$(grep -E 'FATAL' "$TMPD/rt.err" | tail -1 | sed 's/^FATAL: //')" 10 "$W"
         return 0
     fi
     # Pseudoszablony "@rel" (cel) i "@rel-src" (źródło) w kształcie, który czytają tabela i
@@ -367,7 +370,7 @@ harm_flow() {
     local nsrc; nsrc=$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1],encoding="utf-8")).get("source",[])))' "$TMPD/rt.json")
     if [ -n "$only_src" ]; then
         if [ "$nsrc" -eq 0 ]; then
-            wt --title "Retencja źródła" --msgbox "Źródło tej relacji nie ma własnej retencji (sprząta je tylko cel)." 8 "$W"
+            wt --title "$(T 'Retencja źródła')" --msgbox "$(T 'Źródło tej relacji nie ma własnej retencji (sprząta je tylko cel).')" 8 "$W"
             PROFILE="$SAVE_P"; CUR_S="$SAVE_S"; return 0
         fi
         mapfile -t RARGS <"$TMPD/rargs.acc"; hs=2
@@ -376,7 +379,7 @@ harm_flow() {
     while :; do
         if [ "$hs" -eq 1 ]; then
             clear 2>/dev/null
-            TEMPLATE_JSON="$TMPD/rt-work.json" ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "@rel" "$TMPD/rargs" "Harmonogram i retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)" \
+            TEMPLATE_JSON="$TMPD/rt-work.json" ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "@rel" "$TMPD/rargs" "$(Tv 'Harmonogram i retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)' '$(hostname -s 2>/dev/null || hostname)' "$(hostname -s 2>/dev/null || hostname)")" \
                 || { PROFILE="$SAVE_P"; CUR_S="$SAVE_S"; return 0; }
             cat "$TMPD/rargs" >>"$TMPD/rargs.acc"
             mapfile -t RARGS <"$TMPD/rargs.acc"
@@ -389,21 +392,21 @@ harm_flow() {
         printf '%s\n' ${P_SARGS[@]+"${P_SARGS[@]}"} | grep . >"$TMPD/srcargs"
         if [ -n "$only_src" ]; then
             : >"$TMPD/srcargs"
-            SRC_TITLE="Retencja: W ŹRÓDLE KOPII – $SRCNAME"
+            SRC_TITLE="$(Tv 'Retencja: W ŹRÓDLE KOPII – $SRCNAME' '$SRCNAME' "$SRCNAME")"
             SRC_ARGS_OUT="$TMPD/srcargs" SRC_NEW_TIERS="$(cat "$TMPD/newtiers" 2>/dev/null)" source_retention_editor                 || { PROFILE="$SAVE_P"; CUR_S="$SAVE_S"; return 0; }
         fi
         local -a SARGS=(); mapfile -t SARGS <"$TMPD/srcargs"
         if [ "${#RARGS[@]}" -eq 0 ] && [ "${#SARGS[@]}" -eq 0 ]; then
-            wt --title "Harmonogram i retencja" --msgbox "Nic nie zmieniono -- relacja zostaje, jak jest." 8 "$W"
+            wt --title "$(T 'Harmonogram i retencja')" --msgbox "$(T 'Nic nie zmieniono -- relacja zostaje, jak jest.')" 8 "$W"
             PROFILE="$SAVE_P"; CUR_S="$SAVE_S"; return 0
         fi
         ARGV=("$ZB" set-tiers "$NAME" ${RARGS[@]+"${RARGS[@]}"} ${SARGS[@]+"${SARGS[@]}"})
-        info "Zmień relację $NAME" "Liczę plan (cały config przez generator)..."
+        info "$T_CHG" "$(T 'Liczę plan (cały config przez generator)...')"
         if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
-            wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)))" 12 "$W"
+            wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)))" 12 "$W"
             [ -n "$only_src" ] && hs=2 || hs=1; continue
         fi
-        { echo "PLAN -- nic jeszcze nie zostało zmienione:"; echo
+        { echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione:')"; echo
           sed -n '/^Relacja .* -- szczeble:/,/^plan only/p' "$TMPD/plan.txt" | grep -v '^plan only'
           echo
           grep -E '^ +[-+][0-9*]' "$TMPD/plan.txt" | grep -v 'check-snap-age' | sed -E 's/profile__[^ ]*__//; s|/[^ ]*/zfs-job\.sh "([^"]*)".* (-[HDWMY][0-9]+) *$|\1  \2|; t; s|/[^ ]*/zfs-job\.sh "([^"]*)".*|\1|' | head -40
@@ -424,18 +427,18 @@ harm_flow() {
 # dopiero "Gotowe" składa set-transfer (--plan, potem WYKONAJ = --yes). Wstecz = bez zmian.
 eng_hist_words() {
     case "$1" in
-        default|all) echo "wszystkie migawki pomiędzy" ;;
-        newest)      echo "tylko różnica do najnowszej" ;;
-        auto:*)      echo "auto (po ${1#auto:} odstępach tylko różnica)" ;;
+        default|all) echo "$(T 'wszystkie migawki pomiędzy')" ;;
+        newest)      echo "$(T 'tylko różnica do najnowszej')" ;;
+        auto:*)      echo "$(Tv 'auto (po ${1#auto:} odstępach tylko różnica)' '${1#auto:}' "${1#auto:}")" ;;
         *)           echo "$1" ;;
     esac
 }
 eng_comp_words() {
     case "$1" in
-        default) if [ "$PEER" = - ]; then echo "nie (kopia lokalna)"; else echo "tak (zstd)"; fi ;;
+        default) if [ "$PEER" = - ]; then echo "$(T 'nie (kopia lokalna)')"; else echo "$(T 'tak (zstd)')"; fi ;;
         zstd)    echo "zstd" ;;
         gzip)    echo "gzip (pigz)" ;;
-        none)    echo "nie" ;;
+        none)    echo "$(T nie)" ;;
         *)       echo "$1" ;;
     esac
 }
@@ -444,21 +447,24 @@ ptransfer_words() {   # P_TRANSFER (--history=.. --compression=.. --cipher=.. --
     local a out=""
     for a in "${P_TRANSFER[@]}"; do
         case "$a" in
-            --history=*)     a="historia: $(eng_hist_words "${a#*=}")" ;;
-            --compression=*) a="kompresja: $(eng_comp_words "${a#*=}")" ;;
-            --cipher=default) a="szyfr: domyślny SSH" ;;
-            --cipher=*)      a="szyfr: ${a#*=}"; a="${a%%@*}" ;;
-            --autotune=*)    a="autodobór: $(case "${a#*=}" in no) echo nie ;; default) echo fabryczny ;; *) echo tak ;; esac)" ;;
+            --history=*)     a="$(T 'historia: %s' "$(eng_hist_words "${a#*=}")")" ;;
+            --compression=*) a="$(T 'kompresja: %s' "$(eng_comp_words "${a#*=}")")" ;;
+            --cipher=default) a="$(T 'szyfr: domyślny SSH')" ;;
+            --cipher=*)      a="$(T 'szyfr: %s' "${a#*=}")"; a="${a%%@*}" ;;
+            --autotune=*)    a="$(T 'autodobór: %s' "$(case "${a#*=}" in no) T nie ;; default) T fabryczny ;; *) T tak ;; esac)")" ;;
             *) continue ;;
         esac
         out="${out:+$out, }$a"
     done
-    printf '%s' "${out:-zmiana}"
+    printf '%s' "${out:-$(T zmiana)}"
+}
+eng_lbl() {   # etykieta pozycji menu dopełniona spacjami do 17 ZNAKÓW (printf %-17s liczy bajty, jak w card_menu)
+    local s="$1"; while [ "${#s}" -lt 17 ]; do s="$s "; done; printf '%s' "$s"
 }
 eng_pick() {   # <tytuł> <tekst> <domyślny tag> <tag> <opis> ... -> wybór w WT_OUT; rc 1 = Wstecz
     local t="$1" x="$2" d="$3"; shift 3
     geom
-    wt --title "$t" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "$d" \
+    wt --title "$t" --ok-button "$(T Wybierz)" --cancel-button "$(T Wstecz)" --notags --default-item "$d" \
        --menu "$x" "$(fit $(($# / 2 + 2)))" "$W" "$(lhfit $(($# / 2)) 2)" "$@"
 }
 # Karta (U65, pve10 2026-10-22): ile trzyma źródło -- z CONFIGU (show-tiers), nie z nazwy
@@ -468,7 +474,10 @@ srcret_words() {
     [ -s "$TMPD/tiers.json" ] || "$ZB" show-tiers "$NAME" --json >"$TMPD/tiers.json" 2>/dev/null || { rm -f "$TMPD/tiers.json"; echo "?"; return 0; }
     "$PY" - "$TMPD/tiers.json" <<'PYEOF' 2>/dev/null | tr -d '\r' || echo "?"
 import json, sys
-W = (("hourly", "godzinowe"), ("daily", "dobowe"), ("weekly", "tygodniowe"), ("monthly", "miesięczne"), ("yearly", "roczne"))
+import os as _os
+_C = json.load(open(_os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if _os.environ.get("ZFS_TUI_CAT") else {}
+def _(s): return _C.get(s, s)
+W = (("hourly", _(u"godzinowe")), ("daily", _(u"dobowe")), ("weekly", _(u"tygodniowe")), ("monthly", _(u"miesięczne")), ("yearly", _(u"roczne")))
 d = json.load(open(sys.argv[1], encoding="utf-8"))
 # REV-20261023-171: "tyle samo" only when BOTH sides' retention-bearing tiers match as
 # whole sets -- a tier dropped on the source (set-tiers --drop-src-tier=daily) left the
@@ -483,9 +492,9 @@ for n, k in sr.items():
     w = next((v for s, v in W if n.endswith(s)), n)
     out.append("%s %s" % (w, k[0] or k[1]))
 if sr == tg:
-    print("tyle samo co w kopii")
+    print(_(u"tyle samo co w kopii"))
 elif not sr:
-    print("bez retencji (źródło nie przycina migawek)")
+    print(_(u"bez retencji (źródło nie przycina migawek)"))
 else:
     print(", ".join(out))
 PYEOF
@@ -498,10 +507,10 @@ sargs_words() {   # P_SARGS (--src-tier=T --keep=N ...) -> "godzinowe 72, dobowe
         case "$a" in
             --src-tier=*) t="${a#*=}" ;;
             --keep=*|--retain=*)
-                case "$t" in *hourly) w=godzinowe ;; *daily) w=dobowe ;; *weekly) w=tygodniowe ;;
-                             *monthly) w=miesięczne ;; *yearly) w=roczne ;; *) w="$t" ;; esac
+                case "$t" in *hourly) w="$(T godzinowe)" ;; *daily) w="$(T dobowe)" ;; *weekly) w="$(T tygodniowe)" ;;
+                             *monthly) w="$(T miesięczne)" ;; *yearly) w="$(T roczne)" ;; *) w="$t" ;; esac
                 out="${out:+$out, }$w ${a#*=}" ;;
-            --drop-tier*) out="${out:+$out, }$t: bez" ;;
+            --drop-tier*) out="${out:+$out, }$t: $(T bez)" ;;
         esac
     done
     echo "${out:-?}"
@@ -511,7 +520,10 @@ engine_words() {
     [ -s "$TMPD/sc.json" ] || "$ZB" show-config "$NAME" --json >"$TMPD/sc.json" 2>/dev/null || { echo "?"; return 0; }
     "$PY" - "$TMPD/sc.json" "$NAME" <<'PYEOF' 2>/dev/null | tr -d '\r' || echo "?"
 import sys, json
-names = {"history": "historia", "compression": "kompresja", "cipher": "szyfr", "autotune": "autodobór", "raw": "raw"}
+import os as _os
+_C = json.load(open(_os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if _os.environ.get("ZFS_TUI_CAT") else {}
+def _(s): return _C.get(s, s)
+names = {"history": _(u"historia"), "compression": _(u"kompresja"), "cipher": _(u"szyfr"), "autotune": _(u"autodobór"), "raw": "raw"}
 out = []
 try:
     d = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -525,14 +537,14 @@ try:
             break
 except Exception:
     print("?"); sys.exit(0)
-print(", ".join(out) if out else "fabryczne")
+print(", ".join(out) if out else _(u"fabryczne"))
 PYEOF
 }
 engine_settings() {
-    local c_h c_c c_x c_a c_r p_h p_c p_x p_a items n d v N out
-    info "Ustawienia silnika" "Czytam ustawienia relacji..."
+    local c_h c_c c_x c_a c_r p_h p_c p_x p_a items n d v N out fab
+    info "$(T 'Ustawienia silnika')" "$(T 'Czytam ustawienia relacji...')"
     if ! "$ZB" show-config "$NAME" --json >"$TMPD/sc.json" 2>"$TMPD/sc.err"; then
-        wt --title "Ustawienia silnika" --msgbox "show-config nie odpowiedział:\n$(tail -3 "$TMPD/sc.err")" 12 "$W"
+        wt --title "$(T 'Ustawienia silnika')" --msgbox "$(T 'show-config nie odpowiedział:\n')$(tail -3 "$TMPD/sc.err")" 12 "$W"
         return 0
     fi
     # Brak pola = ustawienie fabryczne ("default"); pierwsza sekcja dataset tej relacji.
@@ -569,65 +581,65 @@ PYEOF
         geom
         # X10 (właściciel 2026-10-14): lustro (synchro) ma to samo co źródło -- "tylko różnica"
         # by temu przeczyła, więc w lustrze wiersza Historia nie ma.
-        items=()
-        [ "${MIRROR:-0}" = 1 ] || items+=(hist "Historia         $(eng_hist_words "$p_h")$([ "$p_h" = default ] && echo ' (fabryczne)')")
+        items=(); fab=" $(T '(fabryczne)')"
+        [ "${MIRROR:-0}" = 1 ] || items+=(hist "$(eng_lbl "$(T Historia)")$(eng_hist_words "$p_h")$([ "$p_h" = default ] && echo "$fab")")
         # X2 (właściciel 2026-10-12): kopia LOKALNA nie ma łącza -- kompresji, szyfru SSH
         # ani autodoboru nie ma tu czego ustawiać (silnik i tak je pomija).
         if [ "$PEER" != - ]; then
             # X10: wysyłka zaszyfrowana (raw) -- szyfrowanych danych nie da się skompresować.
             case "${c_r:-default}" in yes|1|true) ;; *)
-                items+=(comp "Kompresja        $(eng_comp_words "$p_c")$([ "$p_c" = default ] && echo ' (fabryczne)')") ;; esac
-            v="domyślny SSH"; [ "$p_x" = default ] || v="$p_x"
-            items+=(ciph "Szyfr SSH        $v$([ "$p_x" = default ] && echo ' (fabryczne)')")
-            v="tak"; case "$p_a" in no) v="nie" ;; esac
-            items+=(auto "Autodobór łącza  $v$([ "$p_a" = default ] && echo ' (fabryczne)')")
+                items+=(comp "$(eng_lbl "$(T Kompresja)")$(eng_comp_words "$p_c")$([ "$p_c" = default ] && echo "$fab")") ;; esac
+            v="$(T 'domyślny SSH')"; [ "$p_x" = default ] || v="$p_x"
+            items+=(ciph "$(eng_lbl "$(T 'Szyfr SSH')")$v$([ "$p_x" = default ] && echo "$fab")")
+            v="$(T tak)"; case "$p_a" in no) v="$(T nie)" ;; esac
+            items+=(auto "$(eng_lbl "$(T 'Autodobór łącza')")$v$([ "$p_a" = default ] && echo "$fab")")
         fi
         # W17: wysyłka zaszyfrowana tylko do wglądu -- decyduje o niej pierwsza kopia,
         # zmiana = nowa kopia od zera (silniki odmawiają mieszania trybów).
-        case "${c_r:-default}" in yes|1|true) items+=(raw "Szyfrowane       wysyłka zaszyfrowana (raw)") ;; esac
-        items+=(__reset__ "Przywróć fabryczne" __done__ "Gotowe")
-        wt --title "Ustawienia silnika: $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item __done__ \
-           --menu "Jak przesyłane są kopie tej relacji." "$(fit $((${#items[@]} / 2 + 2)))" "$W" "$(lhfit $((${#items[@]} / 2)) 2)" "${items[@]}" || return 0
+        case "${c_r:-default}" in yes|1|true) items+=(raw "$(eng_lbl "$(T Szyfrowane)")$(T 'wysyłka zaszyfrowana (raw)')") ;; esac
+        items+=(__reset__ "$(T 'Przywróć fabryczne')" __done__ "$(T Gotowe)")
+        wt --title "$(Tv 'Ustawienia silnika: $NAME' '$NAME' "$NAME")" --ok-button "$(T Wybierz)" --cancel-button "$(T Wstecz)" --notags --default-item __done__ \
+           --menu "$(T 'Jak przesyłane są kopie tej relacji.')" "$(fit $((${#items[@]} / 2 + 2)))" "$W" "$(lhfit $((${#items[@]} / 2)) 2)" "${items[@]}" || return 0
         case "$WT_OUT" in
             raw)
-                wt --title "Wysyłka zaszyfrowana" --msgbox "Źródło jest zaszyfrowane i kopie idą zaszyfrowane (raw): w celu leżą\nzaszyfrowane, ten host nie potrzebuje klucza.\n\nTego nie zmienia się w działającej relacji -- zmiana to nowa kopia od zera\n(usuń relację i załóż ją ponownie)." 12 "$W"
+                wt --title "$(T 'Wysyłka zaszyfrowana')" --msgbox "$(T 'Źródło jest zaszyfrowane i kopie idą zaszyfrowane (raw): w celu leżą\nzaszyfrowane, ten host nie potrzebuje klucza.\n\nTego nie zmienia się w działającej relacji -- zmiana to nowa kopia od zera\n(usuń relację i załóż ją ponownie).')" 12 "$W"
                 continue ;;
             hist)
                 d="${p_h%%:*}"; [ "$d" = default ] && d=all
-                eng_pick "Historia" "Co przesyłać, gdy w celu brakuje kilku migawek." "$d" \
-                    all    "Wszystkie migawki pomiędzy -- pełna historia w celu" \
-                    newest "Tylko różnica do najnowszej -- mniej miejsca, bez historii pośredniej" \
-                    auto   "Auto -- wszystkie, a przy dużej zaległości tylko różnica" || continue
+                eng_pick "$(T Historia)" "$(T 'Co przesyłać, gdy w celu brakuje kilku migawek.')" "$d" \
+                    all    "$(T 'Wszystkie migawki pomiędzy -- pełna historia w celu')" \
+                    newest "$(T 'Tylko różnica do najnowszej -- mniej miejsca, bez historii pośredniej')" \
+                    auto   "$(T 'Auto -- wszystkie, a przy dużej zaległości tylko różnica')" || continue
                 case "$WT_OUT" in
                     auto)
                         N=3; case "$p_h" in auto:*) N="${p_h#auto:}" ;; esac
                         while :; do
-                            wt --title "Historia: auto" --ok-button "Dalej" --cancel-button "Wstecz" \
-                               --inputbox "Po ilu odstępach zaległości przejść na samą różnicę (1-999)?" 9 "$W" "$N" || continue 2
+                            wt --title "$(T 'Historia: auto')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
+                               --inputbox "$(T 'Po ilu odstępach zaległości przejść na samą różnicę (1-999)?')" 9 "$W" "$N" || continue 2
                             v="${WT_OUT// /}"
                             case "$v" in ''|*[!0-9]*) ;; *) [ "${#v}" -le 3 ] && [ "$((10#$v))" -ge 1 ] && { p_h="auto:$((10#$v))"; break; } ;; esac
-                            wt --title "Zła liczba" --msgbox "'$WT_OUT' -- podaj liczbę całkowitą od 1 do 999." 8 "$W"
+                            wt --title "$(T 'Zła liczba')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- podaj liczbę całkowitą od 1 do 999.' '$WT_OUT' "$WT_OUT")" 8 "$W"
                         done ;;
                     *) p_h="$WT_OUT" ;;
                 esac ;;
             comp)
-                eng_pick "Kompresja" "Czy kompresować strumień kopii." "$p_c" \
-                    default "Fabryczna -- zdalnie zstd, lokalnie nic" \
+                eng_pick "$(T Kompresja)" "$(T 'Czy kompresować strumień kopii.')" "$p_c" \
+                    default "$(T 'Fabryczna -- zdalnie zstd, lokalnie nic')" \
                     zstd    "zstd" \
                     gzip    "gzip (pigz)" \
-                    none    "Bez kompresji" || continue
+                    none    "$(T 'Bez kompresji')" || continue
                 p_c="$WT_OUT" ;;
             ciph)
-                eng_pick "Szyfr SSH" "Jakim szyfrem SSH idą kopie." "$p_x" \
-                    default                       "Domyślny SSH" \
-                    aes128-gcm@openssh.com        "aes128-gcm (szybki na procesorach z AES-NI)" \
-                    chacha20-poly1305@openssh.com "chacha20 (szybki bez AES-NI)" || continue
+                eng_pick "$(T 'Szyfr SSH')" "$(T 'Jakim szyfrem SSH idą kopie.')" "$p_x" \
+                    default                       "$(T 'Domyślny SSH')" \
+                    aes128-gcm@openssh.com        "$(T 'aes128-gcm (szybki na procesorach z AES-NI)')" \
+                    chacha20-poly1305@openssh.com "$(T 'chacha20 (szybki bez AES-NI)')" || continue
                 p_x="$WT_OUT" ;;
             auto)
                 d="$p_a"; [ "$d" = default ] && d=yes
-                eng_pick "Autodobór łącza" "Czy silnik ma sam mierzyć łącze." "$d" \
-                    yes "Tak -- mierzy łącze i sam decyduje o kompresji" \
-                    no  "Nie" || continue
+                eng_pick "$(T 'Autodobór łącza')" "$(T 'Czy silnik ma sam mierzyć łącze.')" "$d" \
+                    yes "$(T 'Tak -- mierzy łącze i sam decyduje o kompresji')" \
+                    no  "$(T Nie)" || continue
                 p_a="$WT_OUT" ;;
             __reset__) p_h=default; p_c=default; p_x=default; p_a=default ;;
             __done__)
@@ -639,15 +651,15 @@ PYEOF
                     [ "$p_a" = "$c_a" ] || ARGV+=("--autotune=$p_a")
                 fi
                 [ "${#ARGV[@]}" -gt 3 ] || { P_TRANSFER=(); return 0; }
-                info "Ustawienia silnika" "Liczę plan..."
+                info "$(T 'Ustawienia silnika')" "$(T 'Liczę plan...')"
                 if ! "${ARGV[@]}" --plan >"$TMPD/stplan.txt" 2>&1; then
                     out="$(verb_refusal "$TMPD/stplan.txt")"
                     [ -n "$out" ] || out="$(tail -3 "$TMPD/stplan.txt")"
-                    wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(printf '%s' "$out" | fold -s -w $((W - 6)))" 12 "$W"
+                    wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(printf '%s' "$out" | fold -s -w $((W - 6)))" 12 "$W"
                     continue
                 fi
                 {
-                    echo "PLAN -- nic jeszcze nie zostało zmienione:"
+                    echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione:')"
                     echo
                     grep "^Relacja '" "$TMPD/stplan.txt"
                     echo
@@ -678,21 +690,21 @@ pending_count() {
 save_all() {
     local n rc=0 a k=0
     {
-        echo "PLAN -- nic jeszcze nie zostało zmienione. Po WYKONAJ, po kolei:"
+        echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione. Po WYKONAJ, po kolei:')"
         echo
-        [ -n "$P_HOST" ] && { k=$((k + 1)); echo "$k. Adres źródła: $P_HOST  (activate --host, sprawdzenie, że to ten sam host)"; echo; }
+        [ -n "$P_HOST" ] && { k=$((k + 1)); echo "$(Tv '$k. Adres źródła: $P_HOST  (activate --host, sprawdzenie, że to ten sam host)' '$k' "$k" '$P_HOST' "$P_HOST")"; echo; }
         if [ -n "$P_ADDED$P_REMOVED" ]; then
-            k=$((k + 1)); echo "$k. Datasety:"
+            k=$((k + 1)); echo "$(Tv '$k. Datasety:' '$k' "$k")"
             # Kampania wariantów 2026-10-22: dataset dodany z powrotem szedł PRZYROSTOWO od kopii, która
             # tu została -- "pierwsza pełna kopia" wprowadzała w błąd.
-            for n in $P_ADDED; do echo "   DOJDĄ:    $n  (pierwsza kopia od razu; przyrostowo, gdy kopia już tu jest)"; done
-            for n in $P_REMOVED; do echo "   ODPADNĄ:  $n  (kopie na tym hoście ZOSTAJĄ)"; done
+            for n in $P_ADDED; do echo "$(Tv '   DOJDĄ:    $n  (pierwsza kopia od razu; przyrostowo, gdy kopia już tu jest)' '$n' "$n")"; done
+            for n in $P_REMOVED; do echo "$(Tv '   ODPADNĄ:  $n  (kopie na tym hoście ZOSTAJĄ)' '$n' "$n")"; done
             echo
         fi
-        if [ "${#P_EDIT[@]}" -gt 0 ]; then k=$((k + 1)); echo "$k. Szablon: $(cur_words) -> $P_EDIT_WORDS"; sed -n '3,$p' "$TMPD/p_edit.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
-        if [ "${#P_TIERS[@]}" -gt 0 ]; then k=$((k + 1)); echo "$k. Harmonogram i retencja (tabela):"; sed -n '3,$p' "$TMPD/p_tiers.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
-        if [ "${#P_TRANSFER[@]}" -gt 0 ]; then k=$((k + 1)); echo "$k. Ustawienia silnika:"; grep "^Relacja '" "$TMPD/p_transfer.txt" | sed 's/^/   /'; echo; fi
-        echo "Komendy:"
+        if [ "${#P_EDIT[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(T '%s. Szablon: %s -> %s' "$k" "$(cur_words)" "$P_EDIT_WORDS")"; sed -n '3,$p' "$TMPD/p_edit.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
+        if [ "${#P_TIERS[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(T '%s. Harmonogram i retencja (tabela):' "$k")"; sed -n '3,$p' "$TMPD/p_tiers.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
+        if [ "${#P_TRANSFER[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(Tv '$k. Ustawienia silnika:' '$k' "$k")"; grep "^Relacja '" "$TMPD/p_transfer.txt" | sed 's/^/   /'; echo; fi
+        echo "$(T 'Komendy:')"
         [ -n "$P_HOST" ] && echo "  $(shq "$ZB") activate $NAME --host=$P_HOST --skip-final-catchup --yes"
         for n in $P_ADDED; do echo "  $(shq "$ZB") add-source $NAME $n --yes"; done
         for n in $P_REMOVED; do echo "  $(shq "$ZB") remove-source $NAME $n --yes"; done
@@ -706,11 +718,11 @@ save_all() {
     # potem krótkie pytanie.
     geom
     if [ "$(fold -s -w $((W - 4)) "$TMPD/saveplan.txt" | grep -c '')" -gt $((H - 6)) ]; then
-        textbox_read "Zmień relację $NAME -- plan wszystkich zmian" "$TMPD/saveplan.txt" || return 1
-        wt --title "Zmień relację $NAME" --yes-button "WYKONAJ" --no-button "Wstecz" \
-           --yesno "Wykonać zmiany z planu ($(pending_count))?\nWstecz = lista zmian, nic nie zmienione." 9 "$W" || return 1
+        textbox_read "$(Tv 'Zmień relację $NAME -- plan wszystkich zmian' '$NAME' "$NAME")" "$TMPD/saveplan.txt" "$(T Dalej)" || return 1
+        wt --title "$T_CHG" --yes-button "$(T WYKONAJ)" --no-button "$(T Wstecz)" \
+           --yesno "$(Tv 'Wykonać zmiany z planu ($(pending_count))?\nWstecz = lista zmian, nic nie zmienione.' '$(pending_count)' "$(pending_count)")" 9 "$W" || return 1
     else
-        yesno_text "$TMPD/saveplan.txt" "Zmień relację $NAME -- plan wszystkich zmian" "WYKONAJ" "Wstecz" || return 1
+        yesno_text "$TMPD/saveplan.txt" "$(Tv 'Zmień relację $NAME -- plan wszystkich zmian' '$NAME' "$NAME")" "$(T WYKONAJ)" "$(T Wstecz)" || return 1
     fi
     # U64 (właściciel 2026-10-21: "czarny ekran ponad 15 sekund"): kroki biegną za oknem
     # postępu (wt-lib run_progress), wynik w oknie. Kroki idą w podpowłoce, więc to, że
@@ -727,11 +739,11 @@ save_all() {
         if [ "$rc" -eq 0 ] && [ "${#P_TRANSFER[@]}" -gt 0 ]; then run1 "$ZB" set-transfer "$NAME" "${P_TRANSFER[@]}" --yes || rc=$?; fi
         return "$rc"
     }
-    run_progress "Zmień relację $NAME: wykonuję" "$TMPD/run.log" apply_steps || rc=$?
+    run_progress "$(Tv 'Zmień relację $NAME: wykonuję' '$NAME' "$NAME")" "$TMPD/run.log" apply_steps || rc=$?
     [ -e "$TMPD/edit.done" ] && DONE=1
     [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$rc"; } >>"$ZFS_TUI_LOG" 2>/dev/null
-    result_box "Zmień relację $NAME" "$rc" "$TMPD/run.log" "Relacja '$NAME' zmieniona (rc=0).${ZFS_TUI_LOG:+\n\nDziennik: $ZFS_TUI_LOG}" \
-        "ZATRZYMANE -- kroki przed tym, który odmówił, zostały."
+    result_box "$T_CHG" "$rc" "$TMPD/run.log" "$(Tv 'Relacja '\''$NAME'\'' zmieniona (rc=0).' '$NAME' "$NAME")${ZFS_TUI_LOG:+\n\n$(T 'Dziennik:') $ZFS_TUI_LOG}" \
+        "$(T 'ZATRZYMANE -- kroki przed tym, który odmówił, zostały.')"
     exit "$rc"
 }
 while :; do
@@ -749,21 +761,30 @@ while :; do
     elif [ "$PEER" = - ] && { [ "$TGT" = - ] || [ -z "$TGT" ]; }; then _rodzaj="migawki lokalne"
     elif [ "$PEER" = - ]; then _rodzaj="kopia lokalna"
     elif [ "${MIRROR:-0}" = 1 ]; then _rodzaj="lustro"; fi
+    # _rodzaj to kod (porównywany niżej w case); na ekranie idzie jego tłumaczenie _rt.
+    case "$_rodzaj" in
+        "migawki zdalne")  _rt="$(T 'migawki zdalne')" ;;
+        "migawki lokalne") _rt="$(T 'migawki lokalne')" ;;
+        "kopia lokalna")   _rt="$(T 'kopia lokalna')" ;;
+        lustro)            _rt="$(T lustro)" ;;
+        *)                 _rt="$_rodzaj" ;;
+    esac
+    _zm="$(T '[zmiana]')"
     _ds="$(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')"
     # Jak w kreatorze: liczba i nazwy; adres -- ten, przez który relacja chodzi TERAZ.
     _ds="$_ds: ${SRCS//,/, }"
     _ep="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); r=(d.get("relations") or [{}])[0]; e=r.get("active_endpoint") or ""; print(e[:-3] if e.endswith(":22") else e)' "$TMPD/st.json" 2>/dev/null | tr -d '\r')"
     _ep="${_ep:-$SRCHOST}"
-    _dsp=""; [ -n "$P_ADDED$P_REMOVED" ] && _dsp="  [zmiana]$(for n in $P_ADDED; do printf ' +%s' "$n"; done)$(for n in $P_REMOVED; do printf ' -%s' "$n"; done)"
+    _dsp=""; [ -n "$P_ADDED$P_REMOVED" ] && _dsp="  $_zm$(for n in $P_ADDED; do printf ' +%s' "$n"; done)$(for n in $P_REMOVED; do printf ' -%s' "$n"; done)"
     _sz="$(cur_words)"
     _pw="$(awk -F'\t' -v n="$CUR_P" '$1==n{print $2; exit}' "$TMPD/prof.tsv" 2>/dev/null | sed -e "s/^$CUR_P  *//" -e 's/  */ /g')"
     [ -n "$_pw" ] && _sz="$_sz -- $_pw"
-    [ "${#P_EDIT[@]}" -gt 0 ] && _sz="$(cur_words) -> $P_EDIT_WORDS [zmiana]"
-    [ "${#P_RARGS[@]}" -gt 0 ] && _sz="$_sz, tabela [zmiana]"
+    [ "${#P_EDIT[@]}" -gt 0 ] && _sz="$(cur_words) -> $P_EDIT_WORDS $_zm"
+    [ "${#P_RARGS[@]}" -gt 0 ] && _sz="$_sz, $(T tabela) $_zm"
     # U65 (uwaga 3: "Silnik: jak w configu -- nie wiadomo co"): wartości słowami, nie "jak w configu".
     _sr="$(srcret_words)"
-    [ "${#P_SARGS[@]}" -gt 0 ] && _sr="$_sr -> $(sargs_words) [zmiana]"
-    _en="$(engine_words)"; [ "${#P_TRANSFER[@]}" -gt 0 ] && _en="$(ptransfer_words) [zmiana]"   # sama nowa wartość: z "stare ->" [zmiana] wypadało za kartę
+    [ "${#P_SARGS[@]}" -gt 0 ] && _sr="$_sr -> $(sargs_words) $_zm"
+    _en="$(engine_words)"; [ "${#P_TRANSFER[@]}" -gt 0 ] && _en="$(ptransfer_words) $_zm"   # sama nowa wartość: z "stare ->" [zmiana] wypadało za kartę
     # U65 (właściciel 2026-10-21: "do kompletnej przebudowy"; makieta 2026-10-21): to, czego nie
     # da się zmienić (rodzaj, nazwa, konto, cel), stoi w NAGŁÓWKU, nie na liście; na liście tylko
     # to, co się zmienia, a zmieniona pozycja ma '*' i "[zmiana]". Pod kreską tylko zapis.
@@ -773,28 +794,28 @@ while :; do
         CARD_TAGS+=("$1"); CARD_VALUES+=("$3"); CARD_FIXED+=(0)
         if [ "$4" -eq 1 ]; then CARD_NAMES+=("* $2"); else CARD_NAMES+=("  $2"); fi
     }
-    if [ "$PEER" != - ]; then er_row adres "Źródło" "$_ep${P_HOST:+ -> $P_HOST [zmiana]}" "$([ -n "$P_HOST" ] && echo 1 || echo 0)"; fi
-    er_row dane "Datasety" "$_ds$_dsp" "$([ -n "$_dsp" ] && echo 1 || echo 0)"
-    er_row harmon "Harmonogram" "$_sz" "$([ "${#P_EDIT[@]}" -gt 0 ] || [ "${#P_RARGS[@]}" -gt 0 ] && echo 1 || echo 0)"
+    if [ "$PEER" != - ]; then er_row adres "$(T Źródło)" "$_ep${P_HOST:+ -> $P_HOST $_zm}" "$([ -n "$P_HOST" ] && echo 1 || echo 0)"; fi
+    er_row dane "$(T Datasety)" "$_ds$_dsp" "$([ -n "$_dsp" ] && echo 1 || echo 0)"
+    er_row harmon "$(T Harmonogram)" "$_sz" "$([ "${#P_EDIT[@]}" -gt 0 ] || [ "${#P_RARGS[@]}" -gt 0 ] && echo 1 || echo 0)"
     case "$_rodzaj" in backup|"kopia lokalna")
-        er_row srcret "Retencja źródła" "$_sr" "$([ "${#P_SARGS[@]}" -gt 0 ] && echo 1 || echo 0)" ;; esac
+        er_row srcret "$(T 'Retencja źródła')" "$_sr" "$([ "${#P_SARGS[@]}" -gt 0 ] && echo 1 || echo 0)" ;; esac
     case "$_rodzaj" in "migawki zdalne"|"migawki lokalne") ;; *)
-        er_row silnik "Silnik" "$_en" "$([ "${#P_TRANSFER[@]}" -gt 0 ] && echo 1 || echo 0)" ;; esac
+        er_row silnik "$(T Silnik)" "$_en" "$([ "${#P_TRANSFER[@]}" -gt 0 ] && echo 1 || echo 0)" ;; esac
     CARD_ACT_TAGS=(wykonaj)
-    if [ "$np" -gt 0 ]; then CARD_ACT_LABELS=("ZAPISZ ZMIANY ($np) -- najpierw plan do potwierdzenia")
-    else CARD_ACT_LABELS=("Zapisz zmiany (brak zmian)"); fi
-    _hdr="$_rodzaj${SRCHOST:+ z $SRCHOST}   nazwa $NAME   konto $([ "$ACCT_U" = - ] && echo root || echo "$ACCT_U")"
-    case "$_rodzaj" in backup|"kopia lokalna") _hdr="$_hdr   cel $TGT" ;; esac
+    if [ "$np" -gt 0 ]; then CARD_ACT_LABELS=("$(Tv 'ZAPISZ ZMIANY ($np) -- najpierw plan do potwierdzenia' '$np' "$np")")
+    else CARD_ACT_LABELS=("$(T 'Zapisz zmiany (brak zmian)')"); fi
+    _hdr="$_rt${SRCHOST:+ $(Tv 'z $SRCHOST' '$SRCHOST' "$SRCHOST")}   $(T nazwa) $NAME   $(T konto) $([ "$ACCT_U" = - ] && echo root || echo "$ACCT_U")"
+    case "$_rodzaj" in backup|"kopia lokalna") _hdr="$_hdr   $(T cel) $TGT" ;; esac
     if [ -n "$FORCE_ACTION" ]; then
         WT_OUT="$FORCE_ACTION"; FORCE_ACTION=""
     else
-    card_menu "Zmiana relacji $NAME" "$_hdr\nCo zmienić? Tego wyżej się nie zmienia (inaczej: nowa relacja). Zapis dopiero w \"Zapisz zmiany\"." "${LAST_ACTION:-dane}" "Wstecz" || {
+    card_menu "$(Tv 'Zmiana relacji $NAME' '$NAME' "$NAME")" "$(Tv '$_hdr\nCo zmienić? Tego wyżej się nie zmienia (inaczej: nowa relacja). Zapis dopiero w "Zapisz zmiany".' '$_hdr' "$_hdr")" "${LAST_ACTION:-dane}" "$(T Wstecz)" || {
            if [ "$np" -gt 0 ]; then
-               wt --title "Porzucić zmiany?" --yes-button "Porzuć" --no-button "Wstecz" --defaultno \
-                  --yesno "Na liście czeka zmian: $np. Wyjść bez zapisu?" 8 "$W"
+               wt --title "$(T 'Porzucić zmiany?')" --yes-button "$(T Porzuć)" --no-button "$(T Wstecz)" --defaultno \
+                  --yesno "$(Tv 'Na liście czeka zmian: $np. Wyjść bez zapisu?' '$np' "$np")" 8 "$W"
                [ $? -ne 0 ] && continue   # Wróć albo Esc = zostań
            fi
-           clear 2>/dev/null; wt_end "Zmień relację: przerwane, nic nie zmieniono"; exit 1; }
+           clear 2>/dev/null; wt_end "$(T 'Zmień relację: przerwane, nic nie zmieniono')"; exit 1; }
     fi
     ACTION="$WT_OUT"; LAST_ACTION="$ACTION"
     case "$ACTION" in
@@ -802,13 +823,13 @@ while :; do
         harmon) ACTION=szablon ;;
         srcret)
             if [ "${#P_EDIT[@]}" -gt 0 ]; then
-                wt --title "Retencja źródła" --msgbox "Nowy szablon czeka na zapis -- liczby źródła ustawiasz w oknie zaraz po wyborze\nszablonu (Harmonogram). Najpierw zapisz zmiany, potem wróć tutaj." 9 "$W"
+                wt --title "$(T 'Retencja źródła')" --msgbox "$(T 'Nowy szablon czeka na zapis -- liczby źródła ustawiasz w oknie zaraz po wyborze\nszablonu (Harmonogram). Najpierw zapisz zmiany, potem wróć tutaj.')" 9 "$W"
                 continue
             fi
             harm_flow src; continue ;;
     esac
     [ "$ACTION" = wykonaj ] && {
-        [ "$np" -gt 0 ] || { wt --title "Zapisz zmiany" --msgbox "Nic nie zmieniono -- nie ma czego zapisać." 8 "$W"; continue; }
+        [ "$np" -gt 0 ] || { wt --title "$(T 'Zapisz zmiany')" --msgbox "$(T 'Nic nie zmieniono -- nie ma czego zapisać.')" 8 "$W"; continue; }
         save_all || continue
     }
     case "$ACTION" in
@@ -825,26 +846,26 @@ while :; do
             "$ZB" edit-config "$NAME"; RC=$?
             # 3 = zamkniety bez zmian: nic do czytania, wracamy od razu (uwaga 22)
             [ "$RC" -eq 3 ] && exit 0
-            echo "=== edit-config zakończony (rc=$RC). Enter = dalej"
+            echo "$(Tv '=== edit-config zakończony (rc=$RC). Enter = dalej' '$RC' "$RC")"
             [ -t 0 ] && read -r _
             exit "$RC" ;;
         zapisz)
             # Z RELACJI SZABLON (właściciel 2026-10-09): kopia jej szablonu celu pod nową
             # nazwą, zwykła (bez znaku "ukryty") -- pojawi się na F5 i w kreatorze.
-            [ -n "$CUR_P" ] || { wt --title "Brak szablonu" --msgbox "Relacja '$NAME' nie ma zapisanego szablonu -- nie ma czego skopiować." 8 "$W"; continue; }
-            wt --title "Zapisz jako szablon" --ok-button "Dalej" --cancel-button "Wstecz" \
-               --inputbox "Nazwa nowego szablonu (litery, cyfry, . _ -).\nTrzyma i robi migawki tak jak relacja $NAME teraz: $(cur_words)." 10 "$W" "$NAME-szablon" || continue
+            [ -n "$CUR_P" ] || { wt --title "$(T 'Brak szablonu')" --msgbox "$(Tv 'Relacja '\''$NAME'\'' nie ma zapisanego szablonu -- nie ma czego skopiować.' '$NAME' "$NAME")" 8 "$W"; continue; }
+            wt --title "$(T 'Zapisz jako szablon')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
+               --inputbox "$(Tv 'Nazwa nowego szablonu (litery, cyfry, . _ -).\nTrzyma i robi migawki tak jak relacja $NAME teraz: $(cur_words).' '$NAME' "$NAME" '$(cur_words)' "$(cur_words)")" 10 "$W" "$NAME-$(T szablon)" || continue
             n="${WT_OUT// /}"
-            case "$n" in ''|-*|*[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, myślnik, podkreślenie; na początku nie myślnik." 8 "$W"; continue ;; esac
+            case "$n" in ''|-*|*[!A-Za-z0-9._-]*) wt --title "$(T 'Zła nazwa')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- tylko litery, cyfry, kropka, myślnik, podkreślenie; na początku nie myślnik.' '$WT_OUT' "$WT_OUT")" 8 "$W"; continue ;; esac
             if awk -F'\t' -v n="$n" '$1==n{f=1} END{exit !f}' "$TMPD/prof.tsv"; then
-                wt --title "Nazwa zajęta" --msgbox "Szablon '$n' już jest. Podaj inną nazwę." 8 "$W"; continue
+                wt --title "$(T 'Nazwa zajęta')" --msgbox "$(Tv 'Szablon '\''$n'\'' już jest. Podaj inną nazwę.' '$n' "$n")" 8 "$W"; continue
             fi
-            info "Zapisz jako szablon" "Zapisuję szablon $n..."
-            if out=$("$ZB" save-profile "--from=$CUR_P" "--as=$n" "--description=Ustawienia relacji $NAME" 2>&1); then
-                wt --title "Szablon zapisany" --msgbox "Szablon '$n' zapisany -- jest na F5 i w kreatorze nowej relacji." 8 "$W"
+            info "$(T 'Zapisz jako szablon')" "$(Tv 'Zapisuję szablon $n...' '$n' "$n")"
+            if out=$("$ZB" save-profile "--from=$CUR_P" "--as=$n" "--description=$(Tv 'Ustawienia relacji $NAME' '$NAME' "$NAME")" 2>&1); then
+                wt --title "$(T 'Szablon zapisany')" --msgbox "$(Tv 'Szablon '\''$n'\'' zapisany -- jest na F5 i w kreatorze nowej relacji.' '$n' "$n")" 8 "$W"
                 load_lists
             else
-                wt --title "Czasownik odmówił -- nic nie zapisano" --msgbox "$(printf '%s' "$out" | tail -6 | fold -s -w $((W - 6)))" 14 "$W"
+                wt --title "$(T 'Czasownik odmówił -- nic nie zapisano')" --msgbox "$(printf '%s' "$out" | tail -6 | fold -s -w $((W - 6)))" 14 "$W"
             fi
             continue ;;
         dane)
@@ -852,10 +873,10 @@ while :; do
             # z obecnymi datasetami relacji, dowolnie wiele dodań i usunięć, potem JEDEN
             # plan różnic i WYKONAJ. Bez "Sposób" (to inna relacja) i bez "Wyjątków":
             # add-source bierze cały dataset, wyjątków istniejącej relacji nie zmienia.
-            info "Datasety" "Czytam datasety z $SRCHOST..."
+            info "$(T Datasety)" "$(Tv 'Czytam datasety z $SRCHOST...' '$SRCHOST' "$SRCHOST")"
             if ! "$ZB" list-datasets ${LDS_ARGS[@]+"${LDS_ARGS[@]}"} --json --own-snapshots >"$TMPD/ds.json" 2>"$TMPD/ds.err" \
                || ! basket_tree_from_json "$TMPD/ds.json"; then
-                wt --title "Lista datasetów niedostępna" --msgbox "list-datasets $SRCHOST nie odpowiedział:\n$(tail -3 "$TMPD/ds.err")" 12 "$W"; continue
+                wt --title "$(T 'Lista datasetów niedostępna')" --msgbox "$(Tv 'list-datasets $SRCHOST nie odpowiedział:\n' '$SRCHOST' "$SRCHOST")$(tail -3 "$TMPD/ds.err")" 12 "$W"; continue
             fi
             B_ROOT=(); B_EXCL=()
             for n in ${SRCS//,/ }; do [ "$n" != - ] && { B_ROOT+=("$n"); B_EXCL+=(""); }; done
@@ -881,18 +902,18 @@ while :; do
                 # X21 (właściciel 2026-10-14): każda zmiana sprawdzona PRZED WYKONAJ -- czasownik
                 # bez --yes daje plan albo odmawia (np. dataset wewnątrz celu kopii); odmowa
                 # wraca do listy, zamiast przyjść po WYKONAJ z "to, co wyżej się udało, zostało".
-                info "Datasety" "Sprawdzam zmiany (plan czasownika, nic nie zmienia)..."
+                info "$(T Datasety)" "$(T 'Sprawdzam zmiany (plan czasownika, nic nie zmienia)...')"
                 : >"$TMPD/dswhy.txt"
                 for n in $ADDED; do
                     "$ZB" add-source "$NAME" "$n" >"$TMPD/dschk.txt" 2>&1 \
-                        || printf '%s -- nie dodam:\n  %s\n' "$n" "$(verb_refusal "$TMPD/dschk.txt")" >>"$TMPD/dswhy.txt"
+                        || T '%s -- nie dodam:\n  %s\n' "$n" "$(verb_refusal "$TMPD/dschk.txt")" >>"$TMPD/dswhy.txt"
                 done
                 for n in $REMOVED; do
                     "$ZB" remove-source "$NAME" "$n" >"$TMPD/dschk.txt" 2>&1 \
-                        || printf '%s -- nie usunę:\n  %s\n' "$n" "$(verb_refusal "$TMPD/dschk.txt")" >>"$TMPD/dswhy.txt"
+                        || T '%s -- nie usunę:\n  %s\n' "$n" "$(verb_refusal "$TMPD/dschk.txt")" >>"$TMPD/dswhy.txt"
                 done
                 if [ -s "$TMPD/dswhy.txt" ]; then
-                    wt --title "Tej zmiany nie da się zrobić -- nic nie zmieniono" --msgbox "$(fold -s -w $((W - 6)) "$TMPD/dswhy.txt")" "$(fit "$(fold -s -w $((W - 6)) "$TMPD/dswhy.txt" | grep -c '')")" "$W"
+                    wt --title "$(T 'Tej zmiany nie da się zrobić -- nic nie zmieniono')" --msgbox "$(fold -s -w $((W - 6)) "$TMPD/dswhy.txt")" "$(fit "$(fold -s -w $((W - 6)) "$TMPD/dswhy.txt" | grep -c '')")" "$W"
                     continue
                 fi
                 # Na listę zmian -- wykona je "Zapisz zmiany", razem z resztą (jedno WYKONAJ).
@@ -908,16 +929,16 @@ while :; do
     geom
     if [ "$step" -eq 1 ] && [ "$ACTION" = szablon ]; then
         # U25: "Harmonogram" = jedno pole jak w kreatorze -- na górze "Ręcznie…" (tabela).
-        items=(__manual__ "$(clip_label "$(printf '%-9s%s' '' 'Ręcznie…  tabela szczebli: sposób, szczeble, liczby, zamrażanie')" $((W - 10)))")
+        items=(__manual__ "$(clip_label "$(printf '%-9s%s' '' "$(T 'Ręcznie…  tabela szczebli: sposób, szczeble, liczby, zamrażanie')")" $((W - 10)))")
         while IFS=$'\t' read -r n t; do
             [ -n "$n" ] || continue
-            mark="         "; [ "$n" = "$CUR_P" ] && mark="[obecny] "
+            mark="         "; [ "$n" = "$CUR_P" ] && mark="$(T '[obecny]') "
             items+=("$n" "$(clip_label "$mark$t" $((W - 10)))")
         done <"$TMPD/prof.tsv"
         def="$PROFILE"; awk -F'\t' -v n="$def" '$1==n{f=1} END{exit !f}' "$TMPD/prof.tsv" || def="${items[2]:-${items[0]}}"
         [ "$CUR_P" = "$HNAME" ] && def=__manual__
-        wt --title "Zmień relację $NAME -- użyj szablonu" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
-           --menu "Obecny szablon: $(cur_words)\nSekcje relacji zostaną wygenerowane od nowa z wybranego szablonu\n(retencja, harmonogramy). Dane nie są przenoszone, seed nie jest potrzebny.\nTen sam szablon = odświeżenie (rozrzut minut, retencja źródła per szczebel)." \
+        wt --title "$(Tv 'Zmień relację $NAME -- użyj szablonu' '$NAME' "$NAME")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
+           --menu "$(Tv 'Obecny szablon: $(cur_words)\nSekcje relacji zostaną wygenerowane od nowa z wybranego szablonu\n(retencja, harmonogramy). Dane nie są przenoszone, seed nie jest potrzebny.\nTen sam szablon = odświeżenie (rozrzut minut, retencja źródła per szczebel).' '$(cur_words)' "$(cur_words)")" \
            "$(fit $((${#items[@]} / 2 + 5)))" "$W" "$(lhfit $((${#items[@]} / 2)) 4)" "${items[@]}" || continue 2
         if [ "$WT_OUT" = __manual__ ]; then
             # Ręcznie: tabela szczebli (snaponly -- blok "harm" niżej, ukryty szablon relacji).
@@ -931,8 +952,8 @@ while :; do
         # startuje z obecnego szablonu relacji; wynik = ukryty szablon relacja-<NAZWA>.
         base="${CUR_P:-default}"
         clear 2>/dev/null
-        _ttl="Harmonogram i retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)"
-        [ "$SNAPONLY" -eq 1 ] && _ttl="Harmonogram i retencja: MIGAWKI NA ŹRÓDLE – $SRCNAME"
+        _ttl="$(Tv 'Harmonogram i retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)' '$(hostname -s 2>/dev/null || hostname)' "$(hostname -s 2>/dev/null || hostname)")"
+        [ "$SNAPONLY" -eq 1 ] && _ttl="$(Tv 'Harmonogram i retencja: MIGAWKI NA ŹRÓDLE – $SRCNAME' '$SRCNAME' "$SRCNAME")"
         ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "$base" "$TMPD/rargs" "$_ttl" \
             || continue 2
         mapfile -t RARGS <"$TMPD/rargs"
@@ -943,9 +964,9 @@ while :; do
             if [ -n "$HFILE" ] && [ -z "$HBACKUP" ] && [ -f "$HFILE" ]; then
                 HBACKUP="$TMPD/hidden.bak"; cp -p "$HFILE" "$HBACKUP"
             fi
-            info "Harmonogram i retencja kopii w celu i źródle" "Zapisuję ustawienia relacji..."
-            if ! out=$("$ZB" save-profile "--from=$base" "--as=$HNAME" --hidden --force ${RARGS[@]+"${RARGS[@]}"} "--description=Własne ustawienia relacji $NAME" 2>&1); then
-                wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(printf '%s' "$out" | grep -E 'FATAL' | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)))" 14 "$W"
+            info "$(T 'Harmonogram i retencja kopii w celu i źródle')" "$(T 'Zapisuję ustawienia relacji...')"
+            if ! out=$("$ZB" save-profile "--from=$base" "--as=$HNAME" --hidden --force ${RARGS[@]+"${RARGS[@]}"} "--description=$(Tv 'Własne ustawienia relacji $NAME' '$NAME' "$NAME")" 2>&1); then
+                wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(printf '%s' "$out" | grep -E 'FATAL' | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)))" 14 "$W"
                 continue
             fi
             HIDDEN_DIRTY=1
@@ -962,15 +983,15 @@ while :; do
         if [ "$ACTION" = szablon ]; then
             src_override_warning
             if [ -s "$TMPD/srcwarn.txt" ]; then
-                { echo "Szablon $PROFILE ustawi liczby w ŹRÓDLE tak jak w szablonie:"; echo; cat "$TMPD/srcwarn.txt"; echo
-                  echo "Jeśli źródło ma trzymać inaczej, zmień liczby w następnym oknie"
-                  echo "(retencja źródła) albo później w 'Harmonogram i retencja'."; } >"$TMPD/srcwarn2.txt"
-                wt --title "Uwaga: szablon nadpisze liczby w źródle" --ok-button "Dalej" --msgbox "$(cat "$TMPD/srcwarn2.txt")" "$(fit "$(grep -c '' "$TMPD/srcwarn2.txt")")" "$W"
+                { echo "$(Tv 'Szablon $PROFILE ustawi liczby w ŹRÓDLE tak jak w szablonie:' '$PROFILE' "$PROFILE")"; echo; cat "$TMPD/srcwarn.txt"; echo
+                  echo "$(T 'Jeśli źródło ma trzymać inaczej, zmień liczby w następnym oknie')"
+                  echo "$(T '(retencja źródła) albo później w '\''Harmonogram i retencja'\''.')"; } >"$TMPD/srcwarn2.txt"
+                wt --title "$(T 'Uwaga: szablon nadpisze liczby w źródle')" --ok-button "$(T Dalej)" --msgbox "$(cat "$TMPD/srcwarn2.txt")" "$(fit "$(grep -c '' "$TMPD/srcwarn2.txt")")" "$W"
             fi
         fi
         # RETENCJA ŹRÓDŁA: to samo okno-tabela co w kreatorze (uwaga 10).
         src_prefill
-        SRC_TITLE="Retencja: W ŹRÓDLE KOPII – $SRCNAME"
+        SRC_TITLE="$(Tv 'Retencja: W ŹRÓDLE KOPII – $SRCNAME' '$SRCNAME' "$SRCNAME")"
         # CONFIG JAKO JEDYNE ŹRÓDŁO: bez pochodnego szablonu źródła (<P>-src-...). Szablon
         # idzie na relację ze źródłem jak cel, a różnice źródła (--src-tier...) jadą w TYM
         # SAMYM wywołaniu edit-relation -- jedna podmiana configu (X27 etap B).
@@ -985,11 +1006,11 @@ while :; do
     # X27 (właściciel 2026-10-14): szablon i liczby źródła JEDNYM zapisem -- edit-relation
     # przyjmuje słowa set-tiers i nakłada je w tej samej kopii roboczej configu.
     ARGV=("$ZB" edit-relation "$NAME" "--profile=$PROFILE" "--source-profile=$SRCPROF" ${SARGS[@]+"${SARGS[@]}"})
-    info "Zmień relację $NAME" "Liczę plan (generacja, próba pobrania, prawa na źródle)..."
+    info "$T_CHG" "$(T 'Liczę plan (generacja, próba pobrania, prawa na źródle)...')"
     if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
         verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)) >"$TMPD/why.txt"
         [ -s "$TMPD/why.txt" ] || tail -5 "$TMPD/plan.txt" >"$TMPD/why.txt"
-        wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
+        wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
         # Kampania 2026-10-22: szablon z INNĄ rodziną migawek to nowa relacja -- żadna liczba
         # w oknie źródła tego nie zmieni, a Wstecz o jeden krok kręcił w kółko ostrzeżenie ->
         # tabela -> odmowa. Taka odmowa wraca do listy szablonów.
@@ -999,10 +1020,13 @@ while :; do
     # Plan w skrócie: podsumowanie czasownika + linie crona TEJ relacji (-/+), każda jako
     # "minuta godzina ... | etykieta | retencja". Pełny diff jest w dzienniku.
     "$PY" - "$TMPD/plan.txt" "$NAME" <<'PYEOF' >"$TMPD/plan2.txt"
-import sys, re
+import sys, re, json
+import os as _os
+_C = json.load(open(_os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if _os.environ.get("ZFS_TUI_CAT") else {}
+def _(s): return _C.get(s, s)
 lines = open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()
 name = sys.argv[2]
-print("PLAN -- nic jeszcze nie zostało zmienione:\n")
+print(_(u"PLAN -- nic jeszcze nie zostało zmienione:") + u"\n")
 show = False
 for l in lines:
     if l.startswith("Edycja relacji:") or l.startswith("UWAGA:"):
@@ -1039,17 +1063,17 @@ for l in lines:
     r = re.search(r'\s(-[HDWMY]\d+)\s*$', body)
     new.append("  %-14s %s%s" % (when, lbl, ("  " + r.group(1)) if r else ""))
 if new or gone:
-    print("\nZadania tej relacji po zmianie (zastępują %d dotychczasowych):" % gone)
+    print(u"\n" + (_(u"Zadania tej relacji po zmianie (zastępują %d dotychczasowych):") % gone))
     for x in new:
         print(x)
 else:
-    print("\nZadania w cronie: bez zmian.")
+    print(u"\n" + _(u"Zadania w cronie: bez zmian."))
 PYEOF
     if [ "$ACTION" = szablon ] && [ -s "$TMPD/srcwarn.txt" ] && [ "${#SARGS[@]}" -eq 0 ]; then
-        { echo; echo "UWAGA -- źródło dostanie liczby szablonu (w oknie źródła nic nie zmieniono):"; cat "$TMPD/srcwarn.txt"; } >>"$TMPD/plan2.txt"
+        { echo; echo "$(T 'UWAGA -- źródło dostanie liczby szablonu (w oknie źródła nic nie zmieniono):')"; cat "$TMPD/srcwarn.txt"; } >>"$TMPD/plan2.txt"
     fi
     if [ -s "$TMPD/rargs.plan" ] && [ "$PROFILE" = "$HNAME" ]; then
-        { echo; echo "Zmiany w tabeli szczebli:"; cat "$TMPD/rargs.plan"; } >>"$TMPD/plan2.txt"
+        { echo; echo "$(T 'Zmiany w tabeli szczebli:')"; cat "$TMPD/rargs.plan"; } >>"$TMPD/plan2.txt"
     fi
     # X6 (właściciel 2026-10-12): RĘCZNA ZMIANA CONFIGU przepadała bez słowa -- sekcje
     # relacji powstają od nowa z jej szablonu. Plan z OBECNYMI ustawieniami relacji (nic
@@ -1068,7 +1092,7 @@ PYEOF
     # Plan przeszedł -- szablon czeka na liście zmian; "Zapisz zmiany" wykona wszystko razem.
     # Szablon i tabela szczebli to dwie drogi do tego samego (sekcje od nowa) -- obowiązuje ostatnia.
     P_EDIT=("${ARGV[@]:3}"); cp "$TMPD/plan2.txt" "$TMPD/p_edit.txt"; P_TIERS=(); P_RARGS=(); P_SARGS=()
-    P_EDIT_WORDS="$PROFILE"; [ "$PROFILE" = "$HNAME" ] && P_EDIT_WORDS="własne ustawienia (tabela)"
+    P_EDIT_WORDS="$PROFILE"; [ "$PROFILE" = "$HNAME" ] && P_EDIT_WORDS="$(T 'własne ustawienia (tabela)')"
     continue 2
 done
 done

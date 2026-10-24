@@ -33,7 +33,8 @@ for fn in sorted(os.listdir(tui)):
                     k = m.group(2)
                 if k not in cat:
                     missing.append("%s:%d %r" % (fn, no, k[:60]))
-    elif fn.endswith(".py"):
+    if fn.endswith((".py", ".sh")):
+        # .sh: Python pasted into the script (heredoc) uses the same _() over ZFS_TUI_CAT
         src = open(p, encoding="utf-8").read()
         for m in re.finditer(r"\b_\(\s*u?(\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')\s*\)", src):
             k = ast.literal_eval(m.group(1))

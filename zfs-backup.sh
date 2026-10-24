@@ -15604,7 +15604,7 @@ growth.factor|5|int:2:100|-|ile razy szybszy niż zwykle przyrost uznać za pode
 growth.min_mib|1024|int:1:10485760|-|od ilu MiB przyrostu strażnik w ogóle reaguje
 growth.max_ratio_pct|110|int:100:200|-|kompresja przyrostu (w %, 100 = żadna) do której przyrost uznać za niekompresowalny
 growth.days|7|int:2:60|-|z ilu dni strażnik liczy normę przyrostu
-replica.insert_wait|60|int:60:3600|-|ile sekund replika czeka po włożeniu dysku, zanim go dotknie (wyjęty w tym czasie = nic; mniej niż 60 się nie da)
+replica.insert_wait|60|int:60:3600|-|ile sekund replika czeka po podłączeniu dysku, zanim go dotknie (odłączony w tym czasie = nic; mniej niż 60 się nie da)
 monitor.interval|15m|interval|cron|co ile strażnik sprawdza wiek kopii
 new_relation.template|default|profile|-|szablon proponowany nowej relacji
 update.time|:15|minute|host|minuta godzinnej aktualizacji (git pull)'

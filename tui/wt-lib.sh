@@ -45,6 +45,11 @@ d = json.load(open(sys.argv[1], encoding="utf-8"))
 sys.stdout.buffer.write(b"".join(k.encode("utf-8") + b"\0" + v.encode("utf-8") + b"\0"
                                  for k, v in d.items() if k and "\0" not in k + v))' "$_tcat")
 fi
+# Python wklejony w skrypt (heredoc) tłumaczy tym samym katalogiem: ścieżka w ZFS_TUI_CAT,
+# czytana przez json.load (dane, nie kod); pusta = polski.
+ZFS_TUI_CAT=""
+[ "$ZFS_TUI_LANG" != pl ] && [ -r "$_tcat" ] && ZFS_TUI_CAT="$(cd "$(dirname "$_tcat")" && pwd)/$(basename "$_tcat")"
+export ZFS_TUI_CAT
 unset _tcat _tk _tv
 T() {   # <tekst polski / szablon printf> [argumenty]
     local k="$1" v; shift
@@ -109,7 +114,7 @@ run_progress() {   # <tytuł> <dziennik> <polecenie...> -> rc polecenia; dzienni
     while kill -0 "$pid" 2>/dev/null; do
         geom
         n=$((H - 8)); [ "$n" -gt 14 ] && n=14; [ "$n" -lt 3 ] && n=3
-        TERM="$INFO_TERM" "$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" --title "$t -- trwa $((SECONDS - s0)) s" \
+        TERM="$INFO_TERM" "$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" --title "$(T '%s -- trwa %d s' "$t" "$((SECONDS - s0))")" \
               --infobox "$(tail -n "$n" "$log" | cut -c1-$((W - 6)))" $((n + 4)) "$W"
         for i in 1 2 3 4 5; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
     done
@@ -119,7 +124,7 @@ run_progress() {   # <tytuł> <dziennik> <polecenie...> -> rc polecenia; dzienni
 }
 # Wynik po run_progress: GOTOWE krótko; odmowa = przyczyna (verb_refusal) i koniec dziennika.
 result_box() {   # <tytuł> <rc> <dziennik> <tekst przy rc=0> [tekst przy rc!=0]
-    local t="$1" rc="$2" log="$3" okt="$4" bad="${5:-Nie udało się.}"
+    local t="$1" rc="$2" log="$3" okt="$4" bad="${5:-$(T 'Nie udało się.')}"
     geom
     if [ "$rc" -eq 0 ]; then
         local l; l=$(printf '%b
@@ -129,10 +134,10 @@ result_box() {   # <tytuł> <rc> <dziennik> <tekst przy rc=0> [tekst przy rc!=0]
         return 0
     fi
     { printf '%s  (rc=%s)\n\n' "$bad" "$rc"
-      if [ -n "$(verb_refusal "$log")" ]; then printf 'Powód:\n'; verb_refusal "$log" | sed 's/^/  /'; printf '\n'; fi
-      printf 'Koniec dziennika:\n'; tail -n 15 "$log" | sed 's/^/  /'
+      if [ -n "$(verb_refusal "$log")" ]; then printf '%s\n' "$(T 'Powód:')"; verb_refusal "$log" | sed 's/^/  /'; printf '\n'; fi
+      printf '%s\n' "$(T 'Koniec dziennika:')"; tail -n 15 "$log" | sed 's/^/  /'
     } >"$log.view"
-    textbox_read "$t" "$log.view" "Zamknij"
+    textbox_read "$t" "$log.view" "$(T Zamknij)"
     return 0
 }
 clip_label() {  # <tekst> <max znaków> -> tekst, ucięty z '…' gdy dłuższy (pozycja listy nie rozsadzi ramki)
@@ -146,13 +151,13 @@ clip_label() {  # <tekst> <max znaków> -> tekst, ucięty z '…' gdy dłuższy 
 # dopiero po Tab na przycisku (Esc = wstecz) -- zmierzone. Krótki tekst: zwykłe okno, Enter
 # zamyka; długi: przewijanie i te klawisze w tytule (na ramce).
 textbox_read() {   # <tytuł> <plik> [przycisk, domyślnie Dalej] -> rc whiptail (Esc = 1/255)
-    local t="$1" f="$2" b="${3:-Dalej}" lines
+    local t="$1" f="$2" b="${3:-$(T Dalej)}" lines
     geom
     lines=$(fold -s -w $((W - 4)) "$f" | grep -c '')
     if [ "$lines" -le $((H - 7)) ]; then
         wt --title "$t" --ok-button "$b" --textbox "$f" "$H" "$W"
     else
-        wt --title "$t  [strzałki przewijają, Tab -> $b, Esc wraca]" --ok-button "$b" --scrolltext --textbox "$f" "$H" "$W"
+        wt --title "$(Tv '$t  [strzałki przewijają, Tab -> $b, Esc wraca]' '$t' "$t" '$b' "$b")" --ok-button "$b" --scrolltext --textbox "$f" "$H" "$W"
     fi
 }
 yesno_text() {  # <plik> <tytuł> <tak> <nie> [--defaultno] -> yesno; przewijanie TYLKO gdy się nie mieści
@@ -172,7 +177,7 @@ yesno_text() {  # <plik> <tytuł> <tak> <nie> [--defaultno] -> yesno; przewijani
         # zmianie relacji. Esc w oknie tekstu = "nie".
         textbox_read "$t" "$f" || return 1
         wt --title "$t" --yes-button "$y" --no-button "$n" $extra \
-           --yesno "Plan był w poprzednim oknie (wierszy: $lines). $y?" 8 "$W"
+           --yesno "$(Tv 'Plan był w poprzednim oknie (wierszy: $lines). $y?' '$lines' "$lines" '$y' "$y")" 8 "$W"
     fi
 }
 # EDYTOR LISTY -- jeden wzór okna dla każdego "dodaj / usuń pozycje" (decyzja właściciela
@@ -249,7 +254,7 @@ card_menu() {   # <tytuł> <tekst> <domyślny tag> <przycisk Wstecz/Wyjdź>; rc 
         # wypadało z kolumny.
         lb="${CARD_NAMES[$i]}"; while [ "${#lb}" -lt "$pad" ]; do lb="$lb "; done; lb="$lb$v"
         if [ "${CARD_FIXED[$i]:-0}" = 1 ]; then
-            items+=("${CARD_TAGS[$i]}" "$(clip_label "$lb" $((w - 10)))  (stałe)")
+            items+=("${CARD_TAGS[$i]}" "$(clip_label "$lb" $((w - 10)))  $(T '(stałe)')")
         else
             items+=("${CARD_TAGS[$i]}" "$(clip_label "$lb" "$w")")
         fi
