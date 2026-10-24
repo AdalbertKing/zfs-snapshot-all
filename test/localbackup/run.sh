@@ -407,7 +407,7 @@ out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="
 
 # ---- accepted: same-pool note vs cross-pool ----
 out="$(run --source=rpool/data --target=rpool/store --config="$WORK/sp.conf")"
-[ "$(printf '%s\n' "$out" | grep -c 'dziela pule')" -eq 1 ] \
+[ "$(printf '%s\n' "$out" | grep -c 'share pool')" -eq 1 ] \
     && ok "same-pool prints one factual note" || bad "same-pool prints one factual note" ""
 out="$(run --source=rpool/data --target=hdd/backups --config="$WORK/xp.conf")"
 printf '%s\n' "$out" | grep -q 'dziela pule' \

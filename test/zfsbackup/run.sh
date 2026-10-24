@@ -9986,7 +9986,7 @@ else
     bad "monitorjson: zero monitor lines is UNKNOWN with rc 3, never OK" "rc=$mn_rc" "$(cat "$WORK/mn.out")"
 fi
 mn_run
-if grep -q "nikt tego nie pilnuje" "$WORK/mn.out"; then
+if grep -q "nobody is watching this" "$WORK/mn.out"; then
     ok "monitorjson: the text form says nobody is watching, rather than printing nothing"
 else
     bad "monitorjson: the text form says nobody is watching, rather than printing nothing" "$(cat "$WORK/mn.out")"
@@ -10546,10 +10546,10 @@ sed -e 's/"argv":\["--host=10.0.0.11"/"argv":["--host=192.168.28.98"/' \
     "$IM/ksiegowosc.json" > "$IM/stary.json"
 im_run "$IM/stary.json" --yes; im_rc=$?
 if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|--host=10.98.0.2|' "$IM/calls.log" \
-        && ! grep -q '192.168.28.98' "$IM/calls.log" && grep -q 'łączę się przez 10.98.0.2' "$WORK/im.out"; then
+        && ! grep -q '192.168.28.98' "$IM/calls.log" && grep -q 'connecting through 10.98.0.2' "$WORK/im.out"; then
     ok "importrel U62: an older export (argv = pairing address) connects through the ACTIVE_ENDPOINT it carries, and says so"
 else
-    bad "importrel U62: older export uses the active address" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(grep -i 'adres\|host' "$WORK/im.out" | head -5)"
+    bad "importrel U62: older export uses the active address" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(grep -i 'address\|host' "$WORK/im.out" | head -5)"
 fi
 # LANDING (owner 2026-10-21): an older file has no --landing; the import takes the label of
 # the pairing address from its declarations -- the directory the copies are in.
