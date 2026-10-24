@@ -240,15 +240,15 @@ printf '%s' "$out" | grep -q 'guid=991' \
 { printf '%s' "$out" | grep -qi 'INDEPENDENT' && printf '%s' "$out" | grep -qi 'frontier' \
   && ! printf '%s' "$out" | grep -qi 'ATOMIC'; } \
     && ok "planner: a CONFIG without recursive=atomic reports an INDEPENDENT frontier" \
-    || bad "planner: a CONFIG without recursive=atomic reports an INDEPENDENT frontier" "$(printf '%s' "$out"|grep -i spojnosc)"
+    || bad "planner: a CONFIG without recursive=atomic reports an INDEPENDENT frontier" "$(printf '%s' "$out"|grep -i coherence)"
 
 # ---- consistency comes from CONFIG: atomic ----------------------------------
 acfg="$WORK/atomic.conf"
 mkcfg "$acfg" '\n[dataset:rpool/data]\n\tdst          = hdd/store\n\trecursive    = atomic\n'
 out="$(run "$acfg" --plan)"
-{ printf '%s' "$out" | grep -qi 'ATOMIC' && printf '%s' "$out" | grep -qi 'punkt odtworzenia'; } \
+{ printf '%s' "$out" | grep -qi 'ATOMIC' && printf '%s' "$out" | grep -qi 'restore point'; } \
     && ok "planner: recursive = atomic in CONFIG reports an ATOMIC recovery point" \
-    || bad "planner: recursive = atomic in CONFIG reports an ATOMIC recovery point" "$(printf '%s' "$out"|grep -i spojnosc)"
+    || bad "planner: recursive = atomic in CONFIG reports an ATOMIC recovery point" "$(printf '%s' "$out"|grep -i coherence)"
 
 # ---- THE MEASURED TRAP, encoded ---------------------------------------------
 # On pve2 two datasets in different subtrees share the snapshot name
@@ -277,7 +277,7 @@ out="$(run "$tacfg" --plan)"
 { [ "$(printf '%s\n' "$out" | grep -ci 'ATOMIC')" -ge 2 ] && ! printf '%s' "$out" | grep -qi 'INDEPENDENT'; } \
     && ok "planner: the SAME snapshots under an atomic CONFIG report atomic (verdict keyed on CONFIG)" \
     || bad "planner: the SAME snapshots under an atomic CONFIG report atomic (verdict keyed on CONFIG)" \
-           "$(printf '%s' "$out"|grep -i spojnosc)"
+           "$(printf '%s' "$out"|grep -i coherence)"
 rm -f "$WORK/snaps.hdd_store_rpool_db"
 
 # ==============================================================================
@@ -1103,7 +1103,7 @@ out="$(runrepl "$stcfg" rpool/data)"
 reset_src
 echo FAIL > "$WORK/livebytes"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'z dziura w srodku'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'with a hole in the middle'; } \
     && ok "REV-119: an unmeasurable live delta refuses instead of showing a partial loss set" \
     || bad "REV-119: an unmeasurable live delta refuses instead of showing a partial loss set" "$out"
 [ "$(srccount)" = 1 ] \
@@ -1311,7 +1311,7 @@ echo 4096 > "$WORK/arrivebytes"; touch "$WORK/unfencefail" "$WORK/destroyfail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 { [ "$rc" -ne 0 ] \
   && printf '%s' "$out" | grep -q "readonly" \
-  && printf '%s' "$out" | grep -q "techniczne snapshoty"; } \
+  && printf '%s' "$out" | grep -q "technical snapshots"; } \
     && ok "REV-119 F1.2: both leftovers are named when both happen" \
     || bad "REV-119 F1.2: both leftovers are named when both happen" "$out"
 
@@ -1413,7 +1413,7 @@ rm -f "$WORK/written.$SRC"
 reset_src
 printf '999' > "$WORK/recvguid"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'weryfikacja GUID zawiodla' \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'GUID verification failed' \
   && printf '%s' "$out" | grep -q 'is NOT in its state from before the command' \
   && ! printf '%s' "$out" | grep -q 'RESTORE COMPLETE'; } \
     && ok "EXEC guid: a clean pipeline with the wrong guid fails and never claims an unchanged source" \
@@ -1521,7 +1521,7 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 printf 'rpool/data#bmold\t50\t66\t50\n' > "$WORK/bmarks.$SRC"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q 'BOOKMARKI' \
+{ [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q 'BOOKMARKS' \
   && ! printf '%s' "$out" | grep -q 'bookmark  bmold' \
   && grep -q '^rpool/data#bmold	' "$WORK/bmarks.$SRC"; } \
     && ok "REV-120 F1: a bookmark older than the base is neither announced nor destroyed (control)" \
@@ -1615,7 +1615,7 @@ grep -q '^rollback -r ' "$WORK/zfs-calls3" \
 #      still deciding, not only inside the destructive verb.
 bmfixture
 out="$(runstrat "$stcfg")"
-{ printf '%s' "$out" | grep -q 'BOOKMARKI' && printf '%s' "$out" | grep -q 'bmnew' \
+{ printf '%s' "$out" | grep -q 'BOOKMARKS' && printf '%s' "$out" | grep -q 'bmnew' \
   && ! printf '%s' "$out" | grep -q 'bmold'; } \
     && ok "REV-120 F1: the read-only plan announces the bookmarks a recovery would destroy" \
     || bad "REV-120 F1: the read-only plan announces the bookmarks a recovery would destroy" "$out"
