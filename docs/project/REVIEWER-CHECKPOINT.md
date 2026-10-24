@@ -2,7 +2,55 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-24
+## Latest final-audit batch — 2026-10-24 (REV-129 reconciliation)
+
+**PR #557 / REV-20260831-129 — historical evidence gap reconciled; REV remains
+CLOSED.** The reviewed integrated range is
+`b6e6adb68085abbb3cff3fe87f66a92a988c65c3..f31ac727acbab9595e5aaf9c0184793b9b92dad8`;
+the P8 correction is `5b9ae11777c980e74a269b91fc99cc793208d4e7`
+and the merge is `83bc122c2852cef8d4590cfc086ebb5889619bf2`.
+
+The old backlog warning was valid about the proof, but not evidence of a
+current open defect. REV-129's approval and closure were intentional and
+formally connected: approval commit
+`2d379051308f946fe618637830ea5e9b37923638` reviewed implementation
+`8c5204919f366371810535417b18f3592e6bbfd9`, and the closure names the same
+approval. The approval was nevertheless evidentially unsound. Its focused
+test called `restore_remote_off_point` with a hand-built per-dataset map and
+therefore never traversed `restore_one`'s production map builder. At the exact
+approved SHA the focused test passed 9/9 while the production awk program
+failed with `runaway string constant` (rc 2) because its `printf` contained a
+literal newline. The map was empty and post-restore verification fell back to
+snapshot names.
+
+PR #557 fixed that production path by extracting `restore_guid_map`, corrected
+the awk format string, and added both map-output and production-wiring tests.
+Independent current-tree evidence at
+`0b6737e6ecbc2e984d61960a15e6dff5e416ec09`:
+
+- historical focused suite at the approved SHA: 9/9 despite the production
+  awk negative control failing with rc 2 (this demonstrates the old test gap);
+- current focused off-point suite: 9/9;
+- current full restore suite: 335/335, including the two P8 production-path
+  assertions;
+- `./test/impact.sh b6e6adb68085abbb3cff3fe87f66a92a988c65c3..f31ac727acbab9595e5aaf9c0184793b9b92dad8`
+  selected restore, restore-grant, TUI and dead-code coverage;
+  `./test/impact.sh --verify` passed;
+- upstream exact-head CI run 38810678111 passed:
+  https://github.com/AdalbertKing/zfs-snapshot-all/actions/runs/38810678111.
+
+No new REV was opened: the currently shipped production builder is corrected,
+the regression now traverses the previously missed boundary, and no fresh
+failure contradicts it. The stale `CHANGES REQUIRED` prose in the original
+review remains historical finding text; the machine header, approval commit,
+closure, response and ledger agree on the closed state.
+
+**Next reviewer scope:** reconcile the next old-backlog empty-proof report,
+PR #551 / REV-20260809-084 (`coverage_conflicts` and `die_arm_fatal`), against
+the exact published approval/closure and current reachable refusal path; do
+not reopen it without a current defect or new contradicting evidence.
+
+## Previous final-audit batch — 2026-10-24
 
 **GUI reader timeout, PR #813 — reviewed, no new finding.** The exact integrated
 range was `7c4a57581ad9b50ed1ab9f0c50e3f0fb764181f6..66e702aade8cb96a0e3af8cb45079adc13d47b02`;
@@ -31,10 +79,9 @@ reopened: their acceptance properties are already covered by closed REV-171
 and REV-168 respectively, with no new contradicting code or evidence in this
 batch.
 
-**Next reviewer scope:** reconcile the old `REVIEW-BACKLOG-2026-10-16.md`
-warning for PR #557 / REV-129 against the actually published review, closure,
-current code, and decisive GUID negative control; do not reopen it unless that
-fresh comparison produces new evidence.
+That batch routed the next review to the old
+`REVIEW-BACKLOG-2026-10-16.md` warning for PR #557 / REV-129; the latest batch
+above records its completed reconciliation.
 
 ## Mandatory start of every Check / reviewer write
 
