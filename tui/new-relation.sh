@@ -510,9 +510,9 @@ account_is_flat() {    # <konto: "" = root> -> 0, gdy żywa relacja NA TYM KONCI
 # kreator mówi to wprost i poleca passive-flat; decyduje admin.
 sync_from_chain() {   # -> 0, gdy lustro/backup i któryś korzeń koszyka ma już migawki naszej rodziny
     [ "$MODE" = sync ] || [ "$MODE" = backup ] || return 1
-    local r n c f
+    local r n c f e
     for r in ${B_ROOT[@]+"${B_ROOT[@]}"}; do
-        while IFS=$'\t' read -r n c f; do
+        while IFS=$'\t' read -r n c f e; do
             [ "$n" = "$r" ] || continue
             # Backup: tylko NASZA rodzina (automated_*) -- ręczna migawka to nie łańcuch.
             [ "$MODE" = backup ] && c="${f:-0}"
@@ -523,6 +523,48 @@ sync_from_chain() {   # -> 0, gdy lustro/backup i któryś korzeń koszyka ma ju
     return 1
 }
 REC_PROFILE=passive-flat
+# KTO ROBI TE MIGAWKI? (właściciel 2026-10-24, wariant A). Silnik nie odróżni żywego łańcucha
+# od resztek starej relacji -- zmierzone na pve10<>pve11: lustro założone od nowa na migawkach
+# swojej poprzedniczki wyszło PASYWNE i przestało robić migawki. Pyta więc kreator, a admin
+# odpowiada na podstawie faktów (ile i jak stara najnowsza); "resztki" = --own-snapshots.
+CHAIN_ANS=""; CHAIN_FOR=""
+chain_ans() {   # -> chain | own | "" (brak odpowiedzi dla obecnego koszyka)
+    [ -n "$CHAIN_ANS" ] && [ "$CHAIN_FOR" = "${B_ROOT[*]}" ] && echo "$CHAIN_ANS"
+}
+chain_facts() {   # -> wiersze "  dataset: N migawek automated_*, najnowsza ... (... temu)"
+    local r n c f e now ago
+    now=$(date +%s)
+    for r in ${B_ROOT[@]+"${B_ROOT[@]}"}; do
+        while IFS=$'\t' read -r n c f e; do
+            [ "$n" = "$r" ] || continue
+            case "$f" in ''|*[!0-9]*) f=0 ;; esac
+            [ "$f" -gt 0 ] || continue
+            case "$e" in ''|*[!0-9]*) e=0 ;; esac
+            if [ "$e" -gt 0 ]; then
+                ago=$(( (now - e) / 60 ))
+                if [ "$ago" -lt 120 ]; then ago="$ago min"
+                elif [ "$ago" -lt 2880 ]; then ago="$((ago / 60)) $(T 'godz.')"
+                else ago="$((ago / 1440)) $(T dni)"; fi
+                echo "$(Tv '  $n: $f migawek automated_*, najnowsza $when ($ago temu)' '$n' "$n" '$f' "$f" '$when' "$(date -d "@$e" '+%Y-%m-%d %H:%M')" '$ago' "$ago")"
+            else
+                echo "$(Tv '  $n: $f migawek automated_*' '$n' "$n" '$f' "$f")"
+            fi
+        done <"$TMPD/own.tsv" 2>/dev/null
+    done
+}
+step_chain() {   # 0 = odpowiedź zapisana, 1 = wstecz
+    local def="${CHAIN_ANS:-chain}" facts
+    facts="$(chain_facts)"
+    geom
+    wt --title "$(title 5 "$(T 'Migawki naszej rodziny już są na źródle')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
+       --menu "$(Tv 'Na $HOST są już migawki naszej rodziny:\n$facts\n\nKto je dziś robi? Świeża najnowsza (sprzed godziny-dwóch) zwykle znaczy, że ktoś.\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.' '$HOST' "$HOST" '$facts' "$facts")" "$H" "$W" 2 \
+       chain "$(T 'Ktoś je robi (inny kolektor albo stary cron) -- łańcuch, przyjmuję')" \
+       own "$(T 'Nikt -- to resztki starej relacji, robię własne')" || return 1
+    CHAIN_ANS="$WT_OUT"; CHAIN_FOR="${B_ROOT[*]}"
+    # "Resztki" z wybranym wcześniej passive-flat nie robiłyby niczego -- szablon do wyboru od nowa.
+    [ "$CHAIN_ANS" = own ] && [ "$PROFILE" = "$REC_PROFILE" ] && { PROFILE=""; SRCPROF=""; VIS="${VIS/ profile / }"; }
+    return 0
+}
 # Domyślna nazwa relacji (krok 7 proponuje to samo) -- od niej nazwa szkicu "Ręcznie".
 rname_default() {
     if [ -n "$RNAME" ]; then echo "$RNAME"
@@ -561,7 +603,8 @@ step_profile() {
         PROFILE="${WT_OUT// /}"; [ -n "$PROFILE" ] || PROFILE=default; FREEZE=1; return 0
     fi
     items=(__manual__ "$(clip_label "$(printf '%-15s %s' "$(T 'Ręcznie…')" "$(T 'tabela szczebli: sposób, szczeble, liczby, zamrażanie')")" $((W - 10)))")
-    sync_from_chain && chain=1
+    # passive-flat polecany tylko przy odpowiedzi "łańcuch"; przy "resztki" relacja robi własne.
+    sync_from_chain && [ "$(chain_ans)" != own ] && chain=1
     while IFS=$'\t' read -r n w c q f sh hd; do
         [ -n "$n" ] || continue
         # Ukryte (od 2026-10-22 także fabryczne spoza piątki) nie idą na listę -- z jednym
@@ -871,6 +914,8 @@ build_argv() {   # [install] -> ARGV[]
         [ -n "$EXFAM" ] && ARGV+=("--exclude-family=$EXFAM")
         [ "$RAW" -eq 1 ] && ARGV+=("--raw")
     fi
+    # "Nikt ich nie robi -- resztki": seed i linia lustra nie robią się pasywne.
+    { [ "$MODE" = sync ] || [ "$MODE" = backup ]; } && sync_from_chain && [ "$(chain_ans)" = own ] && ARGV+=("--own-snapshots")
     a="$(account_name)"; [ -n "$a" ] && ARGV+=("--local-user=$a")
     [ "$GRANT" -eq 1 ] && ARGV+=("--grant-remotely")
     [ "$GRANT" -eq 1 ] && [ "$FREEZE" -eq 1 ] && [ "$GQUIESCE" -eq 1 ] && ARGV+=("--grant-quiesce")
@@ -936,8 +981,17 @@ summary_text() {
     else echo "$(T 'Pomijane migawki: żadne (kopiowane wszystkie).')"; fi
     [ "$RECURSION" = atomic ] && echo "$(T 'U ŹRÓDŁA migawek nie sprząta nikt (tak działa atomowo) -- trzeba samemu.')"
     if sync_from_chain; then
-        if [ "$PROFILE" = "$REC_PROFILE" ]; then
+        # Plan mówi to, co wyjdzie (kampania 2026-10-24: obiecywał "WŁASNE migawki", a lustro
+        # wychodziło pasywne -- sonda przy generowaniu configu robi je pasywnym mimo szablonu).
+        if [ "$(chain_ans)" = own ]; then
+            echo "$(T 'WŁASNE MIGAWKI: stare migawki naszej rodziny na źródle to resztki -- ta relacja robi własne')"
+            echo "$(T '  (--own-snapshots); stare wejdą do jej retencji i z czasem znikną.')"
+        elif [ "$PROFILE" = "$REC_PROFILE" ]; then
             echo "$(Tv 'ŁAŃCUCH: źródło ma już migawki naszej rodziny -- ta relacja kopiuje je BEZ własnych migawek ($PROFILE).' '$PROFILE' "$PROFILE")"
+        elif [ "$MODE" = sync ]; then
+            echo "$(T 'ŁAŃCUCH: migawki naszej rodziny na źródle robi ktoś inny -- lustro będzie PASYWNE:')"
+            echo "$(Tv '  niczego tam nie utworzy ani nie skasuje, szablon $PROFILE tego nie zmieni.' '$PROFILE' "$PROFILE")"
+            echo "$(T '  Jeśli nikt ich już nie robi, kopie staną -- wtedy pole Migawki na źródle -> resztki.')"
         else
             echo "$(T 'UWAGA ŁAŃCUCH: źródło ma już migawki naszej rodziny (kopie innej relacji albo resztki starej).')"
             echo "$(Tv '  Szablon $PROFILE dołoży tam WŁASNE migawki -- na kopiach innego kolektora to psuje jego kopie.' '$PROFILE' "$PROFILE")"
@@ -1086,7 +1140,7 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
 # karty dowolne pole poprawia się bez cofania. "Utwórz relację" = podsumowanie, plan,
 # WYKONAJ (step_summary, bez zmian).
 RC_RUN=1
-ORDER=(mode host ds target profile srcret name acct extra)
+ORDER=(mode host ds target chain profile srcret name acct extra)
 VIS=" "
 field_applies() {   # <pole> -> 0, gdy pole jest w tej relacji
     case "$1" in
@@ -1095,6 +1149,8 @@ field_applies() {   # <pole> -> 0, gdy pole jest w tej relacji
         # U32: lustro trzyma to, co źródło -- osobnej retencji "u źródła" nie ma.
         srcret) [ "$MODE" = backup ] || { [ "$MODE" = local ] && [ "$NOCOPY" -eq 0 ]; } ;;
         extra)  [ "$NOCOPY" -eq 0 ] ;;
+        # Tylko gdy źródło ma już migawki naszej rodziny (lustro, backup).
+        chain)  { [ "$MODE" = sync ] || [ "$MODE" = backup ]; } && sync_from_chain ;;
         *)      return 0 ;;
     esac
 }
@@ -1122,6 +1178,10 @@ field_value() {   # <pole> -> wartość na karcie ("" = jeszcze nie ustawione)
             a="$(awk -F'\t' -v n="$PROFILE" '$1==n{print $2; exit}' "$TMPD/prof.tsv" 2>/dev/null)"
             echo "$PROFILE${a:+ -- $a}" ;;
         srcret) case "$VIS" in *" srcret "*) src_words ;; esac ;;
+        chain)  case "$(chain_ans)" in
+                    chain) echo "$(T 'przyjmowane -- robi je ktoś inny (łańcuch)')" ;;
+                    own)   echo "$(T 'własne -- stare to resztki')" ;;
+                esac ;;
         name)   echo "$RNAME" ;;
         acct)   a="$(account_name)"; echo "${a:-root}" ;;
         extra)
@@ -1142,6 +1202,7 @@ missing_fields() {   # -> nazwy pól, bez których relacji nie da się założy�
     field_applies host && [ -z "$(field_value host)" ] && m="${m:+$m, }$(T 'źródło')"
     [ "${#B_ROOT[@]}" -gt 0 ] || m="${m:+$m, }$(T 'datasety')"
     field_applies target && [ -z "$TARGET" ] && m="${m:+$m, }$(T 'cel')"
+    field_applies chain && [ -z "$(chain_ans)" ] && m="${m:+$m, }$(T 'migawki na źródle')"
     [ -n "$PROFILE" ] || m="${m:+$m, }$(T 'harmonogram')"
     [ -n "$RNAME" ] || m="${m:+$m, }$(T 'nazwa')"
     echo "$m"
@@ -1159,6 +1220,7 @@ run_field() {   # <pole> -> rc okna pola (0 = ustawione)
         profile) before="$PROFILE"; step_profile; rc=$?
                  [ "$rc" -eq 0 ] && [ "$before" != "$PROFILE" ] && { SRCPROF=""; VIS="${VIS/ srcret / }"; } ;;
         srcret)  step_srcret; rc=$? ;;
+        chain)   step_chain; rc=$? ;;
         name)    step_name; rc=$? ;;
         acct)    step_account; rc=$? ;;
         extra)   step_extra; rc=$? ;;
@@ -1179,6 +1241,7 @@ CARD_NAMES_OF() {
     case "$1" in
         mode) echo "$(T 'Rodzaj')" ;; host) echo "$(T 'Źródło')" ;; ds) echo "$(T 'Datasety')" ;; target) echo "$(T 'Cel')" ;;
         profile) echo "$(T 'Harmonogram')" ;; srcret) echo "$(T 'Retencja źródła')" ;; silnik) echo "$(T 'Silnik')" ;;
+        chain) echo "$(T 'Migawki na źródle')" ;;
         name) echo "$(T 'Nazwa')" ;; acct) echo "$(T 'Konto')" ;; extra) echo "$(T 'Dodatkowe')" ;;
     esac
 }
@@ -1191,7 +1254,7 @@ CARD_NAMES_OF() {
 # siedzą w "Zaawansowane" (domyślne pasują prawie zawsze); dopiero tam "Utwórz relację".
 wz_steps() {   # -> kroki bieżącego rodzaju, w kolejności
     local f out=""
-    for f in mode host ds target profile srcret name; do field_applies "$f" && out="$out $f"; done
+    for f in mode host ds target chain profile srcret name; do field_applies "$f" && out="$out $f"; done
     echo $out
 }
 wz_abort() {   # 0 = przerwij; 1 = zostań ("Zostań" albo Esc)
