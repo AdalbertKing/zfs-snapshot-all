@@ -503,7 +503,7 @@ PYEOF
         step=3 ;;
     3)  # rodzaj nośnika -- PRZED wyborem nośnika (P5, uwaga 7): od niego zależy lista
         wt --title "$(rtitle 4 "$(T 'rodzaj nośnika')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$MEDIA" \
-           --menu "$(T 'Wymienny: dysk jest podłączany do systemu na czas kopii i odłączany po niej (można go wyjąć).\nStały: dysk zawsze w maszynie (np. osobna pula), nic się nie podłącza ani odłącza.')" 12 "$W" 2 \
+           --menu "$(T 'Wymienny: dysk jest podłączany do systemu na czas kopii i odłączany po niej (można go wyjąć).\nStały: dysk zawsze w maszynie (np. osobna pula), nic się nie podłącza ani odłącza.')" 14 "$W" 2 \
            removable "$(T 'wymienny (USB, dysk do sejfu)')" fixed "$(T 'stały (inna pula w tej maszynie)')" || { [ "$PASSIVE" = yes ] && step=25 || step=26; continue; }
         MEDIA="$WT_OUT"; [ "$MEDIA" = fixed ] && GUIDS=""
         step=4 ;;

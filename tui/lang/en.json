@@ -1144,7 +1144,7 @@
 "Wykonać zmiany z planu ($(pending_count))?\\nWstecz = lista zmian, nic nie zmienione.": "Apply the changes from the plan ($(pending_count))?\\nBack = list of changes, nothing changed.",
 "Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL": "Needs consent on $TARGET: deploy.sh --allow-restore=$GRANT_LABEL",
 "Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL (z --replace, gdy nie ma wspólnego punktu).": "Needs consent on $TARGET: deploy.sh --allow-restore=$GRANT_LABEL (with --replace when there is no common point).",
-"Wymienny: dysk jest podłączany do systemu na czas kopii i odłączany po niej (można go wyjąć).\\nStały: dysk zawsze w maszynie (np. osobna pula), nic się nie podłącza ani odłącza.": "Removable: the disk is attached to the system for the copy and detached afterwards (it can be removed).\nFixed: the disk is always in the machine (e.g. a separate pool), nothing is attached or detached.",
+"Wymienny: dysk jest podłączany do systemu na czas kopii i odłączany po niej (można go wyjąć).\\nStały: dysk zawsze w maszynie (np. osobna pula), nic się nie podłącza ani odłącza.": "Removable: connected for the copy, disconnected after it (can be removed).\\nFixed: always in the machine (e.g. another pool), nothing to connect.",
 "Wymienny: każdy bieg importuje pulę i eksportuje ją po kopii (dysk można odłączyć).\\nStały: pula jest zawsze w maszynie (np. osobna pula w mirrorze), bez importu/eksportu.": "Removable: every run imports the pool and exports it after the copy (the disk can be disconnected).\\nFixed: the pool is always in the machine (e.g. a separate pool in a mirror), no import/export.",
 "Wynik": "Result",
 "Wyrzucono": "Removed",

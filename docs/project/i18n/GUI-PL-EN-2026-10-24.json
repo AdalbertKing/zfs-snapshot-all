@@ -13745,7 +13745,7 @@
    "k": "u1193",
    "pl_code": "Wymienny: dysk jest podłączany do systemu na czas kopii i odłączany po niej (można go wyjąć).\\nStały: dysk zawsze w maszynie (np. osobna pula), nic się nie podłącza ani odłącza.",
    "pl": "Wymienny: dysk jest podłączany do systemu na czas kopii i odłączany po niej (można go wyjąć).\\nStały: dysk zawsze w maszynie (np. osobna pula), nic się nie podłącza ani odłącza.",
-   "en": "Removable: the disk is attached to the system for the copy and detached afterwards (it can be removed).\nFixed: the disk is always in the machine (e.g. a separate pool), nothing is attached or detached.",
+   "en": "Removable: connected for the copy, disconnected after it (can be removed).\\nFixed: always in the machine (e.g. another pool), nothing to connect.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
