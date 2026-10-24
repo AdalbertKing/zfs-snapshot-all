@@ -75,14 +75,18 @@ przeszkody na poziomie 0. Aktualna bramka rozróżnia identyfikatory GUID
 i import własny od zastanego; poprawki #741/#742 należy liczyć oddzielnie.
 Próby CI main `40112247542`: mediagate 160/0, twins 94/0, cron 232/0,
 gencron 123/0, składnia i graf PASS. PR-head `37495811929`: SUCCESS.
-Historyczne `cron2conf` usunięto świadomie w X27 S4, więc jego starego
-round-trip nie przypisuje się współczesnej suicie. Live USB/pve9 opisane
-przez implementera, niepowtórzone przez recenzenta. Bez nowego findingu/REV.
-Następny zakres: **#480/#482** — rozjazd kopii i `recv -F`, ochrona
-uruchomionego gościa.
+Historyczne `cron2conf` usunięto świadomie w X27 S4, ale dokładny head
+odtworzono w worktree: 31/0; ta sama suita z parserem dokładnej bazy przegrywa
+trzy nowe kształty repliki. Dawna liczba czterech porażek z opisu PR nie jest
+reprodukowalna. Historyczny `twins` daje dziś 93/94 wyłącznie przez termin
+portowania `process_dataset`, który upłynął 2026-10-19; port jest ukończony na
+bieżącym main. Live USB/pve9 opisane przez implementera, niepowtórzone przez
+recenzenta. Bez nowego findingu/REV. Następny zakres: **#453/#455** — końcowy
+rekord postępu i rc 75/raportowanie pominięcia przez blokadę. #480/#482 są już
+objęte REV-151 i jego zatwierdzoną kontynuacją.
 
 Zakres PR #463 zamknięto powyższym audytem. Granicy kasowania lustra z PR #460 / REV-150
-nie otwierać bez nowego diffu lub dowodu. Kolejny przegląd: PR #480 / #482.
+nie otwierać bez nowego diffu lub dowodu. Kolejny przegląd: PR #453 / #455.
 
 Uwaga do terminologii: wpis 2026-10-06 w `ENGINE-FREEZE.md` (~819) nazywa zmianę „PRE-AUTHORISED by the owner”, choć
 dokument (~1016–1035) mówi, że autoryzacja zamrożonego pliku należy do recenzenta. Żaden z wpisów 2026-10-06/-08/-12

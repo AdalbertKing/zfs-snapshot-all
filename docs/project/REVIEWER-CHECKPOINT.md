@@ -48,10 +48,16 @@ Current published tree reviewed: `7ff2b0bd1d11ab865a03100023b0606c2a3fbc0e`.
 
 **Evidence measured from repository and actual CI logs:**
 
-- Exact PR #463 head Actions run `37495811929` completed SUCCESS.
-  Its submitted report says historical `test/cron2conf` 31/0 and old-main
-  discriminator 4 failures, and `test/twins` 94/0; reviewer did not rerun
-  the deleted historic tool.
+- Exact PR #463 head Actions run `37495811929` completed SUCCESS. A reviewer
+  worktree at that exact head reran the now-deleted `test/cron2conf` suite:
+  **31 PASS / 0 FAIL**. The same head suite with the exact base parser fails
+  the three new replica-shape fixtures (`replica-fixed`,
+  `replica-multisource`, `replica-removable`), so the parser update is
+  discriminating. The PR report's older count of four base failures is not
+  reproduced and is not repeated as evidence. Exact-head `test/twins` now
+  reports **93 PASS / 1 FAIL** solely because its dated `process_dataset`
+  porting deadline expired on 2026-10-19; that unrelated port is complete on
+  current main, where twins is 94/94.
 - Current `main` push Actions run `40112247542` completed SUCCESS,
   51/51 jobs successful. Logs examined: `mediagate` **160 PASS / 0 FAIL**,
   including L8r (foreign/same-name GUID), L8s (two disks), L8f (pre-imported
@@ -68,10 +74,11 @@ Current published tree reviewed: `7ff2b0bd1d11ab865a03100023b0606c2a3fbc0e`.
 published implementation; no review state transition needed. Keep closed REV
 findings closed. No production script or host was changed by this audit.
 
-**Next reviewer scope:** reconcile PRs **#480 and #482** (P-0 source/target
-divergence, `receive -F`, guest-running protection) against their exact bases,
-current tests and live-risk evidence. Do not duplicate prior reviewed mirror
-destruction contract absent a genuinely new counterexample.
+**Next reviewer scope:** PRs **#453 and #455** as one small engine-control
+batch: terminal progress accounting and lock-skip rc 75/reporting across both
+engine twins. PRs #480/#482 are already covered by REV-151 and its accepted
+continuation; do not repeat that destructive-landing campaign without new code
+or evidence.
 
 ## Previous final-audit batch — 2026-10-24 (PR #510 / W19 and W14 engine reconciliation)
 
