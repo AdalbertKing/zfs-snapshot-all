@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ad83e05db7950a1a -->
+<!-- status-covers-digest: 01280f83730f47d3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -60,6 +60,16 @@
   Testy: `zfsbackup` (rekord, odmowy, seed, sonda lustra, eksport/import, `family_newest`) i `tui` (okno,
   `--own-snapshots`, tekst planu). Dalej: usuwanie relacji sprząta jej migawki na źródle (C) i „przejmij
   migawki” w zmianie relacji (migracja z snapsend.sh).
+
+- **GUI po angielsku -- ostatnie resztki (P6, `tr/p6-rest`).** Obchód wszystkich ekranów po angielsku na pve10
+  (47 widoków, tylko klawisze bez skutków) i skaner tekstów bez polskich liter wskazały ostatnie polskie napisy.
+  Ostrzeżenie „relacja ma ustawienia inne niż jej szablon” w planie zmiany relacji (`tui/hand-edits.py`, osobny
+  proces) czyta katalog przez `ZFS_TUI_CAT`. Przez katalog idą też: powody na panelu strażnika („ostatni bieg …
+  rc=…”, „zobacz cron.log”), tytuł panelu na F5, etykieta sortowania „ostatni bieg” oraz powód pauzy i wyłączenia
+  zapisywany przez GUI (`--reason=`). Dwa angielskie wpisy cytowały polskie nazwy okien. Pętla `for _, f in fails`
+  przesłaniała funkcję tłumaczącą i psuła F2/F3 przy nieudanym biegu; suite `tui` złapał to na gałęzi, przed scaleniem.
+  Zostają po polsku tylko komunikaty samych poleceń CLI, które GUI pokazuje w oknach planu i wyniku: to osobna
+  paczka. `tui` 411/0 (pve9).
 
 - **GUI po angielsku -- odzysk i przeglądanie kopii (P5, `tr/p5-restore`).** Teksty `tui/restore.sh` (okna
   Przywróć z F11) i `tui/browse.sh` (przeglądanie kopii: migawka zamontowana tylko do odczytu i mc) idą przez
