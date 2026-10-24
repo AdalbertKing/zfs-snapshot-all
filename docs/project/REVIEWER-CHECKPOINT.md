@@ -18,7 +18,7 @@ Current published tree reviewed: `7ff2b0bd1d11ab865a03100023b0606c2a3fbc0e`.
 - **Bookmark identity:** both `snapsend.sh` and `snapget.sh` source the same
   `lib-zfs-snap.sh`; both call `record_send_bookmark` with the same destination
   name and `IDENTIFIER`. `bookmark_target_tag` hashes
-  `printf '%s\\0%s' target identifier` and takes 8 hexadecimal characters.
+  `printf '%s\0%s' target identifier` and takes 8 hexadecimal characters.
   The PR #463 generator's ordinary replica does not introduce a `-j`
   identifier. The old and new transport therefore retain the same per-target
   anchor calculation, not merely the same comment.
@@ -42,7 +42,7 @@ Current published tree reviewed: `7ff2b0bd1d11ab865a03100023b0606c2a3fbc0e`.
   envelopes and kept flags. Later X27 S4 intentionally removed
   `cron2conf.sh` and its own suite; it would be misleading to claim
   those old legacy round-trip tests still run on current main. The
-  current cron generator instead has direct tests for ordinary/pasive
+  current cron generator instead has direct tests for ordinary/passive
   replicas, `-M`, GUID gating, own `keep=N` pruning without `-M`,
   and long-command dispatch.
 
