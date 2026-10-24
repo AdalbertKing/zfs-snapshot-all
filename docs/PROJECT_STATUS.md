@@ -25,8 +25,10 @@
   (`fix/rev174-foreign-protections`).** Siódmy wyjątek w `assert_target_block_not_clobbered` (przepisanie
   najdrobniejszego szczebla na pusty wzorzec z ochronami cudzych rodzin) porównywał linie po zdjęciu
   wszystkich `-P`, więc `vzdump:2 -> vzdump:0` albo usunięta ochrona przechodziły razem z przepisaniem.
-  Teraz każda ochrona `-P` z linii zainstalowanej musi zostać bez zmian, a nowe mogą mieć tylko postać
-  generowaną przez gen-cron (`:all`, `:2`); inaczej zwykły strażnik odmawia. Reproducer recenzenta:
+  Teraz każda ochrona `-P` z linii zainstalowanej musi zostać bez zmian, a nowe mogą mieć tylko kształt,
+  jaki generuje gen-cron (`:all`, `:2`), i nie mogą dotyczyć prefiksu już chronionego; inaczej zwykły
+  strażnik odmawia. Pełnego zestawu z gen-cron strażnik nie odtwarza (dodatkowa ochrona tylko zmniejsza
+  liczbę usunięć) -- opisane w odpowiedzi jako ryzyko do oceny recenzenta. Reproducer recenzenta:
   na main „REPRODUCED”, po poprawce „NOT REPRODUCED”. `zfsbackup --section mirrorguard` 12/0 (4 nowe
   przypadki, w tym kontrola pozytywna); na kodzie z main nowe przypadki odmowy padają.
 
