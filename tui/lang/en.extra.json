@@ -88,5 +88,10 @@
 "drabina GFS": "GFS ladder",
 "wg wieku": "by age",
 "jedna rodzina": "one family",
-"%s -- szczebel %s": "%s -- tier %s"
+"%s -- szczebel %s": "%s -- tier %s",
+"jutro %s": "tomorrow %s",
+" w ": " in ",
+"przyrost.": "increm.",
+"Repliki backupu kolektora (%d)": "Collector backup replicas (%d)",
+"TU": "HERE"
 }

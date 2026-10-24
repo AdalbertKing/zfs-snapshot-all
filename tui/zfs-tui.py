@@ -438,9 +438,9 @@ def fmt_next_short(epoch, now):
     midnight_n = time.mktime((n.tm_year, n.tm_mon, n.tm_mday, 0, 0, 0, 0, 0, -1))
     diff_days = int(round((midnight_t - midnight_n) / 86400.0))
     if diff_days == 1:
-        return u"jutro %s" % hhmm
+        return _(u"jutro %s") % hhmm
     if 2 <= diff_days <= 6:
-        wd = [u"pn", u"wt", u"śr", u"cz", u"pt", u"so", u"nd"][t.tm_wday]
+        wd = dow_word((t.tm_wday + 1) % 7)
         return u"%s %s" % (wd, hhmm)
     return "%s %s" % (time.strftime("%d.%m", t), hhmm)
 
@@ -742,6 +742,13 @@ def cron_next(spec, now):
 TIER_WORDS = [("hourly", u"godz."), ("daily", u"dni"), ("weekly", u"tyg."), ("monthly", u"mies."), ("yearly", u"lat")]
 TIER_ADJ = [("hourly", u"godzinowe"), ("daily", u"dobowe"), ("weekly", u"tygodniowe"), ("monthly", u"miesięczne"), ("yearly", u"roczne")]
 DOW = [u"nd", u"pn", u"wt", u"śr", u"cz", u"pt", u"so"]
+# Dni tygodnia nie idą przez katalog: "śr" jest w nim już kluczem "średnia" (kolumna statystyk).
+DOW_EN = [u"Sun", u"Mon", u"Tue", u"Wed", u"Thu", u"Fri", u"Sat"]
+
+
+def dow_word(i):
+    """<0 = niedziela> -> skrót dnia w języku okien."""
+    return (DOW_EN if LANG_CAT else DOW)[i % 7]
 
 
 def tier_unit(name, table=TIER_WORDS):
@@ -770,7 +777,7 @@ def cron_words(spec):
     if dom == "*" and mon == "*" and dow == "*":
         return _(u"co dobę %s") % hm
     if dom == "*" and mon == "*" and dow.isdigit():
-        return _(u"co tydzień %s %s") % (DOW[int(dow) % 7], hm)
+        return _(u"co tydzień %s %s") % (dow_word(int(dow)), hm)
     if dom.isdigit() and mon == "*" and dow == "*":
         return _(u"co miesiąc %s. dnia %s") % (dom, hm)
     if dom.isdigit() and mon.isdigit():
@@ -2147,7 +2154,7 @@ def job_panel_pairs(row, data, now, ch):
             common = common[:-1]
         base = "/".join(common)
         short = ["/".join(x[len(common):]) or "/".join(x) for x in parts]
-        pairs.append((_(u"Zakres"), _(u"%d datasetów%s: %s") % (len(jobs_here), (u" w " + base) if base else "", ", ".join(short))))
+        pairs.append((_(u"Zakres"), _(u"%d datasetów%s: %s") % (len(jobs_here), (_(u" w ") + base) if base else "", ", ".join(short))))
     else:
         src, dst = job_src_dst(j)
         d = j.get("direction", "")
@@ -3526,7 +3533,7 @@ def render_transfery(data, cursor, width, height, now, ch, message="", hide_gone
     cells = []
     for t in allrows:
         it = transfer_item(t, data, now, ch)
-        mode = {"incremental": u"przyrost.", "full": _(u"pełny")}.get(t.get("mode", ""), t.get("mode", "?"))
+        mode = {"incremental": _(u"przyrost."), "full": _(u"pełny")}.get(t.get("mode", ""), t.get("mode", "?"))
         when, wd, ds, dur, dane = it["cells"]
         cells.append([when, transfer_label(t, data), ds, mode, wd, dur, dane])
     host = (data.jobs or {}).get("host") or ""
@@ -3811,7 +3818,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
     if not reps:
         det_title = _(u"stany nośnika")
         det = [(_(MEDIA_STATES[k][0]), _(MEDIA_STATES[k][2])) for k in ("here", "available", "away", "wrong_medium")]
-    return render_tabbed(data, width, height, now, ch, "nosniki", u"Repliki backupu kolektora (%d)" % len(reps),
+    return render_tabbed(data, width, height, now, ch, "nosniki", _(u"Repliki backupu kolektora (%d)") % len(reps),
                          [_(u"Replika"), _(u"Nośnik"), _(u"Kopia z"), _(u"Kiedy")], cells, cursor,
                          (_(u"Enter szczegóły   Ins nowa   Del usuń   Tab do datasetów")) if reps else _(u"Ins nowa replika"),
                          det_title, det, child, focus, pair_cursor, screen_actions("nosniki"), empty, prio=[0, 1, 2, 3])
