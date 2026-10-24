@@ -26,7 +26,7 @@
   `lib-*.sh`, `hostscripts/`, `profiles/`, `tui/` bez narzędzi budowy katalogu, `docs/pl`, `docs/en`,
   LICENSE). `release/publish.sh <rewizja> <klon repo wydań> [--push]` eksportuje te pliki z tej
   rewizji (`git archive`, nie working tree), czyści je mapą `release/scrub.sed` (adresy labu i firm
-  na adresy dokumentacyjne RFC 5737, nazwa firmy na „site-a”; wzorce zakresów prywatnych w kodzie
+  na adresy dokumentacyjne RFC 5737, nazwa firmy na „Site-A” / „site-a”; wzorce zakresów prywatnych w kodzie
   zostają), wkłada `release/README.md` jako README, zapisuje `RELEASE-OF` (pełny SHA dev) i commituje
   tylko przy zmianach; `push` zwykły, nigdy `--force`. `zfs-backup.sh --version` i `deploy.sh
   --version` pokazują rewizję dev z `RELEASE-OF`. Suita `release` (10 sprawdzeń, w tym kontrola, że

@@ -64,7 +64,7 @@ printf '%s\n' "$rev" > "$tmp/RELEASE-OF"
 
 # Nothing the scrub is meant to remove may survive it (the private-range globs in the code,
 # 10.*|192.168.*, are not addresses and do not match these).
-left=$(grep -rIlE '192\.168\.(28|11)\.[0-9]|10\.98\.0\.[0-9]|[Mm]etropolis' "$tmp" || true)
+left=$(grep -rIliE '192\.168\.(28|11)\.[0-9]|10\.98\.0\.[0-9]|metropolis' "$tmp" || true)
 [ -z "$left" ] || die "after the scrub these still carry lab/customer addresses or names: $left"
 
 # --- into the release checkout -------------------------------------------------------------

@@ -35,7 +35,7 @@ is a documented, step-by-step operation (`zfs-backup edit-config`, then the wiza
 
 ## Known limitations
 
-- Target-side GFS retention is rendered as a flat count per tier; with one snapshot per period
-  the result is the same.
+- Target-side GFS retention is rendered as a flat count per tier; while the cadence is regular
+  the two keep the same snapshots, after a burst of catch-up runs they differ.
 - An automatic guard for datasets that become Proxmox replication targets while snapshotted is
   planned for 1.1; until then the wizard asks and the admin decides.
