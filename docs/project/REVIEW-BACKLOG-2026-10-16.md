@@ -81,6 +81,20 @@ pełny `test/restore` 335/335, a historyczne CI dokładnego head PR #557
 reprodukcji błędu ani nowego kodu przeczącego poprawce; luka dotyczy jakości
 historycznego dowodu i została zapisana w `REVIEWER-CHECKPOINT.md`.
 
+
+**Rozstrzygnięcie recenzenta 2026-10-24 — PR #551 / REV-20260809-084.**
+Wpis backlogu poprawnie wskazał późniejszą regresję osiągalności dowodu:
+`die_arm_fatal` powodował, że `record_load` w podpowłoce kończył rodzica zanim
+`coverage_conflicts` mogło zbudować nazwaną odmowę. Negatywna kontrola na bazie
+PR #551 `b9b1e5c58f2f6e854f10e18abe6b99399f676b18` kończy się rc 1 i pustym
+wyjściem. Commit `bb2ec7dc02e954e3122117f8a3738a2a3ed7dd72` dodał
+`die_confine_to_subshell`; na bieżącym `main` ten sam przypadek zwraca rc 1,
+drukuje fail-closed odmowę i dokładną ścieżkę złego rekordu. Dwie właściwe
+asercje `test/restoregrant` przechodzą, `impact --verify` przechodzi, a CI
+dokładnego head PR #551 (run 38759223428) jest zielone. REV-084 pozostaje
+CLOSED: bieżąca własność bezpieczeństwa jest spełniona i nie ma nowego kodu
+ani dowodu, który uzasadniałby ponowne otwarcie.
+
 ## 3. Uprawnienia, zgody, operacje niszczące
 
 Kolejność: odzysk (najwięcej nowych uprawnień), potem wdrożenie.
