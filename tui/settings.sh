@@ -13,7 +13,7 @@ set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "settings: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
-WT_BACKTITLE="Ustawienia hosta -- $(hostname)"
+WT_BACKTITLE="$(T 'Ustawienia hosta -- %s' "$(hostname)")"
 TMPD="$(mktemp -d)" || exit 1
 trap 'rm -rf "$TMPD"' EXIT
 

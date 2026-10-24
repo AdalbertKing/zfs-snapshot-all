@@ -294,8 +294,8 @@
 "miesięcznych": "monthly",
 "rocznych": "yearly",
 "KOHERENTNE (zamrażanie)": "CONSISTENT (freezing)",
-"WIEK (age)": "AGE (age)",
-"PŁASKI (flat)": "FLAT (flat)",
+"WIEK (age)": "AGE",
+"PŁASKI (flat)": "FLAT",
 "Jedna migawka na okres (godzinę, dobę, tydzień...), N okresów wstecz.": "One snapshot per period (hour, day, week...), N periods back.",
 "Seria migawek w jednej godzinie zostawia z niej jedną.": "A burst of snapshots within one hour leaves just one of them.",
 "Kasuje migawki starsze niż N okresów (dobowe 7 = 7 dni).": "Deletes snapshots older than N periods (daily 7 = 7 days).",
@@ -350,5 +350,6 @@
 "%s -- trwa %d s": "%s -- running %d s",
 "odczyt %s ": "read %s ",
 "... jeszcze %d": "... %d more",
-" (%d szt.)": " (%d datasets)"
+" (%d szt.)": " (%d datasets)",
+"Ustawienia hosta -- %s": "Host settings -- %s"
 }
