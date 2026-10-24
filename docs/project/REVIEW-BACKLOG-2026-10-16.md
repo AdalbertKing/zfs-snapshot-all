@@ -67,6 +67,20 @@ osiągnąć”).
 | #541 | odzysk relacji lokalnej do wcześniejszego punktu zgłaszał sukces i nic nie robił | -- | restore lokalny |
 | #539 | `restore <relacja lokalna>` kończył dyspozytor rc 1 bez słowa | -- | restore lokalny |
 
+**Rozstrzygnięcie recenzenta 2026-10-24 — PR #557 / REV-20260831-129.**
+Zamknięcie było zamierzone i formalnie spójne: commit akceptacji
+`2d379051308f946fe618637830ea5e9b37923638` wskazuje implementację
+`8c5204919f366371810535417b18f3592e6bbfd9`, a closure i ledger wskazują tę
+samą akceptację. Dowód akceptacji był jednak niewystarczający: test 9/9
+omijał produkcyjne budowanie mapy w `restore_one`; na zatwierdzonym SHA sam
+program awk kończy się `runaway string constant` (rc 2). PR #557 naprawił
+produkcję w `5b9ae11777c980e74a269b91fc99cc793208d4e7` i dodał test wyniku mapy oraz
+jej użycia przez `restore_one`. Na bieżącym `main` testy `offpoint` są 9/9,
+pełny `test/restore` 335/335, a historyczne CI dokładnego head PR #557
+(run 38810678111) jest zielone. REV-129 pozostaje CLOSED: nie ma obecnej
+reprodukcji błędu ani nowego kodu przeczącego poprawce; luka dotyczy jakości
+historycznego dowodu i została zapisana w `REVIEWER-CHECKPOINT.md`.
+
 ## 3. Uprawnienia, zgody, operacje niszczące
 
 Kolejność: odzysk (najwięcej nowych uprawnień), potem wdrożenie.
