@@ -3822,7 +3822,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
     return render_tabbed(data, width, height, now, ch, "nosniki", _(u"Repliki backupu kolektora (%d)") % len(reps),
                          [_(u"Replika"), _(u"Nośnik"), _(u"Kopia z"), _(u"Kiedy")], cells, cursor,
                          (_(u"Enter szczegóły   Ins nowa   Del usuń   Tab do datasetów")) if reps else _(u"Ins nowa replika"),
-                         det_title, det, child, focus, pair_cursor, screen_actions("nosniki"), empty, prio=[0, 1, 2, 3])
+                         det_title, det, child, focus, pair_cursor, screen_actions("nosniki"), empty, prio=[0, 1, 2, 3], flex=3)
 
 
 # --- F5 Szablony (uwaga 24, 2026-10-09) ------------------------------------
