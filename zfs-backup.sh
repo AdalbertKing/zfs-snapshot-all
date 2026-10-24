@@ -16112,6 +16112,15 @@ cmd_edit_config() {
         fi
         echo "edit-config: generator odrzucił config:"
         sed 's/^/  /' "$errf"
+        # --yes or no terminal: nobody can edit again, and the default answer "yes"
+        # reopened the same rejected file forever (takeover rehearsal, pve11
+        # 2026-10-24: a scripted EDITOR emptied the config of rules and the run
+        # looped). Stop instead -- nothing installed, the edit kept for a look.
+        if [ "$yes" -eq 1 ] || [ ! -t 0 ]; then
+            rm -f "$errf"
+            echo "edit-config: nic nie zainstalowano (bez terminala / --yes nie ma komu edytować dalej). Twoja wersja: $tmp"
+            return 1
+        fi
         if ! edit_config_ask "Edytować dalej? [T/n]" y; then
             rm -f "$errf"
             echo "edit-config: nic nie zainstalowano. Twoja wersja: $tmp"
