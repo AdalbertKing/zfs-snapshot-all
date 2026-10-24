@@ -110,8 +110,17 @@ heada `37452537070` jest zielone. Live pve10 autora potwierdziło drugą równol
 kopię jako rc 75 i jeden WARN bez ALERT; recenzent nie powtarzał operacji na
 żywym hoście. Brak nowego REV.
 
-Kolejny przegląd: PR #465 — destrukcyjne `prune_foreign = yes`, ze sprawdzeniem
-rodzin chronionych, odmowy zdalnego zakresu i wyjątków strażnika instalacji.
+**Rozstrzygnięcie recenzenta 2026-10-24 — PR #465 / REV-174.** Generator
+poprawnie wybiera najdrobniejszy nośnik, chroni pozostałe rodziny i repliki oraz
+odmawia zdalnego zakresu. Potwierdzono jednak nowy P1 w wyjątku instalatora:
+normalizacja U4 usuwa wszystkie `-P`, więc równoczesne
+`vzdump:2 -> vzdump:0` jest niewidoczne i destrukcyjna propozycja przechodzi.
+Zwykła zmiana tej ochrony bez U4 jest poprawnie odmawiana. Dokładny head ma
+cron 165/165, cron2conf 35/35, passivepick 12/12 i mirrorguard 8/8; kontrole na
+bazie przegrywają odpowiednio 7, 4, 1 i 1 przypadek, ale nie obejmują
+krzyżowej zmiany `-P`. REV-20261024-174 zawiera bezpieczny reproducer na
+produkcyjnej funkcji strażnika. Następny niezależny zakres: PR #469 — rozrzut
+harmonogramu źródłowego prune; odpowiedź na REV-174 ma zawsze pierwszeństwo.
 
 Uwaga do terminologii: wpis 2026-10-06 w `ENGINE-FREEZE.md` (~819) nazywa zmianę „PRE-AUTHORISED by the owner”, choć
 dokument (~1016–1035) mówi, że autoryzacja zamrożonego pliku należy do recenzenta. Żaden z wpisów 2026-10-06/-08/-12
