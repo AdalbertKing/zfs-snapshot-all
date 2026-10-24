@@ -15,7 +15,9 @@ Przećwiczone w labie 2026-10-24 (pve11 = „pve1”, pve9 = „pve2”, dataset
   Odwrotnie strażnik nakładania odmówi (stare sekcje dzieci pod nowym miejscem).
 - Okno bez migawek między krokami: minuty. Nie robić tego w minucie, o której chodzą stare zadania.
 - Konto relacji: `zfsbackup` (Zaawansowane -> Konto), jak dziś. Relacje dopisują się do tego
-  samego `jobs.pveN.v4.conf` (Source z crontabu wygrywa).
+  samego `jobs.pveN.v4.conf`: pakiet bierze config wskazany w linii `# Source:` zainstalowanego
+  bloku konta, zanim sięgnie po domyślny (`default_cron_config` w `zfs-backup.sh`); plan pisze
+  „Config docelowy: …v4.conf (istnieje -- plan jest ADDYTYWNY)”.
 - NIE RUSZAĆ: linie `# ZSA-LAB-PVESR` (subvol-990) -- lab właściciela.
 - 101 zostaje bez kopii na pve2 (decyzja właściciela: 4 TB, replika + kopia nie mieszczą się w puli).
 - Na pve2 NIE zakładać „Migawek lokalnych” na replikach (`hdd/vm-disks/subvol-107…`,
@@ -49,7 +51,7 @@ Przećwiczone w labie 2026-10-24 (pve11 = „pve1”, pve9 = „pve2”, dataset
 ### Sprawdź (pve1)
 
     crontab -u zfsbackup -l | grep -c 'snapshot (vm-disks)'      # 0 -- stare linie zniknęły
-    crontab -u zfsbackup -l | grep -c 'relacja-'                 # nowe linie są
+    crontab -u zfsbackup -l | grep -c 'profile__relacja-'        # nowe linie są (nazwy zadań relacji)
     pvesr status                                                 # replikacje bez błędu
     # F3: relacje A/B/C "działa"; F7 na A -> nowa migawka automated_hourly_ na każdym dysku
 
@@ -60,8 +62,8 @@ Przećwiczone w labie 2026-10-24 (pve11 = „pve1”, pve9 = „pve2”, dataset
    `[dataset:rpool/ROOT/pve-1]` oraz CAŁE `[prune:hdd/backups]` (GFS na całym magazynie) i
    `[prune:hdd/backups/pve2/…]` (monitory kopii). Stary GFS obejmuje cały `hdd/backups`, więc
    zostawiony przycinałby też kopie relacji -- zdejmujemy go w tym samym kroku.
-   `[prune-bookmarks:…]` zostają -- to one trzymają config przy życiu (reguła), więc tu wolno
-   zdjąć wszystkie kopie naraz (przećwiczone w labie).
+   `[prune-bookmarks:…]` zostają -- z nimi config nie jest pusty, więc tu wolno zdjąć wszystkie
+   kopie naraz (zmierzone w labie: na pve9 config z samymi zakładkami zainstalował się).
 2. GUI F3 -> Ins -> „Kopia lokalna”, cel „Wpisz ścieżkę…” = `hdd/backups/pve2`, konto `zfsbackup`
    (ścieżka kopii wychodzi ta sama co dziś: `hdd/backups/pve2/hdd/vm-disks/…`, więc bez pełnego seeda):
    - 107 (replika): „Migawki na źródle” -> **łańcuch** (komenda dostaje `--passive`); „Ręcznie”:
