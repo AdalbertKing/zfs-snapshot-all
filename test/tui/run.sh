@@ -1698,7 +1698,7 @@ rm -rf "$SOD" "$SOL"
 # ============================================================================
 N="$(screen nosniki)"
 # X11 (2026-10-12): kolumna Rodzaj po nazwie; sciezka sejf-b obcina sie wczesniej.
-if hasE "$N" '^║ sejf-a +W SEJFIE +brak +co dobę 02:30 +║' && hasE "$N" '^║ sejf-b +W SEJFIE +brak +po włożeniu +║'; then
+if hasE "$N" '^║ sejf-a +W SEJFIE +brak +co dobę 02:30 +║' && hasE "$N" '^║ sejf-b +W SEJFIE +brak +po podłączeniu +║'; then
     ok "nosniki: wiersz = replika, stan nosnika SLOWEM, kiedy ostatnia aktualna kopia (Kopia z), harmonogram slowami (U21)"
 else
     bad "nosniki: wiersze" "$N"
@@ -1736,8 +1736,8 @@ json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 RALL="--status $P10/status.json --jobs $P10/list-jobs.json --monitors $P10/monitor.json --replicas $P10/replicas.json --stats $RST"
 Z2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen zadania --width 200 --height 60 2>&1)"
-if hasE "$Z2" '^║ sejf-a +replika ' && hasE "$Z2" '^║ sejf-b +replika .*po włożeniu'; then
-    ok "zadania: repliki sa wierszami F2 (zadanie 'replika', 'po włożeniu' bez godziny)"
+if hasE "$Z2" '^║ sejf-a +replika ' && hasE "$Z2" '^║ sejf-b +replika .*po podłączeniu'; then
+    ok "zadania: repliki sa wierszami F2 (zadanie 'replika', 'po podłączeniu' bez godziny)"
 else
     bad "zadania: wiersze replik" "$(printf '%s' "$Z2" | grep -E 'sejf|replika')"
 fi
@@ -1863,10 +1863,10 @@ json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 S1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RSL" --screen nosniki --width 200 --height 50 2>&1)"
 S2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RSL" --screen nosniki --keys down --width 200 --height 50 2>&1)"
-if has "$S1" 'W SLOCIE -- kopia aktualna z 2026-10-08 20:46' && has "$S2" 'W SLOCIE -- brak kopii' && has "$S1" 'Kopia z'; then
+if has "$S1" 'Podłączony -- kopia aktualna z 2026-10-08 20:46' && has "$S2" 'Podłączony -- brak kopii' && has "$S1" 'Kopia z'; then
     ok "nosniki: dysk w slocie mowi, czy kopia na nim jest aktualna (z czasem) albo ze kopii brak; kolumna 'Kopia z'"
 else
-    bad "nosniki: w slocie + kopia" "$(printf '%s\n' "$S1" | grep -E 'SLOCIE|Kopia')" "$(printf '%s\n' "$S2" | grep -E 'SLOCIE')"
+    bad "nosniki: w slocie + kopia" "$(printf '%s\n' "$S1" | grep -E 'Podłączony|Kopia')" "$(printf '%s\n' "$S2" | grep -E 'Podłączony')"
 fi
 rm -f "$RSL"
 A="$(nact F7)"
@@ -3623,13 +3623,13 @@ RPOUT=$(rp_run "0${T}usb2
 if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=repl/replica --schedule=0 22 \* \* 5 --removable --recursive=yes --passive --media-guid=4242 --on-insert=yes --install --yes$' "$RP/zb.log" \
    && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
    && grep -F '3/6 migawki' "$RP/wt.log" | grep -qF -- '--default-item ~ passive ~' \
-   && grep -F '4/6 rodzaj' "$RP/wt.log" | grep -q . && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'repl  dysk w slocie' \
+   && grep -F '4/6 rodzaj' "$RP/wt.log" | grep -q . && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'repl  dysk podłączony' \
    && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF -- '--default-item ~ repl ~' \
    && ! grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Wpisz nazwę puli' \
    && grep -F '6/6 kiedy' "$RP/wt.log" | grep -qF '0 22 * * 5 ~ co tydzień, piątek 22:00' \
-   && grep -F 'także po włożeniu' "$RP/wt.log" | grep -qF 'Uruchamiać kopię także po włożeniu dysku' \
+   && grep -F 'także po podłączeniu' "$RP/wt.log" | grep -qF 'Uruchamiać kopię także po podłączeniu dysku' \
    && grep -qF 'reguła udev ZOSTANIE ZAŁOŻONA' "$RP/wt.log" && grep -qF 'po ID puli: 4242' "$RP/wt.log" \
-   && grep -qF 'Pierwsza kopia ruszy po włożeniu dysku albo o czasie z harmonogramu.' "$RP/wt.log"; then
+   && grep -qF 'Pierwsza kopia ruszy opóźniona po podłączeniu dysku albo o czasie z harmonogramu.' "$RP/wt.log"; then
     ok "replica: rodzaj przed nosnikiem, nosnik z listy (bez wpisywania), ID puli -> --media-guid; B Tak -> --on-insert=yes i regula w planie"
 else
     bad "replica: kreator, pasywna + harmonogram + B" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)" "$(cat "$RP/err")"
@@ -3662,8 +3662,8 @@ RPOUT=$(rp_run "0${T}usb3
 " RP_TREE='goto:hdd/data,space,enter'); RPRC=$?
 if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb3 --source=hdd/data --dst=repl/replica --schedule=on-insert --removable --recursive=yes --media-guid=4242 --install --yes$' "$RP/zb.log" \
    && grep -F '3/6 migawki' "$RP/wt.log" | grep -qF -- '--default-item ~ own ~' \
-   && ! grep -qF 'także po włożeniu' "$RP/wt.log" && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
-   && grep -qF 'Pierwsza kopia ruszy po włożeniu dysku.' "$RP/wt.log"; then
+   && ! grep -qF 'także po podłączeniu' "$RP/wt.log" && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
+   && grep -qF 'Pierwsza kopia ruszy opóźniona po podłączeniu dysku.' "$RP/wt.log"; then
     ok "replica: oryginal -> domyslnie wlasne migawki; 'tylko po wlozeniu' nie pyta o B, regula i tak zakladana"
 else
     bad "replica: kreator, on-insert" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)"
@@ -3682,8 +3682,8 @@ RPOUT=$(rp_run "0${T}usb4
 1${T}
 0${T}
 " RP_TREE='goto:hdd/data,space,enter'); RPRC=$?
-if [ "$RPRC" -eq 0 ] && grep -qF 'także po włożeniu' "$RP/wt.log" && ! grep -q '^install-media-trigger' "$RP/zb.log" \
-   && grep -q -- '--on-insert=no --install --yes$' "$RP/zb.log" && grep -qF 'Po włożeniu: nic -- kopia tylko wg harmonogramu' "$RP/wt.log" \
+if [ "$RPRC" -eq 0 ] && grep -qF 'także po podłączeniu' "$RP/wt.log" && ! grep -q '^install-media-trigger' "$RP/zb.log" \
+   && grep -q -- '--on-insert=no --install --yes$' "$RP/zb.log" && grep -qF 'Po podłączeniu: nic -- kopia tylko wg harmonogramu' "$RP/wt.log" \
    && grep -qF 'ZOSTANIE ZDJĘTA' "$RP/wt.log" && grep -q '^remove-media-trigger --install$' "$RP/zb.log"; then
     ok "replica: okno B zawsze (ustawienie repliki, nie hosta) -- Nie = --on-insert=no; zadna replika nie rusza po wlozeniu -> plan zdejmuje regule"
 else
@@ -3782,7 +3782,7 @@ RPOUT=$(rp_run "0${T}zrodla
 0${T}
 " RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb7","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb7)
 if grep -q '^add-replica usb7 --source=hdd/data .*--exclude-child=^hdd/data/mail\$ .*--media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log" \
-   && ! grep -F ': nośnik ~' "$RP/wt.log" | grep -qF 'Sformatuj nowy nośnik' && grep -F ': nośnik ~' "$RP/wt.log" | grep -qF 'Dodaj dysk (włożony zostanie sformatowany)'; then
+   && ! grep -F ': nośnik ~' "$RP/wt.log" | grep -qF 'Sformatuj nowy nośnik' && grep -F ': nośnik ~' "$RP/wt.log" | grep -qF 'Dodaj dysk (podłączony zostanie sformatowany)'; then
     ok "replica: zmiana repliki -- koszyk z jej zrodel i wyjatkow; obecny dysk dostaje ID; zamiast 'Sformatuj nowy' jest 'Dodaj kolejny dysk'"
 else
     bad "replica: zmiana -- koszyk i ID" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
@@ -3890,7 +3890,7 @@ if grep -q '^add-replica usb13 --source=hdd/data --dst=repl/replica .*--media-gu
    && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
    && has "$RP13" 'nic, tylko wg harmonogramu' && has "$RP13" 'codziennie 22:00' && has "$RP13" 'repl/replica (wymienny)' \
    && has "$RP13" 'replika usb13   kolektor' && has "$RP13" 'Zapisz zmiany (brak zmian)' && ! has "$RP13" '* ' \
-   && has "$RP13B" '* Po włożeniu' && has "$RP13B" 'kopia minutę po włożeniu dysku [zmiana]' && has "$RP13B" 'ZAPISZ ZMIANY (1)' \
+   && has "$RP13B" '* Po podłączeniu' && has "$RP13B" 'kopia minutę po podłączeniu dysku [zmiana]' && has "$RP13B" 'ZAPISZ ZMIANY (1)' \
    && ! grep -qF '6/6 kiedy' "$RP/wt.log" && ! grep -qF '4/6 rodzaj' "$RP/wt.log"; then
     ok "replica: U8/E-1 -- karta jak przy relacji (nagłówek, '*' i [zmiana], licznik przy zapisie); 'Po włożeniu' przełącza od razu, Zapisz = --on-insert=yes + reguła, bez innych kroków"
 else

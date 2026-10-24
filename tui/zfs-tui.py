@@ -138,9 +138,9 @@ TRANSFER_STATES = {
 # srodkowe w jeden i schowalby ten jedyny grozny (dokument decyzji, sekcja 6).
 MEDIA_STATES = {
     "here":         ("TU", 2, u"pula zaimportowana, replika może pisać"),
-    "available":    ("W SLOCIE", 3, u"dysk jest w slocie, pula NIEzaimportowana -- brama zaimportuje ją przy biegu"),
+    "available":    ("Podłączony", 3, u"dysk jest podłączony, pula NIEzaimportowana -- brama zaimportuje ją przy biegu"),
     "away":         ("W SEJFIE", 4, u"nośnika nie ma w maszynie; to stan oczekiwany między wymianami"),
-    "wrong_medium": ("NIE TEN DYSK", 1, u"w slocie jest dysk, ale NIE TEN. Brama odmówi replikacji; wyjęcie złego nośnika to ruch człowieka przy maszynie"),
+    "wrong_medium": ("NIE TEN DYSK", 1, u"podłączony jest dysk, ale NIE TEN. Brama odmówi replikacji; wyjęcie złego nośnika to ruch człowieka przy maszynie"),
     "unknown":      ("?", 4, u"brama nośnika (zfs-media-gate.sh) nie odpowiedziała -- stan nieznany, nie 'brak'"),
 }
 
@@ -157,7 +157,7 @@ def media_state_line(r, st):
 # zeby nie byly podciagami zwyklego tekstu.
 COLOR_WORDS = [
     ("nie odpowiada", 4), ("bez monitora", 4), ("aktualne", 2), (u"spóźnione", 3),
-    (" stare", 1), ("NIE TEN DYSK", 1), ("W SLOCIE", 3), ("W SEJFIE", 4), (" TU ", 2),
+    (" stare", 1), ("NIE TEN DYSK", 1), ("Podłączony", 3), ("W SEJFIE", 4), (" TU ", 2),
     (u"BŁĄD", 1), ("w toku", 3), ("PAUZA", 3), ("NIEwdro", 1), ("nieczytelny", 1),
     (u"błąd źródła", 1), (" OK ", 2), (" OK", 2),
 ]
@@ -800,7 +800,7 @@ def profile_words(p):
             n = r[1:] if r[:1].isalpha() else r
             ret.append(u"%s %s" % (n, tier_unit(t.get("name", ""))))
     mech = {"flat": _(u"N najnowszych"), "gfs": _(u"drabina GFS"), "age": _(u"wg wieku")}.get(p.get("mechanism", ""), p.get("mechanism") or "?")
-    shape = {"one-family": _(u"jedna rodzina"), "family-per-tier": _(u"rodzina na szczebel")}.get(p.get("shape", ""), p.get("shape") or "?")
+    shape = {"one-family": _(u"jedna rodzina"), "family-per-tier": _(u"osobne migawki na każdy szczebel")}.get(p.get("shape", ""), p.get("shape") or "?")
     q = [tier_unit(t.get("name", ""), TIER_ADJ) for t in tiers if t.get("quiesce")]
     quiesce = (_(u"zamraża: %s") % ", ".join(q)) if q else _(u"bez zamrażania")
     mon = ""
@@ -1175,24 +1175,24 @@ def next_step(rel):
 def disable_note(rel):
     peer = rel.get("peer_host") or "?"
     return [_(u"WYŁĄCZENIE = pauza tutaj ORAZ zamek na źródle %s:") % peer,
-            _(u"  źródło odmawia kluczowi tego kolektora, także ręcznym komendom."),
-            _(u"  Kopie nie powstają, monitor mówi z pauzy; dane po obu stronach"),
+            _(u"  źródło ODRZUCA klucz tego kolektora, także wsadowym komendom."),
+            _(u"  Kopie przestają powstawać, monitor nie alarmuje; dane po obu stronach"),
             _(u"  ZOSTAJĄ."),
-            _(u"Kiedy: kolektor może być przejęty albo źródło ma mu nie ufać do"),
-            _(u"  świadomego włączenia. Na zwykłą przerwę wystarcza Pauza (t)."),
+            _(u"Kiedy: kolektor może być przejęty albo źródło nie może go zautoryzować"),
+            _(u"  czasu, aż świadomie go włączysz. Na zwykłą przerwę wystarczy Pauza (t w poprzednim oknie)."),
             "",
             _(u"Włączenie z powrotem: F8 na tej relacji -> Włącz (enable-client)."),
-            _(u"  Źródło musi być osiągalne; gdy nie jest, polecenie mówi, gdzie"),
+            _(u"  Źródło musi być dostępne przez sieć; jeśli nie jest, polecenie pokaże, na czym"),
             _(u"  stanęło, i można je bezpiecznie powtórzyć. Potem następny bieg"),
             u"  dogania przyrostowo.",
-            _(u"Granica: kluczem tej relacji da się zamek zdjąć (źródło to loguje)"),
-            _(u"  -- to zamek na przypadek i zapomniany klucz, nie na intruza.")]
+            _(u"Ograniczenie: kluczem tej relacji da się zdjąć blokadę (źródło to loguje)"),
+            _(u"  -- to blokada na przypadek zapomnianego klucza, nie na intruza.")]
 
 
 ENABLE_NOTE = [u"Relacja jest WYŁĄCZONA: pauza tutaj i zamek na źródle.",
                u"Włącz zdejmuje zamek na źródle (musi być osiągalne), potem pauzę",
-               u"tutaj; następny bieg z crona dogania przyrostowo. Gdy źródło jest",
-               u"niedostępne, nic się nie zmienia i można bezpiecznie powtórzyć."]
+               u"tutaj; najbliższe zaplanowane uruchomienie dośle tylko brakujące zmiany. Gdy źródło jest",
+               u"niedostępne, nic się nie zmienia i można powtórzyć."]
 
 
 def finish_argv(rel):
@@ -1609,11 +1609,11 @@ def build_jobs(data, now):
             "dir": u"%s → %s" % (host, (rp.get("dst") or "?").split("/")[0]),
             "mode": None, "task": _(u"replika"), "pref": rp.get("prefix") or "-", "keep": "-",
             "cnt": len(rp.get("sources") or []) or 1, "tier": "", "scope": rp.get("source") or "",
-            # "po włożeniu" stoi w kolumnie Następny; w Harmonogramie poszerzałoby
+            # "po podłączeniu" stoi w kolumnie Następny; w Harmonogramie poszerzałoby
             # kolumnę i przy 80 znakach wypychało Trzyma z ekranu WSZYSTKIM wierszom.
             "schedule": "-" if on_ins else sched, "verdict": rver,
             "vword": _(VERDICTS.get(rver, (rver, 0))[0]), "reasons": reasons, "next_epoch": rnxt,
-            "next": (_(u"po włożeniu") if on_ins else (fmt_when(rnxt, now) if rnxt else "?")),
+            "next": (_(u"po podłączeniu") if on_ins else (fmt_when(rnxt, now) if rnxt else "?")),
             "job": {}, "jobs": [], "state": "", "last_txt": "", "monitors": [], "transfers": [], "last": None,
         })
     # GRUPOWANIE: relacja synchro (albo kazda inna z kilkoma datasetami pod tym
@@ -2105,7 +2105,7 @@ def odz_children(tab, item, rows, data, now, ch):
     """F11: datasety, z ktorych mozna odzyskac (kopie relacji)."""
     if item.get("kind") == "disk":
         return {"heads": [_(u"Dataset")], "items": [],
-                "empty": _(u"dysk wybierasz w oknie przywracania -- pule z dysków podłączonych do tego hosta")}
+                "empty": _(u"dysk i dataset wybierzesz po Enter, w oknie Przywróć (z dysków podłączonych do tego hosta)")}
     row = next((r for r in rows or [] if r.get("kind") == "relation" and r["name"] == item["name"]), None)
     pairs, _how = rel_pairs(row, data, now, ch) if row else ([], "")
     items = []
@@ -2237,7 +2237,7 @@ def rel_panel_pairs(row, data, now, ch):
     _seen = set()
     for m in row["monitors"]:
         if m.get("engine_path_differs"):
-            w = _(u"cron woła inny plik silnika (%s) niż ten, który tu policzono") % m.get("engine_in_cron")
+            w = _(u"cron uruchamia program z innego miejsca (%s) niż ten, którym GUI sprawdzało stan") % m.get("engine_in_cron")
             if w not in _seen:
                 _seen.add(w)
                 warns.append(w)
@@ -2360,7 +2360,7 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_
             runs = job_runs(r, data, now, ch)
             child = {"name": det_title, "tabs": TABS["zadania"], "ti": 0, "items": runs,
                      "heads": [_(u"Kiedy"), _(u"Wynik"), _(u"Dataset"), _(u"Czas"), _(u"Dane")], "prio": [0, 1, 2, 4, 3],
-                     "empty": (_(u"porządki (prune) nie zapisują przebiegów w historii transferów -- czasy i błędy są w panelu obok")
+                     "empty": (_(u"sprzątanie migawek nie trafia do historii -- ostatni czas i błędy masz w panelu obok")
                                if all(j.get("section_kind") == "prune" for j in (r.get("jobs") or [r["job"]]))
                                else _(u"brak przebiegów tego zadania w historii transferów"))}
         else:
@@ -2666,7 +2666,7 @@ def rel_detail_pairs(row, data, now, ch):
             txt += "  " + note
         pairs.append((_("Ostatni bieg"), txt))
     else:
-        pairs.append((_("Ostatni bieg"), _(u"brak zapisu w historii -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'")))
+        pairs.append((_("Ostatni bieg"), _(u"brak zapisu w historii -- stan nieznany")))
     if row["next_epoch"]:
         pairs.append((_(u"Następny"), "%s  (wg crontaba, %s)" % (
             fmt_full(row["next_epoch"]), ", ".join(sorted({j.get("schedule", "") for j in row["jobs"] if j.get("section_kind") in SEND_KINDS})))))
@@ -2697,7 +2697,7 @@ def rel_detail_pairs(row, data, now, ch):
     _seen = set()
     for m in row["monitors"]:
         if m.get("engine_path_differs"):
-            w = _(u"cron woła inny plik silnika (%s) niż ten, który tu policzono") % m.get("engine_in_cron")
+            w = _(u"cron uruchamia program z innego miejsca (%s) niż ten, którym GUI sprawdzało stan") % m.get("engine_in_cron")
             if w not in _seen:
                 _seen.add(w)
                 warns.append(w)
@@ -2837,7 +2837,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
         child.update({"name": r["name"] + ((u" (%s)" % child["how"]) if child.get("how") not in (None, u"wg crona") else ""),
                       "tabs": tabs, "ti": ti})
     empty = [_(u"Brak relacji zfs-backup na tym hoście."),
-             _(u"Inne kopie (np. replikacja Proxmoxa) nie są tu pokazywane."),
+             _(u"Cudze migawki (np. replikacja Proxmoxa) nie są tu pokazywane."),
              _(u"Ins = nowa relacja (kreator).")]
     foot = (_(u"Enter szczegóły   Ins nowa   Del usuń   Tab do datasetów")) if rows else _(u"Ins nowa relacja")
     return render_tabbed(data, width, height, now, ch, "relacje", title,
@@ -3577,11 +3577,11 @@ def monitor_detail_pairs(m, ch, full=False):
         verdict += _(u"   najnowsza migawka mieści się w progu")
     notes = []
     if m.get("paused_local"):
-        notes.append(_(u"relacja wstrzymana -- OK z pauzy to nie dowód pokrycia"))
+        notes.append(_(u"relacja wstrzymana -- „OK” nie znaczy, że kopie są aktualne"))
     if m.get("engine_path_differs"):
-        notes.append(_(u"cron woła %s, a tu policzono %s -- inny plik silnika") % (m.get("engine_in_cron"), m.get("engine_run")))
+        notes.append(_(u"cron uruchamia %s, a GUI sprawdzało %s -- to różne pliki programu, wynik może nie pasować") % (m.get("engine_in_cron"), m.get("engine_run")))
     if not m.get("parsed", True):
-        notes.append(_(u"linii monitora nie dało się sparsować; werdykt pochodzi z kodu wyjścia"))
+        notes.append(_(u"linii monitora nie dało się sparsować; wynik pochodzi z kodu wyjścia"))
     if notes:
         pairs.append((_("Uwaga"), "  |  ".join(notes)))
     pairs.append(("Werdykt", verdict))
@@ -3683,12 +3683,12 @@ def replica_stats_row(data, name):
 
 
 def replica_when(r, long=False):
-    """Harmonogram repliki słowami; '+ po włożeniu', gdy replika rusza też po włożeniu
+    """Harmonogram repliki słowami; '+ po podłączeniu', gdy replika rusza też po podłączeniu
     dysku (on_insert, P5 2026-10-09)."""
     s = r.get("schedule") or "?"
     if s == "on-insert":
-        return _(u"po włożeniu nośnika") if long else _(u"po włożeniu")
-    return s + (_(u" + po włożeniu") if r.get("on_insert") == "yes" else "")
+        return _(u"po podłączeniu nośnika") if long else _(u"po podłączeniu")
+    return s + (_(u" + po podłączeniu") if r.get("on_insert") == "yes" else "")
 
 
 def replica_disks_words(r):
@@ -3697,7 +3697,7 @@ def replica_disks_words(r):
         return _(u"stały nośnik (pula w maszynie)")
     g = [x for x in (r.get("media_guids") or "").split(",") if x]
     if not g:
-        return _(u"po nazwie puli -- ID nieznane (zmiana repliki dopisze ID włożonego dysku)")
+        return _(u"po nazwie puli -- ID nieznane (zmiana repliki dopisze ID podłączonego dysku)")
     return _(u"%d po ID puli: %s") % (len(g), ", ".join(g))
 
 
@@ -3730,7 +3730,7 @@ def replica_disk_words(r):
     f = (r.get("schedule") or "").split()
     span = u""
     if r.get("schedule") == "on-insert":
-        span = _(u" -- tyle włożeń dysku wstecz")
+        span = _(u" -- tyle podłączeń dysku wstecz")
     elif len(f) == 5:
         if f[2] != "*":
             span = _(u" = ok. %d mies. wstecz") % n
@@ -3762,8 +3762,8 @@ def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
     """Panel repliki (F6), U21: grupy Co / Kiedy / Zdrowie, harmonogram slowami,
     JEDEN "Ostatni bieg" (bylo "Ostatnio" i "Ost. bieg" z roznymi godzinami)."""
     s = r.get("schedule") or "?"
-    when = _(u"zaraz po włożeniu dysku") if s == "on-insert" else \
-        cron_words(s) + (_(u" i zaraz po włożeniu dysku") if r.get("on_insert") == "yes" else "")
+    when = _(u"zaraz po podłączeniu dysku") if s == "on-insert" else \
+        cron_words(s) + (_(u" i zaraz po podłączeniu dysku") if r.get("on_insert") == "yes" else "")
     pairs = [group(ch, _(u"Co")),
              (_(u"Rodzaj"), replica_kind(r)[1]),
              (_(u"Na dysku"), replica_disk_words(r)),
@@ -3773,7 +3773,7 @@ def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
              (_(u"Nośnik"), media_state_line(r, MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"]))),
              (_(u"Kiedy"), when),
              (_(u"Dyski"), replica_disks_words(r)),
-             (_(u"Dysk widziany"), r.get("last_seen") or _(u"nigdy (brak pliku last-seen bramy)")),
+             (_(u"Ostatnio podłączony"), r.get("last_seen") or _(u"nigdy (brak pliku last-seen bramy)")),
              group(ch, _(u"Zdrowie"))]
     if stats_failed:
         pairs.append((_(u"Ostatni bieg"), _(u"? (job-stats nie odpowiedział)")))
@@ -3803,7 +3803,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
         st = MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"])
         s = r.get("schedule") or "?"
         cells.append([r.get("name") or "?", _(st[0]), (r.get("last_current") or _(u"brak"))[:16],
-                      _(u"po włożeniu") if s == "on-insert" else cron_words(s) + (_(u" + po włożeniu") if r.get("on_insert") == "yes" else "")])
+                      _(u"po podłączeniu") if s == "on-insert" else cron_words(s) + (_(u" + po podłączeniu") if r.get("on_insert") == "yes" else "")])
     det_title, det, child = u"", [], None
     if reps and 0 <= cursor < len(reps):
         r = reps[cursor]
@@ -3814,8 +3814,8 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
         child = rep_children(tabs[ti][0], r, data, now, ch)
         child.update({"name": r.get("name"), "tabs": tabs, "ti": ti})
     empty = [_(u"Brak sekcji [replica:] w configu tego kolektora."),
-             _(u"Ten host nie replikuje na nośniki wymienne; to nie jest błąd, tylko brak konfiguracji."),
-             _(u"Ins dodaje ją w oknach; z linii: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA")]
+             _(u"Brak skonfigurowanych replik dla tego kolektora"),
+             _(u"Ins dodaje ją w oknach; komendą wsadową: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA")]
     if not reps:
         det_title = _(u"stany nośnika")
         det = [(_(MEDIA_STATES[k][0]), _(MEDIA_STATES[k][2])) for k in ("here", "available", "away", "wrong_medium")]
@@ -3910,17 +3910,17 @@ def odzysk_detail(row, copies=()):
         return [(_(u"Skąd"), _(u"kopia na dysku podłączonym do tego hosta -- nośnik repliki albo dysk przyniesiony po awarii")),
                 (_(u"Kiedy"), _(u"także bez relacji i bez replik, np. czysty serwer po ransomware")),
                 group(None, _(u"Zgody")),
-                (_(u"Na bok"), _(u"tak -- do nowego datasetu, nic nie nadpisuje")),
+                (_(u"Na bok"), _(u"tak -- do nowego datasetu, istniejące dane nietknięte")),
                 (_(u"Przeglądanie"), _(u"tak: migawka tylko do odczytu, mc"))]
     path = compact_paths(list(copies)) if copies else "?"
     return [group(None, _(u"Kopie")),
             (_(u"Ścieżka"), path),
             (_(u"Kierunek"), row.get("dir") or "?"),
             group(None, _(u"Zgody")),
-            (_(u"Na źródło"), _(u"sprawdza okno Przywróć -- źródło musi wydać zgodę (deploy.sh --allow-restore)")),
+            (_(u"Na źródło"), _(u"sprawdza okno Przywróć -- źródło musi wydać zgodę na dostęp (deploy.sh --allow-restore)")),
             (_(u"Na bok"), _(u"tak -- do nowego datasetu obok, oryginał nietknięty")),
             (_(u"Przeglądanie"), _(u"tak: migawka tylko do odczytu, mc, potem odmontowanie")),
-            (_(u"Uwaga"), _(u"odzysk nadpisuje albo dokłada dane -- nic się nie dzieje przed WYKONAJ"))]
+            (_(u"Uwaga"), _(u"odzysk może nadpisać albo dołożyć dane -- nic się nie zmieni, dopóki nie wybierzesz WYKONAJ"))]
 
 
 def render_odzysk(data, rows, cursor, width, height, now, ch, message="", focus="list", pair_cursor=0, ti=0):
@@ -3941,32 +3941,32 @@ def render_odzysk(data, rows, cursor, width, height, now, ch, message="", focus=
 
 # --- Pomoc -----------------------------------------------------------------
 HELP = [
-    u"Okna nad zfs-snapshot-all. Akcje wołają czasowniki CLI, nic więcej.",
+    u"To okna do obsługi zfs-snapshot-all. Każda akcja uruchamia zwykłe polecenie zfs-backup.sh, nic więcej.",
     "",
     u"  F2  Zadania    co chodzi w cronie: relacja, zadanie (pobranie, wysyłka,",
-    u"                 lokalny/zdalny prune), prefiks migawek, następny bieg, kopie.",
+    u"                 lokalny/zdalny prune), prefiks migawek, następny przebieg, kopie.",
     u"                 Panel obok: kierunek, źródło i cel, kiedy, ile trzyma, czasy",
-    u"                 ostatni/średni/maks, wywołania, dane i strażnik (progi) jak",
+    u"                 ostatni/średni/maks, wywołania, dane i strażnik (progi) tryb",
     u"                 w mailu; na dole przebiegi zadania z historii transferów.",
-    u"                 Strażnik bez zadania (nic do pilnowania) jest własnym",
+    u"Linia monitora, która nie pasuje do żadnego zadania, ma na liście osobny",
     u"                 wierszem. F7 uruchamia zaznaczone",
     u"                 zadanie teraz, bez pytania: dokładnie jego linię z crona,",
     u"                 jako konto z crontaba; wynik w oknie. F8 przełącza sortowanie",
     u"                 (relacje/oś czasu/ostatni bieg) -- nazwa widoku w tytule.",
     u"  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
     u"                 = Zmień relację: adres hosta, datasety, szablon, retencja",
-    u"                 źródła, silnik; 's' zapisuje ustawienia jako szablon,",
+    u"ile trzyma źródło, program kopiujący; 's' zapisuje ustawienia relacji jako nowy szablon,",
     u"                 'c' otwiera config do ręcznej edycji), Del usuń,",
-    u"                 F7 uruchom teraz: kopia każdego datasetu relacji jej",
-    u"                 najdrobniejszym zadaniem, bez pytania; F8 pauza/wznów;",
+    u"                 F7 uruchom teraz: kopia wszystkich datasets w relacji ",
+    u"zadaniem o najkrótszym odstępie (np. godzinowym), bez pytania; F8 pauza/wznów;",
     u"                 F9 eksport/import: eksport do pliku (Enter zapisuje, domyślnie",
     u"                 w /etc/zfs-snapshot-all/relations) albo import: lista plików",
-    u"                 eksportu z tego katalogu, potem werdykt",
+    u"eksportu z tego katalogu, potem wynik porównania",
     u"                 (już jest / różni się / plan), t wykonuje plan, Ins nowa",
-    u"                 Ins i Del oddają terminal oknom whiptaila i wracają tutaj",
-    u"                 z odświeżonymi danymi: Ins to kreator krok po kroku (backup: 7",
-    u"                 kroków -- rodzaj, host, datasety, dokąd, szablon, retencja",
-    u"                 źródła, nazwa; Wstecz = poprzedni krok), potem podsumowanie",
+    u"                 Ins i Del przełączają terminal do whiptaila i wracają tu",
+    u"                 z odświeżonymi danymi: Ins -kreator krok po kroku (backup: 7",
+    u"kroków -- rodzaj, host, datasety, dokąd, szablon, ile trzyma",
+    u"źródło, nazwa; Wstecz = poprzedni krok), potem podsumowanie",
     u"                 (pozycja = popraw krok; konto i dodatki w Zaawansowane) i",
     u"                 Utwórz -> plan -> WYKONAJ z oknem postępu. Del to",
     u"                 usunięcie całej relacji (źródło, nazwa, opcjonalnie kopie).",
@@ -3977,37 +3977,37 @@ HELP = [
     u"  F5  Szablony   szablony retencji: Ins nowy na podstawie zaznaczonego,",
     u"                 Enter szczegóły ('e' zmienia własny), Del usuwa własny",
     u"  F6  Replika    repliki i 4 stany nośnika; Ins/Del/F7 uruchom/F8 klucz, Enter+'e' zmiana",
-    u"  F11 Odzysk     odzysk danych: relacja z kopią albo 'z dysku' (nośnik, także",
+    u"F11 Odzysk     odzyskanie danych: z kopii relacji albo „z dysku” (dysk repliki, także",
     u"                 bez replik, np. po ransomware); Enter otwiera okna Przywróć --",
-    u"                 dataset, dokąd, migawka, plan, WYKONAJ. Tylko tutaj.",
+    u"                 dataset, cel, migawka, plan, WYKONAJ. Tylko tutaj.",
     u"                 F7 przeglądaj kopię: migawka zamontowana tylko do odczytu, mc",
     u"                 do skopiowania plików, po wyjściu odmontowanie (datasety plikowe).",
     u"  F10 Ustawienia ustawienia hosta (/etc/zfs-snapshot-all/settings.ini): alerty",
     u"                 (adres, tryb, godzina maila, mail 'wszystko OK'), próg pojemności,",
-    u"                 strażnik, szablon nowej relacji, aktualizacja, język GUI; mail",
-    u"                 próbny. Zapis = plan i WYKONAJ (zfs-backup.sh settings set).",
+    u"…język GUI; wysłanie",
+    u"maila testowego. Zapis: najpierw lista zmian, zmienia dopiero WYKONAJ.",
     u"                 Pasek u góry: „ochrona” -- czy na tym hoście działa bezpiecznik",
-    u"                 pojemności i strażnik przyrostu (włącza się je tutaj, w F10).",
+    u"pojemności (pełna pula) i strażnik nagłego przyrostu danych; włączasz je w F10.",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
     "",
     u"  PANELE (każdy ekran): lista = wybór i stan; panel obok = fakty o",
-    u"                 zaznaczonym wierszu, których lista nie ma; na dole zakładki",
+    u"zaznaczonym wierszu, których nie widać na liście; na dole zakładki",
     u"                 z tym, co wiersz zawiera (F3: Datasety, Zadania; F5: Szczeble,",
     u"                 Używają; F6: Datasety, Przebiegi; F11: Datasety). Tab wchodzi",
     u"                 na dół, strzałki w lewo/prawo zmieniają zakładkę, panel obok",
-    u"                 pokazuje wtedy zaznaczony element, Enter jego pełne okno, Esc",
+    u"                 pokazuje zaznaczony element, Enter jego pełne okno, Esc",
     u"                 wraca do listy, kolejny Tab do linii poleceń. Datasety relacji",
-    u"                 bez crona są z rekordu i tytuł zakładki to mówi.",
+    u"bez wpisów w cronie pochodzą z zapisanej definicji relacji (mówi to tytuł zakładki).",
     "",
     u"  LINIA POLECEŃ nad listwą klawiszy (jak w mc): pisz, Enter wykonuje na",
     u"                 pierwszym planie w katalogu repo, po komendzie Enter wraca.",
-    u"                 Tab przechodzi do linii (i z powrotem do listy); w linii",
+    u"Tab przechodzi do linii poleceń (i z powrotem do listy); w niej",
     u"                 strzałki = historia, Esc/Ctrl-U czyści. Linia jest widoczna",
     u"                 także pod oknem: potwierdzenie pokazuje w niej swoją komendę,",
-    u"                 a Tab przenosi ją do linii, żeby ją poprawić przed",
-    u"                 wykonaniem. Cyfry i litery NIGDY",
-    u"                 nie są skrótami na ekranach -- wszystko, co piszesz, idzie",
+    u"                 a Tab przenosi ją do linii, żeby ją poprawić",
+    u"wykonaniem. Litery i cyfry NIE są",
+    u"skrótami klawiszowymi -- wszystko, co wpiszesz, trafia",
     u"                 do linii.",
     "",
     u"  F1-F6, F11        główne okna (F11 Odzysk danych); F12 wyjście",
@@ -4118,7 +4118,7 @@ class UI(object):
         if self.exec_log:
             with io.open(self.exec_log, "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
-            self.message = _(u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: ") + line
+            self.message = _(u"[tryb testowy] polecenie nie zostało uruchomione, tylko zapisane do dziennika: ") + line
             return "stay"
         self.pending_shell = line
         return "shell"
@@ -4154,7 +4154,7 @@ class UI(object):
         if self.exec_log:
             with io.open(self.exec_log, "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
-            self.message = _(u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: ") + line
+            self.message = _(u"[tryb testowy] polecenie nie zostało uruchomione, tylko zapisane do dziennika: ") + line
             return "stay"
         line = self.window_env(argv[1] if len(argv) > 1 else "cmd", line)
         self.pending_shell, self.pending_nowait = line, True
@@ -4240,7 +4240,7 @@ class UI(object):
         if self.exec_log:
             with io.open(self.exec_log, "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
-            self.message = _(u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: ") + line
+            self.message = _(u"[tryb testowy] polecenie nie zostało uruchomione, tylko zapisane do dziennika: ") + line
             return "stay"
         line = self.window_env("new-relation", line)
         self.pending_shell, self.pending_nowait = line, True
@@ -4424,7 +4424,7 @@ class UI(object):
             with open(self.exec_log, "a", encoding="utf-8") as fh:
                 fh.write(shell + "\n")
             self.window = ("output", {"title": title, "path": None, "proc": None, "shell": shell,
-                                      "lines": [_(u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu:"), "  " + shell], "rc": 0})
+                                      "lines": [_(u"[tryb testowy] polecenie nie zostało uruchomione, tylko zapisane do dziennika:"), "  " + shell], "rc": 0})
             self.scroll = 0
             return
         logdir = os.path.join(home_dir(), ".zfs-tui")
@@ -4531,7 +4531,7 @@ class UI(object):
         # list-replicas, list-jobs replik nie zwraca) -- F7 robi to samo co F7 na F6.
         if r.get("kind") == "replica":
             n = (r.get("replica") or {}).get("name") or r.get("name")
-            self.run_detached(_(u"Replika %s -- bieg teraz") % n, [self.zb(), "run-replicas", "--name=%s" % n])
+            self.run_detached(_(u"Replika %s -- biegnie teraz") % n, [self.zb(), "run-replicas", "--name=%s" % n])
             return
         j = r.get("job") or {}
         sched = (r.get("schedule") or "").split()
@@ -4555,7 +4555,7 @@ class UI(object):
         elif me == "root":
             argv = ["runuser", "-u", acct, "--", "/bin/sh", "-c", script]
         else:
-            self.message = _(u"zadanie konta %s -- uruchomić je może root albo samo konto") % acct
+            self.message = _(u"zadanie konta %s -- uruchomić je może też root") % acct
             return
         # X9 (wlasciciel 2026-10-12): bez okna potwierdzenia, jak F7 na replice -- bieg
         # robi dokladnie to, co nocny cron (prune tez: kasuje tylko wg retencji).
@@ -4596,7 +4596,7 @@ class UI(object):
         if k == "F7":
             # ZAZNACZONA replika, od razu, bez pytania (uwaga 18, 2026-10-08): kopia niczego
             # nie niszczy, a "t" niczego nie chronilo. Wynik w oknie, jak kazdy bieg w tle.
-            self.run_detached(_(u"Replika %s -- bieg teraz") % n, [self.zb(), "run-replicas", "--name=%s" % n])
+            self.run_detached(_(u"Replika %s -- biegnie teraz") % n, [self.zb(), "run-replicas", "--name=%s" % n])
             return
         if k == "del":
             # Okna whiptail (remove-replica --ask): plan, potem WYKONAJ; dane na
@@ -4617,7 +4617,7 @@ class UI(object):
                 return
             self.window = ("output", {"title": _(u"Klucz nośnika repliki %s") % n, "path": None, "proc": None, "shell": "",
                                       "lines": [u"Klucz (64 znaki hex):", u"", u"  " + key, u"",
-                                                _(u"Zapisz go POZA tym serwerem. Bez klucza i bez tego serwera"),
+                                                _(u"Zapisz go gdzieś POZA tym serwerem. Gdy serwer przepadnie, bez klucza"),
                                                 _(u"kopii z dysku nie odczytasz."), _(u"Plik: ") + kf], "rc": 0})
             self.scroll = 0
             return
@@ -4651,7 +4651,7 @@ class UI(object):
             # UROCHOM TERAZ, jak F7 na F2 i F6: bez okna potwierdzenia (kopia niczego nie
             # niszczy), wynik w oknie wyjscia. Czasownik bierze z zainstalowanego crona
             # najdrobniejsze zadanie kazdego datasetu relacji; wstrzymanej odmawia.
-            self.run_detached(_(u"Relacja %s -- kopia teraz: wszystkie datasety poza harmonogramem (np. przed przeniesieniem kolektora)") % n, [self.zb(), "run-relation", n], logname="relacja")
+            self.run_detached(_(u"Relacja %s -- kopia teraz: wymuszenie kopii wszystkich datasetów (np. przed przeniesieniem kolektora)") % n, [self.zb(), "run-relation", n], logname="relacja")
         elif k == "F8":
             if rel.get("disabled"):
                 self.confirm(_(u"Włącz relację %s") % n, [self.zb(), "enable-client", n], [_(x) for x in ENABLE_NOTE])
@@ -4660,13 +4660,13 @@ class UI(object):
                              [_(u"Zdejmuje pauzę: następny bieg z crona rusza normalnie i dogania przyrostowo.")])
             else:
                 note = [_(u"Pauza LOGICZNA: linie w cronie zostają, ale nic nie wysyła i nie kasuje;"),
-                        _(u"monitor mówi OK z pauzy. Odwrotność: F8 jeszcze raz (resume-client).")]
+                        _(u"monitor nie alarmuje (pokazuje PAUZA). Cofnięcie: F8 jeszcze raz (resume-client).")]
                 alt = None
                 if rel.get("peer_host") and rel.get("mode") != "local":
                     # D-1 (kampania 2026-10-21): "wyjaśnienie pokaże następne okno" -- następnego
                     # okna nie było; to okno otwiera się dopiero czynnością z dołu ramki.
-                    note += ["", _(u"Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (zamek):"),
-                             _(u"czynność „wyłącz na źródle” na dole tego okna; tamto okno powie, co zmienia.")]
+                    note += ["", _(u"Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (lock):"),
+                             _(u"przycisk „wyłącz na źródle” na dole; następne okno wyjaśni, co to zmienia.")]
                     alt = ("w", lambda: self.confirm(_(u"Wyłącz relację %s") % n, [self.zb(), "disable-client", n,
                                                      "--reason=wyłączona z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
                                                      disable_note(rel)), _(u"wyłącz na źródle"))
@@ -4816,7 +4816,7 @@ class UI(object):
             self.message = _(u"nazwa: tylko litery, cyfry, kropka, podkreślnik, myślnik")
             return
         if name == base.get("name"):
-            self.message = _(u"nazwa musi być inna niż baza (pakietowego szablonu nie nadpiszemy)")
+            self.message = _(u"nazwa musi być inna niż baza (fabrycznego szablonu nie nadpiszemy)")
             return
         for key, _l, kind, _h in obj["fields"]:
             if kind == "cron" and len((vals.get(key) or "").split()) != 5:
@@ -4900,7 +4900,7 @@ class UI(object):
                 out.append(fit("      " + hint, width - 4))
         out.append("")
         if obj.get("kind") == "profile":
-            out.append(fit(_(u" Nowy szablon powstaje z bazy: mechanizm i kształt są z bazy (inny = inna baza)."), width - 4))
+            out.append(fit(_(u" Sposób liczenia i układ migawek bierze się z szablonu bazowego -- inny = wybierz inną bazę."), width - 4))
             out.append(fit(_(u" Zapis = save-profile do /etc/zfs-snapshot-all/profiles; nic zbudowanego nie rusza."), width - 4))
             if self.message:
                 out += ["", fit(u" ! " + self.message, width - 4)]
@@ -4986,7 +4986,7 @@ class UI(object):
             else:
                 out.append(fit(u"%s %s" % (mark, it["label"]), w))
         if not obj["nfiles"]:
-            out += ["", fit(_(u" w tym katalogu nie ma plików eksportu relacji (eksport relacji z ekranu Relacje, menu Plik, zapisuje je w %s)") % relations_dir(), w)]
+            out += ["", fit(_(u" w tym katalogu nie ma wyeksportowanych relacji (eksport relacji z ekranu Relacje, menu Plik, zapisuje je w %s)") % relations_dir(), w)]
         return out
 
     def import_ask_file(self, value, error=None):
@@ -5539,7 +5539,7 @@ class UI(object):
         if it.get("pair") is not None:
             j = it["pair"].get("job")
             if j is None:
-                self.message = _(u"ten dataset jest z rekordu, nie z crona -- nie ma jego linii ani sekcji do pokazania")
+                self.message = _(u"ten dataset jest tylko w definicji relacji, nie w cronie -- nie ma zadania do pokazania")
                 return None
             for jr in self.jobrows:
                 if any(x is j for x in jr.get("jobs") or []):
