@@ -25,8 +25,12 @@ for fn in sorted(os.listdir(tui)):
             # T 'literal'  /  $(T 'literal' ...)  /  T Word  (single-quoted or a bare word only:
             # a double-quoted argument would be expanded before the lookup)
             # T and Tv (Tv: the literal keeps its variable names; values follow as pairs)
-            for m in re.finditer(r"(?:^|[\s(;])Tv?\s+(?:'([^']*)'|([A-Za-ząćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)(?=[\s)]))", line):
-                k = m.group(1) if m.group(1) is not None else m.group(2)
+            # A single-quoted word may be glued from pieces: 'a'\''b' is a'b.
+            for m in re.finditer(r"(?:^|[\s(;])Tv?\s+(?:((?:'[^']*'|\\')+)|([A-Za-ząćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)(?=[\s)]))", line):
+                if m.group(1) is not None:
+                    k = "".join(p[1:-1] if p.startswith("'") else "'" for p in re.findall(r"'[^']*'|\\'", m.group(1)))
+                else:
+                    k = m.group(2)
                 if k not in cat:
                     missing.append("%s:%d %r" % (fn, no, k[:60]))
     elif fn.endswith(".py"):
