@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 57a6e15ae0fcf28a -->
+<!-- status-covers-digest: b774a8dec0ae9b80 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,11 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Tłumaczenie GUI: decyzje właściciela x95–x217 (`docs/gui-translation-x95`, 2026-10-24 wieczór).** Druga porcja
+  tekstów spoza tabeli (kreator P2, drzewo, tabela szczebli, okno „Migawki na źródle”): 115 zatwierdzonych,
+  8 przeredagowanych po polsku i angielsku. Zmieniony tekst polski jest kluczem, więc zmieniają się też
+  `tui/new-relation.sh` i `tui/retention-lib.sh`. `tui` 409/0 (pve9).
 
 - **Migawki naszej rodziny już na źródle: admin mówi, kto je robi (`feat/own-snapshots-declared`, decyzja
   właściciela 2026-10-24, wariant A+D).** Gdy źródło ma już migawki `automated_*`, seed (a przy lustrze także
