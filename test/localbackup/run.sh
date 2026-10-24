@@ -751,7 +751,7 @@ rdr=$(CLIENTS_DIR="$RD/clients" bash "$ZB" restore rdr --plan --config="$RD/c.co
 # naming the label. Silence is the defect.
 # NOTE: on Git Bash the fatal-die TERM does not reach the parent, so the remote case
 # only discriminates on Linux (CI) -- measured 2026-10-15.
-if printf '%s' "$rdl" | grep -qE 'Plan odtworzenia|^FATAL: restore:' && printf '%s' "$rdr" | grep -qF "'rdr' is not a relation label"; then
+if printf '%s' "$rdl" | grep -qE 'Restore plan|^FATAL: restore:' && printf '%s' "$rdr" | grep -qF "'rdr' is not a relation label"; then
     ok "restore dispatch: a local relationship, and one whose connection cannot be loaded, reach zfs-restore.sh -- no silent rc=1"
 else
     bad "restore dispatch: silent exit" "local: [$rdl]" "remote, no connection: [$rdr]"
