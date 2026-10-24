@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2aa880f38193ccd5 -->
+<!-- status-covers-digest: ba5e7e6a3c93e7cf -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,17 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **GUI po angielsku -- główne ekrany (P1, `feat/gui-lang-p1`).** Teksty ekranów F2-F6, F11, okien szczegółów, pomocy F1
+  i komunikatów w `tui/zfs-tui.py` idą przez `_()` (533 linie z tekstem w `_()`); stałe modułu (stany, werdykty,
+  tytuły okien, pomoc, zakładki) tłumaczone w miejscu wyświetlania, bo powstają przed wczytaniem języka. Katalog
+  `tui/lang/en.json` przebudowany z ostatecznej tabeli właściciela (71 zmienionych tłumaczeń) -- 1461 wpisów, z
+  czego 94 spoza tabeli w `tui/lang/en.extra.json` (głównie krótkie nagłówki i etykiety, których ekstraktor nie
+  złapał, i kilka zdań; według słowniczka -- do potwierdzenia przez właściciela). Kolory słów (np. „up to date”, „stale”) działają też
+  po angielsku; dni tygodnia mają osobną listę angielskich skrótów (`dow_word`). Po polsku ekrany są
+  bajt w bajt jak na main (porównanie 36 widoków na danych testów; różnią się tylko godziną odczytu).
+  Na żywo pve10 `zfs-backup gui --lang=en`: F2-F6 i F11 po angielsku; zostaje po polsku to, co przychodzi z
+  danych (opisy szablonów) i okna whiptail (P2-P6). `tui` 406/0 (pve9).
 
 - **GUI po angielsku -- mechanizm i pilot (P0, `feat/gui-lang-p0`).** Tekst polski w kodzie jest kluczem; katalog
   `tui/lang/en.json` (1374 wpisów) jest zbudowany z tabeli przeglądu właściciela

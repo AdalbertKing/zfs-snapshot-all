@@ -2395,7 +2395,7 @@
    "k": "u187",
    "pl_code": "dysk wybierasz w oknie przywracania -- pule z dysków podłączonych do tego hosta",
    "pl": "dysk i dataset wybierzesz po Enter, w oknie Przywróć (z dysków podłączonych do tego hosta)",
-   "en": "you choose the disk and dataset after Enter, in the Przywróć window (from disks connected to this host)",
+   "en": "you choose the disk and dataset after Enter, in the Restore window (from disks connected to this host)",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
