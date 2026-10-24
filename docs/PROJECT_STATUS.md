@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 172d9de16a9dbb45 -->
+<!-- status-covers-digest: 01280f83730f47d3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -32,6 +32,7 @@
   --version` pokazują rewizję dev z `RELEASE-OF`. Suita `release` (10 sprawdzeń, w tym kontrola, że
   czyszczenie nie rusza `192.168.*` w kodzie). Próbna publikacja do lokalnego repo: 85 plików.
   Przepięcie hostów na repo wydań (`switch-origin`) -- osobno, po 1.0.
+
 
 
 - **Pasywna kopia lokalna i przejęcie starych zadań (`feat/local-passive-copy`, 2026-10-24, do wdrożenia
@@ -73,6 +74,26 @@
   Testy: `zfsbackup` (rekord, odmowy, seed, sonda lustra, eksport/import, `family_newest`) i `tui` (okno,
   `--own-snapshots`, tekst planu). Dalej: usuwanie relacji sprząta jej migawki na źródle (C) i „przejmij
   migawki” w zmianie relacji (migracja z snapsend.sh).
+
+- **GUI po angielsku -- ostatnie resztki (P6, `tr/p6-rest`).** Obchód wszystkich ekranów po angielsku na pve10
+  (47 widoków, tylko klawisze bez skutków) i skaner tekstów bez polskich liter wskazały ostatnie polskie napisy.
+  Ostrzeżenie „relacja ma ustawienia inne niż jej szablon” w planie zmiany relacji (`tui/hand-edits.py`, osobny
+  proces) czyta katalog przez `ZFS_TUI_CAT`. Przez katalog idą też: powody na panelu strażnika („ostatni bieg …
+  rc=…”, „zobacz cron.log”), tytuł panelu na F5, etykieta sortowania „ostatni bieg” oraz powód pauzy i wyłączenia
+  zapisywany przez GUI (`--reason=`). Dwa angielskie wpisy cytowały polskie nazwy okien. Pętla `for _, f in fails`
+  przesłaniała funkcję tłumaczącą i psuła F2/F3 przy nieudanym biegu; suite `tui` złapał to na gałęzi, przed scaleniem.
+  Zostają po polsku tylko komunikaty samych poleceń CLI, które GUI pokazuje w oknach planu i wyniku: to osobna
+  paczka. `tui` 411/0 (pve9).
+
+- **GUI po angielsku -- odzysk i przeglądanie kopii (P5, `tr/p5-restore`).** Teksty `tui/restore.sh` (okna
+  Przywróć z F11) i `tui/browse.sh` (przeglądanie kopii: migawka zamontowana tylko do odczytu i mc) idą przez
+  `T`/`Tv`. Python wklejony w te skrypty używa `_()` przez `ZFS_TUI_CAT`. Opisy szablonów zapisywanych przez
+  kreator relacji (`--description=`) też idą przez katalog. Poprawione trzy angielskie wpisy: zgoda na odzysk
+  („debt collector”), ścieżka w podpowiedzi (`relationships`) i pytanie „Move all older snapshots too” zaczęte małą literą. Linia użycia
+  `restore.sh` przy złych argumentach jest po angielsku, tak jak inne komunikaty poleceń. Na żywo na pve10 po
+  angielsku przeszły: F11, okno braku zgody źródła, odzysk z dysku do kroku z nazwą (bez WYKONAJ) oraz
+  przeglądanie kopii relacji `ab` (montaż, mc, odmontowanie po F10). Wersja polska: okno braku zgody też przeszło.
+  `tui` 411/0 (pve9).
 
 - **GUI: polskie brzmienia właściciela w kodzie i okna replik po angielsku (P4, `tr/p4-replica`).** Tabela
   tłumaczeń miała poprawki właściciela do polskich tekstów (`pl`) obok tekstu z kodu (`pl_code`), ale do kodu

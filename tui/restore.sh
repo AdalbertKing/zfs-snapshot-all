@@ -26,13 +26,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "restore: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 REL="${1:-}"
-[ -n "$REL" ] || { echo "użycie: restore.sh RELACJA | restore.sh --from-copy [DATASET]" >&2; exit 2; }
+[ -n "$REL" ] || { echo "usage: restore.sh RELATION | restore.sh --from-copy [DATASET]" >&2; exit 2; }
 CONFDIR="${ZFS_CONF_DIR:-/etc/zfs-snapshot-all}"
-WT_BACKTITLE="Przywracanie z relacji $REL -- $(hostname)"
+WT_BACKTITLE="$(Tv 'Przywracanie z relacji $REL -- $(hostname)' '$REL' "$REL" '$(hostname)' "$(hostname)")"
 TMPD="$(mktemp -d)" || exit 1
 trap 'rm -rf "$TMPD"' EXIT
 
-abort() { clear 2>/dev/null; wt_end "Odzysk: przerwane, nic nie zmieniono"; exit 1; }
+abort() { clear 2>/dev/null; wt_end "$(T 'Odzysk: przerwane, nic nie zmieniono')"; exit 1; }
 join_by_comma() { local IFS=,; echo "$*"; }
 # P3 (właściciel 10-15): godziny punktów są w strefie HOSTA (lab: UTC), a nie operatora --
 # 20:01 na ekranie to 22:01 w Polsce latem. Strefy operatora przez SSH nie znamy; okno
@@ -48,8 +48,8 @@ run_cmd() {
     echo
     # Napis zwykłym echo, jak w delete-relation.sh: podpowiedź `read -p` idzie na stderr,
     # a `2>/dev/null` ją chowało -- okno czekało na Enter bez słowa (właściciel, P1 10-15).
-    if [ "$RC" -eq 0 ]; then echo "=== GOTOWE (rc=0). Enter = powrót do GUI"
-    else echo "=== NIE WYSZŁO (rc=$RC) -- komunikat polecenia powyżej. Enter = powrót do GUI"; fi
+    if [ "$RC" -eq 0 ]; then echo "$(T '=== GOTOWE (rc=0). Enter = powrót do GUI')"
+    else echo "$(Tv '=== NIE WYSZŁO (rc=$RC) -- komunikat polecenia powyżej. Enter = powrót do GUI' '$RC' "$RC")"; fi
     read -r _ </dev/tty 2>/dev/null || true
     exit "$RC"
 }
@@ -74,7 +74,7 @@ build_points() {
         # etykietę "08-18-21" -- ułomek godziny. Wtedy pełna nazwa migawki.
         case "$tier" in ''|*[!a-z]*) tier="$nm" ;; esac
         lbl="$tm  $tier"
-        [ "${#PT_TIME[@]}" -eq 0 ] && lbl="$lbl  (najnowszy)"
+        [ "${#PT_TIME[@]}" -eq 0 ] && lbl="$lbl  $(T '(najnowszy)')"
         menu+=("p${#PT_TIME[@]}" "$(clip_label "$lbl" $((W - 14)))")
         PT_TIME+=("$tm")
     done <"$TMPD/points.tsv"
@@ -83,7 +83,7 @@ build_points() {
 # ================= TRYB "PRZYWRÓĆ Z DYSKU" (--from-copy) ====================================
 if [ "$REL" = --from-copy ]; then
     PRE="${2:-}"
-    WT_BACKTITLE="Przywracanie z dysku -- $(hostname)"
+    WT_BACKTITLE="$(Tv 'Przywracanie z dysku -- $(hostname)' '$(hostname)' "$(hostname)")"
     # podpowiedź nazwy: kopia z kolektora (<pula>/.../backups/<host>/<ścieżka>) -> <ścieżka>;
     # inaczej <pula>/restore/<ostatni człon>
     SUG_RE='^[^/]+/(.*/)?backups/[^/]+/(.+)$'
@@ -109,12 +109,15 @@ if [ "$REL" = --from-copy ]; then
             zfs list -H -p -o name,used,type 2>/dev/null >"$TMPD/ds.tsv"
             if ! [ -s "$TMPD/ds.tsv" ]; then
                 geom
-                wt --title "Przywróć z dysku" \
-                   --msgbox "Na tym hoście nie widać żadnego datasetu. Podłącz dysk i zaimportuj pulę (zpool import <pula>), potem spróbuj jeszcze raz." 9 "$W"
+                wt --title "$(T 'Przywróć z dysku')" \
+                   --msgbox "$(T 'Na tym hoście nie widać żadnego datasetu. Podłącz dysk i zaimportuj pulę (zpool import <pula>), potem spróbuj jeszcze raz.')" 9 "$W"
                 exit 1
             fi
-            "$PY" - "$TMPD/ds.tsv" "$TMPD/tree-spec.json" "Przywróć z dysku: skąd?" "$(hostname)" "$PRE" <<'PYEOF' || exit 1
+            "$PY" - "$TMPD/ds.tsv" "$TMPD/tree-spec.json" "$(T 'Przywróć z dysku: skąd?')" "$(hostname)" "$PRE" <<'PYEOF' || exit 1
 import sys, json
+import os as _os
+_C = json.load(open(_os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if _os.environ.get("ZFS_TUI_CAT") else {}
+def _(s): return _C.get(s, s)
 seen = set(); ds = []
 for ln in open(sys.argv[1], encoding="utf-8"):
     p = ln.rstrip("\r\n").split("\t")
@@ -128,7 +131,7 @@ for ln in open(sys.argv[1], encoding="utf-8"):
     ds.append({"name": p[0], "used": used, "type": p[2]})
 roots = [sys.argv[5]] if sys.argv[5] and sys.argv[5] in seen else []
 spec = {"title": sys.argv[3], "host": sys.argv[4], "show_mode": False, "no_exc": True,
-        "legend": u" [x] odtwarzane razem z tym, co pod nim   dysku nie ma? zpool import",
+        "legend": _(u" [x] odtwarzane razem z tym, co pod nim   dysku nie ma? zpool import"),
         "recursion": "flat", "hide": [], "datasets": ds, "roots": roots, "excl": {}}
 with open(sys.argv[2], "w", encoding="utf-8") as f:
     json.dump(spec, f, ensure_ascii=False)
@@ -153,7 +156,7 @@ PYEOF
             while IFS= read -r r; do [ -n "$r" ] && FROM+=("$r"); done <"$TMPD/roots.txt"
             if [ "${#FROM[@]}" -eq 0 ]; then
                 geom
-                wt --title "Przywróć z dysku" --msgbox "Nic nie zaznaczono." 7 "$W"
+                wt --title "$(T 'Przywróć z dysku')" --msgbox "$(T 'Nic nie zaznaczono.')" 7 "$W"
                 continue
             fi
             step=2 ;;
@@ -161,9 +164,11 @@ PYEOF
             i=0; GOBACK=0
             while [ "$i" -lt "${#FROM[@]}" ]; do
                 def="${ANS[$i]:-$(sug "${FROM[$i]}")}"
-                txt=$'Pod jaką nazwą odtworzyć na tym hoście:\n  '"${FROM[$i]}"$'\n(datasety pod nim przyjdą razem z nim)'
+                txt="$(Tv 'Pod jaką nazwą odtworzyć na tym hoście:
+  $SRC
+(datasety pod nim przyjdą razem z nim)' '$SRC' "${FROM[$i]}")"
                 geom
-                if wt --title "Przywróć z dysku: dokąd? ($((i + 1))/${#FROM[@]})" --ok-button "Dalej" --cancel-button "Wstecz" \
+                if wt --title "$(Tv 'Przywróć z dysku: dokąd? ($((i + 1))/${#FROM[@]})' '$((i + 1))' "$((i + 1))" '${#FROM[@]}' "${#FROM[@]}")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
                       --inputbox "$txt" "$(fit 6)" "$W" "$def"; then
                     [ -n "$WT_OUT" ] || continue
                     # P5 (właściciel 10-15): nazwa bez puli ("restore/home") przechodziła
@@ -171,11 +176,11 @@ PYEOF
                     if ! pool_ok "$WT_OUT"; then
                         ANS[$i]="$WT_OUT"
                         geom
-                        wt --title "Przywróć z dysku: zła nazwa" \
-                           --msgbox "'$WT_OUT' nie zaczyna się od puli tego hosta.
+                        wt --title "$(T 'Przywróć z dysku: zła nazwa')" \
+                           --msgbox "$(Tv ''\''$WT_OUT'\'' nie zaczyna się od puli tego hosta.' '$WT_OUT' "$WT_OUT")
 
-Nazwa ma mieć postać <pula>/<ścieżka>, np. $(sug "${FROM[$i]}").
-Pule tutaj: $(zpool list -H -o name 2>/dev/null | tr '\n' ' ')" 11 "$W"
+$(Tv 'Nazwa ma mieć postać <pula>/<ścieżka>, np. $SUG.' '$SUG' "$(sug "${FROM[$i]}")")
+$(Tv 'Pule tutaj: $POOLS' '$POOLS' "$(zpool list -H -o name 2>/dev/null | tr '\n' ' ')")" 11 "$W"
                         continue
                     fi
                     ANS[$i]="$WT_OUT"; i=$((i + 1))
@@ -194,18 +199,18 @@ Pule tutaj: $(zpool list -H -o name 2>/dev/null | tr '\n' ' ')" 11 "$W"
             done
             if [ -n "$DUP" ]; then
                 geom
-                wt --title "Przywróć z dysku" --msgbox "Dwa źródła mają ten sam cel ($DUP) -- podaj różne nazwy." 8 "$W"
+                wt --title "$(T 'Przywróć z dysku')" --msgbox "$(Tv 'Dwa źródła mają ten sam cel ($DUP) -- podaj różne nazwy.' '$DUP' "$DUP")" 8 "$W"
                 continue
             fi
             EXIST=()
             for o in "${ONTO[@]}"; do zfs list -H -o name -- "$o" >/dev/null 2>&1 && EXIST+=("$o"); done
             OVERWRITE=0
             if [ "${#EXIST[@]}" -gt 0 ]; then
-                txt="Te cele JUŻ ISTNIEJĄ na tym hoście:"
+                txt="$(T 'Te cele JUŻ ISTNIEJĄ na tym hoście:')"
                 for o in "${EXIST[@]}"; do txt+=$'\n'"  $o"; done
-                txt+=$'\n\nNadpisać je (--overwrite)? To, co tam jest, zostanie zastąpione kopią z dysku.'
+                txt+=$'\n\n'"$(T 'Nadpisać je (--overwrite)? To, co tam jest, zostanie zastąpione kopią z dysku.')"
                 geom
-                wt --title "Przywróć z dysku: cel istnieje" --yes-button "Nadpisz" --no-button "Wstecz" --defaultno \
+                wt --title "$(T 'Przywróć z dysku: cel istnieje')" --yes-button "$(T Nadpisz)" --no-button "$(T Wstecz)" --defaultno \
                    --yesno "$txt" "$(fit $((${#EXIST[@]} + 5)))" "$W" || continue
                 OVERWRITE=1
             fi
@@ -217,17 +222,17 @@ Pule tutaj: $(zpool list -H -o name 2>/dev/null | tr '\n' ' ')" 11 "$W"
             geom
             build_points
             if [ "${#PT_TIME[@]}" -eq 0 ]; then
-                wt --title "Przywróć z dysku" --msgbox "${FROM[0]} nie ma żadnej migawki -- nie ma z czego odtworzyć." 8 "$W"
+                wt --title "$(T 'Przywróć z dysku')" --msgbox "$(Tv '${FROM[0]} nie ma żadnej migawki -- nie ma z czego odtworzyć.' '${FROM[0]}' "${FROM[0]}")" 8 "$W"
                 exit 1
             fi
-            wt --title "Przywróć z dysku: z kiedy?" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-               --default-item p0 --menu "Wybierz migawkę do odzyskania." \
+            wt --title "$(T 'Przywróć z dysku: z kiedy?')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags \
+               --default-item p0 --menu "$(T 'Wybierz migawkę do odzyskania.')" \
                "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
             idx="${WT_OUT#p}"
             if [ "$idx" = 0 ]; then AT=""; PT=""; else AT="${PT_AT[$idx]}"; PT="${PT_TIME[$idx]}"; fi
             geom
-            wt --title "Przywróć z dysku: historia" --yes-button "Tak" --no-button "Nie" --defaultno \
-               --yesno $'Przenieść też wszystkie starsze migawki (z historią)?\nNie = tylko wybrany punkt.' "$(fit 3)" "$W"
+            wt --title "$(T 'Przywróć z dysku: historia')" --yes-button "$(T Tak)" --no-button "$(T Nie)" --defaultno \
+               --yesno "$(T 'Przenieść też wszystkie starsze migawki (z historią)?\nNie = tylko wybrany punkt.')" "$(fit 3)" "$W"
             hrc=$?
             case $hrc in
                 0) HIST=1 ;;
@@ -243,21 +248,21 @@ Pule tutaj: $(zpool list -H -o name 2>/dev/null | tr '\n' ' ')" 11 "$W"
             CMDTXT=""
             for w in "${CMD[@]}"; do CMDTXT+="${CMDTXT:+ }$(shq "$w")"; done
             {
-                echo "Skąd:   dysk / inny dataset na tym hoście"
-                echo "Co -> dokąd:"
+                echo "$(T 'Skąd:   dysk / inny dataset na tym hoście')"
+                echo "$(T 'Co -> dokąd:')"
                 for ((i = 0; i < ${#FROM[@]}; i++)); do
                     echo "  ${FROM[$i]} -> ${ONTO[$i]}"
-                    for o in ${EXIST[@]+"${EXIST[@]}"}; do [ "$o" = "${ONTO[$i]}" ] && { echo "  (NADPISUJE)"; break; }; done
+                    for o in ${EXIST[@]+"${EXIST[@]}"}; do [ "$o" = "${ONTO[$i]}" ] && { echo "  $(T '(NADPISUJE)')"; break; }; done
                 done
-                if [ -n "$AT" ]; then echo "Punkt:  bieg z $PT ($TZN) -- każdy dataset: jego ostatnia migawka do $AT"; else echo "Punkt:  najnowszy"; fi
-                if [ "$HIST" -eq 1 ]; then echo "Historia: tak"; else echo "Historia: nie"; fi
+                if [ -n "$AT" ]; then echo "$(Tv 'Punkt:  bieg z $PT ($TZN) -- każdy dataset: jego ostatnia migawka do $AT' '$PT' "$PT" '$TZN' "$TZN" '$AT' "$AT")"; else echo "$(T 'Punkt:  najnowszy')"; fi
+                if [ "$HIST" -eq 1 ]; then echo "$(T 'Historia: tak')"; else echo "$(T 'Historia: nie')"; fi
                 echo
-                echo "Polecenie:"
+                echo "$(T 'Polecenie:')"
                 echo "  $CMDTXT"
                 echo
-                echo "Po <Uruchom> polecenie pokaże podgląd i samo zapyta; zaszyfrowana kopia -- zapyta o klucz albo plik klucza."
+                echo "$(T 'Po <Uruchom> polecenie pokaże podgląd i samo zapyta; zaszyfrowana kopia -- zapyta o klucz albo plik klucza.')"
             } >"$TMPD/summary.txt"
-            yesno_text "$TMPD/summary.txt" "Przywróć z dysku: sprawdź" "Uruchom" "Wstecz" --defaultno || { step=3; continue; }
+            yesno_text "$TMPD/summary.txt" "$(T 'Przywróć z dysku: sprawdź')" "$(T Uruchom)" "$(T Wstecz)" --defaultno || { step=3; continue; }
             run_cmd ;;
         esac
     done
@@ -265,7 +270,7 @@ fi
 
 # ---- KROK 0: który config trzyma kopie tej relacji + jej punkty odzysku --------------------
 geom
-info "Przywróć $REL" "Czytam kopie i punkty odzysku..."
+info "$(Tv 'Przywróć $REL' '$REL' "$REL")" "$(T 'Czytam kopie i punkty odzysku...')"
 CFG=""
 for C in "$CONFDIR"/jobs.*.conf; do
     [ -f "$C" ] || continue
@@ -285,8 +290,8 @@ PYEOF
 done
 if [ -z "$CFG" ]; then
     geom
-    wt --title "Nie ma kopii relacji $REL" \
-       --msgbox "Na tym hoście nie ma kopii relacji $REL -- przywracać można tylko na kolektorze, który ją trzyma." 8 "$W"
+    wt --title "$(Tv 'Nie ma kopii relacji $REL' '$REL' "$REL")" \
+       --msgbox "$(Tv 'Na tym hoście nie ma kopii relacji $REL -- przywracać można tylko na kolektorze, który ją trzyma.' '$REL' "$REL")" 8 "$W"
     exit 1
 fi
 
@@ -296,6 +301,8 @@ case "${ROWS[0]}" in
     *:*) h="${ROWS[0]%%:*}"; TARGET="${h#*@}" ;;
     *)   TARGET="ten host" ;;
 esac
+# TARGET = "ten host" jest tokenem porownywanym w kodzie; na ekranie idzie TARGET_DISP.
+if [ "$TARGET" = "ten host" ]; then TARGET_DISP="$(T 'ten host')"; else TARGET_DISP="$TARGET"; fi
 
 SEL=(); ORIG=(); ONTO=(); WHOLE=0; DEST=""; BASE=""; AT=""; CMD=()
 # Etykieta, pod którą cel zna ten kolektor -- to ją przyjmuje deploy.sh --allow-restore=
@@ -309,7 +316,7 @@ GRANT_LABEL="$(hostname -s 2>/dev/null || hostname)"
 # tylko odczyt), a bez zgody okno proponuje odzysk na TYM hoście (kopia -> nowy dataset).
 GRANT=""; GRANT_RC=0
 if [ "$TARGET" != "ten host" ]; then
-    info "Przywróć $REL" "Pytam $TARGET o zgodę na odzysk..."
+    info "$(Tv 'Przywróć $REL' '$REL' "$REL")" "$(Tv 'Pytam $TARGET o zgodę na odzysk...' '$TARGET' "$TARGET")"
     "$ZB" restore "$REL" --grant --config="$CFG" >"$TMPD/grant.txt" 2>/dev/null; GRANT_RC=$?
     GRANT="$(sed -n 's/^GRANT=//p' "$TMPD/grant.txt" | head -1)"
     _gl="$(sed -n 's/^LABEL=//p' "$TMPD/grant.txt" | head -1)"
@@ -318,22 +325,22 @@ if [ "$TARGET" != "ten host" ]; then
     case "$GRANT" in ""|none|unreachable) [ "$GRANT_RC" -ne 0 ] || GRANT_RC=1 ;; esac
     if [ "$GRANT_RC" -ne 0 ]; then
         if [ "$GRANT" = none ]; then
-            why="$TARGET nie wydał temu kolektorowi zgody na odzysk."
+            why="$(Tv '$TARGET nie wydał temu kolektorowi zgody na odzysk.' '$TARGET' "$TARGET")"
         else
-            why="$TARGET nie odpowiedział na pytanie o zgodę (brak połączenia albo pakietu)."
+            why="$(Tv '$TARGET nie odpowiedział na pytanie o zgodę (brak połączenia albo pakietu).' '$TARGET' "$TARGET")"
         fi
-        txt="$why Odzysk na $TARGET -- na miejsce i obok -- zostanie odrzucony.
+        txt="$(Tv '$why Odzysk na $TARGET -- na miejsce i obok -- zostanie odrzucony.' '$why' "$why" '$TARGET' "$TARGET")
 
-Żeby go umożliwić, na $TARGET jako root:
+$(Tv 'Żeby go umożliwić, na $TARGET jako root:' '$TARGET' "$TARGET")
   deploy.sh --allow-restore=$GRANT_LABEL
-  (na miejsce, gdy trzeba nadpisać: z --replace)
+  $(T '(na miejsce, gdy trzeba nadpisać: z --replace)')
 
-Bez zgody źródła: odtwórz kopię na TYM hoście jako nowy dataset albo przejrzyj jej pliki (ekran Odzysk, Przeglądaj kopię)."
+$(T 'Bez zgody źródła: odtwórz kopię na TYM hoście jako nowy dataset albo przejrzyj jej pliki (ekran Odzysk, Przeglądaj kopię).')"
         geom
-        wt --title "Przywróć $REL: brak zgody na $TARGET" --ok-button "Wybierz" --cancel-button "Wyjdź" --notags \
+        wt --title "$(Tv 'Przywróć $REL: brak zgody na $TARGET' '$REL' "$REL" '$TARGET' "$TARGET")" --ok-button "$(T Wybierz)" --cancel-button "$(T Wyjdź)" --notags \
            --menu "$txt" "$(fit 13)" "$W" 2 \
-           tutaj "Odtwórz kopię na tym hoście (bez zgody źródła)" \
-           dalej "Mimo to dalej -- zgodę wydam przed uruchomieniem" || abort
+           tutaj "$(T 'Odtwórz kopię na tym hoście (bez zgody źródła)')" \
+           dalej "$(T 'Mimo to dalej -- zgodę wydam przed uruchomieniem')" || abort
         if [ "$WT_OUT" = tutaj ]; then
             rm -rf "$TMPD"
             exec bash "$HERE/tui/restore.sh" --from-copy "${ROWC[0]}"
@@ -350,8 +357,10 @@ while :; do
         # Kampania wariantów 2026-10-22 (W5): Wstecz z "Gdzie odtworzyć?" wracało do drzewa
         # z zaznaczonym WSZYSTKIM -- wybór admina znikał, a nieuważny Enter + "na miejsce"
         # nadpisałby całą relację. Drzewo dostaje z powrotem ostatni wybór.
-        RESTORE_LAST_TREE="$TMPD/tree-last.json" "$PY" - "$TMPD/ds.tsv" "$TMPD/tree-spec.json" "Przywróć $REL: co?" "$TARGET" "${ROWC[@]}" <<'PYEOF' || exit 1
+        RESTORE_LAST_TREE="$TMPD/tree-last.json" "$PY" - "$TMPD/ds.tsv" "$TMPD/tree-spec.json" "$(Tv 'Przywróć $REL: co?' '$REL' "$REL")" "$TARGET" "${ROWC[@]}" <<'PYEOF' || exit 1
 import sys, json, os
+_C = json.load(open(os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if os.environ.get("ZFS_TUI_CAT") else {}
+def _(s): return _C.get(s, s)
 seen = set(); ds = []
 for ln in open(sys.argv[1], encoding="utf-8"):
     p = ln.rstrip("\r\n").split("\t")
@@ -364,7 +373,7 @@ for ln in open(sys.argv[1], encoding="utf-8"):
         used = None
     ds.append({"name": p[0], "used": used, "type": p[2]})
 spec = {"title": sys.argv[3], "host": sys.argv[4], "show_mode": False, "no_exc": False,
-        "legend": u" [x] odtwarzane   [-] część   [ ] nie",
+        "legend": _(u" [x] odtwarzane   [-] część   [ ] nie"),
         "recursion": "flat", "hide": [], "datasets": ds, "roots": sys.argv[5:], "excl": {}}
 lp = os.environ.get("RESTORE_LAST_TREE") or ""
 if lp and os.path.exists(lp):
@@ -379,7 +388,7 @@ with open(sys.argv[2], "w", encoding="utf-8") as f:
 PYEOF
         if ! grep -q '"name"' "$TMPD/tree-spec.json" 2>/dev/null || ! [ -s "$TMPD/ds.tsv" ]; then
             geom
-            wt --title "Przywróć $REL" --msgbox "Nie mogę odczytać datasetów kopii relacji $REL (zfs list nic nie zwrócił)." 8 "$W"
+            wt --title "$(Tv 'Przywróć $REL' '$REL' "$REL")" --msgbox "$(Tv 'Nie mogę odczytać datasetów kopii relacji $REL (zfs list nic nie zwrócił).' '$REL' "$REL")" 8 "$W"
             exit 1
         fi
         rm -f "$TMPD/tree-out.json"
@@ -425,24 +434,24 @@ PYEOF
         while IFS=$'\t' read -r d o; do [ -n "$d" ] && { SEL+=("$d"); ORIG+=("$o"); }; done <"$TMPD/sel.tsv"
         if [ "${#SEL[@]}" -eq 0 ]; then
             geom
-            wt --title "Przywróć $REL" --msgbox "Nic nie zaznaczono." 7 "$W"
+            wt --title "$(Tv 'Przywróć $REL' '$REL' "$REL")" --msgbox "$(T 'Nic nie zaznaczono.')" 7 "$W"
             continue
         fi
         step=2 ;;
     2)  # ---- DOKĄD? ----------------------------------------------------------------------
         geom
-        wt --title "Przywróć $REL: dokąd?" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-           --default-item obok --menu "Gdzie odtworzyć wybrane datasety?" "$(fit 5)" "$W" "$(lhfit 2 1)" \
-           obok "Obok oryginału na $TARGET -- nic nie nadpisuje" \
-           miejsce "Na miejsce na $TARGET -- NADPISUJE obecne dane" || { step=1; continue; }
+        wt --title "$(Tv 'Przywróć $REL: dokąd?' '$REL' "$REL")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags \
+           --default-item obok --menu "$(T 'Gdzie odtworzyć wybrane datasety?')" "$(fit 5)" "$W" "$(lhfit 2 1)" \
+           obok "$(Tv 'Obok oryginału na $TARGET -- nic nie nadpisuje' '$TARGET' "$TARGET_DISP")" \
+           miejsce "$(Tv 'Na miejsce na $TARGET -- NADPISUJE obecne dane' '$TARGET' "$TARGET_DISP")" || { step=1; continue; }
         DEST="$WT_OUT"
         ONTO=()
         if [ "$DEST" = obok ]; then
             BASE="${ORIG[0]%%/*}/restore"
-            txt="Katalog na $TARGET, pod którym lądują odtworzone datasety (każdy pod swoją nazwą). Musi leżeć w <pula>/restore -- tylko tam zgoda na odzysk pozwala kolektorowi tworzyć."
+            txt="$(Tv 'Katalog na $TARGET, pod którym lądują odtworzone datasety (każdy pod swoją nazwą). Musi leżeć w <pula>/restore -- tylko tam zgoda na odzysk pozwala kolektorowi tworzyć.' '$TARGET' "$TARGET_DISP")"
             while :; do
                 geom
-                wt --title "Przywróć $REL: obok -- gdzie?" --ok-button "Dalej" --cancel-button "Wstecz" \
+                wt --title "$(Tv 'Przywróć $REL: obok -- gdzie?' '$REL' "$REL")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
                    --inputbox "$txt" "$(fit $((${#txt} / (W - 8) + 3)))" "$W" "$BASE" || { BASE=""; break; }
                 # P5: bez "<pula>/" polecenie odmówi dopiero na celu; tu sprawdzamy postać
                 # (pula leży na $TARGET, więc jej istnienia stąd nie widać).
@@ -450,7 +459,7 @@ PYEOF
                     */?*) BASE="$WT_OUT"; break ;;
                     "") ;;
                     *) BASE="$WT_OUT"; geom
-                       wt --title "Przywróć $REL: zła nazwa" --msgbox "'$WT_OUT' nie ma postaci <pula>/<katalog>, np. ${ORIG[0]%%/*}/restore." 8 "$W" ;;
+                       wt --title "$(Tv 'Przywróć $REL: zła nazwa' '$REL' "$REL")" --msgbox "$(Tv ''\''$WT_OUT'\'' nie ma postaci <pula>/<katalog>, np. ${ORIG[0]%%/*}/restore.' '$WT_OUT' "$WT_OUT" '${ORIG[0]%%/*}' "${ORIG[0]%%/*}")" 8 "$W" ;;
                 esac
             done
             [ -n "$BASE" ] || continue            # Wstecz z pola -> znów wybór "dokąd"
@@ -481,7 +490,7 @@ PYEOF
             ) || abort
             if [ -n "$DUP" ]; then
                 geom
-                wt --title "Przywróć $REL" --msgbox "Dwa wybrane datasety mają tę samą nazwę ($DUP) -- obok nie zmieszczą się pod jednym katalogiem. Wybierz je osobno." 9 "$W"
+                wt --title "$(Tv 'Przywróć $REL' '$REL' "$REL")" --msgbox "$(Tv 'Dwa wybrane datasety mają tę samą nazwę ($DUP) -- obok nie zmieszczą się pod jednym katalogiem. Wybierz je osobno.' '$DUP' "$DUP")" 9 "$W"
                 step=1; continue
             fi
             while IFS= read -r o; do [ -n "$o" ] && ONTO+=("$o"); done <"$TMPD/onto.txt"
@@ -504,12 +513,12 @@ PYEOF
         build_points
         if [ "${#PT_TIME[@]}" -eq 0 ]; then
             geom
-            wt --title "Przywróć $REL" --msgbox "Kopia nie ma żadnego punktu odzysku." 7 "$W"
+            wt --title "$(Tv 'Przywróć $REL' '$REL' "$REL")" --msgbox "$(T 'Kopia nie ma żadnego punktu odzysku.')" 7 "$W"
             exit 1
         fi
         geom
-        wt --title "Przywróć $REL: z kiedy?" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-           --default-item p0 --menu "Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety potomne dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
+        wt --title "$(Tv 'Przywróć $REL: z kiedy?' '$REL' "$REL")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags \
+           --default-item p0 --menu "$(Tv 'Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety potomne dostają swój najbliższy punkt z tej chwili lub wcześniejszy.' '$TZN' "$TZN")" \
            "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
         idx="${WT_OUT#p}"
         if [ "$idx" = 0 ]; then AT=""; PT=""; else AT="${PT_AT[$idx]}"; PT="${PT_TIME[$idx]}"; fi
@@ -526,34 +535,34 @@ PYEOF
         CMDTXT=""
         for w in "${CMD[@]}"; do CMDTXT+="${CMDTXT:+ }$(shq "$w")"; done
         {
-            echo "Skąd:   relacja $REL (kopie na tym kolektorze)"
-            if [ "$WHOLE" = 1 ]; then echo "Co:     cała relacja"; else echo "Co:     ${#SEL[@]} dataset(ów)"; fi
+            echo "$(Tv 'Skąd:   relacja $REL (kopie na tym kolektorze)' '$REL' "$REL")"
+            if [ "$WHOLE" = 1 ]; then echo "$(T 'Co:     cała relacja')"; else echo "$(Tv 'Co:     ${#SEL[@]} dataset(ów)' '${#SEL[@]}' "${#SEL[@]}")"; fi
             for o in "${ORIG[@]}"; do echo "          $o"; done
             if [ "$DEST" = obok ]; then
-                echo "Dokąd:  obok, na $TARGET:"
+                echo "$(Tv 'Dokąd:  obok, na $TARGET:' '$TARGET' "$TARGET_DISP")"
                 for o in "${ONTO[@]}"; do echo "          $o"; done
             else
-                echo "Dokąd:  NA MIEJSCE na $TARGET -- NADPISUJE"
+                echo "$(Tv 'Dokąd:  NA MIEJSCE na $TARGET -- NADPISUJE' '$TARGET' "$TARGET_DISP")"
             fi
-            if [ -n "$AT" ]; then echo "Punkt:  bieg z $PT ($TZN) -- każdy dataset: jego ostatnia migawka do $AT"; else echo "Punkt:  najnowszy"; fi
+            if [ -n "$AT" ]; then echo "$(Tv 'Punkt:  bieg z $PT ($TZN) -- każdy dataset: jego ostatnia migawka do $AT' '$PT' "$PT" '$TZN' "$TZN" '$AT' "$AT")"; else echo "$(T 'Punkt:  najnowszy')"; fi
             echo
-            echo "Polecenie:"
+            echo "$(T 'Polecenie:')"
             echo "  $CMDTXT"
             echo
             if [ "$TARGET" = "ten host" ]; then
                 # relacja lokalna: zrodlo, kopia i cel na tym hoscie -- restore nie pyta o zgode
-                echo "Relacja lokalna: kopia i cel są na tym hoście, zgoda nie jest potrzebna."
+                echo "$(T 'Relacja lokalna: kopia i cel są na tym hoście, zgoda nie jest potrzebna.')"
             elif [ "$GRANT_RC" -eq 0 ] && [ -n "$GRANT" ]; then
-                echo "Zgoda $TARGET: $GRANT  (create = obok, rewind = na miejsce ze wspólnym punktem, replace = nadpisanie bez niego)"
+                echo "$(Tv 'Zgoda $TARGET: $GRANT  (create = obok, rewind = na miejsce ze wspólnym punktem, replace = nadpisanie bez niego)' '$TARGET' "$TARGET" '$GRANT' "$GRANT")"
             elif [ "$DEST" = obok ]; then
-                echo "Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL"
+                echo "$(Tv 'Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL' '$TARGET' "$TARGET" '$GRANT_LABEL' "$GRANT_LABEL")"
             else
-                echo "Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL (z --replace, gdy nie ma wspólnego punktu)."
+                echo "$(Tv 'Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL (z --replace, gdy nie ma wspólnego punktu).' '$TARGET' "$TARGET" '$GRANT_LABEL' "$GRANT_LABEL")"
             fi
-            [ "$TARGET" = "ten host" ] || echo "($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)"
-            echo "Po <Uruchom> polecenie pokaże plan i samo zapyta, zanim cokolwiek nadpisze."
+            [ "$TARGET" = "ten host" ] || echo "$(Tv '($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)' '$GRANT_LABEL' "$GRANT_LABEL" '$TARGET' "$TARGET")"
+            echo "$(T 'Po <Uruchom> polecenie pokaże plan i samo zapyta, zanim cokolwiek nadpisze.')"
         } >"$TMPD/summary.txt"
-        yesno_text "$TMPD/summary.txt" "Przywróć $REL: sprawdź" "Uruchom" "Wstecz" --defaultno || { step=3; continue; }
+        yesno_text "$TMPD/summary.txt" "$(Tv 'Przywróć $REL: sprawdź' '$REL' "$REL")" "$(T Uruchom)" "$(T Wstecz)" --defaultno || { step=3; continue; }
         run_cmd ;;
     esac
 done

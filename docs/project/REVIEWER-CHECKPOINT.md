@@ -2,6 +2,66 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
+## Latest final-audit batch — 2026-10-24 (PR #845 local passive copy)
+
+**No new finding was confirmed.** The exact implementation range is
+`d16c1ea5a2acde06ef2a5b60e22a6229f703bfd8..994b404bdc9e2c538aee6cca0697a4dc903ec0af`,
+merged as `bb00fca9c1a85373f45c3251ef2f8a3cf51c290d`. It adds local
+`local-backup --passive` pickup for an existing snapshot family, the recursive
+source-overlap refusal, and the non-interactive `edit-config` stop after a
+rejected candidate.
+
+The passive candidate writes `passive = yes` on every source section, renders
+`snapget -e`, omits source `delsnaps` while retaining landing retention and
+monitoring, seeds against the whole family root, and refuses the meaningless
+no-copy combination. A recursive source now conflicts with an already-installed
+child section; the same flat source remains the negative control. The installer
+continues to reject source/target nesting before composition. No cron, ZFS or
+live host was changed by the review.
+
+Exact-head evidence: cron 235/235, deadcode 7/7, and every new passive/overlap
+assertion in localbackup and TUI passed. The whole localbackup run was 154 pass /
+17 fail and TUI 403 pass / 8 fail: the former failures are the pre-existing
+container fixture pinning `[defaults] repo_dir` to a non-runnable root path; the
+TUI failures are unrelated command-line/terminal fixture cases. The passive seed
+trace still proved `snapget -m automated_ ... -e`; only the subsequent record
+assertion was blocked by that same install-fixture refusal. Exact-head CI run
+40131058505 and `impact --verify` pass.
+
+**Next reviewer action:** pick up any `IMPLEMENTED | Reviewer` response to
+REV-20261024-174 first. Otherwise continue with PR #469, source-side prune
+schedule spreading. Do not repeat PR #845 without new code or evidence.
+
+## Latest final-audit batch — 2026-10-24 (PR #465 / REV-174)
+
+**A new P1 finding was opened in the destructive `prune_foreign` installer
+boundary.** PR #465 is the exact range
+`533b41a34a3da8656a29adfcfb5f9d8d6a0f7096..cacf61c230b1df84734f0a5d672820b3ec7b14ea`,
+merged as `288ab86a51713747574b6eb7e4406c851e611a51`.
+
+The generator itself still constructs the intended empty-pattern carrier,
+protects every other managed family with `:all`, keeps two replica snapshots,
+and refuses remote scope. The defect is the seventh install-guard exception:
+`foreign_normalized_identity()` removes every `-P` token while comparing the
+installed and proposed lines. An independent floor such as `vzdump:2` can
+therefore change to `vzdump:0` in the same proposal and be accepted as if only
+the permitted U4 rewrite occurred. The next empty-pattern retention run can
+then delete old snapshots from that newly unprotected family.
+
+Deterministic production-function evidence: a plain protection change is
+refused (rc 1), the intended U4-only transition is accepted (rc 0), and the
+combined U4 plus `vzdump:2 -> vzdump:0` transition is incorrectly accepted
+(rc 0). Exact-head suites pass 165/165 cron, 35/35 cron2conf, 12/12 passivepick
+and 8/8 mirrorguard; exact-base production files add 7, 4, 1 and 1 failures.
+Current main passes generator 123/123, cron 230/230, passivepick 15/15 and
+mirrorguard 8/8, demonstrating the missing cross-condition assertion rather
+than a broad regression. No cron or ZFS action was performed.
+
+**Next reviewer action:** pick up any `IMPLEMENTED | Reviewer` response to
+REV-20261024-174 first. Otherwise continue with PR #469, source-side prune
+schedule spreading. Do not repeat the remainder of PR #465 without new code or
+evidence.
+
 ## Latest final-audit batch — 2026-10-24 (PRs #453/#455 engine control and observability)
 
 **The terminal progress-record rewrite and lock-skip rc 75 contract remain

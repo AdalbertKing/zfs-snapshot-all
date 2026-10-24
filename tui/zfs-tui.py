@@ -1354,8 +1354,8 @@ def build_relations(data, now):
                 if fail:
                     verdict = worst([verdict, "BLAD"])
                     vword = _(VERDICTS[verdict][0])
-                    reasons.append(u"%s: ostatni bieg %s rc=%s: %s" % (
-                        (j.get("scope") or "?").split(":")[-1], fail[1], fail[0], fail[2] or u"zobacz cron.log"))
+                    reasons.append(_(u"%s: ostatni bieg %s rc=%s: %s") % (
+                        (j.get("scope") or "?").split(":")[-1], fail[1], fail[0], fail[2] or _(u"zobacz cron.log")))
         rows.append({
             "kind": "relation", "name": name, "rel": rel, "state": state_word(rel),
             "dir": direction_of(host, rel_addr(rel), dirs, rel.get("mode")),
@@ -1526,8 +1526,8 @@ def build_jobs(data, now):
                 v = "BLAD"
             if disc:
                 discs.append((sc, disc))
-        reasons = list(reasons0) + [u"ostatni bieg %s rc=%s: %s" % (f[1], f[0], f[2] or u"zobacz cron.log")
-                                    for _, f in fails]
+        reasons = list(reasons0) + [_(u"ostatni bieg %s rc=%s: %s") % (f[1], f[0], f[2] or _(u"zobacz cron.log"))
+                                    for _ds, f in fails]
         items.append({
             "kind": "job", "name": j.get("label") or _("(bez rel.)"), "rel": None,
             "clabel": clabel, "srow": srow, "vol": vol, "czas": czas, "gb": gb,
@@ -1585,7 +1585,7 @@ def build_jobs(data, now):
         rnxt = None if on_ins else cron_next(sched, now)
         reasons = []
         if srow and str(srow.get("last_rc")) not in ("0", "None"):
-            reasons.append(u"ostatni bieg rc=%s" % srow.get("last_rc"))
+            reasons.append(_(u"ostatni bieg rc=%s") % srow.get("last_rc"))
         # WERDYKT Z MONITORA REPLIKI (2026-10-08): nosnik wymienny -- linia bramy
         # (`zfs-media-gate.sh age`, etykieta = nazwa repliki, wzorzec "replica");
         # staly -- check-snap-age na kopii (dst/zrodlo) z prefiksem repliki.
@@ -2060,7 +2060,7 @@ def tpl_children(tab, p, rows, now, ch):
             items.append({"cells": [r["name"], side, r.get("dir") or "?"],
                           "pairs": [(_(u"Relacja"), r["name"]), (_(u"Strona"), side), (_(u"Kierunek"), r.get("dir") or "?"),
                                     (_(u"Stan"), r.get("state") or "?"), (u"Zmiana szablonu", _(u"w zmianie relacji (ekran Relacje)"))],
-                          "title": u"%s -- relacja %s" % (p.get("name"), r["name"])})
+                          "title": _(u"%s -- relacja %s") % (p.get("name"), r["name"])})
         return {"heads": [_(u"Relacja"), _(u"Strona"), _(u"Kierunek")], "items": items,
                 "empty": _(u"żadna relacja na tym hoście nie używa tego szablonu")}
     items = []
@@ -2269,7 +2269,7 @@ def rel_panel_pairs(row, data, now, ch):
     if fails:
         ds, f = fails[0]
         pairs.append((_(u"Ostatni bieg"), _(u"BŁĄD   %s   rc=%s%s") % (f[1], f[0], (u"   (+%d)" % (len(fails) - 1)) if len(fails) > 1 else u"")))
-        pairs.append((_(u"Przyczyna"), u"%s: %s" % (ds, f[2] or u"zobacz cron.log")))
+        pairs.append((_(u"Przyczyna"), u"%s: %s" % (ds, f[2] or _(u"zobacz cron.log"))))
     elif last:
         w, note = transfer_word(last, now)
         st_, fin = int(last.get("started_epoch") or 0), int(last.get("finished_epoch") or 0)
@@ -4671,9 +4671,9 @@ class UI(object):
                     note += ["", _(u"Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (lock):"),
                              _(u"przycisk „wyłącz na źródle” na dole; następne okno wyjaśni, co to zmienia.")]
                     alt = ("w", lambda: self.confirm(_(u"Wyłącz relację %s") % n, [self.zb(), "disable-client", n,
-                                                     "--reason=wyłączona z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
+                                                     _(u"--reason=wyłączona z TUI %s") % time.strftime("%Y-%m-%d %H:%M")],
                                                      disable_note(rel)), _(u"wyłącz na źródle"))
-                self.confirm(_(u"Wstrzymaj relację %s") % n, [self.zb(), "pause-client", n, "--reason=z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
+                self.confirm(_(u"Wstrzymaj relację %s") % n, [self.zb(), "pause-client", n, _(u"--reason=z TUI %s") % time.strftime("%Y-%m-%d %H:%M")],
                              note, alt=alt)
         elif k == "del":
             # CALE usuniecie (kolektor + zrodlo + zwolnienie nazwy), w oknach whiptail:
