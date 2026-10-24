@@ -95,6 +95,23 @@ dokładnego head PR #551 (run 38759223428) jest zielone. REV-084 pozostaje
 CLOSED: bieżąca własność bezpieczeństwa jest spełniona i nie ma nowego kodu
 ani dowodu, który uzasadniałby ponowne otwarcie.
 
+**Rozstrzygnięcie recenzenta 2026-10-24 — PR #547 / F23.**
+F23 wszedł w `08ab57cdd25f257d28f369eaf9f4399358872b3f` bez osobnego REV,
+approval ani closure. Jego opis błędnie uznał pusty zakres wyłączający straż za
+bezpieczny, a commit nie dodał testu. Poprawiona aparatura PR #547 uruchomiona
+przeciw dokładnej bazie `f7478b700fa294c63fd17dbf31b8bc56ff054ff8`
+odtwarza oba ogniwa: bramka nie zgłasza listy wielu datasetów, a zdalny
+`replace` z pustym zakresem dochodzi do silnika. Commit
+`77e755e966b2796e2e50bd14385f5b47f3c5a547` poprawił białą listę i dodał
+odmowę pustego zakresu przed silnikiem; późniejsze #548 rozróżniło korzeń od
+dziecka, a opublikowany audyt #550 potwierdził bezpieczne odświeżanie
+zainstalowanej bramki. Na bieżącym `main`
+`6146dbab2d34296d1b195ec233ac56c6753225e6` wszystkie pięć właściwych asercji
+przechodzi z pustym zapisem wywołań silnika, pairgate ma 92/92, restore 335/335,
+`impact --verify` przechodzi, a CI dokładnego head PR #547 (run 38726889526)
+jest zielone. Nie otwarto REV: luka historycznego dowodu jest naprawiona w
+bieżącym kodzie, a dla F23 nie istnieje review, które można ponownie otworzyć.
+
 ## 3. Uprawnienia, zgody, operacje niszczące
 
 Kolejność: odzysk (najwięcej nowych uprawnień), potem wdrożenie.
