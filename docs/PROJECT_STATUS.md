@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ba5e7e6a3c93e7cf -->
+<!-- status-covers-digest: e340c451c932a86f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,15 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **GUI domyślnie po angielsku (`feat/gui-default-en`, właściciel 2026-10-24: „zfsbackup gui domyślnie po angielsku,
+  polski przełączany parametrem” -- publikacja dla społeczności Proxmoxa).** Bez `--lang`, `ZFS_TUI_LANG` i
+  `[gui] language` okna są po angielsku; polski: `zfs-backup gui --lang=pl` albo na stałe F10 -> GUI ->
+  `language = pl` (`settings.ini`). Domyślna wartość ustawienia w rejestrze (`zfs-backup.sh`) i przykład w
+  `lib-cron.sh` -- `en`. Uwaga przy wdrożeniu: hosty bez tego ustawienia po najbliższej aktualizacji pokażą
+  GUI po angielsku; okna whiptail (kreatory, zmiana relacji, repliki, odzysk) są po polsku do paczek P2-P6.
+  Suita `tui` przypina polski (`ZFS_TUI_LANG=pl`); test języka sprawdza: domyślnie angielski, polski z
+  `--lang`, zmiennej i ustawienia.
 
 - **GUI po angielsku -- główne ekrany (P1, `feat/gui-lang-p1`).** Teksty ekranów F2-F6, F11, okien szczegółów, pomocy F1
   i komunikatów w `tui/zfs-tui.py` idą przez `_()` (533 linie z tekstem w `_()`); stałe modułu (stany, werdykty,
@@ -36,9 +45,8 @@
   `tui/lang/en.json` (1374 wpisów) jest zbudowany z tabeli przeglądu właściciela
   (`docs/project/i18n/GUI-PL-EN-2026-10-24.json`) przez `tui/lang/build.py`, z dopiskami spoza tabeli w
   `tui/lang/en.extra.json` (Odśwież, Eksport/Import, Klucz, „Jaka relacja?” -- do potwierdzenia). Brak wpisu =
-  tekst polski. Język: `zfs-backup gui --lang=en`, potem `ZFS_TUI_LANG` (dziedziczą go okna whiptail), potem
-  `[gui] language` w `settings.ini` (F10; domyślna wartość zmieniona z `en` na `pl` -- nikt jej dotąd nie czytał),
-  domyślnie polski. Funkcje: `_()` w `tui/zfs-tui.py`, `T` w `tui/wt-lib.sh` (szablon z `%s` przez printf; katalog
+  tekst polski. Język: `zfs-backup gui --lang=…`, potem `ZFS_TUI_LANG` (dziedziczą go okna whiptail), potem
+  `[gui] language` w `settings.ini` (F10), domyślnie -- od 2026-10-24 -- angielski (wpis wyżej). Funkcje: `_()` w `tui/zfs-tui.py`, `T` w `tui/wt-lib.sh` (szablon z `%s` przez printf; katalog
   czytany jako dane, bez eval). Pilot: pasek klawiszy F (też skróty przy 80 kolumnach) i krok 1 kreatora relacji;
   przy okazji opis kroku 1 mieści się w oknie (linia o migawkach zdalnych była ucięta) i nie ma w nim listy
   klawiszy. Komunikaty poleceń (CLI) zostają po angielsku. Test `test/tui/lang_catalog.py` (każdy tekst podany do

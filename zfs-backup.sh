@@ -15544,7 +15544,7 @@ relation_copy_sources() {
 # all read it, so a key cannot be settable in one and unknown in another.
 # ---------------------------------------------------------------------------
 # key|built-in default|kind|applies to|help (Polish -- shown in the window)
-SETTINGS_REGISTRY='gui.language|pl|enum:pl,en|-|język okien GUI (pl, en); komunikaty poleceń zostają po angielsku
+SETTINGS_REGISTRY='gui.language|en|enum:en,pl|-|język okien GUI (en, pl); komunikaty poleceń zostają po angielsku
 alerts.email|root|email|-|kto dostaje maile o kopiach
 alerts.errors|daily|enum:daily,immediate|-|błędy: zbiorczo raz na dobę albo od razu
 alerts.warnings|daily|enum:daily,immediate|-|ostrzeżenia: zbiorczo raz na dobę albo od razu

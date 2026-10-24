@@ -5384,24 +5384,25 @@ else
 fi
 
 # JĘZYK OKIEN (P0 tłumaczenia, 2026-10-24): katalog tui/lang/en.json ma wpis dla każdego tekstu
-# podanego do T/_(); pasek F i T dają angielski z --lang=en / ZFS_TUI_LANG=en / [gui] language,
-# a bez nich polski (domyślny język; testy wyżej są po polsku).
+# podanego do T/_(). Właściciel 2026-10-24: domyślnie ANGIELSKI (publikacja dla społeczności
+# Proxmoxa); polski z --lang=pl / ZFS_TUI_LANG=pl / [gui] language = pl. Testy wyżej przypinają
+# polski przez ZFS_TUI_LANG=pl.
 lc_out="$("$PY" "$REPO/test/tui/lang_catalog.py" "$REPO" 2>&1 | tr -d '\r')"
-LGS="$(mktemp -d)"; printf '[gui]\nlanguage = en\n' > "$LGS/settings.ini"
-bar_pl="$(env -u ZFS_TUI_LANG SETTINGS_FILE=/nonexistent "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --screen relacje --width 100 2>&1 | tail -1)"
-bar_en="$(env -u ZFS_TUI_LANG SETTINGS_FILE=/nonexistent "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --screen relacje --width 100 --lang en 2>&1 | tail -1)"
+LGS="$(mktemp -d)"; printf '[gui]\nlanguage = pl\n' > "$LGS/settings.ini"
+bar_pl="$(env -u ZFS_TUI_LANG SETTINGS_FILE=/nonexistent "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --screen relacje --width 100 --lang pl 2>&1 | tail -1)"
+bar_en="$(env -u ZFS_TUI_LANG SETTINGS_FILE=/nonexistent "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --screen relacje --width 100 2>&1 | tail -1)"
 bar_set="$(env -u ZFS_TUI_LANG SETTINGS_FILE="$LGS/settings.ini" "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --screen relacje --width 100 2>&1 | tail -1)"
-t_pl="$(env -u ZFS_TUI_LANG SETTINGS_FILE=/nonexistent WHIPTAIL=true bash -c '. "$1/tui/wt-lib.sh"; T Dalej; T "Nowa relacja -- krok %s z %s: %s" 1 6 X' x "$REPO")"
-t_en="$(ZFS_TUI_LANG=en WHIPTAIL=true bash -c '. "$1/tui/wt-lib.sh"; T Dalej; T "Nowa relacja -- krok %s z %s: %s" 1 6 X; T "tekst bez wpisu"' x "$REPO")"
+t_pl="$(ZFS_TUI_LANG=pl WHIPTAIL=true bash -c '. "$1/tui/wt-lib.sh"; T Dalej; T "Nowa relacja -- krok %s z %s: %s" 1 6 X' x "$REPO")"
+t_en="$(env -u ZFS_TUI_LANG SETTINGS_FILE=/nonexistent WHIPTAIL=true bash -c '. "$1/tui/wt-lib.sh"; T Dalej; T "Nowa relacja -- krok %s z %s: %s" 1 6 X; T "tekst bez wpisu"' x "$REPO")"
 t_set="$(env -u ZFS_TUI_LANG SETTINGS_FILE="$LGS/settings.ini" WHIPTAIL=true bash -c '. "$1/tui/wt-lib.sh"; T Wstecz' x "$REPO")"
 rm -rf "$LGS"
 if [ "$(printf '%s\n' "$lc_out" | grep -c '^ok ')" -eq 2 ] \
    && has "$bar_pl" '3Relacje' && has "$bar_pl" '12Wyjście' \
    && has "$bar_en" '3Relations' && has "$bar_en" '12Quit' && ! has "$bar_en" 'Relacje' \
-   && has "$bar_set" '3Relations' \
+   && has "$bar_set" '3Relacje' \
    && [ "$t_pl" = "DalejNowa relacja -- krok 1 z 6: X" ] \
-   && [ "$t_en" = "NextNew relation -- step 1 of 6: Xtekst bez wpisu" ] && [ "$t_set" = "Back" ]; then
-    ok "język okien: katalog pełny dla T/_(), pasek F i T po angielsku z --lang/ZFS_TUI_LANG/settings, bez nich po polsku"
+   && [ "$t_en" = "NextNew relation -- step 1 of 6: Xtekst bez wpisu" ] && [ "$t_set" = "Wstecz" ]; then
+    ok "język okien: katalog pełny dla T/_(), domyślnie po angielsku, polski z --lang/ZFS_TUI_LANG/settings"
 else
     bad "język okien (P0)" "$lc_out" "pl=[$bar_pl]" "en=[$bar_en]" "set=[$bar_set]" "t_pl=[$t_pl] t_en=[$t_en] t_set=[$t_set]"
 fi
