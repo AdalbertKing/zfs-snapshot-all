@@ -2195,8 +2195,10 @@ if [ "$pv_rc" -eq 0 ] && printf '%s\n' "$pv_ds" | grep -qE '^\s*passive\s*=\s*ye
 else
     bad "local-backup --passive: passive = yes, no source [prune:]" "rc=$pv_rc" "$pv_c" "$(printf '%s\n' "$pv_o" | grep -E 'FATAL|rror' | head -2)"
 fi
-if printf '%s\n' "$pv_kc" | grep -qxF '[prune:rpool/data]' && ! printf '%s\n' "$pv_kc" | grep -qE '^\s*passive\s*='; then
-    ok "local-backup --passive: control without it keeps the source [prune:] section and has no passive field"
+# default is flat since 2026-10-22: it prunes the source in the [dataset:] tiers, not in a
+# [prune:<source>] section -- so the control is the source delsnaps line itself.
+if [ "$(printf '%s\n' "$pv_k" | grep -cE 'delsnaps\.sh .*"rpool/data"')" -ge 1 ] && ! printf '%s\n' "$pv_kc" | grep -qE '^\s*passive\s*='; then
+    ok "local-backup --passive: control without it prunes the source (delsnaps on rpool/data) and has no passive field"
 else
     bad "local-backup --passive: control without it" "$pv_kc"
 fi
@@ -2228,7 +2230,9 @@ if [ "$pv_o1rc" -ne 0 ] && printf '%s\n' "$pv_o1" | grep -q 'overlap' && printf 
 else
     bad "local-backup --recursive=flat: overlap with a child section" "rc=$pv_o1rc" "$(printf '%s\n' "$pv_o1" | tail -4)"
 fi
-if [ "$pv_o2rc" -eq 0 ] && ! printf '%s\n' "$pv_o2" | grep -q 'overlap coverage'; then
+# Only the overlap verdict is the control: the hand-written child points at a template the
+# fixture does not define, so gen-cron rejects the candidate for that unrelated reason.
+if ! printf '%s\n' "$pv_o2" | grep -q 'overlap'; then
     ok "local-backup overlap control: the same root without --recursive (flat claim) passes next to the child section"
 else
     bad "local-backup overlap control: without --recursive" "rc=$pv_o2rc" "$(printf '%s\n' "$pv_o2" | tail -3)"
