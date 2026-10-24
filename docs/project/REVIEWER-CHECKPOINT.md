@@ -2,7 +2,62 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-24 (F23 / PR #547 reconciliation)
+## Latest final-audit batch — 2026-10-24 (local restore / PRs #539 and #541)
+
+**Both local-restore backlog defects reproduce on their exact bases and are
+corrected in the current tree; no current defect was found.** PR #539 spans
+`ebb1fcf42eb88a8bda5c210e8210fb612db330e4..c809809040ffff0a9d1cc5ea529b925104d2266a`;
+its corrective dispatcher commits culminate in
+`99330357e4599ef4df661a0be352454ae6e9d83b` and
+`c12b9c0a4ed233736c4aa36e1c128033227db45d`, and its merge is
+`61af6f8977821db6ba766a6d725780f1d45b189b`. PR #541 spans
+`616b6716ca90a918fc64850b11bc9e58152f844b..5c9286d6a3f092954add9321a8844c13ace8c5a8`;
+the production correction is consolidated in
+`db3a9f5aca7a2f801600029d372974fb520bc83d` and the merge is
+`291b6307dc46053a53b51a738663a4b2b450d276`.
+
+Independent evidence on current `main`
+`eac8eee9b918a858cbeb2024ded46a76995ce1aa`:
+
+- a public-entry negative control on PR #539's exact base returned rc 1 and
+  **zero bytes** for a local relationship's read-only plan; the same invocation
+  on current main returned rc 0 and the complete `Plan odtworzenia` without
+  changing anything. The current focused dispatcher assertion passes;
+- running PR #541's corrected `restoregrant` instrument against its exact base
+  reproduced all five local failures: no rollback before the engine, false rc 0
+  while a newer snapshot remains, a success verdict instead of `NOT at`, and no
+  refusal/engine suppression when no base is pinned. The corresponding current
+  assertions pass;
+- current `test/restore/run.sh` is 335/335 and `test/deadcode/run.sh` is 7/7.
+  `test/restoregrant/run.sh` is 207/210 in this root-only reviewer container;
+  its three known failures are non-root precondition/message checks, outside the
+  reviewed local-rollback path. The relevant `localbackup` assertion passes;
+  its full suite is not valid in this root/container fixture and finished
+  147/164 with unrelated install/seed fixture failures;
+- `bash -n`, both exact-range `git diff --check` runs, both `test/impact.sh`
+  selections and `./test/impact.sh --verify` pass;
+- exact-head CI runs 38701660631 (#539) and 38710218351 (#541) passed:
+  https://github.com/AdalbertKing/zfs-snapshot-all/actions/runs/38701660631 and
+  https://github.com/AdalbertKing/zfs-snapshot-all/actions/runs/38710218351;
+- the repository's bounded manual evidence records the original silent exit,
+  the original false-success local rewind, a successful destructive lab rewind
+  with snapshot identity and `referenced` equality, and the next relationship
+  run discarding the copy's now-newer snapshots. No live host or dataset was
+  touched by this reviewer batch.
+
+PR #539 now bypasses peer loading for `RUX_MODE=local` and confines a failed
+remote load before handing diagnosis to `zfs-restore.sh`. PR #541 now requires
+a uniquely pinned common base, rolls back only the exact engine depth and only
+datasets with a copy counterpart, stops after a rollback refusal, and verifies
+GUID, newest snapshot and live `referenced` state after an engine rc 0. No REV
+was opened: these are historical defects with current corrective code and
+discriminating regression evidence, not open acceptance properties.
+
+**Next reviewer scope:** audit PR #553's widened restore delegation on its exact
+range: creation and ownership of `<pool>/restore`, least-privilege capability
+set, failure/retry cleanup, and revoke symmetry with concurrent grants.
+
+## Previous final-audit batch — 2026-10-24 (F23 / PR #547 reconciliation)
 
 **The original F23 guard was not fail-closed for a multi-dataset scope; PR
 #547 corrected both halves and the current destructive boundary is reachable.**
