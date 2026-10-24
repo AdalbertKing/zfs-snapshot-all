@@ -1941,7 +1941,7 @@ the merge, or the merge does not run.
 
 *Genesis.* To see the plan before rebuilding `pve9` on pve10 I ran the one-command form
 (`zfs-backup.sh --source=... --target=... --profile=... --install`) without `--yes`,
-expecting a plan. It executed: it created client `pve9` (state `pending_enroll`) and ran
+expecting a plan. It asked nothing (plink gave it no terminal) and executed: it created client `pve9` (state `pending_enroll`) and ran
 `--join-remotely` on pve9. The join stopped at `git pull --ff-only`, because pve9's
 checkout held another session's unmerged commits, so nothing changed on pve9.
 
