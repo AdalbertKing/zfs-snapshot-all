@@ -2427,11 +2427,13 @@ rm -rf "$NRE"
 # zrodle (tylko reczne migawki) -- ani polecenia, ani ostrzezenia.
 NRC="$(mktemp -d)"; cp "$P10"/*.json "$NRC/"
 "$PY" - "$NRC/list-datasets-pve9b.json" <<'PYEOF'
-import sys, json
+import sys, json, time
 p = sys.argv[1]; d = json.load(open(p, encoding="utf-8"))
 for x in d["datasets"]:
     x["own_snapshots"] = 5 if x["name"] == "hdd/test-kreator" else 0
     x["family_snapshots"] = 5 if x["name"] == "hdd/test-kreator" else 0
+    # 2026-10-24: wiek najnowszej migawki rodziny (okno "Migawki naszej rodziny już są na źródle")
+    x["family_newest"] = int(time.time()) - 7200 if x["name"] == "hdd/test-kreator" else 0
 json.dump(d, open(p, "w", encoding="utf-8"))
 PYEOF
 # szablon passive-flat jest na kazdym hoscie (profiles/), w fixture go nie bylo
@@ -2446,7 +2448,37 @@ for x in d["profiles"]:
         x["hidden"] = "yes"
 json.dump(d, open(p, "w", encoding="utf-8"))
 PYEOF
-NRCA=$(nr_run "$(w17_ans 'grant')" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCW="$(cat "$NR/wt.log")"
+# 2026-10-24: przy rodzinie na zrodle jest okno "Migawki naszej rodziny już są na źródle"
+# (krok po "Dokąd", przed szablonem): chain = ktos je robi, own = resztki, robie wlasne.
+nrc_ans() {   # <odpowiedz w oknie migawek: chain|own> [tryb: backup] -> odpowiedzi kreatora backupu ze zrodlem z rodzina
+    printf '%s' "0${T}${2:-backup}
+0${T}192.168.28.98
+0${T}
+0${T}hdd/backups
+0${T}$1
+0${T}default
+0${T}pve9b
+0${T}adv
+0${T}acct
+0${T}root
+0${T}extra
+0${T}grant
+0${T}__done__
+1${T}
+0${T}create
+0${T}
+0${T}
+"; }
+NRCA=$(nr_run "$(nrc_ans chain)" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCW="$(cat "$NR/wt.log")"
+# okno pytajace: tytul, menu z tagami chain/own, wiek najnowszej migawki z 4. kolumny own.tsv
+NRCQ="$NRCW"
+NRCOA=$(nr_run "$(nrc_ans own)" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCOW="$(cat "$NR/wt.log")"
+# sync + szablon default + odpowiedz chain: lustro bedzie PASYWNE, bez --own-snapshots
+NRCS=$(nr_run "0${T}sync
+0${T}192.168.28.98
+0${T}
+0${T}chain
+${NRTS}" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCSW="$(cat "$NR/wt.log")"
 "$PY" - "$NRC/list-datasets-pve9b.json" <<'PYEOF'
 import sys, json
 p = sys.argv[1]; d = json.load(open(p, encoding="utf-8"))
@@ -2456,10 +2488,27 @@ json.dump(d, open(p, "w", encoding="utf-8"))
 PYEOF
 NRCB=$(nr_run "$(w17_ans 'grant')" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCW0="$(cat "$NR/wt.log")"
 if has "$NRCW" '[polecany]' && has "$NRCW" 'resztki starej relacji' && has "$NRCW" 'UWAGA ŁAŃCUCH' && has "$NRCW" 'pole Harmonogram -> passive-flat' \
-   && ! has "$NRCW0" 'ŁAŃCUCH' && ! has "$NRCW0" '[polecany]' && has "$NRCB" 'CMD: '; then
+   && ! has "$NRCW0" 'ŁAŃCUCH' && ! has "$NRCW0" '[polecany]' && has "$NRCB" 'CMD: ' \
+   && has "$NRCA" 'CMD: ' && ! has "$NRCA" '--own-snapshots'; then
     ok "new-relation: backup z magazynu kopii (nasza rodzina na zrodle) -- polecany passive-flat, UWAGA LANCUCH w podsumowaniu; reczne migawki -- bez tego"
 else
-    bad "new-relation: lancuch dla backupu" "$(printf '%s' "$NRCW" | grep -E 'polecany|ŁAŃCUCH' | cut -c1-200)" "$(printf '%s' "$NRCW0" | grep -E 'polecany|ŁAŃCUCH' | cut -c1-200)"
+    bad "new-relation: lancuch dla backupu" "$(printf '%s' "$NRCW" | grep -E 'polecany|ŁAŃCUCH' | cut -c1-200)" "$(printf '%s' "$NRCW0" | grep -E 'polecany|ŁAŃCUCH' | cut -c1-200)" "$NRCA"
+fi
+if has "$NRCOA" 'CMD: ' && has "$NRCOA" ' --own-snapshots ' && has "$NRCOW" 'WŁASNE MIGAWKI' && ! has "$NRCOW" 'UWAGA ŁAŃCUCH'; then
+    ok "new-relation: odpowiedz 'own' w oknie migawek rodziny -- komenda niesie --own-snapshots, podsumowanie mowi WŁASNE MIGAWKI (kontrola: 'chain' = bez flagi)"
+else
+    bad "new-relation: own -> --own-snapshots" "$NRCOA" "$(printf '%s' "$NRCOW" | grep -E 'WŁASNE|ŁAŃCUCH' | cut -c1-200)"
+fi
+if has "$NRCS" 'CMD: ' && ! has "$NRCS" '--own-snapshots' && has "$NRCSW" 'lustro będzie PASYWNE'; then
+    ok "new-relation: synchro + odpowiedz 'chain' + szablon default -- podsumowanie mowi 'lustro będzie PASYWNE', komenda bez --own-snapshots"
+else
+    bad "new-relation: synchro chain -> PASYWNE" "$NRCS" "$(printf '%s' "$NRCSW" | grep -E 'PASYWNE|ŁAŃCUCH|ATRAPA' | cut -c1-200)"
+fi
+if has "$NRCQ" 'Migawki naszej rodziny już są na źródle' && has "$NRCQ" '--notags' && has "$NRCQ" ' ~ chain ~ ' && has "$NRCQ" ' ~ own ~ ' \
+   && has "$NRCQ" 'najnowsza' && has "$NRCQ" '2 godz. temu' && ! has "$NRCW0" 'najnowsza'; then
+    ok "new-relation: okno 'Migawki naszej rodziny już są na źródle' -- menu chain/own, w tekscie 'najnowsza' z wiekiem z 4. kolumny own.tsv (family_newest)"
+else
+    bad "new-relation: okno migawek rodziny" "$NRCQ"
 fi
 rm -rf "$NRC"
 

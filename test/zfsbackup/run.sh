@@ -4329,6 +4329,44 @@ else
     bad "seed overlap: a disjoint dataset (different peer) still reaches the real transfer" "rc=$rc out=$out recorder=$(cat "$SD_RECORDER" 2>/dev/null)"
 fi
 
+# 5. --own-snapshots (2026-10-24): the source ALREADY carries an automated_* family.
+#    Undeclared, the seed takes it for a chain and goes PASSIVE (-e, creates nothing);
+#    a record that declares OWN_SNAPSHOTS=1 says it is leftovers, so the seed stamps its
+#    own base -- no probe, no -e. Same fixture, only the record line differs.
+sd_seed_family() {   # <client name> <peer ip> <extra record line or ""> -> output; family present on the source
+    local nm="$1" ip="$2" extra="$3"
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtl\n' "$ip" > "$SD/keys/${ip}_known_hosts"
+    cat > "$SD/clients/$nm.conf" <<EOF2
+CLIENT_NAME=$nm
+PEER_HOST=$ip
+STATE=pending_enroll
+ACTIVE_ENDPOINT=lan
+ENDPOINT_LAN_HOST=$ip
+ENDPOINT_LAN_PORT=22
+${extra}
+EOF2
+    cat > "$SD/peerstate/$ip.conf" <<EOF2
+PEER_SAVED_ACCOUNT=zfsbackup
+PEER_SAVED_TARGET=tank/backups
+PEER_SAVED_MODE=backup
+PEER_SAVED_DATASETS="rpool/fam"
+EOF2
+    ( ssh() { printf 'rpool/fam@automated_hourly_x\t100\n'; }; load_ssh_opts() { LOAD_SSH_OPTS=(); }
+      CLIENTS_DIR="$SD/clients" PEER_STATE_DIR="$SD/peerstate" PEER_KEY_DIR="$SD/keys" SNAPGET="$SD_SNAPGET" \
+      cmd_seed "$nm" --yes ) 2>&1
+}
+rm -f "$SD_RECORDER"
+out_plain=$(sd_seed_family famplain 10.9.9.11 "")
+rm -f "$SD_RECORDER"
+out_own=$(sd_seed_family famown 10.9.9.12 "OWN_SNAPSHOTS=1")
+if printf '%s\n' "$out_plain" | grep -q 'PASSIVE seed' \
+   && ! printf '%s\n' "$out_own" | grep -q 'PASSIVE seed' \
+   && printf '%s\n' "$out_own" | grep -q 'OWN snapshots declared'; then
+    ok "seed own-snapshots: the same family on the source -- undeclared = PASSIVE seed (control); OWN_SNAPSHOTS=1 = 'OWN snapshots declared', no PASSIVE seed"
+else
+    bad "seed own-snapshots: OWN_SNAPSHOTS=1 must not seed passively" "plain: $(printf '%s\n' "$out_plain" | tail -4)" "own: $(printf '%s\n' "$out_own" | tail -4)"
+fi
+
 # --- 47a. client_recursive_args(): the recursion flag and every recorded
 #          exclusion travel together, filled from the record fields directly
 #          (no word splitting, no globbing of a regex like ^tank/vms/vm[0-9]$)
@@ -5061,6 +5099,32 @@ if grep -q "^PROFILE=altprofile$" "$P53/clients/proftest3.conf"; then
     ok "add-client: a named non-default profile is validated and stored"
 else
     bad "add-client: a named non-default profile is validated and stored" "$(cat "$P53/clients/proftest3.conf" 2>&1)"
+fi
+
+# 3b. --own-snapshots (2026-10-24): the admin's declaration that the family already on
+# the source is leftovers. Written as OWN_SNAPSHOTS=1 ONLY when given (proftest2 above is
+# the control: same command without the flag, no such field); opposite of --passive and
+# meaningless for --snaponly, both refused before any record exists.
+( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
+  cmd_add_client "ownsnap" --lan=10.0.0.1 --datasets="tank/x" --own-snapshots ) >/dev/null 2>&1
+if grep -q "^OWN_SNAPSHOTS=1$" "$P53/clients/ownsnap.conf" && ! grep -q "OWN_SNAPSHOTS" "$P53/clients/proftest2.conf"; then
+    ok "add-client: --own-snapshots writes OWN_SNAPSHOTS=1; the same command without the flag writes no such field"
+else
+    bad "add-client: --own-snapshots record field" "with: $(cat "$P53/clients/ownsnap.conf" 2>&1)" "without: $(cat "$P53/clients/proftest2.conf" 2>&1)"
+fi
+out=$( ( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
+  cmd_add_client "ownpas" --lan=10.0.0.1 --datasets="tank/x" --passive --own-snapshots ) 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'opposite answers' && [ ! -e "$P53/clients/ownpas.conf" ]; then
+    ok "add-client: --passive together with --own-snapshots is refused ('opposite answers'), no record is created"
+else
+    bad "add-client: --passive --own-snapshots" "rc=$rc" "$out"
+fi
+out=$( ( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
+  cmd_add_client "ownsnaponly" --host=10.0.0.1 --snaponly --datasets="tank/x" --own-snapshots ) 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'snaponly' && printf '%s' "$out" | grep -q -- '--own-snapshots' && [ ! -e "$P53/clients/ownsnaponly.conf" ]; then
+    ok "add-client: --snaponly together with --own-snapshots is refused, no record is created"
+else
+    bad "add-client: --snaponly --own-snapshots" "rc=$rc" "$out"
 fi
 
 # 4. apply_client_profile_choice: the wiring that turns the stored field into
@@ -8413,6 +8477,17 @@ if [ "$rc" -eq 0 ] && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*prefix[[:spa
 else
     bad "passivepick control: the family-profile shape changed" "rc=$rc" "$sec"
 fi
+# OWN_SNAPSHOTS=1 (add-client --own-snapshots, 2026-10-24): the SAME fixture as the control
+# above (the source carries an automated_ family), but the record says it is leftovers --
+# the probe is skipped, the section stamps its own family (no -e), the log says why.
+sec=$(OWN_SNAPSHOTS=1 pk_emit default); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*flags[[:space:]]*= -K /dev/null -M$' \
+   && ! printf '%s\n' "$sec" | grep -qE '^[[:space:]]*flags[[:space:]]*=.* -e( |$)' \
+   && grep -q 'OWN snapshots declared' "$PK/default.log" && ! grep -q 'PASSIVE consumption' "$PK/default.log"; then
+    ok "passivepick: OWN_SNAPSHOTS=1 -- the family on the source is leftovers: no probe, flags without -e, the log says 'OWN snapshots declared'"
+else
+    bad "passivepick: OWN_SNAPSHOTS=1 must skip the passive probe" "rc=$rc" "$sec" "$(grep -h 'sync:' "$PK/default.log")"
+fi
 
 # SYNC IS A MIRROR (owner 2026-10-06): every sync pull above ends in -M, and
 # the ladder profile's target [prune:] says prune = no (checked in the default
@@ -10871,7 +10946,22 @@ if [ "$(grep -o -- '"--passive"' "$IM/pasywna.json" | wc -l | tr -d ' ')" -eq 1 
 else
     bad "importrel/142: passive control" "$(grep -o '"argv":\[[^]]*\]' "$IM/pasywna.json")" "$(cat "$IM/calls.log")"
 fi
-rm -f "$EX/clients/zwykla.conf" "$EX/clients/pasywna.conf"
+# OWN_SNAPSHOTS=1 (--own-snapshots, 2026-10-24) rides the same way: exactly one
+# --own-snapshots in the argv, the declaration in the JSON, replayed on import;
+# an ordinary record (the ZWYKLA one above has no such field) exports without it.
+im_rec wlasne "OWN_SNAPSHOTS=1"
+ex_run export-relation wlasne --json; cp "$WORK/ex.out" "$IM/wlasne.json"
+im_run "$IM/wlasne.json" --name=wlasne2 --yes
+im_rec zwykla "PASSIVE=0"
+ex_run export-relation zwykla --json; cp "$WORK/ex.out" "$IM/zwykla.json"
+if [ "$(grep -o -- '"--own-snapshots"' "$IM/wlasne.json" | wc -l | tr -d ' ')" -eq 1 ] && grep -q '"OWN_SNAPSHOTS":"1"' "$IM/wlasne.json" \
+        && [ "$(grep '^add-client|wlasne2|' "$IM/calls.log" | grep -o -- '|--own-snapshots' | wc -l | tr -d ' ')" -eq 1 ] \
+        && ! grep -q -- '--own-snapshots' "$IM/zwykla.json" && ! grep -q 'OWN_SNAPSHOTS' "$IM/zwykla.json"; then
+    ok "importrel/own: an OWN_SNAPSHOTS=1 record exports with exactly one --own-snapshots + the declaration and imports with it; an ordinary record carries neither"
+else
+    bad "importrel/own: OWN_SNAPSHOTS export/import" "$(grep -o '"argv":\[[^]]*\]' "$IM/wlasne.json")" "$(cat "$IM/calls.log")" "$(grep -o '"argv":\[[^]]*\]' "$IM/zwykla.json")"
+fi
+rm -f "$EX/clients/zwykla.conf" "$EX/clients/pasywna.conf" "$EX/clients/wlasne.conf"
 
 # usage says so
 if bash "$ZFSBACKUP" 2>&1 | grep -q 'import-relation FILE'; then
@@ -12928,6 +13018,32 @@ if [ "$got" = "[('pool', 0), ('pool/a', 1), ('pool/b', 0)]" ]; then
     ok "listdatasets: --own-snapshots podaje tez family_snapshots -- tylko automated_* (pool/a 1 z 2 wlasnych)"
 else
     bad "listdatasets: family_snapshots" "got=$got" "$LDOUT"
+fi
+# family_newest (2026-10-24): the listing asks for the creation column, the newest
+# epoch counts only for OUR family (pool/a@reczny 9000 must not), and a peer that
+# answers with names only (the stub above) reports 0 for every dataset.
+got=$(printf '%s' "$LDOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print([(x["name"], x["family_newest"]) for x in d["datasets"]])' 2>/dev/null)
+if [ "$got" = "[('pool', 0), ('pool/a', 0), ('pool/b', 0)]" ] && grep -q -- 'zfs list -H -p -o name,creation -t snapshot' "$LO/ssh.argv"; then
+    ok "listdatasets: family_newest -- the snapshot call asks for name,creation; a names-only answer gives 0 for every dataset"
+else
+    bad "listdatasets: family_newest backward compat / argv" "got=$got" "$LDOUT" "$(cat "$LO/ssh.argv")"
+fi
+LC2="$WORK/listown2"; rm -rf "$LC2"; mkdir -p "$LC2/bin"
+cat > "$LC2/bin/ssh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${LD_ARGS:?}/ssh.argv"
+case "$*" in
+    *"-t snapshot"*) printf 'pool/a@automated_hourly_1\t1000\npool/a@automated_daily_2\t3000\npool/a@reczny\t9000\npool/b@x_automated_hourly_3\t2000\n' ;;
+    *) printf 'pool\tfilesystem\t1\t2\npool/a\tfilesystem\t1\t2\npool/b\tfilesystem\t1\t2\n' ;;
+esac
+EOF
+chmod +x "$LC2/bin/ssh"
+LDOUT=$( ( PATH="$LC2/bin:$PATH" LD_ARGS="$LC2" bash "$ZFSBACKUP" list-datasets peer.example --json --own-snapshots ) 2>"$LC2/err")
+got=$(printf '%s' "$LDOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print([(x["name"], x["family_newest"], x["family_snapshots"]) for x in d["datasets"]])' 2>/dev/null)
+if [ "$got" = "[('pool', 0, 0), ('pool/a', 3000, 2), ('pool/b', 2000, 1)]" ]; then
+    ok "listdatasets: family_newest = newest creation epoch of automated_* only (pool/a 3000 not the manual 9000, pool/b 2000 via prefix_automated_, root 0)"
+else
+    bad "listdatasets: family_newest" "got=$got" "$LDOUT" "$(cat "$LC2/err")"
 fi
 rm -f "$LO/ssh.argv"
 LDOUT=$(lo_run peer.example --json)
