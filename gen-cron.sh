@@ -4116,6 +4116,9 @@ apply_foreign_prune() {
             fprot="${fprot}-P \"${pfx}:2\" "
         done
         unset _seen
+        # REV-20261024-174: the EXACT set added here, for the installer's guard
+        # (zfs-backup.sh foreign_protections_kept) -- shape alone is not provenance.
+        [ -n "${GEN_CRON_FOREIGN_REPORT:-}" ] && printf '%s\t%s\n' "$scope" "$fprot" >> "$GEN_CRON_FOREIGN_REPORT"
         case "$kind" in
             gfs)    GFS_PRUNE_SEC_ENTITIES[$best]="$(foreign_rewrite "${GFS_PRUNE_SEC_ENTITIES[$best]}" 2)${SEP}${fprot}" ;;
             inline) INLINE_PRUNE_ENTITIES[$best]="$(foreign_rewrite "${INLINE_PRUNE_ENTITIES[$best]}" 3)${SEP}${fprot}" ;;
