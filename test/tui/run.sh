@@ -5376,11 +5376,8 @@ fi
 
 # Limit czytnika GUI: zawieszony czytnik (ssh do martwego hosta) wraca błędem w limicie i nie
 # zostawia procesów; zwykły czytnik dalej daje JSON. Prawdziwe run_verb() z produkcji.
-rto_out="$("$PY" "$REPO/test/tui/reader_timeout.py" "$TUI" 2>&1 | tr -d '
-')"
-if [ "$(printf '%s
-' "$rto_out" | grep -c '^ok ')" -eq 3 ] && ! printf '%s
-' "$rto_out" | grep -q '^bad '; then
+rto_out="$("$PY" "$REPO/test/tui/reader_timeout.py" "$TUI" 2>&1 | tr -d '\r')"
+if [ "$(printf '%s\n' "$rto_out" | grep -c '^ok ')" -eq 3 ] && ! printf '%s\n' "$rto_out" | grep -q '^bad '; then
     ok "czytnik GUI: limit czasu -- zawieszony wraca błędem i ginie z dziećmi, zwykły daje JSON"
 else
     bad "czytnik GUI: limit czasu" "$rto_out"
