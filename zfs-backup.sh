@@ -9419,6 +9419,12 @@ Taking over older jobs (a v4 config written by hand): remove their sections firs
         fi
     fi
 
+    # A PASSIVE seed adopts the newest snapshot of the whole family, the way the old
+    # hand-written pickup did (-m automated_ -e), not the first tier's newest: in the
+    # takeover rehearsal (pve9, 2026-10-24) the copy already held a newer daily/monthly
+    # than the newest hourly, and `send -I <newer> <older>` failed the seed. With the
+    # family root the engine finds that snapshot on the target and skips (rc 0).
+    [ "$lb_passive" -eq 1 ] && seed_prefix="$(profile_family_root)"
     log "seed: pierwsza wysylka kazdego zrodla, prefiks '$seed_prefix' (to moze potrwac)..."
     local seed_failed=0 sr
     # The seed makes the FIRST snapshot the same way the installed line will,
