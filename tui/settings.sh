@@ -124,7 +124,7 @@ while :; do
     n=0; for k in "${KEYS[@]}"; do [ -n "${NEW[$k]+x}" ] && n=$((n + 1)); done
     items+=("#_" " " mail "$(T 'Wyślij mail próbny (na obecny adres)')" zapisz "$(Tv 'Zapisz zmiany ($n) -- plan, WYKONAJ' '$n' "$n")")
     wt --title "$(T 'Ustawienia hosta')" --ok-button "$(T Wybierz)" --cancel-button "$(T Wyjdź)" --notags --default-item "$LAST" \
-       --menu "$(T 'Pozycja zmienia jedną wartość; nic nie jest zapisane przed WYKONAJ. W nawiasie: skąd jest wartość, gdy nie z pliku ustawień.')" \
+       --menu "$(T 'Wybierz pozycję, aby zmienić jej wartość. Nic nie zostanie zapisane, dopóki nie wybierzesz „Zapisz zmiany” i WYKONAJ. Nawias przy wartości mówi, skąd ona pochodzi, jeśli nie ma jej w pliku ustawień.')" \
        "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 2)" "${items[@]}" \
        || { clear 2>/dev/null; wt_end "$(T 'Ustawienia: wyjście, nic nie zapisano')"; exit 1; }
     LAST="$WT_OUT"

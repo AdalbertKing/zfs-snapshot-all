@@ -1351,6 +1351,43 @@ fo=$(for_run)
 check "PRV6 control: a replica with a prefix still stamps its own family (-m \"replica_\" -M)" "1" \
       "$(printf '%s\n' "$fo" | grep 'replica copy (usb1)' | grep -c 'snapget\.sh -m "replica_" -M')"
 
+# PASSIVE LOCAL COPY (local-backup --passive): a LOCAL [dataset:] whose section says
+# passive = yes adopts the snapshots already on the source, so the tier adds NO
+# inline prune of the source (nothing of ours to count there). The send is
+# snapget -e and the tier's monitor still rides the dataset. The landing prune
+# (a [prune:] on the copy) is a separate section and is not under test here.
+pl_conf() {   # <extra dataset lines> -> $FOR/c.conf
+    cat > "$FOR/c.conf" <<EOF
+[defaults]
+	host_label = f
+[template:hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+	monitor_warn   = 90m
+	monitor_crit   = 150m
+[dataset:rpool/data]
+	use_template = hourly
+	dst          = hdd/backups
+$1
+EOF
+}
+pl_conf "	passive      = yes"
+fo=$(for_run); frc=$?
+check "PLC1 a passive local [dataset:] renders, rc=0" "0" "$frc"
+check "PLC2 ...the send is snapget -e" "1" \
+      "$(printf '%s\n' "$fo" | grep -cE 'snapget\.sh( .*)? -e( |$)')"
+check "PLC3 ...NO delsnaps line for the source dataset (the tier prune is not inlined)" "0" \
+      "$(printf '%s\n' "$fo" | grep 'delsnaps\.sh' | grep -c '"rpool/data"')"
+check "PLC4 ...the monitor still covers it (check-snap-age on the source)" "1" \
+      "$(printf '%s\n' "$fo" | grep 'check-snap-age\.sh' | grep -c '"rpool/data"')"
+pl_conf ""
+fo=$(for_run); frc=$?
+check "PLC5 control: the same section without passive prunes the source (delsnaps line) and does not send with -e" "0:1:0" \
+      "$frc:$(printf '%s\n' "$fo" | grep 'delsnaps\.sh' | grep -c '"rpool/data"'):$(printf '%s\n' "$fo" | grep -cE 'snapget\.sh( .*)? -e( |$)')"
+
 # DISKS BY GUID AND ON-INSERT PER REPLICA (P5, owner 2026-10-09). media_guids goes to
 # the gate's ATTACH only (--guids), never to detach (cron's 1000 bytes); on_insert =
 # yes on a scheduled replica adds a commented '#on-insert' copy of its line for

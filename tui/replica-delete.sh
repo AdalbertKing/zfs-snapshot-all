@@ -16,13 +16,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "replica-delete: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 NAME="${1:-}"
-[ -n "$NAME" ] || { echo "użycie: replica-delete.sh NAZWA" >&2; exit 2; }
-WT_BACKTITLE="Usuwanie repliki $NAME -- kolektor $(hostname)"
+[ -n "$NAME" ] || { echo "usage: replica-delete.sh NAME" >&2; exit 2; }
+WT_BACKTITLE="$(Tv 'Usuwanie repliki $NAME -- kolektor $(hostname)' '$NAME' "$NAME" '$(hostname)' "$(hostname)")"
 TMPD="$(mktemp -d)" || exit 1
 trap 'rm -rf "$TMPD"' EXIT
 
 geom
-info "Usuń replikę $NAME" "Sprawdzam replikę i jej nośnik..."
+info "$(Tv 'Usuń replikę $NAME' '$NAME' "$NAME")" "$(T 'Sprawdzam replikę i jej nośnik...')"
 "$ZB" list-replicas --json >"$TMPD/rep.json" 2>"$TMPD/rep.err" || echo '{"replicas":[]}' >"$TMPD/rep.json"
 # rep.tsv: dst <TAB> źródła(,) <TAB> stan nośnika
 "$PY" - "$TMPD/rep.json" "$NAME" >"$TMPD/rep.tsv" <<'PYEOF'
@@ -51,41 +51,41 @@ RULES="${ZFS_REPLICA_RULES:-/etc/udev/rules.d/90-zfs-replica.rules}"
 UNTRIG=no
 [ "$OTHERS_ON" = no ] && grep -qs 'Managed by zfs-backup.sh install-media-trigger' "$RULES" && UNTRIG=yes
 if ! IFS=$'\t' read -r DST SRCS PRESENT <"$TMPD/rep.tsv"; then
-    wt --title "Nie ma repliki '$NAME'" --msgbox "W configu tego kolektora nie ma [replica:$NAME]." 8 "$W"
+    wt --title "$(Tv 'Nie ma repliki '\''$NAME'\''' '$NAME' "$NAME")" --msgbox "$(Tv 'W configu tego kolektora nie ma [replica:$NAME].' '$NAME' "$NAME")" 8 "$W"
     exit 1
 fi
 
 while :; do
     geom
-    wt --title "Usuń replikę $NAME" --yes-button "Dalej" --no-button "Wstecz" \
-       --yesno "Replika przestanie działać: zniknie jej sekcja i zadanie z crona.\n\nDane na dyskach repliki ZOSTAJĄ ($DST).\nŻeby je skasować, sformatuj dysk: zmiana repliki -> Dodaj dysk." 12 "$W" \
-       || { clear 2>/dev/null; wt_end "Usuń replikę: przerwane, nic nie zmieniono"; exit 1; }
+    wt --title "$(Tv 'Usuń replikę $NAME' '$NAME' "$NAME")" --yes-button "$(T Dalej)" --no-button "$(T Wstecz)" \
+       --yesno "$(Tv 'Replika przestanie działać: zniknie jej sekcja i zadanie z crona.\n\nDane na dyskach repliki ZOSTAJĄ ($DST).\nŻeby je skasować, sformatuj dysk: zmiana repliki -> Dodaj dysk.' '$DST' "$DST")" 12 "$W" \
+       || { clear 2>/dev/null; wt_end "$(T 'Usuń replikę: przerwane, nic nie zmieniono')"; exit 1; }
     {
-        echo "PLAN -- nic jeszcze nie zostało zmienione:"
+        echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione:')"
         echo
-        echo "Replika $NAME: sekcja i zadanie z crona znikają; dane na dyskach ZOSTAJĄ."
+        echo "$(Tv 'Replika $NAME: sekcja i zadanie z crona znikają; dane na dyskach ZOSTAJĄ.' '$NAME' "$NAME")"
         echo
         if [ "$UNTRIG" = yes ]; then
-            echo "Reguła udev \"po włożeniu\" ZOSTANIE ZDJĘTA -- żadna inna replika z niej nie korzysta."
+            echo "$(T 'Reguła udev "po podłączeniu" ZOSTANIE ZDJĘTA -- żadna inna replika z niej nie korzysta.')"
             echo
         fi
-        echo "Komenda:"
+        echo "$(T 'Komenda:')"
         echo "  $(shq "$ZB") remove-replica $NAME --install --yes"
         [ "$UNTRIG" = yes ] && echo "  $(shq "$ZB") remove-media-trigger --install"
     } >"$TMPD/plan.txt"
-    yesno_text "$TMPD/plan.txt" "Usuń replikę $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || continue
+    yesno_text "$TMPD/plan.txt" "$(Tv 'Usuń replikę $NAME -- plan' '$NAME' "$NAME")" "$(T WYKONAJ)" "$(T Wstecz)" --defaultno || continue
     : >"$TMPD/run.log"
-    RC=0; run_progress "Usuń replikę $NAME" "$TMPD/run.log" "$ZB" remove-replica "$NAME" --install --yes || RC=$?
+    RC=0; run_progress "$(Tv 'Usuń replikę $NAME' '$NAME' "$NAME")" "$TMPD/run.log" "$ZB" remove-replica "$NAME" --install --yes || RC=$?
     if [ "$RC" -eq 0 ] && [ "$UNTRIG" = yes ]; then
-        run_progress "Usuń replikę $NAME" "$TMPD/run.log" "$ZB" remove-media-trigger --install || RC=$?
+        run_progress "$(Tv 'Usuń replikę $NAME' '$NAME' "$NAME")" "$TMPD/run.log" "$ZB" remove-media-trigger --install || RC=$?
     fi
     [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
     if [ "$RC" -eq 0 ]; then
-        echo "GOTOWE: replika '$NAME' usunięta, dane na dyskach zostały (rc=0)." >"$TMPD/result.txt"
-        result_box "Usuń replikę $NAME: GOTOWE" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
+        Tv 'GOTOWE: replika '\''$NAME'\'' usunięta, dane na dyskach zostały (rc=0).' '$NAME' "$NAME" >"$TMPD/result.txt"
+        result_box "$(Tv 'Usuń replikę $NAME: GOTOWE' '$NAME' "$NAME")" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
     else
-        echo "Replika nie została usunięta." >"$TMPD/result.txt"
-        result_box "Usuń replikę $NAME" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
+        T 'Replika nie została usunięta.' >"$TMPD/result.txt"
+        result_box "$(Tv 'Usuń replikę $NAME' '$NAME' "$NAME")" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
     fi
     exit "$RC"
 done

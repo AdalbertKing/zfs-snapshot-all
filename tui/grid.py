@@ -256,7 +256,7 @@ class Grid(object):
             fam = r.get("family")
             others = [x for j, x in enumerate(self.rows) if j != i and x.get("on") and fam and x.get("family") == fam]
             if fam and not others:
-                self.msg = _(u"Tego szczebla nie da się wyłączyć: jego migawek (%s) nie sprząta żaden inny.") % fam
+                self.msg = _(u"Nie można wyłączyć: tylko ten szczebel usuwa stare migawki %s -- bez niego rosłyby bez końca.") % fam
                 return
             r["on"] = False
             if r.get("q") is not None:

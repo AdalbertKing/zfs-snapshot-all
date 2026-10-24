@@ -203,14 +203,15 @@
   },
   {
    "k": "u4",
-   "pl_code": "Tego szczebla nie da się wyłączyć: jego migawek (%s) nie sprząta żaden inny.",
+   "pl_code": "Nie można wyłączyć: tylko ten szczebel usuwa stare migawki %s -- bez niego rosłyby bez końca.",
    "pl": "Nie można wyłączyć: tylko ten szczebel usuwa stare migawki %s -- bez niego rosłyby bez końca.",
    "en": "Cannot disable: only this tier removes old %s snapshots -- without it they would grow forever.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "grid.py:237 toggle_on"
-   ]
+   ],
+   "pl_code_before": "Tego szczebla nie da się wyłączyć: jego migawek (%s) nie sprząta żaden inny."
   },
   {
    "k": "u5",
@@ -405,14 +406,15 @@
   },
   {
    "k": "u22",
-   "pl_code": "Chcesz je zachować? Wstecz -- zmieniaj liczby w 'Harmonogram i retencja', nie szablonem.",
+   "pl_code": "Chcesz zachować swoje wartości? Wróć (Wstecz) i popraw liczby w 'Harmonogram i retencja' zamiast zmieniać szablon.",
    "pl": "Chcesz zachować swoje wartości? Wróć (Wstecz) i popraw liczby w 'Harmonogram i retencja' zamiast zmieniać szablon.",
    "en": "Want to keep your values? Go Back and change the numbers in 'Harmonogram i retencja' instead of changing the template.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "hand-edits.py:141 main"
-   ]
+   ],
+   "pl_code_before": "Chcesz je zachować? Wstecz -- zmieniaj liczby w 'Harmonogram i retencja', nie szablonem."
   },
   {
    "k": "u23",
@@ -438,14 +440,15 @@
   },
   {
    "k": "u25",
-   "pl_code": "Tu wybiera się całe miejsca -- żeby nie kopiować %s, odznacz całe %s.",
+   "pl_code": "Tu nie da się pominąć samego %s -- możesz tylko odznaczyć całe %s.",
    "pl": "Tu nie da się pominąć samego %s -- możesz tylko odznaczyć całe %s.",
    "en": "You cannot skip just %s here -- you can only untick the whole %s.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "tree.py:207 space"
-   ]
+   ],
+   "pl_code_before": "Tu wybiera się całe miejsca -- żeby nie kopiować %s, odznacz całe %s."
   },
   {
    "k": "u26",
@@ -515,14 +518,15 @@
   },
   {
    "k": "u32",
-   "pl_code": "Kopiowanie atomowe (-r) nie pozwala pominąć celu kopii (%s). Zaznacz węższe miejsca.",
+   "pl_code": "Tryb „całość naraz” (-r) skopiowałby też miejsce docelowe kopii (%s). Zaznacz mniejsze miejsca, które go nie zawierają.",
    "pl": "Tryb „całość naraz” (-r) skopiowałby też miejsce docelowe kopii (%s). Zaznacz mniejsze miejsca, które go nie zawierają.",
    "en": "\"All at once\" mode (-r) would also copy the copies' target (%s). Select smaller places that do not contain it.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "tree.py:253 toggle_mode"
-   ]
+   ],
+   "pl_code_before": "Kopiowanie atomowe (-r) nie pozwala pominąć celu kopii (%s). Zaznacz węższe miejsca."
   },
   {
    "k": "u33",
@@ -537,14 +541,15 @@
   },
   {
    "k": "u34",
-   "pl_code": "%s: tu nic do wybrania -- rozwinięte, wybierz niżej.",
+   "pl_code": "%s nie można wybrać -- rozwinąłem gałąź, wybierz coś poniżej.",
    "pl": "%s nie można wybrać -- rozwinąłem gałąź, wybierz coś poniżej.",
    "en": "%s cannot be selected -- the branch is expanded, pick something below.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "tree.py:286 key"
-   ]
+   ],
+   "pl_code_before": "%s: tu nic do wybrania -- rozwinięte, wybierz niżej."
   },
   {
    "k": "u35",
@@ -581,14 +586,15 @@
   },
   {
    "k": "u38",
-   "pl_code": " [x] kopiowane, razem z tym, co pod nim POWSTANIE   [-] część   [ ] nie",
-   "pl": " [x] kopiowane, razem z potomnymi również powstałymi w przyszłości   [-] część   [ ] nie",
-   "en": " [x] copied, along with their descendants, including those that will be created in the future   [-] part   [ ] no",
+   "pl_code": " [x] kopiowane z potomnymi, także przyszłymi   [-] część   [ ] nie",
+   "pl": " [x] kopiowane z potomnymi, także przyszłymi   [-] część   [ ] nie",
+   "en": " [x] copied with children, future ones too   [-] part   [ ] no",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "tree.py:364 render"
-   ]
+   ],
+   "pl_code_before": " [x] kopiowane, razem z tym, co pod nim POWSTANIE   [-] część   [ ] nie"
   },
   {
    "k": "u39",
@@ -680,14 +686,15 @@
   },
   {
    "k": "u47",
-   "pl_code": "  S sposób",
+   "pl_code": "  S tryb",
    "pl": "  S tryb",
    "en": "  S mode",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "tree.py:387 render"
-   ]
+   ],
+   "pl_code_before": "  S sposób"
   },
   {
    "k": "u48",
@@ -788,25 +795,27 @@
   },
   {
    "k": "u56",
-   "pl_code": "W SLOCIE",
+   "pl_code": "Podłączony",
    "pl": "Podłączony",
    "en": "CONNECTED",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:90 (moduł)"
-   ]
+   ],
+   "pl_code_before": "W SLOCIE"
   },
   {
    "k": "u57",
-   "pl_code": "dysk jest w slocie, pula NIEzaimportowana -- brama zaimportuje ją przy biegu",
+   "pl_code": "dysk jest podłączony, pula NIEzaimportowana -- brama zaimportuje ją przy biegu",
    "pl": "dysk jest podłączony, pula NIEzaimportowana -- brama zaimportuje ją przy biegu",
    "en": "disk is connected, pool NOT imported -- the gate imports it during the run",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:90 (moduł)"
-   ]
+   ],
+   "pl_code_before": "dysk jest w slocie, pula NIEzaimportowana -- brama zaimportuje ją przy biegu"
   },
   {
    "k": "u58",
@@ -843,14 +852,15 @@
   },
   {
    "k": "u61",
-   "pl_code": "w slocie jest dysk, ale NIE TEN. Brama odmówi replikacji; wyjęcie złego nośnika to ruch człowieka przy maszynie",
+   "pl_code": "podłączony jest dysk, ale NIE TEN. Brama odmówi replikacji; wyjęcie złego nośnika to ruch człowieka przy maszynie",
    "pl": "podłączony jest dysk, ale NIE TEN. Brama odmówi replikacji; wyjęcie złego nośnika to ruch człowieka przy maszynie",
    "en": "a WRONG disk is connected. The gate will refuse replication; removing the wrong medium is a human's job at the machine",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:92 (moduł)"
-   ]
+   ],
+   "pl_code_before": "w slocie jest dysk, ale NIE TEN. Brama odmówi replikacji; wyjęcie złego nośnika to ruch człowieka przy maszynie"
   },
   {
    "k": "u62",
@@ -1195,14 +1205,15 @@
   },
   {
    "k": "u87",
-   "pl_code": "rodzina na szczebel",
+   "pl_code": "osobne migawki na każdy szczebel",
    "pl": "osobne migawki na każdy szczebel",
    "en": "separate snapshots for each tier",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:731 profile_words"
-   ]
+   ],
+   "pl_code_before": "rodzina na szczebel"
   },
   {
    "k": "u88",
@@ -1431,25 +1442,27 @@
   },
   {
    "k": "u108",
-   "pl_code": "  źródło odmawia kluczowi tego kolektora, także ręcznym komendom.",
+   "pl_code": "  źródło ODRZUCA klucz tego kolektora, także wsadowym komendom.",
    "pl": "  źródło ODRZUCA klucz tego kolektora, także wsadowym komendom.",
    "en": "   The source REJECTS the key for this collector, including batch commands.",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:1079 disable_note"
-   ]
+   ],
+   "pl_code_before": "  źródło odmawia kluczowi tego kolektora, także ręcznym komendom."
   },
   {
    "k": "u109",
-   "pl_code": "  Kopie nie powstają, monitor mówi z pauzy; dane po obu stronach",
+   "pl_code": "  Kopie przestają powstawać, monitor nie alarmuje; dane po obu stronach",
    "pl": "  Kopie przestają powstawać, monitor nie alarmuje; dane po obu stronach",
    "en": "  Copies stop being made, the monitor does not alert; data on both sides",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:1080 disable_note"
-   ]
+   ],
+   "pl_code_before": "  Kopie nie powstają, monitor mówi z pauzy; dane po obu stronach"
   },
   {
    "k": "u110",
@@ -1464,25 +1477,27 @@
   },
   {
    "k": "u111",
-   "pl_code": "Kiedy: kolektor może być przejęty albo źródło ma mu nie ufać do",
+   "pl_code": "Kiedy: kolektor może być przejęty albo źródło nie może go zautoryzować",
    "pl": "Kiedy: kolektor może być przejęty albo źródło nie może go zautoryzować",
    "en": "When: The collector may be hijacked, or the source may be unable to authorize it",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:1082 disable_note"
-   ]
+   ],
+   "pl_code_before": "Kiedy: kolektor może być przejęty albo źródło ma mu nie ufać do"
   },
   {
    "k": "u112",
-   "pl_code": "  świadomego włączenia. Na zwykłą przerwę wystarcza Pauza (t).",
+   "pl_code": "  czasu, aż świadomie go włączysz. Na zwykłą przerwę wystarczy Pauza (t w poprzednim oknie).",
    "pl": "  czasu, aż świadomie go włączysz. Na zwykłą przerwę wystarczy Pauza (t w poprzednim oknie).",
    "en": "  until you deliberately enable it. For an ordinary break, Pause is enough (t in the previous window).",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:1083 disable_note"
-   ]
+   ],
+   "pl_code_before": "  świadomego włączenia. Na zwykłą przerwę wystarcza Pauza (t)."
   },
   {
    "k": "u113",
@@ -1497,14 +1512,15 @@
   },
   {
    "k": "u114",
-   "pl_code": "  Źródło musi być osiągalne; gdy nie jest, polecenie mówi, gdzie",
+   "pl_code": "  Źródło musi być dostępne przez sieć; jeśli nie jest, polecenie pokaże, na czym",
    "pl": "  Źródło musi być dostępne przez sieć; jeśli nie jest, polecenie pokaże, na czym",
    "en": "  The source must be reachable over the network; if it is not, the command shows where",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:1086 disable_note"
-   ]
+   ],
+   "pl_code_before": "  Źródło musi być osiągalne; gdy nie jest, polecenie mówi, gdzie"
   },
   {
    "k": "u115",
@@ -1519,25 +1535,27 @@
   },
   {
    "k": "u116",
-   "pl_code": "Granica: kluczem tej relacji da się zamek zdjąć (źródło to loguje)",
+   "pl_code": "Ograniczenie: kluczem tej relacji da się zdjąć blokadę (źródło to loguje)",
    "pl": "Ograniczenie: kluczem tej relacji da się zdjąć blokadę (źródło to loguje)",
    "en": "Limit: this relation's key can remove the lock (the source logs it)",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:1089 disable_note"
-   ]
+   ],
+   "pl_code_before": "Granica: kluczem tej relacji da się zamek zdjąć (źródło to loguje)"
   },
   {
    "k": "u117",
-   "pl_code": "  -- to zamek na przypadek i zapomniany klucz, nie na intruza.",
+   "pl_code": "  -- to blokada na przypadek zapomnianego klucza, nie na intruza.",
    "pl": "  -- to blokada na przypadek zapomnianego klucza, nie na intruza.",
    "en": "  -- This is a lock in case you forget your key, not to keep out intruders.",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:1090 disable_note"
-   ]
+   ],
+   "pl_code_before": "  -- to zamek na przypadek i zapomniany klucz, nie na intruza."
   },
   {
    "k": "u118",
@@ -1563,25 +1581,27 @@
   },
   {
    "k": "u120",
-   "pl_code": "tutaj; następny bieg z crona dogania przyrostowo. Gdy źródło jest",
+   "pl_code": "tutaj; najbliższe zaplanowane uruchomienie dośle tylko brakujące zmiany. Gdy źródło jest",
    "pl": "tutaj; najbliższe zaplanowane uruchomienie dośle tylko brakujące zmiany. Gdy źródło jest",
    "en": "here; the next scheduled run sends only the missing changes. When the source is",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:1095 (moduł)"
-   ]
+   ],
+   "pl_code_before": "tutaj; następny bieg z crona dogania przyrostowo. Gdy źródło jest"
   },
   {
    "k": "u121",
-   "pl_code": "niedostępne, nic się nie zmienia i można bezpiecznie powtórzyć.",
+   "pl_code": "niedostępne, nic się nie zmienia i można powtórzyć.",
    "pl": "niedostępne, nic się nie zmienia i można powtórzyć.",
    "en": "unavailable; nothing changes, and you can try again.",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:1096 (moduł)"
-   ]
+   ],
+   "pl_code_before": "niedostępne, nic się nie zmienia i można bezpiecznie powtórzyć."
   },
   {
    "k": "u122",
@@ -1791,7 +1811,7 @@
   },
   {
    "k": "u139",
-   "pl_code": "po włożeniu",
+   "pl_code": "po podłączeniu",
    "pl": "po podłączeniu",
    "en": "after connect",
    "origin": "owner-edit",
@@ -1800,7 +1820,8 @@
     "zfs-tui.py:1517 build_jobs",
     "zfs-tui.py:3587 replica_when",
     "zfs-tui.py:3703 render_nosniki"
-   ]
+   ],
+   "pl_code_before": "po włożeniu"
   },
   {
    "k": "u140",
@@ -2393,14 +2414,15 @@
   },
   {
    "k": "u187",
-   "pl_code": "dysk wybierasz w oknie przywracania -- pule z dysków podłączonych do tego hosta",
+   "pl_code": "dysk i dataset wybierzesz po Enter, w oknie Przywróć (z dysków podłączonych do tego hosta)",
    "pl": "dysk i dataset wybierzesz po Enter, w oknie Przywróć (z dysków podłączonych do tego hosta)",
    "en": "you choose the disk and dataset after Enter, in the Restore window (from disks connected to this host)",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:2009 odz_children"
-   ]
+   ],
+   "pl_code_before": "dysk wybierasz w oknie przywracania -- pule z dysków podłączonych do tego hosta"
   },
   {
    "k": "u188",
@@ -2661,7 +2683,7 @@
   },
   {
    "k": "u210",
-   "pl_code": "cron woła inny plik silnika (%s) niż ten, który tu policzono",
+   "pl_code": "cron uruchamia program z innego miejsca (%s) niż ten, którym GUI sprawdzało stan",
    "pl": "cron uruchamia program z innego miejsca (%s) niż ten, którym GUI sprawdzało stan",
    "en": "cron runs the program from a different place (%s) than the one the GUI checked",
    "origin": "owner-reworded",
@@ -2669,7 +2691,8 @@
    "where": [
     "zfs-tui.py:2141 rel_panel_pairs",
     "zfs-tui.py:2597 rel_detail_pairs"
-   ]
+   ],
+   "pl_code_before": "cron woła inny plik silnika (%s) niż ten, który tu policzono"
   },
   {
    "k": "u211",
@@ -2976,14 +2999,15 @@
   },
   {
    "k": "u237",
-   "pl_code": "porządki (prune) nie zapisują przebiegów w historii transferów -- czasy i błędy są w panelu obok",
+   "pl_code": "sprzątanie migawek nie trafia do historii -- ostatni czas i błędy masz w panelu obok",
    "pl": "sprzątanie migawek nie trafia do historii -- ostatni czas i błędy masz w panelu obok",
    "en": "snapshot pruning is not recorded in the history -- the last time and errors are in the panel next to it",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:2264 render_zadania"
-   ]
+   ],
+   "pl_code_before": "porządki (prune) nie zapisują przebiegów w historii transferów -- czasy i błędy są w panelu obok"
   },
   {
    "k": "u238",
@@ -3373,14 +3397,15 @@
   },
   {
    "k": "u272",
-   "pl_code": "brak zapisu w historii -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'",
-   "pl": "brak zapisu w historii -- stan nieznany'",
+   "pl_code": "brak zapisu w historii -- stan nieznany",
+   "pl": "brak zapisu w historii -- stan nieznany",
    "en": "“No record in history -- status unknown”",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:2566 rel_detail_pairs"
-   ]
+   ],
+   "pl_code_before": "brak zapisu w historii -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"
   },
   {
    "k": "u273",
@@ -3461,14 +3486,15 @@
   },
   {
    "k": "u280",
-   "pl_code": "Inne kopie (np. replikacja Proxmoxa) nie są tu pokazywane.",
-   "pl": "Cudze migawki(np. replikacja Proxmoxa) nie są tu pokazywane.",
+   "pl_code": "Cudze migawki (np. replikacja Proxmoxa) nie są tu pokazywane.",
+   "pl": "Cudze migawki (np. replikacja Proxmoxa) nie są tu pokazywane.",
    "en": "Snapshots from other sources (e.g., Proxmox replication) are not shown here.",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:2737 render_relacje"
-   ]
+   ],
+   "pl_code_before": "Inne kopie (np. replikacja Proxmoxa) nie są tu pokazywane."
   },
   {
    "k": "u281",
@@ -4215,36 +4241,39 @@
   },
   {
    "k": "u348",
-   "pl_code": "relacja wstrzymana -- OK z pauzy to nie dowód pokrycia",
+   "pl_code": "relacja wstrzymana -- „OK” nie znaczy, że kopie są aktualne",
    "pl": "relacja wstrzymana -- „OK” nie znaczy, że kopie są aktualne",
    "en": "relation paused -- \"OK\" does not mean the copies are up to date",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3477 monitor_detail_pairs"
-   ]
+   ],
+   "pl_code_before": "relacja wstrzymana -- OK z pauzy to nie dowód pokrycia"
   },
   {
    "k": "u349",
-   "pl_code": "cron woła %s, a tu policzono %s -- inny plik silnika",
+   "pl_code": "cron uruchamia %s, a GUI sprawdzało %s -- to różne pliki programu, wynik może nie pasować",
    "pl": "cron uruchamia %s, a GUI sprawdzało %s -- to różne pliki programu, wynik może nie pasować",
    "en": "cron runs %s, but the GUI checked %s -- different program files, the result may not match",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3479 monitor_detail_pairs"
-   ]
+   ],
+   "pl_code_before": "cron woła %s, a tu policzono %s -- inny plik silnika"
   },
   {
    "k": "u350",
-   "pl_code": "linii monitora nie dało się sparsować; werdykt pochodzi z kodu wyjścia",
+   "pl_code": "linii monitora nie dało się sparsować; wynik pochodzi z kodu wyjścia",
    "pl": "linii monitora nie dało się sparsować; wynik pochodzi z kodu wyjścia",
    "en": "monitor lines could not be parsed; the verdict comes from the exit code",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3481 monitor_detail_pairs"
-   ]
+   ],
+   "pl_code_before": "linii monitora nie dało się sparsować; werdykt pochodzi z kodu wyjścia"
   },
   {
    "k": "u351",
@@ -4292,18 +4321,19 @@
   },
   {
    "k": "u355",
-   "pl_code": "po włożeniu nośnika",
+   "pl_code": "po podłączeniu nośnika",
    "pl": "po podłączeniu nośnika",
    "en": "after the medium is connected",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3587 replica_when"
-   ]
+   ],
+   "pl_code_before": "po włożeniu nośnika"
   },
   {
    "k": "u356",
-   "pl_code": " + po włożeniu",
+   "pl_code": " + po podłączeniu",
    "pl": " + po podłączeniu",
    "en": " + after connect",
    "origin": "owner-edit",
@@ -4311,7 +4341,8 @@
    "where": [
     "zfs-tui.py:3588 replica_when",
     "zfs-tui.py:3703 render_nosniki"
-   ]
+   ],
+   "pl_code_before": " + po włożeniu"
   },
   {
    "k": "u357",
@@ -4326,14 +4357,15 @@
   },
   {
    "k": "u358",
-   "pl_code": "po nazwie puli -- ID nieznane (zmiana repliki dopisze ID włożonego dysku)",
+   "pl_code": "po nazwie puli -- ID nieznane (zmiana repliki dopisze ID podłączonego dysku)",
    "pl": "po nazwie puli -- ID nieznane (zmiana repliki dopisze ID podłączonego dysku)",
    "en": "by pool name -- ID unknown (changing the replica adds the ID of the connected disk)",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
     "zfs-tui.py:3597 replica_disks_words"
-   ]
+   ],
+   "pl_code_before": "po nazwie puli -- ID nieznane (zmiana repliki dopisze ID włożonego dysku)"
   },
   {
    "k": "u359",
@@ -4414,14 +4446,15 @@
   },
   {
    "k": "u366",
-   "pl_code": " -- tyle włożeń dysku wstecz",
+   "pl_code": " -- tyle podłączeń dysku wstecz",
    "pl": " -- tyle podłączeń dysku wstecz",
    "en": " -- that many disk connections back",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3630 replica_disk_words"
-   ]
+   ],
+   "pl_code_before": " -- tyle włożeń dysku wstecz"
   },
   {
    "k": "u367",
@@ -4524,25 +4557,27 @@
   },
   {
    "k": "u376",
-   "pl_code": "zaraz po włożeniu dysku",
+   "pl_code": "zaraz po podłączeniu dysku",
    "pl": "zaraz po podłączeniu dysku",
    "en": "right after the disk is connected",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3662 replica_detail_pairs"
-   ]
+   ],
+   "pl_code_before": "zaraz po włożeniu dysku"
   },
   {
    "k": "u377",
-   "pl_code": " i zaraz po włożeniu dysku",
+   "pl_code": " i zaraz po podłączeniu dysku",
    "pl": " i zaraz po podłączeniu dysku",
    "en": " and right after the disk is connected",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3663 replica_detail_pairs"
-   ]
+   ],
+   "pl_code_before": " i zaraz po włożeniu dysku"
   },
   {
    "k": "u378",
@@ -4572,14 +4607,15 @@
   },
   {
    "k": "u380",
-   "pl_code": "Dysk widziany",
+   "pl_code": "Ostatnio podłączony",
    "pl": "Ostatnio podłączony",
    "en": "Last connected",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3673 replica_detail_pairs"
-   ]
+   ],
+   "pl_code_before": "Dysk widziany"
   },
   {
    "k": "u381",
@@ -4638,25 +4674,27 @@
   },
   {
    "k": "u386",
-   "pl_code": "Ten host nie replikuje na nośniki wymienne; to nie jest błąd, tylko brak konfiguracji.",
+   "pl_code": "Brak skonfigurowanych replik dla tego kolektora",
    "pl": "Brak skonfigurowanych replik dla tego kolektora",
    "en": "No replicas have been configured for this collector",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3714 render_nosniki"
-   ]
+   ],
+   "pl_code_before": "Ten host nie replikuje na nośniki wymienne; to nie jest błąd, tylko brak konfiguracji."
   },
   {
    "k": "u387",
-   "pl_code": "Ins dodaje ją w oknach; z linii: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA",
+   "pl_code": "Ins dodaje ją w oknach; komendą wsadową: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA",
    "pl": "Ins dodaje ją w oknach; komendą wsadową: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA",
    "en": "Ins adds it in the windows using the following command: zfs-backup.sh add-replica NAME --source=DS --dst=POOL/BASE",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3715 render_nosniki"
-   ]
+   ],
+   "pl_code_before": "Ins dodaje ją w oknach; z linii: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA"
   },
   {
    "k": "u388",
@@ -4848,14 +4886,15 @@
   },
   {
    "k": "u405",
-   "pl_code": "tak -- do nowego datasetu, nic nie nadpisuje",
+   "pl_code": "tak -- do nowego datasetu, istniejące dane nietknięte",
    "pl": "tak -- do nowego datasetu, istniejące dane nietknięte",
    "en": "yes -- to a new dataset, existing data untouched",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3810 odzysk_detail"
-   ]
+   ],
+   "pl_code_before": "tak -- do nowego datasetu, nic nie nadpisuje"
   },
   {
    "k": "u406",
@@ -4903,14 +4942,15 @@
   },
   {
    "k": "u410",
-   "pl_code": "sprawdza okno Przywróć -- źródło musi wydać zgodę (deploy.sh --allow-restore)",
+   "pl_code": "sprawdza okno Przywróć -- źródło musi wydać zgodę na dostęp (deploy.sh --allow-restore)",
    "pl": "sprawdza okno Przywróć -- źródło musi wydać zgodę na dostęp (deploy.sh --allow-restore)",
    "en": "checks the “Restore” window -- the source must grant access (deploy.sh --allow-restore)",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3817 odzysk_detail"
-   ]
+   ],
+   "pl_code_before": "sprawdza okno Przywróć -- źródło musi wydać zgodę (deploy.sh --allow-restore)"
   },
   {
    "k": "u411",
@@ -4936,14 +4976,15 @@
   },
   {
    "k": "u413",
-   "pl_code": "odzysk nadpisuje albo dokłada dane -- nic się nie dzieje przed WYKONAJ",
+   "pl_code": "odzysk może nadpisać albo dołożyć dane -- nic się nie zmieni, dopóki nie wybierzesz WYKONAJ",
    "pl": "odzysk może nadpisać albo dołożyć dane -- nic się nie zmieni, dopóki nie wybierzesz WYKONAJ",
    "en": "restore may overwrite or add data -- nothing changes until you choose EXECUTE",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3820 odzysk_detail"
-   ]
+   ],
+   "pl_code_before": "odzysk nadpisuje albo dokłada dane -- nic się nie dzieje przed WYKONAJ"
   },
   {
    "k": "u414",
@@ -4991,14 +5032,15 @@
   },
   {
    "k": "u418",
-   "pl_code": "Okna nad zfs-snapshot-all. Akcje wołają czasowniki CLI, nic więcej.",
+   "pl_code": "To okna do obsługi zfs-snapshot-all. Każda akcja uruchamia zwykłe polecenie zfs-backup.sh, nic więcej.",
    "pl": "To okna do obsługi zfs-snapshot-all. Każda akcja uruchamia zwykłe polecenie zfs-backup.sh, nic więcej.",
    "en": "These windows operate zfs-snapshot-all. Every action runs an ordinary zfs-backup.sh command, nothing more.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3841 (moduł)"
-   ]
+   ],
+   "pl_code_before": "Okna nad zfs-snapshot-all. Akcje wołają czasowniki CLI, nic więcej."
   },
   {
    "k": "u419",
@@ -5013,20 +5055,21 @@
   },
   {
    "k": "u420",
-   "pl_code": "                 lokalny/zdalny prune), prefiks migawek, następny bieg, kopie.",
+   "pl_code": "                 lokalny/zdalny prune), prefiks migawek, następny przebieg, kopie.",
    "pl": "                 lokalny/zdalny prune), prefiks migawek, następny przebieg, kopie.",
    "en": "                 local/remote prune), snapshot prefix, next run, copies.",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3844 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 lokalny/zdalny prune), prefiks migawek, następny bieg, kopie."
   },
   {
    "k": "u421",
    "pl_code": "                 Panel obok: kierunek, źródło i cel, kiedy, ile trzyma, czasy",
    "pl": "                 Panel obok: kierunek, źródło i cel, kiedy, ile trzyma, czasy",
-   "en": "                 Side panel: direction, source and target, when, how much it keeps, durations",
+   "en": "                 Side panel: direction, source and target, when, what it keeps,",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -5035,20 +5078,21 @@
   },
   {
    "k": "u422",
-   "pl_code": "                 ostatni/średni/maks, wywołania, dane i strażnik (progi) jak",
+   "pl_code": "                 ostatni/średni/maks, wywołania, dane i strażnik (progi) tryb",
    "pl": "                 ostatni/średni/maks, wywołania, dane i strażnik (progi) tryb",
    "en": "                 last/avg/max, calls, data and monitor (thresholds) mode",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3846 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 ostatni/średni/maks, wywołania, dane i strażnik (progi) jak"
   },
   {
    "k": "u423",
    "pl_code": "                 w mailu; na dole przebiegi zadania z historii transferów.",
    "pl": "                 w mailu; na dole przebiegi zadania z historii transferów.",
-   "en": "                 in the mail; at the bottom the job's runs from transfer history.",
+   "en": "                 mode; at the bottom the job's runs from the transfer history.",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -5057,14 +5101,15 @@
   },
   {
    "k": "u424",
-   "pl_code": "                 Strażnik bez zadania (nic do pilnowania) jest własnym",
+   "pl_code": "Linia monitora, która nie pasuje do żadnego zadania, ma na liście osobny",
    "pl": "Linia monitora, która nie pasuje do żadnego zadania, ma na liście osobny",
    "en": "A monitor line that matches no job has its own",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3848 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 Strażnik bez zadania (nic do pilnowania) jest własnym"
   },
   {
    "k": "u425",
@@ -5103,7 +5148,7 @@
    "k": "u428",
    "pl_code": "  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
    "pl": "  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
-   "en": "  F3  Relations  management: Enter details (description, CONFIG and CRON; there 'e'",
+   "en": "  F3  Relations  management: Enter details (description, CONFIG, CRON; there",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -5114,7 +5159,7 @@
    "k": "u429",
    "pl_code": "                 = Zmień relację: adres hosta, datasety, szablon, retencja",
    "pl": "                 = Zmień relację: adres hosta, datasety, szablon, retencja",
-   "en": "                 = Change relation: host address, datasets, template, source",
+   "en": "                 'e' = Change relation: host address, datasets, template, what",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -5123,14 +5168,15 @@
   },
   {
    "k": "u430",
-   "pl_code": "                 źródła, silnik; 's' zapisuje ustawienia jako szablon,",
+   "pl_code": "ile trzyma źródło, program kopiujący; 's' zapisuje ustawienia relacji jako nowy szablon,",
    "pl": "ile trzyma źródło, program kopiujący; 's' zapisuje ustawienia relacji jako nowy szablon,",
    "en": "what the source keeps, the copy program; 's' saves the relation's settings as a new template,",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3855 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 źródła, silnik; 's' zapisuje ustawienia jako szablon,"
   },
   {
    "k": "u431",
@@ -5145,25 +5191,27 @@
   },
   {
    "k": "u432",
-   "pl_code": "                 F7 uruchom teraz: kopia każdego datasetu relacji jej",
+   "pl_code": "                 F7 uruchom teraz: kopia wszystkich datasets w relacji ",
    "pl": "                 F7 uruchom teraz: kopia wszystkich datasets w relacji ",
    "en": "                    F7 Run Now: Copy all datasets in the relation",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3857 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 F7 uruchom teraz: kopia każdego datasetu relacji jej"
   },
   {
    "k": "u433",
-   "pl_code": "                 najdrobniejszym zadaniem, bez pytania; F8 pauza/wznów;",
+   "pl_code": "zadaniem o najkrótszym odstępie (np. godzinowym), bez pytania; F8 pauza/wznów;",
    "pl": "zadaniem o najkrótszym odstępie (np. godzinowym), bez pytania; F8 pauza/wznów;",
    "en": "with the job that runs most often (e.g. hourly), without asking; F8 pause/resume;",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3858 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 najdrobniejszym zadaniem, bez pytania; F8 pauza/wznów;"
   },
   {
    "k": "u434",
@@ -5189,14 +5237,15 @@
   },
   {
    "k": "u436",
-   "pl_code": "                 eksportu z tego katalogu, potem werdykt",
+   "pl_code": "eksportu z tego katalogu, potem wynik porównania",
    "pl": "eksportu z tego katalogu, potem wynik porównania",
    "en": "export from this directory, then the comparison result",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3861 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 eksportu z tego katalogu, potem werdykt"
   },
   {
    "k": "u437",
@@ -5211,47 +5260,51 @@
   },
   {
    "k": "u438",
-   "pl_code": "                 Ins i Del oddają terminal oknom whiptaila i wracają tutaj",
+   "pl_code": "                 Ins i Del przełączają terminal do whiptaila i wracają tu",
    "pl": "                 Ins i Del przełączają terminal do whiptaila i wracają tu",
-   "en": "                 Ins and Del hand the terminal to whiptail windows and return here",
+   "en": "                 Ins and Del hand the terminal to whiptail and come back here",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3863 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 Ins i Del oddają terminal oknom whiptaila i wracają tutaj"
   },
   {
    "k": "u439",
-   "pl_code": "                 z odświeżonymi danymi: Ins to kreator krok po kroku (backup: 7",
+   "pl_code": "                 z odświeżonymi danymi: Ins -kreator krok po kroku (backup: 7",
    "pl": "                 z odświeżonymi danymi: Ins -kreator krok po kroku (backup: 7",
    "en": "                 with refreshed data: Ins - a step-by-step wizard (backup: 7",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3864 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 z odświeżonymi danymi: Ins to kreator krok po kroku (backup: 7"
   },
   {
    "k": "u440",
-   "pl_code": "                 kroków -- rodzaj, host, datasety, dokąd, szablon, retencja",
+   "pl_code": "kroków -- rodzaj, host, datasety, dokąd, szablon, ile trzyma",
    "pl": "kroków -- rodzaj, host, datasety, dokąd, szablon, ile trzyma",
    "en": "steps -- kind, host, datasets, target, template, what the",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3865 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 kroków -- rodzaj, host, datasety, dokąd, szablon, retencja"
   },
   {
    "k": "u441",
-   "pl_code": "                 źródła, nazwa; Wstecz = poprzedni krok), potem podsumowanie",
+   "pl_code": "źródło, nazwa; Wstecz = poprzedni krok), potem podsumowanie",
    "pl": "źródło, nazwa; Wstecz = poprzedni krok), potem podsumowanie",
    "en": "source keeps, name; Back = previous step), then a summary",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3866 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 źródła, nazwa; Wstecz = poprzedni krok), potem podsumowanie"
   },
   {
    "k": "u442",
@@ -5312,7 +5365,7 @@
    "k": "u447",
    "pl_code": "  F4  Historia   transfery: co leci teraz (na górze) i co się skończyło;",
    "pl": "  F4  Historia   transfery: co leci teraz (na górze) i co się skończyło;",
-   "en": "  F4  History    transfers: what is in progress (at the top) and what has finished;",
+   "en": "  F4  History    transfers: what runs now (at the top) and what finished;",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -5345,7 +5398,7 @@
    "k": "u450",
    "pl_code": "                 Enter szczegóły ('e' zmienia własny), Del usuwa własny",
    "pl": "                 Enter szczegóły ('e' zmienia własny), Del usuwa własny",
-   "en": "                 Enter details ('e' changes a custom one), Del deletes a custom one",
+   "en": "                 Enter details ('e' changes a custom one), Del deletes one",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -5365,14 +5418,15 @@
   },
   {
    "k": "u452",
-   "pl_code": "  F11 Odzysk     odzysk danych: relacja z kopią albo 'z dysku' (nośnik, także",
+   "pl_code": "F11 Odzysk     odzyskanie danych: z kopii relacji albo „z dysku” (dysk repliki, także",
    "pl": "F11 Odzysk     odzyskanie danych: z kopii relacji albo „z dysku” (dysk repliki, także",
    "en": "F11 Odzysk     restore data: from a relation's copy or \"from a disk\" (replica disk, also",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3877 (moduł)"
-   ]
+   ],
+   "pl_code_before": "  F11 Odzysk     odzysk danych: relacja z kopią albo 'z dysku' (nośnik, także"
   },
   {
    "k": "u453",
@@ -5387,14 +5441,15 @@
   },
   {
    "k": "u454",
-   "pl_code": "                 dataset, dokąd, migawka, plan, WYKONAJ. Tylko tutaj.",
+   "pl_code": "                 dataset, cel, migawka, plan, WYKONAJ. Tylko tutaj.",
    "pl": "                 dataset, cel, migawka, plan, WYKONAJ. Tylko tutaj.",
    "en": "                 dataset, target, snapshot, plan, EXECUTE. Only here.",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3879 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 dataset, dokąd, migawka, plan, WYKONAJ. Tylko tutaj."
   },
   {
    "k": "u455",
@@ -5442,31 +5497,33 @@
   },
   {
    "k": "u459",
-   "pl_code": "                 strażnik, szablon nowej relacji, aktualizacja, język GUI; mail",
+   "pl_code": "…język GUI; wysłanie",
    "pl": "…język GUI; wysłanie",
    "en": "…GUI language; sending",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3884 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 strażnik, szablon nowej relacji, aktualizacja, język GUI; mail"
   },
   {
    "k": "u460",
-   "pl_code": "                 próbny. Zapis = plan i WYKONAJ (zfs-backup.sh settings set).",
+   "pl_code": "maila testowego. Zapis: najpierw lista zmian, zmienia dopiero WYKONAJ.",
    "pl": "maila testowego. Zapis: najpierw lista zmian, zmienia dopiero WYKONAJ.",
    "en": "a test mail. Save: first the list of changes, applied only on EXECUTE.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3885 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 próbny. Zapis = plan i WYKONAJ (zfs-backup.sh settings set)."
   },
   {
    "k": "u461",
    "pl_code": "                 Pasek u góry: „ochrona” -- czy na tym hoście działa bezpiecznik",
    "pl": "                 Pasek u góry: „ochrona” -- czy na tym hoście działa bezpiecznik",
-   "en": "                 Top bar: \"protection\" -- whether the capacity fuse",
+   "en": "                 Top bar: \"protection\" -- whether this host runs the capacity",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -5475,14 +5532,15 @@
   },
   {
    "k": "u462",
-   "pl_code": "                 pojemności i strażnik przyrostu (włącza się je tutaj, w F10).",
+   "pl_code": "pojemności (pełna pula) i strażnik nagłego przyrostu danych; włączasz je w F10.",
    "pl": "pojemności (pełna pula) i strażnik nagłego przyrostu danych; włączasz je w F10.",
    "en": "capacity (full pool) and sudden data growth monitors; you enable them in F10.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3887 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 pojemności i strażnik przyrostu (włącza się je tutaj, w F10)."
   },
   {
    "k": "u463",
@@ -5499,7 +5557,7 @@
    "k": "u464",
    "pl_code": "  PANELE (każdy ekran): lista = wybór i stan; panel obok = fakty o",
    "pl": "  PANELE (każdy ekran): lista = wybór i stan; panel obok = fakty o",
-   "en": "  PANELS (every screen): list = choice and state; side panel = facts about the",
+   "en": "  PANELS (every screen): list = choice and state; side panel = facts",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -5508,14 +5566,15 @@
   },
   {
    "k": "u465",
-   "pl_code": "                 zaznaczonym wierszu, których lista nie ma; na dole zakładki",
+   "pl_code": "zaznaczonym wierszu, których nie widać na liście; na dole zakładki",
    "pl": "zaznaczonym wierszu, których nie widać na liście; na dole zakładki",
    "en": "highlighted row that the list does not show; tabs at the bottom",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3892 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 zaznaczonym wierszu, których lista nie ma; na dole zakładki"
   },
   {
    "k": "u466",
@@ -5552,20 +5611,21 @@
   },
   {
    "k": "u469",
-   "pl_code": "                 pokazuje wtedy zaznaczony element, Enter jego pełne okno, Esc",
+   "pl_code": "                 pokazuje zaznaczony element, Enter jego pełne okno, Esc",
    "pl": "                 pokazuje zaznaczony element, Enter jego pełne okno, Esc",
    "en": "                 shows the selected item, Enter its full window, Esc",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3896 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 pokazuje wtedy zaznaczony element, Enter jego pełne okno, Esc"
   },
   {
    "k": "u470",
    "pl_code": "                 wraca do listy, kolejny Tab do linii poleceń. Datasety relacji",
    "pl": "                 wraca do listy, kolejny Tab do linii poleceń. Datasety relacji",
-   "en": "                 returns to the list, the next Tab to the command line. Datasets of a relation",
+   "en": "                 returns to the list, the next Tab to the command line. Datasets",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -5574,14 +5634,15 @@
   },
   {
    "k": "u471",
-   "pl_code": "                 bez crona są z rekordu i tytuł zakładki to mówi.",
+   "pl_code": "bez wpisów w cronie pochodzą z zapisanej definicji relacji (mówi to tytuł zakładki).",
    "pl": "bez wpisów w cronie pochodzą z zapisanej definicji relacji (mówi to tytuł zakładki).",
    "en": "without cron entries come from the relation's saved definition (the tab title says so).",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3898 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 bez crona są z rekordu i tytuł zakładki to mówi."
   },
   {
    "k": "u472",
@@ -5607,14 +5668,15 @@
   },
   {
    "k": "u474",
-   "pl_code": "                 Tab przechodzi do linii (i z powrotem do listy); w linii",
+   "pl_code": "Tab przechodzi do linii poleceń (i z powrotem do listy); w niej",
    "pl": "Tab przechodzi do linii poleceń (i z powrotem do listy); w niej",
    "en": "Tab moves to the command line (and back to the list); there",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3902 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 Tab przechodzi do linii (i z powrotem do listy); w linii"
   },
   {
    "k": "u475",
@@ -5640,36 +5702,39 @@
   },
   {
    "k": "u477",
-   "pl_code": "                 a Tab przenosi ją do linii, żeby ją poprawić przed",
+   "pl_code": "                 a Tab przenosi ją do linii, żeby ją poprawić",
    "pl": "                 a Tab przenosi ją do linii, żeby ją poprawić",
    "en": "                 and Tab moves it to the line so you can fix it",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:3905 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 a Tab przenosi ją do linii, żeby ją poprawić przed"
   },
   {
    "k": "u478",
-   "pl_code": "                 wykonaniem. Cyfry i litery NIGDY",
+   "pl_code": "wykonaniem. Litery i cyfry NIE są",
    "pl": "wykonaniem. Litery i cyfry NIE są",
    "en": "execution. Letters and digits are NOT",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3906 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 wykonaniem. Cyfry i litery NIGDY"
   },
   {
    "k": "u479",
-   "pl_code": "                 nie są skrótami na ekranach -- wszystko, co piszesz, idzie",
+   "pl_code": "skrótami klawiszowymi -- wszystko, co wpiszesz, trafia",
    "pl": "skrótami klawiszowymi -- wszystko, co wpiszesz, trafia",
    "en": "keyboard shortcuts -- whatever you type goes",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:3907 (moduł)"
-   ]
+   ],
+   "pl_code_before": "                 nie są skrótami na ekranach -- wszystko, co piszesz, idzie"
   },
   {
    "k": "u480",
@@ -6005,14 +6070,15 @@
   },
   {
    "k": "u510",
-   "pl_code": "[atrapa] nie uruchomiono, komenda zapisana do dziennika testu:",
-   "pl": "[tryb testowy] polecenie nie zostało uruchomione, tylko zapisane do dziennika:",
-   "en": "[test mode] the command was not run, only written to the log:",
+   "pl_code": "[tryb testowy] nie uruchomiono, zapisano do dziennika:",
+   "pl": "[tryb testowy] nie uruchomiono, zapisano do dziennika:",
+   "en": "[test mode] not run, written to the log:",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:4301 run_detached"
-   ]
+   ],
+   "pl_code_before": "[atrapa] nie uruchomiono, komenda zapisana do dziennika testu:"
   },
   {
    "k": "u511",
@@ -6093,7 +6159,7 @@
   },
   {
    "k": "u518",
-   "pl_code": "Replika %s -- bieg teraz",
+   "pl_code": "Replika %s -- biegnie teraz",
    "pl": "Replika %s -- biegnie teraz",
    "en": "Replica %s -- run now",
    "origin": "owner-edit",
@@ -6101,7 +6167,8 @@
    "where": [
     "zfs-tui.py:4408 run_job_now",
     "zfs-tui.py:4473 replica_action"
-   ]
+   ],
+   "pl_code_before": "Replika %s -- bieg teraz"
   },
   {
    "k": "u519",
@@ -6116,14 +6183,15 @@
   },
   {
    "k": "u520",
-   "pl_code": "zadanie konta %s -- uruchomić je może root albo samo konto",
+   "pl_code": "zadanie konta %s -- uruchomić je może też root",
    "pl": "zadanie konta %s -- uruchomić je może też root",
    "en": "%s account task -- root can also run it",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:4432 run_job_now"
-   ]
+   ],
+   "pl_code_before": "zadanie konta %s -- uruchomić je może root albo samo konto"
   },
   {
    "k": "u521",
@@ -6204,14 +6272,15 @@
   },
   {
    "k": "u528",
-   "pl_code": "Zapisz go POZA tym serwerem. Bez klucza i bez tego serwera",
+   "pl_code": "Zapisz go gdzieś POZA tym serwerem. Gdy serwer przepadnie, bez klucza",
    "pl": "Zapisz go gdzieś POZA tym serwerem. Gdy serwer przepadnie, bez klucza",
    "en": "Store it somewhere OUTSIDE this server. If the server is lost, without the key",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:4494 replica_action"
-   ]
+   ],
+   "pl_code_before": "Zapisz go POZA tym serwerem. Bez klucza i bez tego serwera"
   },
   {
    "k": "u529",
@@ -6271,14 +6340,15 @@
   },
   {
    "k": "u534",
-   "pl_code": "Relacja %s -- kopia teraz: wszystkie datasety poza harmonogramem (np. przed przeniesieniem kolektora)",
+   "pl_code": "Relacja %s -- kopia teraz: wymuszenie kopii wszystkich datasetów (np. przed przeniesieniem kolektora)",
    "pl": "Relacja %s -- kopia teraz: wymuszenie kopii wszystkich datasetów (np. przed przeniesieniem kolektora)",
    "en": "%s Report -- Copy Now: Force a copy of all datasets (e.g., before moving the collector)",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:4528 action"
-   ]
+   ],
+   "pl_code_before": "Relacja %s -- kopia teraz: wszystkie datasety poza harmonogramem (np. przed przeniesieniem kolektora)"
   },
   {
    "k": "u535",
@@ -6326,36 +6396,39 @@
   },
   {
    "k": "u539",
-   "pl_code": "monitor mówi OK z pauzy. Odwrotność: F8 jeszcze raz (resume-client).",
+   "pl_code": "monitor nie alarmuje (pokazuje PAUZA). Cofnięcie: F8 jeszcze raz (resume-client).",
    "pl": "monitor nie alarmuje (pokazuje PAUZA). Cofnięcie: F8 jeszcze raz (resume-client).",
    "en": "the monitor does not alert (shows PAUSE). To undo: F8 again (resume-client).",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:4537 action"
-   ]
+   ],
+   "pl_code_before": "monitor mówi OK z pauzy. Odwrotność: F8 jeszcze raz (resume-client)."
   },
   {
    "k": "u540",
-   "pl_code": "Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (zamek):",
+   "pl_code": "Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (lock):",
    "pl": "Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (lock):",
    "en": "Instead of pausing you can DISABLE the relation also on the source (lock):",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:4542 action"
-   ]
+   ],
+   "pl_code_before": "Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (zamek):"
   },
   {
    "k": "u541",
-   "pl_code": "czynność „wyłącz na źródle” na dole tego okna; tamto okno powie, co zmienia.",
+   "pl_code": "przycisk „wyłącz na źródle” na dole; następne okno wyjaśni, co to zmienia.",
    "pl": "przycisk „wyłącz na źródle” na dole; następne okno wyjaśni, co to zmienia.",
    "en": "the \"disable on the source\" button at the bottom; the next window explains what it changes.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:4543 action"
-   ]
+   ],
+   "pl_code_before": "czynność „wyłącz na źródle” na dole tego okna; tamto okno powie, co zmienia."
   },
   {
    "k": "u542",
@@ -6713,14 +6786,15 @@
   },
   {
    "k": "u574",
-   "pl_code": "nazwa musi być inna niż baza (pakietowego szablonu nie nadpiszemy)",
+   "pl_code": "nazwa musi być inna niż baza (fabrycznego szablonu nie nadpiszemy)",
    "pl": "nazwa musi być inna niż baza (fabrycznego szablonu nie nadpiszemy)",
    "en": "The name must be different from the database (we will not overwrite the default template)",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:4693 profile_plan"
-   ]
+   ],
+   "pl_code_before": "nazwa musi być inna niż baza (pakietowego szablonu nie nadpiszemy)"
   },
   {
    "k": "u575",
@@ -6812,14 +6886,15 @@
   },
   {
    "k": "u583",
-   "pl_code": " Nowy szablon powstaje z bazy: mechanizm i kształt są z bazy (inny = inna baza).",
+   "pl_code": " Sposób liczenia i układ migawek bierze się z szablonu bazowego -- inny = wybierz inną bazę.",
    "pl": " Sposób liczenia i układ migawek bierze się z szablonu bazowego -- inny = wybierz inną bazę.",
    "en": " The counting method and snapshot layout come from the base template -- for a different one, pick another base.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:4777 form_lines"
-   ]
+   ],
+   "pl_code_before": " Nowy szablon powstaje z bazy: mechanizm i kształt są z bazy (inny = inna baza)."
   },
   {
    "k": "u584",
@@ -6933,14 +7008,15 @@
   },
   {
    "k": "u594",
-   "pl_code": " w tym katalogu nie ma plików eksportu relacji (eksport relacji z ekranu Relacje, menu Plik, zapisuje je w %s)",
+   "pl_code": " w tym katalogu nie ma wyeksportowanych relacji (eksport relacji z ekranu Relacje, menu Plik, zapisuje je w %s)",
    "pl": " w tym katalogu nie ma wyeksportowanych relacji (eksport relacji z ekranu Relacje, menu Plik, zapisuje je w %s)",
    "en": " there are no relation export files in this directory (relation export from the Relations screen, File menu, saves them in %s)",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "zfs-tui.py:4863 files_lines"
-   ]
+   ],
+   "pl_code_before": " w tym katalogu nie ma plików eksportu relacji (eksport relacji z ekranu Relacje, menu Plik, zapisuje je w %s)"
   },
   {
    "k": "u595",
@@ -7132,14 +7208,15 @@
   },
   {
    "k": "u612",
-   "pl_code": "ten dataset jest z rekordu, nie z crona -- nie ma jego linii ani sekcji do pokazania",
+   "pl_code": "ten dataset jest tylko w definicji relacji, nie w cronie -- nie ma zadania do pokazania",
    "pl": "ten dataset jest tylko w definicji relacji, nie w cronie -- nie ma zadania do pokazania",
    "en": "this dataset is only in the relation's definition, not in cron -- there is no job to show",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "zfs-tui.py:5399 open_child"
-   ]
+   ],
+   "pl_code_before": "ten dataset jest z rekordu, nie z crona -- nie ma jego linii ani sekcji do pokazania"
   },
   {
    "k": "u613",
@@ -8134,25 +8211,27 @@
   },
   {
    "k": "u703",
-   "pl_code": "Wystawiam migawkę dysku jako urządzenie tylko do odczytu...",
+   "pl_code": "Udostępniam dysk VM z migawki tylko do odczytu...",
    "pl": "Udostępniam dysk VM z migawki tylko do odczytu...",
    "en": "Exposing the VM disk from the snapshot read-only...",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "browse.sh:405 browse_and_exit"
-   ]
+   ],
+   "pl_code_before": "Wystawiam migawkę dysku jako urządzenie tylko do odczytu..."
   },
   {
    "k": "u704",
-   "pl_code": "Nie mogę wystawić migawki $DS@$SNAP jako urządzenia:\\n$(head -2 ",
+   "pl_code": "Nie udało się udostępnić dysku z migawki $DS@$SNAP do odczytu:\n$(head -2 ",
    "pl": "Nie udało się udostępnić dysku z migawki $DS@$SNAP do odczytu:\n$(head -2 ",
    "en": "Could not expose the disk from snapshot $DS@$SNAP read-only:\n$(head -2 ",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "browse.sh:407 browse_and_exit"
-   ]
+   ],
+   "pl_code_before": "Nie mogę wystawić migawki $DS@$SNAP jako urządzenia:\\n$(head -2 "
   },
   {
    "k": "u705",
@@ -9492,15 +9571,16 @@
   },
   {
    "k": "u818",
-   "pl_code": "Po ilu odstępach zaległości przejść na samą różnicę (1-999)?",
+   "pl_code": "Po ilu zgubionych przebiegach przejść na migawkę różnicową?",
    "pl": "Po ilu zgubionych przebiegach przejść na migawkę różnicową?",
-   "en": "After how many missed intervals switch to the difference only (1-999)?",
+   "en": "After how many missed runs switch to a differential snapshot?",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "edit-relation.sh:600 engine_settings",
     "replica.sh:245 replica_engine"
-   ]
+   ],
+   "pl_code_before": "Po ilu odstępach zaległości przejść na samą różnicę (1-999)?"
   },
   {
    "k": "u819",
@@ -10647,14 +10727,15 @@
   },
   {
    "k": "u921",
-   "pl_code": "Z hostem $h jest już relacja: $rel.\\n\\nRelacja to PARA HOSTÓW -- jedna na parę, z wieloma datasetami.\\nDataset do istniejącej relacji dodaje się w jej zmianie,",
+   "pl_code": "Z hostem $h relacja już istnieje: $rel.\n\nZ jednym hostem jest tylko jedna relacja, za to z dowolną liczbą datasetów.\nDataset do istniejącej relacji dodaje się w jej zmianie,",
    "pl": "Z hostem $h relacja już istnieje: $rel.\n\nZ jednym hostem jest tylko jedna relacja, za to z dowolną liczbą datasetów.\nDataset do istniejącej relacji dodaje się w jej zmianie,",
    "en": "A relation with host $h already exists: $rel.\n\nThere is only one relation per host, with any number of datasets.\nA dataset is added to an existing relation in its change window,",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "new-relation.sh:110 step_host"
-   ]
+   ],
+   "pl_code_before": "Z hostem $h jest już relacja: $rel.\\n\\nRelacja to PARA HOSTÓW -- jedna na parę, z wieloma datasetami.\\nDataset do istniejącej relacji dodaje się w jej zmianie,"
   },
   {
    "k": "u922",
@@ -11606,14 +11687,15 @@
   },
   {
    "k": "u1008",
-   "pl_code": "Domyślne są dobre dla zwykłej relacji.\\n\\nPrawa stąd: bez nich instalacja stanie i poda polecenie dla źródła.\\nZamrażanie: bez zgody migawki dobowe i rzadsze wyjdą jako '_crash_'.\\nParowanie ręczne: gdy ten host nie ma wstępu po SSH do źródła.",
-   "pl": "Domyślne wystarczą w zwykłej relacji.\n\nNadaj prawa stąd: bez tego instalacja się zatrzyma i poda polecenie do wpisania na źródle.\nZamrażanie: bez zgody migawki dobowe i rzadsze zostaną oznaczone '_crash_' (bez zamrożenia gości).\nParowanie ręczne: gdy ten host nie może się połączyć ze źródłem przez SSH.",
+   "pl_code": "Domyślne wystarczą w zwykłej relacji.\\n\\nNadaj prawa stąd: bez tego instalacja się zatrzyma i poda polecenie do wpisania na źródle.\\nZamrażanie: bez zgody migawki dobowe i rzadsze zostaną oznaczone '_crash_' (bez zamrożenia gości).\\nParowanie ręczne: gdy ten host nie może się połączyć ze źródłem przez SSH.",
+   "pl": "Domyślne wystarczą w zwykłej relacji.\\n\\nNadaj prawa stąd: bez tego instalacja się zatrzyma i poda polecenie do wpisania na źródle.\\nZamrażanie: bez zgody migawki dobowe i rzadsze zostaną oznaczone '_crash_' (bez zamrożenia gości).\\nParowanie ręczne: gdy ten host nie może się połączyć ze źródłem przez SSH.",
    "en": "The defaults are enough for a normal relation.\n\nGrant permissions from here: without it the install stops and gives you a command to type on the source.\nFreezing: without consent, daily and sparser snapshots are marked '_crash_' (guests are not frozen).\nManual pairing: when this host cannot connect to the source over SSH.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "new-relation.sh:749 step_extra"
-   ]
+   ],
+   "pl_code_before": "Domyślne są dobre dla zwykłej relacji.\\n\\nPrawa stąd: bez nich instalacja stanie i poda polecenie dla źródła.\\nZamrażanie: bez zgody migawki dobowe i rzadsze wyjdą jako '_crash_'.\\nParowanie ręczne: gdy ten host nie ma wstępu po SSH do źródła."
   },
   {
    "k": "u1009",
@@ -12767,14 +12849,15 @@
   },
   {
    "k": "u1113",
-   "pl_code": "Reguła udev \\\"po włożeniu\\\" ZOSTANIE ZDJĘTA -- żadna inna replika z niej nie korzysta.",
+   "pl_code": "Reguła udev \\\"po podłączeniu\\\" ZOSTANIE ZDJĘTA -- żadna inna replika z niej nie korzysta.",
    "pl": "Reguła udev \\\"po podłączeniu\\\" ZOSTANIE ZDJĘTA -- żadna inna replika z niej nie korzysta.",
    "en": "The udev \\\"on connect\\\" rule WILL BE REMOVED -- no other replica uses it.",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica-delete.sh:69 (skrypt)"
-   ]
+   ],
+   "pl_code_before": "Reguła udev \\\"po włożeniu\\\" ZOSTANIE ZDJĘTA -- żadna inna replika z niej nie korzysta."
   },
   {
    "k": "u1114",
@@ -13201,7 +13284,7 @@
   },
   {
    "k": "u1152",
-   "pl_code": "Odbicie kolektora -- dysk trzyma to, co kolektor",
+   "pl_code": "Kopia kolektora -- dysk trzyma to, co kolektor",
    "pl": "Kopia kolektora -- dysk trzyma to, co kolektor",
    "en": "Mirror of the collector -- the disk keeps what the collector keeps",
    "origin": "owner-edit",
@@ -13209,7 +13292,8 @@
    "where": [
     "replica.sh:255 replica_engine",
     "replica.sh:489 rp_row"
-   ]
+   ],
+   "pl_code_before": "Odbicie kolektora -- dysk trzyma to, co kolektor"
   },
   {
    "k": "u1153",
@@ -13315,7 +13399,7 @@
   },
   {
    "k": "u1162",
-   "pl_code": "tylko po włożeniu dysku",
+   "pl_code": "tylko po podłączeniu dysku",
    "pl": "tylko po podłączeniu dysku",
    "en": "only when the disk is connected",
    "origin": "owner-ok",
@@ -13323,7 +13407,8 @@
    "where": [
     "replica.sh:301 sched_words",
     "replica.sh:618 rp_row"
-   ]
+   ],
+   "pl_code_before": "tylko po włożeniu dysku"
   },
   {
    "k": "u1163",
@@ -13349,14 +13434,15 @@
   },
   {
    "k": "u1165",
-   "pl_code": "Po włożeniu",
+   "pl_code": "Po podłączeniu",
    "pl": "Po podłączeniu",
    "en": "On connect",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:339 rp_row"
-   ]
+   ],
+   "pl_code_before": "Po włożeniu"
   },
   {
    "k": "u1166",
@@ -13657,14 +13743,15 @@
   },
   {
    "k": "u1193",
-   "pl_code": "Wymienny: każdy bieg importuje pulę i eksportuje ją po kopii (dysk można wyjąć).\\nStały: pula jest zawsze w maszynie (np. osobna pula w mirrorze), bez importu/eksportu.",
+   "pl_code": "Wymienny: dysk jest podłączany do systemu na czas kopii i odłączany po niej (można go wyjąć).\\nStały: dysk zawsze w maszynie (np. osobna pula), nic się nie podłącza ani odłącza.",
    "pl": "Wymienny: dysk jest podłączany do systemu na czas kopii i odłączany po niej (można go wyjąć).\\nStały: dysk zawsze w maszynie (np. osobna pula), nic się nie podłącza ani odłącza.",
-   "en": "Removable: the disk is attached to the system for the copy and detached afterwards (it can be removed).\nFixed: the disk is always in the machine (e.g. a separate pool), nothing is attached or detached.",
+   "en": "Removable: connected for the copy, disconnected after it (can be removed).\\nFixed: always in the machine (e.g. another pool), nothing to connect.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "replica.sh:503 rp_row"
-   ]
+   ],
+   "pl_code_before": "Wymienny: każdy bieg importuje pulę i eksportuje ją po kopii (dysk można wyjąć).\\nStały: pula jest zawsze w maszynie (np. osobna pula w mirrorze), bez importu/eksportu."
   },
   {
    "k": "u1194",
@@ -13734,14 +13821,15 @@
   },
   {
    "k": "u1200",
-   "pl_code": "Dodaj dysk (włożony zostanie sformatowany)",
+   "pl_code": "Dodaj dysk (podłączony zostanie sformatowany)",
    "pl": "Dodaj dysk (podłączony zostanie sformatowany)",
    "en": "Add disk (the connected one will be formatted)",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:543 rp_row"
-   ]
+   ],
+   "pl_code_before": "Dodaj dysk (włożony zostanie sformatowany)"
   },
   {
    "k": "u1201",
@@ -13846,14 +13934,15 @@
   },
   {
    "k": "u1210",
-   "pl_code": "Który dysk przestaje należeć do repliki? Dane na nim ZOSTAJĄ;\\nwłożony później będzie odrzucony jako obcy.",
+   "pl_code": "Który dysk przestaje należeć do repliki? Dane na nim ZOSTAJĄ;\\npodłączony później będzie odrzucony jako obcy.",
    "pl": "Który dysk przestaje należeć do repliki? Dane na nim ZOSTAJĄ;\\npodłączony później będzie odrzucony jako obcy.",
    "en": "Which disk stops belonging to the replica? Data on it STAYS;\\nif connected later it will be rejected as foreign.",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:571 rp_row"
-   ]
+   ],
+   "pl_code_before": "Który dysk przestaje należeć do repliki? Dane na nim ZOSTAJĄ;\\nwłożony później będzie odrzucony jako obcy."
   },
   {
    "k": "u1211",
@@ -13868,14 +13957,15 @@
   },
   {
    "k": "u1212",
-   "pl_code": "Replika '$NAME' nie ma jeszcze zapisanych ID dysków, a jej obecnego dysku nie ma w maszynie.\\nPo dodaniu nowego dysku stary będzie odrzucany jako obcy -- dodasz go, gdy go włożysz\\n(zmiana repliki, nośnik, wybór obecnego dysku).",
+   "pl_code": "Replika '$NAME' nie ma jeszcze zapisanych ID dysków, a jej obecny dysk jest odłączony.\\nPo dodaniu nowego dysku stary będzie odrzucany jako obcy -- dodasz go, gdy go podłączysz\\n(zmiana repliki, nośnik, wybór obecnego dysku).",
    "pl": "Replika '$NAME' nie ma jeszcze zapisanych ID dysków, a jej obecny dysk jest odłączony.\\nPo dodaniu nowego dysku stary będzie odrzucany jako obcy -- dodasz go, gdy go podłączysz\\n(zmiana repliki, nośnik, wybór obecnego dysku).",
    "en": "Replica '$NAME' has no disk IDs recorded yet, and its current disk is disconnected.\\nAfter you add a new disk the old one will be rejected as foreign -- add it when you connect it\\n(change replica, medium, select the current disk).",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:585 rp_row"
-   ]
+   ],
+   "pl_code_before": "Replika '$NAME' nie ma jeszcze zapisanych ID dysków, a jej obecnego dysku nie ma w maszynie.\\nPo dodaniu nowego dysku stary będzie odrzucany jako obcy -- dodasz go, gdy go włożysz\\n(zmiana repliki, nośnik, wybór obecnego dysku)."
   },
   {
    "k": "u1213",
@@ -13890,14 +13980,15 @@
   },
   {
    "k": "u1214",
-   "pl_code": "Dysk dopisany do repliki '$NAME' (ID puli $PREP_GUID).\\nDyski są równorzędne: replika kopiuje na ten, który jest włożony.\\nDo slotu wkładaj JEDEN naraz. Zapisze się po WYKONAJ w planie.",
+   "pl_code": "Dysk dopisany do repliki '$NAME' (ID puli $PREP_GUID).\\nDyski są równorzędne: replika kopiuje na ten, który jest podłączony.\\nPodłączaj JEDEN naraz. Zapisze się po WYKONAJ w planie.",
    "pl": "Dysk dopisany do repliki '$NAME' (ID puli $PREP_GUID).\\nDyski są równorzędne: replika kopiuje na ten, który jest podłączony.\\nPodłączaj JEDEN naraz. Zapisze się po WYKONAJ w planie.",
    "en": "Disk added to replica '$NAME' (pool ID $PREP_GUID).\\nDisks are equal: the replica copies to whichever is connected.\\nConnect ONE at a time. Saved after EXECUTE in the plan.",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:590 rp_row"
-   ]
+   ],
+   "pl_code_before": "Dysk dopisany do repliki '$NAME' (ID puli $PREP_GUID).\\nDyski są równorzędne: replika kopiuje na ten, który jest włożony.\\nDo slotu wkładaj JEDEN naraz. Zapisze się po WYKONAJ w planie."
   },
   {
    "k": "u1215",
@@ -14011,14 +14102,15 @@
   },
   {
    "k": "u1225",
-   "pl_code": "tylko po włożeniu",
+   "pl_code": "tylko po podłączeniu",
    "pl": "tylko po podłączeniu",
    "en": "only on connect",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:622 rp_row"
-   ]
+   ],
+   "pl_code_before": "tylko po włożeniu"
   },
   {
    "k": "u1226",
@@ -14110,25 +14202,27 @@
   },
   {
    "k": "u1234",
-   "pl_code": "Replika $NAME -- także po włożeniu?",
+   "pl_code": "Replika $NAME -- także po podłączeniu?",
    "pl": "Replika $NAME -- także po podłączeniu?",
    "en": "Replica $NAME -- also on connect?",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:660 rp_row"
-   ]
+   ],
+   "pl_code_before": "Replika $NAME -- także po włożeniu?"
   },
   {
    "k": "u1235",
-   "pl_code": "Uruchamiać kopię także po włożeniu dysku tej repliki?\\n\\nTak: włożony dysk -- kopia minutę po włożeniu (czas na wyjęcie złego dysku),\\npotem dalej wg harmonogramu.\\nNie: tylko wg harmonogramu. Inny dysk -- nic się nie dzieje.",
+   "pl_code": "Uruchamiać kopię także po podłączeniu dysku tej repliki?\\n\\nTak: podłączony dysk -- kopia minutę po podłączeniu (czas na wyjęcie złego dysku),\\npotem dalej wg harmonogramu.\\nNie: tylko wg harmonogramu. Inny dysk -- nic się nie dzieje.",
    "pl": "Uruchamiać kopię także po podłączeniu dysku tej repliki?\\n\\nTak: podłączony dysk -- kopia minutę po podłączeniu (czas na wyjęcie złego dysku),\\npotem dalej wg harmonogramu.\\nNie: tylko wg harmonogramu. Inny dysk -- nic się nie dzieje.",
    "en": "Also run the copy when this replica's disk is connected?\\n\\nYes: disk connected -- copy one minute after connect (time to pull out a wrong disk),\\nthen on by the schedule.\\nNo: by the schedule only. Another disk -- nothing happens.",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:661 rp_row"
-   ]
+   ],
+   "pl_code_before": "Uruchamiać kopię także po włożeniu dysku tej repliki?\\n\\nTak: włożony dysk -- kopia minutę po włożeniu (czas na wyjęcie złego dysku),\\npotem dalej wg harmonogramu.\\nNie: tylko wg harmonogramu. Inny dysk -- nic się nie dzieje."
   },
   {
    "k": "u1236",
@@ -14209,14 +14303,15 @@
   },
   {
    "k": "u1243",
-   "pl_code": "Historia:   tylko najnowsze zdjęcie replica_ (pośrednie nie trafiają)",
+   "pl_code": "Historia:   tylko najnowsza migawka replica_ (pośrednie nie trafiają)",
    "pl": "Historia:   tylko najnowsza migawka replica_ (pośrednie nie trafiają)",
    "en": "History:    only the newest replica_ snapshot (intermediate ones are not carried)",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "replica.sh:701 rp_row"
-   ]
+   ],
+   "pl_code_before": "Historia:   tylko najnowsze zdjęcie replica_ (pośrednie nie trafiają)"
   },
   {
    "k": "u1244",
@@ -14286,14 +14381,15 @@
   },
   {
    "k": "u1250",
-   "pl_code": "Ostrzeżenie: brak (replika po włożeniu bez progu)",
+   "pl_code": "Ostrzeżenie: brak (replika po podłączeniu bez progu)",
    "pl": "Ostrzeżenie: brak (replika po podłączeniu bez progu)",
    "en": "Warning: none (replica on connect without a threshold)",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:710 rp_row"
-   ]
+   ],
+   "pl_code_before": "Ostrzeżenie: brak (replika po włożeniu bez progu)"
   },
   {
    "k": "u1251",
@@ -14341,36 +14437,39 @@
   },
   {
    "k": "u1255",
-   "pl_code": "Po włożeniu: kopia po odczekaniu (replica.insert_wait, domyślnie 60 s); reguła udev jest na hoście",
+   "pl_code": "Po podłączeniu: kopia z opóźnionym startem (replica.insert_wait, domyślnie 60 s); reguła udev jest na hoście",
    "pl": "Po podłączeniu: kopia z opóźnionym startem (replica.insert_wait, domyślnie 60 s); reguła udev jest na hoście",
    "en": "On connect: copy after delay (replica.insert_wait, default 60 s); the udev rule is on the host",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "replica.sh:718 rp_row"
-   ]
+   ],
+   "pl_code_before": "Po włożeniu: kopia po odczekaniu (replica.insert_wait, domyślnie 60 s); reguła udev jest na hoście"
   },
   {
    "k": "u1256",
-   "pl_code": "Po włożeniu: nic -- kopia tylko wg harmonogramu",
+   "pl_code": "Po podłączeniu: nic -- kopia tylko wg harmonogramu",
    "pl": "Po podłączeniu: nic -- kopia tylko wg harmonogramu",
    "en": "On connect: nothing -- copy by the schedule only",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "replica.sh:721 rp_row"
-   ]
+   ],
+   "pl_code_before": "Po włożeniu: nic -- kopia tylko wg harmonogramu"
   },
   {
    "k": "u1257",
-   "pl_code": "Reguła udev \\\"po włożeniu\\\" ZOSTANIE ZDJĘTA -- żadna replika z niej nie korzysta",
+   "pl_code": "Reguła udev \\\"po podłączeniu\\\" ZOSTANIE ZDJĘTA -- żadna replika z niej nie korzysta",
    "pl": "Reguła udev \\\"po podłączeniu\\\" ZOSTANIE ZDJĘTA -- żadna replika z niej nie korzysta",
    "en": "The udev \\\"on connect\\\" rule WILL BE REMOVED -- no replica uses it",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:725 rp_row"
-   ]
+   ],
+   "pl_code_before": "Reguła udev \\\"po włożeniu\\\" ZOSTANIE ZDJĘTA -- żadna replika z niej nie korzysta"
   },
   {
    "k": "u1258",
@@ -14451,25 +14550,27 @@
   },
   {
    "k": "u1265",
-   "pl_code": "ruszy po włożeniu dysku",
+   "pl_code": "ruszy opóźniona po podłączeniu dysku",
    "pl": "ruszy opóźniona po podłączeniu dysku",
    "en": "will start delayed when the disk is connected",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "replica.sh:761 rp_row"
-   ]
+   ],
+   "pl_code_before": "ruszy po włożeniu dysku"
   },
   {
    "k": "u1266",
-   "pl_code": "ruszy po włożeniu dysku albo o czasie z harmonogramu",
-   "pl": "ruszy opóźnione po podłączeniu dysku albo o czasie z harmonogramu",
+   "pl_code": "ruszy opóźniona po podłączeniu dysku albo o czasie z harmonogramu",
+   "pl": "ruszy opóźniona po podłączeniu dysku albo o czasie z harmonogramu",
    "en": "will start delayed when the disk is connected or at the scheduled time",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "replica.sh:762 rp_row"
-   ]
+   ],
+   "pl_code_before": "ruszy po włożeniu dysku albo o czasie z harmonogramu"
   },
   {
    "k": "u1267",
@@ -14814,14 +14915,15 @@
   },
   {
    "k": "u1298",
-   "pl_code": "Punkt odzysku (czas utworzenia migawki na dysku, strefa tego hosta: $TZN). Pozostałe źródła dostają swój najbliższy punkt z tej chwili lub wcześniejszy.",
+   "pl_code": "Wybierz migawkę do odzyskania.",
    "pl": "Wybierz migawkę do odzyskania.",
    "en": "Choose the snapshot to restore.",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "restore.sh:224 pool_ok"
-   ]
+   ],
+   "pl_code_before": "Punkt odzysku (czas utworzenia migawki na dysku, strefa tego hosta: $TZN). Pozostałe źródła dostają swój najbliższy punkt z tej chwili lub wcześniejszy."
   },
   {
    "k": "u1299",
@@ -15210,14 +15312,15 @@
   },
   {
    "k": "u1334",
-   "pl_code": "Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety pod spodem dostają swój najbliższy punkt z tej chwili lub wcześniejszy.",
+   "pl_code": "Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety potomne dostają swój najbliższy punkt z tej chwili lub wcześniejszy.",
    "pl": "Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety potomne dostają swój najbliższy punkt z tej chwili lub wcześniejszy.",
    "en": "Restore point (time the copy was created, this host's zone: $TZN). Child datasets receive their nearest restore point from this moment or an earlier one.",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "restore.sh:512 pool_ok"
-   ]
+   ],
+   "pl_code_before": "Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety pod spodem dostają swój najbliższy punkt z tej chwili lub wcześniejszy."
   },
   {
    "k": "u1335",
@@ -15584,14 +15687,15 @@
   },
   {
    "k": "u1368",
-   "pl_code": "Pozycja zmienia jedną wartość; nic nie jest zapisane przed WYKONAJ. W nawiasie: skąd jest wartość, gdy nie z pliku ustawień.",
+   "pl_code": "Wybierz pozycję, aby zmienić jej wartość. Nic nie zostanie zapisane, dopóki nie wybierzesz „Zapisz zmiany” i WYKONAJ. Nawias przy wartości mówi, skąd ona pochodzi, jeśli nie ma jej w pliku ustawień.",
    "pl": "Wybierz pozycję, aby zmienić jej wartość. Nic nie zostanie zapisane, dopóki nie wybierzesz „Zapisz zmiany” i WYKONAJ. Nawias przy wartości mówi, skąd ona pochodzi, jeśli nie ma jej w pliku ustawień.",
    "en": "Each item changes one value; nothing is saved before EXECUTE. In brackets: where a value comes from when not from the settings file.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "settings.sh:124 save"
-   ]
+   ],
+   "pl_code_before": "Pozycja zmienia jedną wartość; nic nie jest zapisane przed WYKONAJ. W nawiasie: skąd jest wartość, gdy nie z pliku ustawień."
   },
   {
    "k": "u1369",
@@ -15727,14 +15831,15 @@
   },
   {
    "k": "u1381",
-   "pl_code": "Relacje zbudowane z tego szablonu zostają; ich późniejsze 'Zmień relację -> Szablon' nie będzie miało z czego odświeżyć.",
+   "pl_code": "Relacje utworzone z tego szablonu zostaną i będą działać dalej. Później nie odświeżysz ich jednak przez 'Zmień relację -> Szablon', bo tego szablonu już nie będzie.",
    "pl": "Relacje utworzone z tego szablonu zostaną i będą działać dalej. Później nie odświeżysz ich jednak przez 'Zmień relację -> Szablon', bo tego szablonu już nie będzie.",
    "en": "Relations built from this template stay and keep running. Later you cannot refresh them through 'Zmień relację -> Szablon', because this template will be gone.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "template.sh:108 run_cmd"
-   ]
+   ],
+   "pl_code_before": "Relacje zbudowane z tego szablonu zostają; ich późniejsze 'Zmień relację -> Szablon' nie będzie miało z czego odświeżyć."
   },
   {
    "k": "u1382",
@@ -15859,14 +15964,15 @@
   },
   {
    "k": "u1393",
-   "pl_code": "Zbudowane relacje się nie zmieniają; szablon jest dla nowych relacji (i dla 'Zmień relację -> Szablon').",
+   "pl_code": "Zbudowane relacje na podstawie szablonu pozostają niezmienione; szablon jest dla nowych relacji (i dla 'Zmień relację -> Szablon').",
    "pl": "Zbudowane relacje na podstawie szablonu pozostają niezmienione; szablon jest dla nowych relacji (i dla 'Zmień relację -> Szablon').",
    "en": "Relations created using a template remain unchanged; the template applies to new relations (and to “Edit Relation -> Template”).",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
     "template.sh:335 run_cmd"
-   ]
+   ],
+   "pl_code_before": "Zbudowane relacje się nie zmieniają; szablon jest dla nowych relacji (i dla 'Zmień relację -> Szablon')."
   },
   {
    "k": "u1394",
