@@ -55,7 +55,8 @@ MIN_WIDTH = 80
 # kodu”; komunikaty CLI zostają po angielsku). Tekst polski w kodzie jest KLUCZEM; katalog
 # tui/lang/en.json (z tabeli przeglądu właściciela, tui/lang/build.py) daje angielski. Brak
 # wpisu = tekst polski, nic się nie psuje. Język: --lang, potem ZFS_TUI_LANG (dziedziczą go
-# okna whiptail), potem [gui] language w settings.ini (F10 Ustawienia), domyślnie polski.
+# okna whiptail), potem [gui] language w settings.ini (F10 Ustawienia), domyślnie ANGIELSKI
+# (właściciel 2026-10-24: publikacja dla społeczności Proxmoxa; polski przełącza --lang=pl / F10).
 # Katalog to DANE: json.load, nic nie jest wykonywane.
 # ---------------------------------------------------------------------------
 LANGS = ("pl", "en")
@@ -80,7 +81,7 @@ def ui_lang(explicit=None):
                         return v
     except (OSError, UnicodeError):
         pass
-    return "pl"
+    return "en"
 
 
 def load_lang(lang):
@@ -6037,7 +6038,7 @@ def main(argv):
     ap.add_argument("--check-source", help="czytaj check-source HOST --json z pliku (kreator: diagnoza hosta)")
     ap.add_argument("--offline", action="store_true", help="nie uruchamiaj czasownikow; zrodla bez pliku sa puste")
     ap.add_argument("--host-ip", help="R3-1: IP hosta w pasku tytulu (testy/offline; na zywo liczony z trasy domyslnej)")
-    ap.add_argument("--lang", choices=LANGS, help="język okien (domyślnie: [gui] language w settings.ini, potem pl)")
+    ap.add_argument("--lang", choices=LANGS, help="window language (default: [gui] language in settings.ini, then en)")
     a = ap.parse_args(argv)
     # Okna whiptail (tui/*.sh) dziedziczą język przez środowisko.
     os.environ["ZFS_TUI_LANG"] = ui_lang(a.lang)

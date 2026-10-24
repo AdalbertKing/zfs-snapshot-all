@@ -26,7 +26,7 @@ export NEWT_COLORS="${NEWT_COLORS:-root=,blue window=black,white border=black,wh
 
 
 # JĘZYK OKIEN (jak w zfs-tui.py): ZFS_TUI_LANG z GUI, inaczej [gui] language w settings.ini,
-# domyślnie polski. T <tekst polski> [argumenty printf] -> tekst w tym języku; bez wpisu w
+# domyślnie angielski (jak zfs-tui.py). T <tekst polski> [argumenty printf] -> tekst w tym języku; bez wpisu w
 # tui/lang/<język>.json -- polski. Katalog to DANE: czytany jako pary NUL-owe, nic się nie
 # wykonuje; szablon z %s dostaje argumenty przez printf, nigdy przez eval.
 if [ -z "${ZFS_TUI_LANG:-}" ]; then
@@ -34,7 +34,7 @@ if [ -z "${ZFS_TUI_LANG:-}" ]; then
         s=="gui" { k=$1; gsub(/[ \t]/,"",k); if (k=="language") { v=$2; gsub(/[ \t]/,"",v); print v; exit } }' \
         "${SETTINGS_FILE:-/etc/zfs-snapshot-all/settings.ini}" 2>/dev/null)"
 fi
-case "${ZFS_TUI_LANG:-}" in pl|en) ;; *) ZFS_TUI_LANG=pl ;; esac
+case "${ZFS_TUI_LANG:-}" in pl|en) ;; *) ZFS_TUI_LANG=en ;; esac
 export ZFS_TUI_LANG
 declare -A TCAT=()
 _tcat="$(dirname "${BASH_SOURCE[0]}")/lang/$ZFS_TUI_LANG.json"
