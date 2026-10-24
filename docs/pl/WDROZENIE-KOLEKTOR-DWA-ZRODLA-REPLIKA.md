@@ -150,7 +150,7 @@ kopią tego, co kolektor już ma, na nośnik, który się wypina.
 dostaje własny zestaw sekcji oraz własne minuty.
 
 **Nośnik przygotowujesz raz, czasownikiem `prepare-media`.** Dataset bazowy na
-dysku mówi bramce, że w gnieździe leży **właściwy** dysk, i tworzy go to samo
+dysku mówi bramce, że podłączony jest **właściwy** dysk, i tworzy go to samo
 polecenie. Lista wolnych dysków:
 
 ```bash
@@ -170,7 +170,7 @@ Taka pula pasuje do `--dst=repl/replica` z następnej sekcji.
 
 Dwa dyski rotacyjne dostają **tę samą nazwę puli** i różne GUID-y. Bramka
 rozpoznaje nośnik po GUID-zie, nie po nazwie, więc rotacja działa, a dwa dyski
-włożone naraz są **odmawiane** z nazwaniem obu.
+podłączone naraz są **odmawiane** z nazwaniem obu.
 
 ## 5. Scenariusz A: replika na nośnik wymienny
 
@@ -199,7 +199,7 @@ Uruchomienie poza harmonogramem:
 ./zfs-backup.sh list-replicas         # inwentarz + żywy stan nośnika
 ```
 
-Opcjonalnie, **nie domyślnie**, wyzwalacz po włożeniu dysku:
+Opcjonalnie, **nie domyślnie**, wyzwalacz po podłączeniu dysku:
 
 ```bash
 ./zfs-backup.sh install-media-trigger --install
@@ -293,12 +293,12 @@ jest twardy: cron przyjmuje polecenie do **1000 bajtów**.
 ## 8. Scenariusz A: rotacja nośnika, czasy i statystyki
 
 ```bash
-# dysk A w gnieździe, bieg nocny albo run-replicas — po biegu pula jest
+# dysk A podłączony, bieg nocny albo run-replicas — po biegu pula jest
 # wyeksportowana i dysk można wyjąć
-./zfs-backup.sh list-replicas     # 'available' = w gnieździe, nie zaimportowany
+./zfs-backup.sh list-replicas     # 'available' = podłączony, nie zaimportowany
 ```
 
-Po włożeniu dysku B (inny GUID, ta sama nazwa puli) pierwszy bieg go **wciągnie**,
+Po podłączeniu dysku B (inny GUID, ta sama nazwa puli) pierwszy bieg go **wciągnie**,
 bo bramka porówna GUID z zapisem i stwierdzi, że to inny nośnik. Zapis trzyma
 jedną linię na źródło:
 

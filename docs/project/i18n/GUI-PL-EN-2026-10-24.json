@@ -385,7 +385,7 @@
    "k": "u20",
    "pl_code": "UWAGA: relacja ma ustawienia inne niż jej szablon (tabela, silnik albo ręcznie w configu).",
    "pl": "UWAGA: relacja ma ustawienia inne niż jej szablon (tabela, silnik albo ręcznie w configu).",
-   "en": "WARNING: the relationship has settings different from its template (table, engine or manually changed config).",
+   "en": "WARNING: the relation has settings different from its template (table, engine or manually changed config).",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -800,7 +800,7 @@
   {
    "k": "u57",
    "pl_code": "dysk jest w slocie, pula NIEzaimportowana -- brama zaimportuje ją przy biegu",
-   "pl": "dysk jest w slocie, pula NIEzaimportowana -- brama zaimportuje ją przy biegu",
+   "pl": "dysk jest podłączony, pula NIEzaimportowana -- brama zaimportuje ją przy biegu",
    "en": "disk is connected, pool NOT imported -- the gate imports it during the run",
    "origin": "owner-edit",
    "unclear": false,
@@ -844,7 +844,7 @@
   {
    "k": "u61",
    "pl_code": "w slocie jest dysk, ale NIE TEN. Brama odmówi replikacji; wyjęcie złego nośnika to ruch człowieka przy maszynie",
-   "pl": "w slocie jest dysk, ale NIE TEN. Brama odmówi replikacji; wyjęcie złego nośnika to ruch człowieka przy maszynie",
+   "pl": "podłączony jest dysk, ale NIE TEN. Brama odmówi replikacji; wyjęcie złego nośnika to ruch człowieka przy maszynie",
    "en": "a WRONG disk is connected. The gate will refuse replication; removing the wrong medium is a human's job at the machine",
    "origin": "owner-edit",
    "unclear": false,
@@ -1355,7 +1355,7 @@
    "k": "u101",
    "pl_code": "1 relacja",
    "pl": "1 relacja",
-   "en": "1 relationship",
+   "en": "1 relation",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -1366,7 +1366,7 @@
    "k": "u102",
    "pl_code": "%d relacje",
    "pl": "%d relacje",
-   "en": "%d relationships",
+   "en": "%d relations",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -1377,7 +1377,7 @@
    "k": "u103",
    "pl_code": "%d relacji",
    "pl": "%d relacji",
-   "en": "%d relationships",
+   "en": "%d relations",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -1792,7 +1792,7 @@
   {
    "k": "u139",
    "pl_code": "po włożeniu",
-   "pl": "po włożeniu",
+   "pl": "po podłączeniu",
    "en": "after connect",
    "origin": "owner-edit",
    "unclear": false,
@@ -1954,7 +1954,7 @@
    "k": "u153",
    "pl_code": "(bez relacji)",
    "pl": "(bez relacji)",
-   "en": "(no relationship)",
+   "en": "(no relation)",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -3033,7 +3033,7 @@
    "k": "u242",
    "pl_code": "brak relacji",
    "pl": "brak relacji",
-   "en": "no relationships",
+   "en": "no relations",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -3731,7 +3731,7 @@
    "k": "u304",
    "pl_code": " (relacja nie jest aktywna)",
    "pl": " (relacja nie jest aktywna)",
-   "en": " (relationship is not active)",
+   "en": " (relation is not active)",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -3886,7 +3886,7 @@
    "k": "u318",
    "pl_code": "Migawki na źródle: %d (ta relacja nie robi kopii)",
    "pl": "Migawki na źródle: %d (ta relacja nie robi kopii)",
-   "en": "Snapshots on the source: %d (this relationship makes no copies)",
+   "en": "Snapshots on the source: %d (this relation makes no copies)",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -3996,7 +3996,7 @@
    "k": "u328",
    "pl_code": "Nowa relacja",
    "pl": "Nowa relacja",
-   "en": "New relationship",
+   "en": "New relation",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -4019,7 +4019,7 @@
    "k": "u330",
    "pl_code": "Usuń relację",
    "pl": "Usuń relację",
-   "en": "Delete relationship",
+   "en": "Delete relation",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -4304,7 +4304,7 @@
   {
    "k": "u356",
    "pl_code": " + po włożeniu",
-   "pl": " + po włożeniu",
+   "pl": " + po podłączeniu",
    "en": " + after connect",
    "origin": "owner-edit",
    "unclear": false,
@@ -4327,7 +4327,7 @@
   {
    "k": "u358",
    "pl_code": "po nazwie puli -- ID nieznane (zmiana repliki dopisze ID włożonego dysku)",
-   "pl": "po nazwie puli -- ID nieznane (zmiana repliki dopisze ID włożonego dysku)",
+   "pl": "po nazwie puli -- ID nieznane (zmiana repliki dopisze ID podłączonego dysku)",
    "en": "by pool name -- ID unknown (changing the replica adds the ID of the connected disk)",
    "origin": "owner-ok",
    "unclear": false,
@@ -4525,7 +4525,7 @@
   {
    "k": "u376",
    "pl_code": "zaraz po włożeniu dysku",
-   "pl": "zaraz po włożeniu dysku",
+   "pl": "zaraz po podłączeniu dysku",
    "en": "right after the disk is connected",
    "origin": "owner-edit",
    "unclear": false,
@@ -4536,7 +4536,7 @@
   {
    "k": "u377",
    "pl_code": " i zaraz po włożeniu dysku",
-   "pl": " i zaraz po włożeniu dysku",
+   "pl": " i zaraz po podłączeniu dysku",
    "en": " and right after the disk is connected",
    "origin": "owner-edit",
    "unclear": false,
@@ -12768,7 +12768,7 @@
   {
    "k": "u1113",
    "pl_code": "Reguła udev \\\"po włożeniu\\\" ZOSTANIE ZDJĘTA -- żadna inna replika z niej nie korzysta.",
-   "pl": "Reguła udev \\\"po włożeniu\\\" ZOSTANIE ZDJĘTA -- żadna inna replika z niej nie korzysta.",
+   "pl": "Reguła udev \\\"po podłączeniu\\\" ZOSTANIE ZDJĘTA -- żadna inna replika z niej nie korzysta.",
    "en": "The udev \\\"on connect\\\" rule WILL BE REMOVED -- no other replica uses it.",
    "origin": "owner-ok",
    "unclear": false,
@@ -13316,7 +13316,7 @@
   {
    "k": "u1162",
    "pl_code": "tylko po włożeniu dysku",
-   "pl": "tylko po włożeniu dysku",
+   "pl": "tylko po podłączeniu dysku",
    "en": "only when the disk is connected",
    "origin": "owner-ok",
    "unclear": false,
@@ -13350,7 +13350,7 @@
   {
    "k": "u1165",
    "pl_code": "Po włożeniu",
-   "pl": "Po włożeniu",
+   "pl": "Po podłączeniu",
    "en": "On connect",
    "origin": "owner-ok",
    "unclear": false,
@@ -13702,7 +13702,7 @@
   {
    "k": "u1197",
    "pl_code": "$p  dysk w slocie$([ ",
-   "pl": "$p  dysk w slocie$([ ",
+   "pl": "$p  dysk podłączony$([ ",
    "en": "$p  disk connected$([ ",
    "origin": "owner-ok",
    "unclear": false,
@@ -13735,7 +13735,7 @@
   {
    "k": "u1200",
    "pl_code": "Dodaj dysk (włożony zostanie sformatowany)",
-   "pl": "Dodaj dysk (włożony zostanie sformatowany)",
+   "pl": "Dodaj dysk (podłączony zostanie sformatowany)",
    "en": "Add disk (the connected one will be formatted)",
    "origin": "owner-ok",
    "unclear": false,
@@ -13812,7 +13812,7 @@
   {
    "k": "u1207",
    "pl_code": " ] && echo '  (teraz w slocie)')",
-   "pl": " ] && echo '  (teraz w slocie)')",
+   "pl": " ] && echo '  (teraz podłączony)')",
    "en": " ] && echo '  (connected now)')",
    "origin": "owner-ok",
    "unclear": false,
@@ -13847,7 +13847,7 @@
   {
    "k": "u1210",
    "pl_code": "Który dysk przestaje należeć do repliki? Dane na nim ZOSTAJĄ;\\nwłożony później będzie odrzucony jako obcy.",
-   "pl": "Który dysk przestaje należeć do repliki? Dane na nim ZOSTAJĄ;\\nwłożony później będzie odrzucony jako obcy.",
+   "pl": "Który dysk przestaje należeć do repliki? Dane na nim ZOSTAJĄ;\\npodłączony później będzie odrzucony jako obcy.",
    "en": "Which disk stops belonging to the replica? Data on it STAYS;\\nif connected later it will be rejected as foreign.",
    "origin": "owner-ok",
    "unclear": false,
@@ -13869,7 +13869,7 @@
   {
    "k": "u1212",
    "pl_code": "Replika '$NAME' nie ma jeszcze zapisanych ID dysków, a jej obecnego dysku nie ma w maszynie.\\nPo dodaniu nowego dysku stary będzie odrzucany jako obcy -- dodasz go, gdy go włożysz\\n(zmiana repliki, nośnik, wybór obecnego dysku).",
-   "pl": "Replika '$NAME' nie ma jeszcze zapisanych ID dysków, a jej obecnego dysku nie ma w maszynie.\\nPo dodaniu nowego dysku stary będzie odrzucany jako obcy -- dodasz go, gdy go włożysz\\n(zmiana repliki, nośnik, wybór obecnego dysku).",
+   "pl": "Replika '$NAME' nie ma jeszcze zapisanych ID dysków, a jej obecny dysk jest odłączony.\\nPo dodaniu nowego dysku stary będzie odrzucany jako obcy -- dodasz go, gdy go podłączysz\\n(zmiana repliki, nośnik, wybór obecnego dysku).",
    "en": "Replica '$NAME' has no disk IDs recorded yet, and its current disk is disconnected.\\nAfter you add a new disk the old one will be rejected as foreign -- add it when you connect it\\n(change replica, medium, select the current disk).",
    "origin": "owner-ok",
    "unclear": false,
@@ -13891,7 +13891,7 @@
   {
    "k": "u1214",
    "pl_code": "Dysk dopisany do repliki '$NAME' (ID puli $PREP_GUID).\\nDyski są równorzędne: replika kopiuje na ten, który jest włożony.\\nDo slotu wkładaj JEDEN naraz. Zapisze się po WYKONAJ w planie.",
-   "pl": "Dysk dopisany do repliki '$NAME' (ID puli $PREP_GUID).\\nDyski są równorzędne: replika kopiuje na ten, który jest włożony.\\nDo slotu wkładaj JEDEN naraz. Zapisze się po WYKONAJ w planie.",
+   "pl": "Dysk dopisany do repliki '$NAME' (ID puli $PREP_GUID).\\nDyski są równorzędne: replika kopiuje na ten, który jest podłączony.\\nPodłączaj JEDEN naraz. Zapisze się po WYKONAJ w planie.",
    "en": "Disk added to replica '$NAME' (pool ID $PREP_GUID).\\nDisks are equal: the replica copies to whichever is connected.\\nConnect ONE at a time. Saved after EXECUTE in the plan.",
    "origin": "owner-ok",
    "unclear": false,
@@ -13992,7 +13992,7 @@
    "pl_code": "$(rtitle 6 'kiedy kopiować?')",
    "pl": "$(rtitle 6 'kiedy kopiować?')",
    "en": "$(rtitle 6 'when to copy?')",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:621 rp_row"
@@ -14012,7 +14012,7 @@
   {
    "k": "u1225",
    "pl_code": "tylko po włożeniu",
-   "pl": "tylko po włożeniu",
+   "pl": "tylko po podłączeniu",
    "en": "only on connect",
    "origin": "owner-ok",
    "unclear": false,
@@ -14111,7 +14111,7 @@
   {
    "k": "u1234",
    "pl_code": "Replika $NAME -- także po włożeniu?",
-   "pl": "Replika $NAME -- także po włożeniu?",
+   "pl": "Replika $NAME -- także po podłączeniu?",
    "en": "Replica $NAME -- also on connect?",
    "origin": "owner-ok",
    "unclear": false,
@@ -14122,9 +14122,9 @@
   {
    "k": "u1235",
    "pl_code": "Uruchamiać kopię także po włożeniu dysku tej repliki?\\n\\nTak: włożony dysk -- kopia minutę po włożeniu (czas na wyjęcie złego dysku),\\npotem dalej wg harmonogramu.\\nNie: tylko wg harmonogramu. Inny dysk -- nic się nie dzieje.",
-   "pl": "Uruchamiać kopię także po włożeniu dysku tej repliki?\\n\\nTak: włożony dysk -- kopia minutę po włożeniu (czas na wyjęcie złego dysku),\\npotem dalej wg harmonogramu.\\nNie: tylko wg harmonogramu. Inny dysk -- nic się nie dzieje.",
+   "pl": "Uruchamiać kopię także po podłączeniu dysku tej repliki?\\n\\nTak: podłączony dysk -- kopia minutę po podłączeniu (czas na wyjęcie złego dysku),\\npotem dalej wg harmonogramu.\\nNie: tylko wg harmonogramu. Inny dysk -- nic się nie dzieje.",
    "en": "Also run the copy when this replica's disk is connected?\\n\\nYes: disk connected -- copy one minute after connect (time to pull out a wrong disk),\\nthen on by the schedule.\\nNo: by the schedule only. Another disk -- nothing happens.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:661 rp_row"
@@ -14135,7 +14135,7 @@
    "pl_code": "Replika:    $NAME$([ ",
    "pl": "Replika:    $NAME$([ ",
    "en": "Replica:    $NAME$([ ",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:690 rp_row"
@@ -14146,7 +14146,7 @@
    "pl_code": " -eq 1 ] && echo '  (zmiana istniejącej)')",
    "pl": " -eq 1 ] && echo '  (zmiana istniejącej)')",
    "en": " -eq 1 ] && echo '  (change of an existing one)')",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:690 rp_row"
@@ -14157,7 +14157,7 @@
    "pl_code": "Źródła:     ${SRCS//,/, }  (z tym, co pod nimi jest i powstanie)",
    "pl": "Źródła:     ${SRCS//,/, }  (z tym, co pod nimi jest i powstanie)",
    "en": "Sources:    ${SRCS//,/, }  (with everything below them, now and later)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:691 rp_row"
@@ -14168,7 +14168,7 @@
    "pl_code": "Migawki:    $([ ",
    "pl": "Migawki:    $([ ",
    "en": "Snapshots:  $([ ",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:695 rp_row"
@@ -14179,7 +14179,7 @@
    "pl_code": "Na dysku:   $([ -n ",
    "pl": "Na dysku:   $([ -n ",
    "en": "On disk:    $([ -n ",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:696 rp_row"
@@ -14190,7 +14190,7 @@
    "pl_code": "Szyfrowane: źródło jest zaszyfrowane -- kopia idzie zaszyfrowana (raw), kolektor nie potrzebuje klucza",
    "pl": "Szyfrowane: źródło jest zaszyfrowane -- kopia idzie zaszyfrowana (raw), kolektor nie potrzebuje klucza",
    "en": "Encrypted:  source is encrypted -- the copy goes encrypted (raw), the collector needs no key",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:697 rp_row"
@@ -14201,7 +14201,7 @@
    "pl_code": "Historia:   wszystkie istniejące migawki (lustro kolektora)",
    "pl": "Historia:   wszystkie istniejące migawki (lustro kolektora)",
    "en": "History:    all existing snapshots (collector mirror)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:700 rp_row"
@@ -14210,9 +14210,9 @@
   {
    "k": "u1243",
    "pl_code": "Historia:   tylko najnowsze zdjęcie replica_ (pośrednie nie trafiają)",
-   "pl": "Historia:   tylko najnowsze zdjęcie replica_ (pośrednie nie trafiają)",
+   "pl": "Historia:   tylko najnowsza migawka replica_ (pośrednie nie trafiają)",
    "en": "History:    only the newest replica_ snapshot (intermediate ones are not carried)",
-   "origin": "auto",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "replica.sh:701 rp_row"
@@ -14223,7 +14223,7 @@
    "pl_code": "Historia:   $(eng_hist_words ",
    "pl": "Historia:   $(eng_hist_words ",
    "en": "History:    $(eng_hist_words ",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:702 rp_row"
@@ -14234,7 +14234,7 @@
    "pl_code": "Nośnik:     $DST  ($([ ",
    "pl": "Nośnik:     $DST  ($([ ",
    "en": "Medium:     $DST  ($([ ",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:703 rp_row"
@@ -14245,7 +14245,7 @@
    "pl_code": " | tr ',' '\\n' | grep -c .) (po ID puli: ${GUIDS//,/, }) -- inny dysk z tą nazwą puli nie zostanie użyty",
    "pl": " | tr ',' '\\n' | grep -c .) (po ID puli: ${GUIDS//,/, }) -- inny dysk z tą nazwą puli nie zostanie użyty",
    "en": " | tr ',' '\\n' | grep -c .) (by pool ID: ${GUIDS//,/, }) -- another disk with this pool name will not be used",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:705 rp_row"
@@ -14256,7 +14256,7 @@
    "pl_code": "Dyski:      rozpoznawane po nazwie puli (ID nieznane -- dysk nieobecny)",
    "pl": "Dyski:      rozpoznawane po nazwie puli (ID nieznane -- dysk nieobecny)",
    "en": "Disks:      recognised by pool name (IDs unknown -- disk absent)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:706 rp_row"
@@ -14267,7 +14267,7 @@
    "pl_code": "Kiedy:      $([ ",
    "pl": "Kiedy:      $([ ",
    "en": "When:       $([ ",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:708 rp_row"
@@ -14278,7 +14278,7 @@
    "pl_code": "Ostrzeżenie: po $MONDAYS dniach bez kopii, alarm po $(( (MONDAYS * 3 + 1) / 2 ))",
    "pl": "Ostrzeżenie: po $MONDAYS dniach bez kopii, alarm po $(( (MONDAYS * 3 + 1) / 2 ))",
    "en": "Warning: after $MONDAYS days without a copy, critical after $(( (MONDAYS * 3 + 1) / 2 ))",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:709 rp_row"
@@ -14287,9 +14287,9 @@
   {
    "k": "u1250",
    "pl_code": "Ostrzeżenie: brak (replika po włożeniu bez progu)",
-   "pl": "Ostrzeżenie: brak (replika po włożeniu bez progu)",
+   "pl": "Ostrzeżenie: brak (replika po podłączeniu bez progu)",
    "en": "Warning: none (replica on connect without a threshold)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:710 rp_row"
@@ -14300,7 +14300,7 @@
    "pl_code": "Ostrzeżenie: z harmonogramu (dobowo 2/4 dni, tygodniowo 9/14, miesięcznie 35/45)",
    "pl": "Ostrzeżenie: z harmonogramu (dobowo 2/4 dni, tygodniowo 9/14, miesięcznie 35/45)",
    "en": "Warning: from the schedule (daily 2/4 days, weekly 9/14, monthly 35/45)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:711 rp_row"
@@ -14309,9 +14309,9 @@
   {
    "k": "u1252",
    "pl_code": "Po włożeniu: kopia po odczekaniu (replica.insert_wait, domyślnie 60 s) -- krok: reguła udev ZOSTANIE $([ ",
-   "pl": "Po włożeniu: kopia po odczekaniu (replica.insert_wait, domyślnie 60 s) -- krok: reguła udev ZOSTANIE $([ ",
-   "en": "On connect: copy after a wait (replica.insert_wait, default 60 s) -- step: udev rule WILL BE $([ ",
-   "origin": "auto",
+   "pl": "Po podłączeniu: kopia z opóźnieniem (replica.insert_wait, domyślnie 60 s) -- krok: reguła udev ZOSTANIE $([ ",
+   "en": "On connect: copy after delay (replica.insert_wait, default 60 s) -- step: udev rule WILL BE $([ ",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "replica.sh:715 rp_row"
@@ -14322,7 +14322,7 @@
    "pl_code": " = old ] && echo ODNOWIONA || echo ZAŁOŻONA)",
    "pl": " = old ] && echo ODNOWIONA || echo ZAŁOŻONA)",
    "en": " = old ] && echo RENEWED || echo CREATED)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:715 rp_row"
@@ -14333,7 +14333,7 @@
    "pl_code": "             (install-media-trigger --install; jedna na host)",
    "pl": "             (install-media-trigger --install; jedna na host)",
    "en": "             (install-media-trigger --install; one per host)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:716 rp_row"
@@ -14342,9 +14342,9 @@
   {
    "k": "u1255",
    "pl_code": "Po włożeniu: kopia po odczekaniu (replica.insert_wait, domyślnie 60 s); reguła udev jest na hoście",
-   "pl": "Po włożeniu: kopia po odczekaniu (replica.insert_wait, domyślnie 60 s); reguła udev jest na hoście",
-   "en": "On connect: copy after a wait (replica.insert_wait, default 60 s); the udev rule is on the host",
-   "origin": "auto",
+   "pl": "Po podłączeniu: kopia z opóźnionym startem (replica.insert_wait, domyślnie 60 s); reguła udev jest na hoście",
+   "en": "On connect: copy after delay (replica.insert_wait, default 60 s); the udev rule is on the host",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "replica.sh:718 rp_row"
@@ -14353,9 +14353,9 @@
   {
    "k": "u1256",
    "pl_code": "Po włożeniu: nic -- kopia tylko wg harmonogramu",
-   "pl": "Po włożeniu: nic -- kopia tylko wg harmonogramu",
+   "pl": "Po podłączeniu: nic -- kopia tylko wg harmonogramu",
    "en": "On connect: nothing -- copy by the schedule only",
-   "origin": "auto",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "replica.sh:721 rp_row"
@@ -14364,9 +14364,9 @@
   {
    "k": "u1257",
    "pl_code": "Reguła udev \\\"po włożeniu\\\" ZOSTANIE ZDJĘTA -- żadna replika z niej nie korzysta",
-   "pl": "Reguła udev \\\"po włożeniu\\\" ZOSTANIE ZDJĘTA -- żadna replika z niej nie korzysta",
+   "pl": "Reguła udev \\\"po podłączeniu\\\" ZOSTANIE ZDJĘTA -- żadna replika z niej nie korzysta",
    "en": "The udev \\\"on connect\\\" rule WILL BE REMOVED -- no replica uses it",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:725 rp_row"
@@ -14377,7 +14377,7 @@
    "pl_code": "             (remove-media-trigger --install; jedna na host)",
    "pl": "             (remove-media-trigger --install; jedna na host)",
    "en": "             (remove-media-trigger --install; one per host)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:726 rp_row"
@@ -14388,7 +14388,7 @@
    "pl_code": "Zadanie w cronie:",
    "pl": "Zadanie w cronie:",
    "en": "Cron job:",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:730 rp_row"
@@ -14399,7 +14399,7 @@
    "pl_code": "/co sie zmieni w crontabie/,$p",
    "pl": "/co sie zmieni w crontabie/,$p",
    "en": "/co sie zmieni w crontabie/,$p",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:731 rp_row"
@@ -14408,9 +14408,9 @@
   {
    "k": "u1261",
    "pl_code": "{w=($1==\"#on-insert\")?\"po włożeniu\":$1\" \"$2\" \"$3\" \"$4\" \"$5; m=match($0,/zfs-job\\.sh \"[^\"]*\"/); l=m?substr($0,RSTART+12,RLENGTH-13):(/zfs-media-gate\\.sh age|check-snap-age\\.sh/?\"monitor: wiek kopii na nośniku\":\"?\"); print \"  + \" w \"   \" l}",
-   "pl": "{w=($1==\"#on-insert\")?\"po włożeniu\":$1\" \"$2\" \"$3\" \"$4\" \"$5; m=match($0,/zfs-job\\.sh \"[^\"]*\"/); l=m?substr($0,RSTART+12,RLENGTH-13):(/zfs-media-gate\\.sh age|check-snap-age\\.sh/?\"monitor: wiek kopii na nośniku\":\"?\"); print \"  + \" w \"   \" l}",
+   "pl": "{w=($1==\"#on-insert\")?\"po podłączeniu\":$1\" \"$2\" \"$3\" \"$4\" \"$5; m=match($0,/zfs-job\\.sh \"[^\"]*\"/); l=m?substr($0,RSTART+12,RLENGTH-13):(/zfs-media-gate\\.sh age|check-snap-age\\.sh/?\"monitor: wiek kopii na nośniku\":\"?\"); print \"  + \" w \"   \" l}",
    "en": "{w=($1==\"#on-insert\")?\"on connect\":$1\" \"$2\" \"$3\" \"$4\" \"$5; m=match($0,/zfs-job\\.sh \"[^\"]*\"/); l=m?substr($0,RSTART+12,RLENGTH-13):(/zfs-media-gate\\.sh age|check-snap-age\\.sh/?\"monitor: age of copies on the medium\":\"?\"); print \"  + \" w \"   \" l}",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:732 rp_row"
@@ -14421,7 +14421,7 @@
    "pl_code": "Źródło usunięte z listy zostawia swoją kopię na nośniku (wyczyścić dysk: Dodaj dysk = formatowanie).",
    "pl": "Źródło usunięte z listy zostawia swoją kopię na nośniku (wyczyścić dysk: Dodaj dysk = formatowanie).",
    "en": "A source removed from the list leaves its copy on the medium (to wipe the disk: Add disk = formatting).",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:735 rp_row"
@@ -14432,7 +14432,7 @@
    "pl_code": "Replika $NAME -- plan",
    "pl": "Replika $NAME -- plan",
    "en": "Replica $NAME -- plan",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:741 rp_row"
@@ -14443,7 +14443,7 @@
    "pl_code": "Replika $NAME: instaluję",
    "pl": "Replika $NAME: instaluję",
    "en": "Replica $NAME: installing",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:749 rp_row"
@@ -14452,9 +14452,9 @@
   {
    "k": "u1265",
    "pl_code": "ruszy po włożeniu dysku",
-   "pl": "ruszy po włożeniu dysku",
-   "en": "will start when the disk is connected",
-   "origin": "auto",
+   "pl": "ruszy opóźniona po podłączeniu dysku",
+   "en": "will start delayed when the disk is connected",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "replica.sh:761 rp_row"
@@ -14463,9 +14463,9 @@
   {
    "k": "u1266",
    "pl_code": "ruszy po włożeniu dysku albo o czasie z harmonogramu",
-   "pl": "ruszy po włożeniu dysku albo o czasie z harmonogramu",
-   "en": "will start when the disk is connected or at the scheduled time",
-   "origin": "auto",
+   "pl": "ruszy opóźnione po podłączeniu dysku albo o czasie z harmonogramu",
+   "en": "will start delayed when the disk is connected or at the scheduled time",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "replica.sh:762 rp_row"
@@ -14476,7 +14476,7 @@
    "pl_code": "ruszy o czasie z harmonogramu",
    "pl": "ruszy o czasie z harmonogramu",
    "en": "will start at the scheduled time",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:763 rp_row"
@@ -14487,7 +14487,7 @@
    "pl_code": "GOTOWE: replika '$NAME' zmieniona (rc=$RC).",
    "pl": "GOTOWE: replika '$NAME' zmieniona (rc=$RC).",
    "en": "DONE: replica '$NAME' changed (rc=$RC).",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:764 rp_row"
@@ -14498,7 +14498,7 @@
    "pl_code": "    Następna kopia $_first.",
    "pl": "    Następna kopia $_first.",
    "en": "    Next copy $_first.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:764 rp_row"
@@ -14509,7 +14509,7 @@
    "pl_code": "GOTOWE: replika '$NAME' zainstalowana (rc=$RC).",
    "pl": "GOTOWE: replika '$NAME' zainstalowana (rc=$RC).",
    "en": "DONE: replica '$NAME' installed (rc=$RC).",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:765 rp_row"
@@ -14520,7 +14520,7 @@
    "pl_code": "    Pierwsza kopia $_first.",
    "pl": "    Pierwsza kopia $_first.",
    "en": "    First copy $_first.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:765 rp_row"
@@ -14530,8 +14530,8 @@
    "k": "u1272",
    "pl_code": "    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '$NAME' i naciśnij F7 (Uruchom teraz).",
    "pl": "    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '$NAME' i naciśnij F7 (Uruchom teraz).",
-   "en": "    To make it right away: Replica screen (key F6), select '$NAME' and press F7 (Run now).",
-   "origin": "auto",
+   "en": "    To create it right away: go to the Replica screen (F6 key), select ‘$NAME’, and press F7 (Run Now).",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "replica.sh:766 rp_row"
@@ -14542,7 +14542,7 @@
    "pl_code": "Replika $NAME: GOTOWE",
    "pl": "Replika $NAME: GOTOWE",
    "en": "Replica $NAME: DONE",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:768 rp_row"
@@ -14553,7 +14553,7 @@
    "pl_code": "Nie udało się -- nic nie zainstalowano.",
    "pl": "Nie udało się -- nic nie zainstalowano.",
    "en": "Failed -- nothing was installed.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "replica.sh:770 rp_row"
@@ -14564,7 +14564,7 @@
    "pl_code": "restore: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny",
    "pl": "restore: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny",
    "en": "restore: $HERE/tui/wt-lib.sh is missing -- the checkout is incomplete",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:27 (skrypt)"
@@ -14575,7 +14575,7 @@
    "pl_code": "użycie: restore.sh RELACJA | restore.sh --from-copy [DATASET]",
    "pl": "użycie: restore.sh RELACJA | restore.sh --from-copy [DATASET]",
    "en": "usage: restore.sh RELATION | restore.sh --from-copy [DATASET]",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:29 (skrypt)"
@@ -14586,7 +14586,7 @@
    "pl_code": "Przywracanie z relacji $REL -- $(hostname)",
    "pl": "Przywracanie z relacji $REL -- $(hostname)",
    "en": "Restoring from relation $REL -- $(hostname)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:31 (skrypt)"
@@ -14597,7 +14597,7 @@
    "pl_code": "Odzysk: przerwane, nic nie zmieniono",
    "pl": "Odzysk: przerwane, nic nie zmieniono",
    "en": "Restore: aborted, nothing changed",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:35 abort"
@@ -14608,7 +14608,7 @@
    "pl_code": "$(date +%Z 2>/dev/null)",
    "pl": "$(date +%Z 2>/dev/null)",
    "en": "$(date +%Z 2>/dev/null)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:40 join_by_comma"
@@ -14619,7 +14619,7 @@
    "pl_code": "=== GOTOWE (rc=0). Enter = powrót do GUI",
    "pl": "=== GOTOWE (rc=0). Enter = powrót do GUI",
    "en": "=== DONE (rc=0). Enter = back to the GUI",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:51 run_cmd"
@@ -14630,7 +14630,7 @@
    "pl_code": "=== NIE WYSZŁO (rc=$RC) -- komunikat polecenia powyżej. Enter = powrót do GUI",
    "pl": "=== NIE WYSZŁO (rc=$RC) -- komunikat polecenia powyżej. Enter = powrót do GUI",
    "en": "=== FAILED (rc=$RC) -- see the command's message above. Enter = back to the GUI",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:52 run_cmd"
@@ -14641,7 +14641,7 @@
    "pl_code": "Przywracanie z dysku -- $(hostname)",
    "pl": "Przywracanie z dysku -- $(hostname)",
    "en": "Restoring from disk -- $(hostname)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:86 build_points"
@@ -14652,7 +14652,7 @@
    "pl_code": "Przywróć z dysku",
    "pl": "Przywróć z dysku",
    "en": "Restore from disk",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:112 pool_ok"
@@ -14663,7 +14663,7 @@
    "pl_code": "Na tym hoście nie widać żadnego datasetu. Podłącz dysk i zaimportuj pulę (zpool import <pula>), potem spróbuj jeszcze raz.",
    "pl": "Na tym hoście nie widać żadnego datasetu. Podłącz dysk i zaimportuj pulę (zpool import <pula>), potem spróbuj jeszcze raz.",
    "en": "No dataset is visible on this host. Connect the disk and import the pool (zpool import <pool>), then try again.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:113 pool_ok"
@@ -14674,7 +14674,7 @@
    "pl_code": "Przywróć z dysku: skąd?",
    "pl": "Przywróć z dysku: skąd?",
    "en": "Restore from disk: from where?",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:116 pool_ok"
@@ -14685,7 +14685,7 @@
    "pl_code": "Nic nie zaznaczono.",
    "pl": "Nic nie zaznaczono.",
    "en": "Nothing selected.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:156 pool_ok"
@@ -14696,7 +14696,7 @@
    "pl_code": "Pod jaką nazwą odtworzyć na tym hoście:\\n  ",
    "pl": "Pod jaką nazwą odtworzyć na tym hoście:\\n  ",
    "en": "Under what name to restore on this host:\\n  ",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:164 pool_ok"
@@ -14707,7 +14707,7 @@
    "pl_code": "\\n(datasety pod nim przyjdą razem z nim)",
    "pl": "\\n(datasety pod nim przyjdą razem z nim)",
    "en": "\\n(datasets below it come with it)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:164 pool_ok"
@@ -14718,7 +14718,7 @@
    "pl_code": "Przywróć z dysku: dokąd? ($((i + 1))/${#FROM[@]})",
    "pl": "Przywróć z dysku: dokąd? ($((i + 1))/${#FROM[@]})",
    "en": "Restore from disk: to where? ($((i + 1))/${#FROM[@]})",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:166 pool_ok"
@@ -14729,7 +14729,7 @@
    "pl_code": "Przywróć z dysku: zła nazwa",
    "pl": "Przywróć z dysku: zła nazwa",
    "en": "Restore from disk: bad name",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:174 pool_ok"
@@ -14740,7 +14740,7 @@
    "pl_code": "'$WT_OUT' nie zaczyna się od puli tego hosta.",
    "pl": "'$WT_OUT' nie zaczyna się od puli tego hosta.",
    "en": "'$WT_OUT' does not start with a pool of this host.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:175 pool_ok"
@@ -14751,7 +14751,7 @@
    "pl_code": "Dwa źródła mają ten sam cel ($DUP) -- podaj różne nazwy.",
    "pl": "Dwa źródła mają ten sam cel ($DUP) -- podaj różne nazwy.",
    "en": "Two sources have the same destination ($DUP) -- give different names.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:197 pool_ok"
@@ -14762,7 +14762,7 @@
    "pl_code": "Te cele JUŻ ISTNIEJĄ na tym hoście:",
    "pl": "Te cele JUŻ ISTNIEJĄ na tym hoście:",
    "en": "These destinations ALREADY EXIST on this host:",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:204 pool_ok"
@@ -14773,7 +14773,7 @@
    "pl_code": "\\n\\nNadpisać je (--overwrite)? To, co tam jest, zostanie zastąpione kopią z dysku.",
    "pl": "\\n\\nNadpisać je (--overwrite)? To, co tam jest, zostanie zastąpione kopią z dysku.",
    "en": "\\n\\nOverwrite them (--overwrite)? What is there will be replaced by the copy from the disk.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:206 pool_ok"
@@ -14784,7 +14784,7 @@
    "pl_code": "Przywróć z dysku: cel istnieje",
    "pl": "Przywróć z dysku: cel istnieje",
    "en": "Restore from disk: destination exists",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:208 pool_ok"
@@ -14795,7 +14795,7 @@
    "pl_code": "${FROM[0]} nie ma żadnej migawki -- nie ma z czego odtworzyć.",
    "pl": "${FROM[0]} nie ma żadnej migawki -- nie ma z czego odtworzyć.",
    "en": "${FROM[0]} has no snapshot -- nothing to restore from.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:220 pool_ok"
@@ -14806,7 +14806,7 @@
    "pl_code": "Przywróć z dysku: z kiedy?",
    "pl": "Przywróć z dysku: z kiedy?",
    "en": "Restore from disk: from when?",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:223 pool_ok"
@@ -14828,7 +14828,7 @@
    "pl_code": "Przywróć z dysku: historia",
    "pl": "Przywróć z dysku: historia",
    "en": "Restore from disk: history",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:229 pool_ok"
@@ -14838,8 +14838,8 @@
    "k": "u1300",
    "pl_code": "Przenieść też wszystkie starsze migawki (z historią)?\\nNie = tylko wybrany punkt.",
    "pl": "Przenieść też wszystkie starsze migawki (z historią)?\\nNie = tylko wybrany punkt.",
-   "en": "Carry over all older snapshots too (with history)?\\nNo = only the selected point.",
-   "origin": "auto",
+   "en": "move all older snapshots too (with history)?\\nNo = only the selected point.",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "restore.sh:230 pool_ok"
@@ -14850,7 +14850,7 @@
    "pl_code": "Skąd:   dysk / inny dataset na tym hoście",
    "pl": "Skąd:   dysk / inny dataset na tym hoście",
    "en": "From:   disk / another dataset on this host",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:246 pool_ok"
@@ -14861,7 +14861,7 @@
    "pl_code": "Co -> dokąd:",
    "pl": "Co -> dokąd:",
    "en": "What -> where:",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:247 pool_ok"
@@ -14872,7 +14872,7 @@
    "pl_code": "  ${FROM[$i]} -> ${ONTO[$i]}",
    "pl": "  ${FROM[$i]} -> ${ONTO[$i]}",
    "en": "  ${FROM[$i]} -> ${ONTO[$i]}",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:249 pool_ok"
@@ -14883,7 +14883,7 @@
    "pl_code": "Punkt:  bieg z $PT ($TZN) -- każdy dataset: jego ostatnia migawka do $AT",
    "pl": "Punkt:  bieg z $PT ($TZN) -- każdy dataset: jego ostatnia migawka do $AT",
    "en": "Point:  run from $PT ($TZN) -- each dataset: its last snapshot up to $AT",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:252 pool_ok"
@@ -14894,7 +14894,7 @@
    "pl_code": "Historia: tak",
    "pl": "Historia: tak",
    "en": "History: yes",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:253 pool_ok"
@@ -14905,7 +14905,7 @@
    "pl_code": "Historia: nie",
    "pl": "Historia: nie",
    "en": "History: no",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:253 pool_ok"
@@ -14916,7 +14916,7 @@
    "pl_code": "Po <Uruchom> polecenie pokaże podgląd i samo zapyta; zaszyfrowana kopia -- zapyta o klucz albo plik klucza.",
    "pl": "Po <Uruchom> polecenie pokaże podgląd i samo zapyta; zaszyfrowana kopia -- zapyta o klucz albo plik klucza.",
    "en": "After <Run> the command shows a preview and asks by itself; an encrypted copy -- asks for the key or key file.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:258 pool_ok"
@@ -14927,7 +14927,7 @@
    "pl_code": "Przywróć z dysku: sprawdź",
    "pl": "Przywróć z dysku: sprawdź",
    "en": "Restore from disk: check",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:260 pool_ok"
@@ -14938,7 +14938,7 @@
    "pl_code": "Przywróć $REL",
    "pl": "Przywróć $REL",
    "en": "Restore $REL",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:268 pool_ok"
@@ -14949,7 +14949,7 @@
    "pl_code": "Czytam kopie i punkty odzysku...",
    "pl": "Czytam kopie i punkty odzysku...",
    "en": "Reading copies and restore points...",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:268 pool_ok"
@@ -14960,7 +14960,7 @@
    "pl_code": "Nie ma kopii relacji $REL",
    "pl": "Nie ma kopii relacji $REL",
    "en": "No copies of relation $REL",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:288 pool_ok"
@@ -14971,7 +14971,7 @@
    "pl_code": "Na tym hoście nie ma kopii relacji $REL -- przywracać można tylko na kolektorze, który ją trzyma.",
    "pl": "Na tym hoście nie ma kopii relacji $REL -- przywracać można tylko na kolektorze, który ją trzyma.",
    "en": "This host has no copies of relation $REL -- you can restore only on the collector that holds it.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:289 pool_ok"
@@ -14982,7 +14982,7 @@
    "pl_code": "Pytam $TARGET o zgodę na odzysk...",
    "pl": "Pytam $TARGET o zgodę na odzysk...",
    "en": "Asking $TARGET for restore consent...",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:312 pool_ok"
@@ -14992,8 +14992,8 @@
    "k": "u1314",
    "pl_code": "$TARGET nie wydał temu kolektorowi zgody na odzysk.",
    "pl": "$TARGET nie wydał temu kolektorowi zgody na odzysk.",
-   "en": "$TARGET has not given this collector consent to restore.",
-   "origin": "auto",
+   "en": "$TARGET did not grant that debt collector permission to collect the debt.",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "restore.sh:321 pool_ok"
@@ -15003,8 +15003,8 @@
    "k": "u1315",
    "pl_code": "$TARGET nie odpowiedział na pytanie o zgodę (brak połączenia albo pakietu).",
    "pl": "$TARGET nie odpowiedział na pytanie o zgodę (brak połączenia albo pakietu).",
-   "en": "$TARGET did not answer the consent question (no connection or no package).",
-   "origin": "auto",
+   "en": "$TARGET did not respond to the permission request (no connection or packet).",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "restore.sh:323 pool_ok"
@@ -15015,7 +15015,7 @@
    "pl_code": "$why Odzysk na $TARGET -- na miejsce i obok -- zostanie odrzucony.",
    "pl": "$why Odzysk na $TARGET -- na miejsce i obok -- zostanie odrzucony.",
    "en": "$why Restore on $TARGET -- in place and alongside -- will be rejected.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:325 pool_ok"
@@ -15025,8 +15025,8 @@
    "k": "u1317",
    "pl_code": "Przywróć $REL: brak zgody na $TARGET",
    "pl": "Przywróć $REL: brak zgody na $TARGET",
-   "en": "Restore $REL: no consent on $TARGET",
-   "origin": "auto",
+   "en": "Restore $REL: Permission denied for $TARGET",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "restore.sh:333 pool_ok"
@@ -15036,8 +15036,8 @@
    "k": "u1318",
    "pl_code": "Odtwórz kopię na tym hoście (bez zgody źródła)",
    "pl": "Odtwórz kopię na tym hoście (bez zgody źródła)",
-   "en": "Restore the copy on this host (without the source's consent)",
-   "origin": "auto",
+   "en": "Restore a copy on this host (without source permission)",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "restore.sh:335 pool_ok"
@@ -15059,7 +15059,7 @@
    "pl_code": "Przywróć $REL: co?",
    "pl": "Przywróć $REL: co?",
    "en": "Restore $REL: what?",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:353 pool_ok"
@@ -15070,7 +15070,7 @@
    "pl_code": "Nie mogę odczytać datasetów kopii relacji $REL (zfs list nic nie zwrócił).",
    "pl": "Nie mogę odczytać datasetów kopii relacji $REL (zfs list nic nie zwrócił).",
    "en": "Cannot read the datasets of the copy of relation $REL (zfs list returned nothing).",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:382 pool_ok"
@@ -15081,7 +15081,7 @@
    "pl_code": "Przywróć $REL: dokąd?",
    "pl": "Przywróć $REL: dokąd?",
    "en": "Restore $REL: to where?",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:434 pool_ok"
@@ -15092,7 +15092,7 @@
    "pl_code": "Gdzie odtworzyć wybrane datasety?",
    "pl": "Gdzie odtworzyć wybrane datasety?",
    "en": "Where to restore the selected datasets?",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:435 pool_ok"
@@ -15103,7 +15103,7 @@
    "pl_code": "Obok oryginału na $TARGET -- nic nie nadpisuje",
    "pl": "Obok oryginału na $TARGET -- nic nie nadpisuje",
    "en": "Alongside the original on $TARGET -- overwrites nothing",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:436 pool_ok"
@@ -15114,7 +15114,7 @@
    "pl_code": "Na miejsce na $TARGET -- NADPISUJE obecne dane",
    "pl": "Na miejsce na $TARGET -- NADPISUJE obecne dane",
    "en": "In place on $TARGET -- OVERWRITES current data",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:437 pool_ok"
@@ -15124,8 +15124,8 @@
    "k": "u1326",
    "pl_code": "Katalog na $TARGET, pod którym lądują odtworzone datasety (każdy pod swoją nazwą). Musi leżeć w <pula>/restore -- tylko tam zgoda na odzysk pozwala kolektorowi tworzyć.",
    "pl": "Katalog na $TARGET, pod którym lądują odtworzone datasety (każdy pod swoją nazwą). Musi leżeć w <pula>/restore -- tylko tam zgoda na odzysk pozwala kolektorowi tworzyć.",
-   "en": "Directory on $TARGET under which the restored datasets land (each under its own name). Must be in <pool>/restore -- only there does the restore consent let the collector create.",
-   "origin": "auto",
+   "en": "The directory at $TARGET where the restored datasets are stored (each under its own name). It must be located in <pula>/restore—only there does the restore permission allow the collector to create it.",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "restore.sh:442 pool_ok"
@@ -15136,7 +15136,7 @@
    "pl_code": "Przywróć $REL: obok -- gdzie?",
    "pl": "Przywróć $REL: obok -- gdzie?",
    "en": "Restore $REL: alongside -- where?",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:445 pool_ok"
@@ -15147,7 +15147,7 @@
    "pl_code": "$(fit $((${#txt} / (W - 8) + 3)))",
    "pl": "$(fit $((${#txt} / (W - 8) + 3)))",
    "en": "$(fit $((${#txt} / (W - 8) + 3)))",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:446 pool_ok"
@@ -15158,7 +15158,7 @@
    "pl_code": "Przywróć $REL: zła nazwa",
    "pl": "Przywróć $REL: zła nazwa",
    "en": "Restore $REL: bad name",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:453 pool_ok"
@@ -15169,7 +15169,7 @@
    "pl_code": "'$WT_OUT' nie ma postaci <pula>/<katalog>, np. ${ORIG[0]%%/*}/restore.",
    "pl": "'$WT_OUT' nie ma postaci <pula>/<katalog>, np. ${ORIG[0]%%/*}/restore.",
    "en": "'$WT_OUT' is not of the form <pool>/<directory>, e.g. ${ORIG[0]%%/*}/restore.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:453 pool_ok"
@@ -15180,7 +15180,7 @@
    "pl_code": "Dwa wybrane datasety mają tę samą nazwę ($DUP) -- obok nie zmieszczą się pod jednym katalogiem. Wybierz je osobno.",
    "pl": "Dwa wybrane datasety mają tę samą nazwę ($DUP) -- obok nie zmieszczą się pod jednym katalogiem. Wybierz je osobno.",
    "en": "Two selected datasets have the same name ($DUP) -- alongside they will not fit under one directory. Select them separately.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:484 pool_ok"
@@ -15191,7 +15191,7 @@
    "pl_code": "Kopia nie ma żadnego punktu odzysku.",
    "pl": "Kopia nie ma żadnego punktu odzysku.",
    "en": "The copy has no restore point.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:507 pool_ok"
@@ -15202,7 +15202,7 @@
    "pl_code": "Przywróć $REL: z kiedy?",
    "pl": "Przywróć $REL: z kiedy?",
    "en": "Restore $REL: from when?",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:511 pool_ok"
@@ -15211,9 +15211,9 @@
   {
    "k": "u1334",
    "pl_code": "Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety pod spodem dostają swój najbliższy punkt z tej chwili lub wcześniejszy.",
-   "pl": "Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety pod spodem dostają swój najbliższy punkt z tej chwili lub wcześniejszy.",
-   "en": "Restore point (creation time of the copy, this host's time zone: $TZN). Datasets below get their nearest point at or before that moment.",
-   "origin": "auto",
+   "pl": "Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety potomne dostają swój najbliższy punkt z tej chwili lub wcześniejszy.",
+   "en": "Restore point (time the copy was created, this host's zone: $TZN). Child datasets receive their nearest restore point from this moment or an earlier one.",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "restore.sh:512 pool_ok"
@@ -15224,7 +15224,7 @@
    "pl_code": "Skąd:   relacja $REL (kopie na tym kolektorze)",
    "pl": "Skąd:   relacja $REL (kopie na tym kolektorze)",
    "en": "From:   relation $REL (copies on this collector)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:529 pool_ok"
@@ -15235,7 +15235,7 @@
    "pl_code": "Co:     cała relacja",
    "pl": "Co:     cała relacja",
    "en": "What:   the whole relation",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:530 pool_ok"
@@ -15246,7 +15246,7 @@
    "pl_code": "Co:     ${#SEL[@]} dataset(ów)",
    "pl": "Co:     ${#SEL[@]} dataset(ów)",
    "en": "What:   ${#SEL[@]} dataset(s)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:530 pool_ok"
@@ -15257,7 +15257,7 @@
    "pl_code": "Dokąd:  obok, na $TARGET:",
    "pl": "Dokąd:  obok, na $TARGET:",
    "en": "To:     alongside, on $TARGET:",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:533 pool_ok"
@@ -15268,7 +15268,7 @@
    "pl_code": "Dokąd:  NA MIEJSCE na $TARGET -- NADPISUJE",
    "pl": "Dokąd:  NA MIEJSCE na $TARGET -- NADPISUJE",
    "en": "To:     IN PLACE on $TARGET -- OVERWRITES",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:536 pool_ok"
@@ -15279,7 +15279,7 @@
    "pl_code": "Relacja lokalna: kopia i cel są na tym hoście, zgoda nie jest potrzebna.",
    "pl": "Relacja lokalna: kopia i cel są na tym hoście, zgoda nie jest potrzebna.",
    "en": "Local relation: the copy and the target are on this host, no consent needed.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:545 pool_ok"
@@ -15290,7 +15290,7 @@
    "pl_code": "Zgoda $TARGET: $GRANT  (create = obok, rewind = na miejsce ze wspólnym punktem, replace = nadpisanie bez niego)",
    "pl": "Zgoda $TARGET: $GRANT  (create = obok, rewind = na miejsce ze wspólnym punktem, replace = nadpisanie bez niego)",
    "en": "Consent $TARGET: $GRANT  (create = alongside, rewind = in place with a common point, replace = overwrite without one)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:547 pool_ok"
@@ -15301,7 +15301,7 @@
    "pl_code": "Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL",
    "pl": "Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL",
    "en": "Needs consent on $TARGET: deploy.sh --allow-restore=$GRANT_LABEL",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:549 pool_ok"
@@ -15312,7 +15312,7 @@
    "pl_code": "Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL (z --replace, gdy nie ma wspólnego punktu).",
    "pl": "Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL (z --replace, gdy nie ma wspólnego punktu).",
    "en": "Needs consent on $TARGET: deploy.sh --allow-restore=$GRANT_LABEL (with --replace when there is no common point).",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:551 pool_ok"
@@ -15323,7 +15323,7 @@
    "pl_code": "($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)",
    "pl": "($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)",
    "en": "($GRANT_LABEL = this collector's name on $TARGET; list: ls /var/lib/zfs-snapshot-all/relations)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:553 pool_ok"
@@ -15334,7 +15334,7 @@
    "pl_code": "Po <Uruchom> polecenie pokaże plan i samo zapyta, zanim cokolwiek nadpisze.",
    "pl": "Po <Uruchom> polecenie pokaże plan i samo zapyta, zanim cokolwiek nadpisze.",
    "en": "After <Run> the command shows the plan and asks by itself before it overwrites anything.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:554 pool_ok"
@@ -15345,7 +15345,7 @@
    "pl_code": "Przywróć $REL: sprawdź",
    "pl": "Przywróć $REL: sprawdź",
    "en": "Restore $REL: check",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "restore.sh:556 pool_ok"
@@ -15356,7 +15356,7 @@
    "pl_code": "${SRC_TITLE:-Jak długo trzymać u źródła ($HOST)?}",
    "pl": "${SRC_TITLE:-Jak długo trzymać u źródła ($HOST)?}",
    "en": "${SRC_TITLE:-How long to keep at the source ($HOST)?}",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "retention-lib.sh:45 source_retention_editor"
@@ -15367,7 +15367,7 @@
    "pl_code": "${SRC_TITLE:-Retencja źródła}",
    "pl": "${SRC_TITLE:-Retencja źródła}",
    "en": "${SRC_TITLE:-Source retention}",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "retention-lib.sh:127 source_retention_editor"
@@ -15378,7 +15378,7 @@
    "pl_code": "Zapisuję szablon źródła $name...",
    "pl": "Zapisuję szablon źródła $name...",
    "en": "Saving source template $name...",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "retention-lib.sh:127 source_retention_editor"
@@ -15389,7 +15389,7 @@
    "pl_code": "Retencja ŹRÓDŁA na bazie $PROFILE (pochodny, z kreatora)",
    "pl": "Retencja ŹRÓDŁA na bazie $PROFILE (pochodny, z kreatora)",
    "en": "SOURCE retention based on $PROFILE (derived, from the wizard)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "retention-lib.sh:128 source_retention_editor"
@@ -15400,7 +15400,7 @@
    "pl_code": "Szablon źródła odrzucony",
    "pl": "Szablon źródła odrzucony",
    "en": "Source template rejected",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "retention-lib.sh:129 source_retention_editor"
@@ -15411,7 +15411,7 @@
    "pl_code": "settings: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny",
    "pl": "settings: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny",
    "en": "settings: $HERE/tui/wt-lib.sh is missing -- the checkout is incomplete",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:15 (skrypt)"
@@ -15422,7 +15422,7 @@
    "pl_code": "Ustawienia hosta -- $(hostname)",
    "pl": "Ustawienia hosta -- $(hostname)",
    "en": "Host settings -- $(hostname)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:16 (skrypt)"
@@ -15433,7 +15433,7 @@
    "pl_code": "Czytam ustawienia hosta...",
    "pl": "Czytam ustawienia hosta...",
    "en": "Reading host settings...",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:21 (skrypt)"
@@ -15444,7 +15444,7 @@
    "pl_code": "Nie mogę odczytać ustawień: $(tail -2 ",
    "pl": "Nie mogę odczytać ustawień: $(tail -2 ",
    "en": "Cannot read the settings: $(tail -2 ",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:23 (skrypt)"
@@ -15455,7 +15455,7 @@
    "pl_code": "Czasownik nie zwrócił żadnego klucza.",
    "pl": "Czasownik nie zwrócił żadnego klucza.",
    "en": "The verb returned no key.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:31 (skrypt)"
@@ -15466,7 +15466,7 @@
    "pl_code": "Pojemność",
    "pl": "Pojemność",
    "en": "Capacity",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:33 SECT_PL"
@@ -15477,7 +15477,7 @@
    "pl_code": "Replika (dysk wymienny)",
    "pl": "Replika (dysk wymienny)",
    "en": "Replica (removable disk)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:33 SECT_PL"
@@ -15488,7 +15488,7 @@
    "pl_code": "  [własny]",
    "pl": "  [własny]",
    "en": "  [custom]",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:58 edit_key"
@@ -15499,7 +15499,7 @@
    "pl_code": "Nie mogę odczytać listy szablonów (list-profiles).",
    "pl": "Nie mogę odczytać listy szablonów (list-profiles).",
    "en": "Cannot read the template list (list-profiles).",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:61 edit_key"
@@ -15510,7 +15510,7 @@
    "pl_code": "Ustawienia -- plan",
    "pl": "Ustawienia -- plan",
    "en": "Settings -- plan",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:87 save"
@@ -15521,7 +15521,7 @@
    "pl_code": "Ustawienia: GOTOWE",
    "pl": "Ustawienia: GOTOWE",
    "en": "Settings: DONE",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:93 save"
@@ -15532,7 +15532,7 @@
    "pl_code": "Nie zapisano.",
    "pl": "Nie zapisano.",
    "en": "Not saved.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:95 save"
@@ -15543,7 +15543,7 @@
    "pl_code": "${NEW[$k]}  (było ${VAL[$k]})",
    "pl": "${NEW[$k]}  (było ${VAL[$k]})",
    "en": "${NEW[$k]}  (was ${VAL[$k]})",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:115 save"
@@ -15554,7 +15554,7 @@
    "pl_code": "Wyślij mail próbny (na obecny adres)",
    "pl": "Wyślij mail próbny (na obecny adres)",
    "en": "Send a test mail (to the current address)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:122 save"
@@ -15565,7 +15565,7 @@
    "pl_code": "Zapisz zmiany ($n) -- plan, WYKONAJ",
    "pl": "Zapisz zmiany ($n) -- plan, WYKONAJ",
    "en": "Save changes ($n) -- plan, EXECUTE",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:122 save"
@@ -15576,7 +15576,7 @@
    "pl_code": "Ustawienia hosta",
    "pl": "Ustawienia hosta",
    "en": "Host settings",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:123 save"
@@ -15598,7 +15598,7 @@
    "pl_code": "Ustawienia: wyjście, nic nie zapisano",
    "pl": "Ustawienia: wyjście, nic nie zapisano",
    "en": "Settings: exit, nothing saved",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:126 save"
@@ -15609,7 +15609,7 @@
    "pl_code": "Enter = powrót do ustawień",
    "pl": "Enter = powrót do ustawień",
    "en": "Enter = back to settings",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "settings.sh:132 save"
@@ -15620,7 +15620,7 @@
    "pl_code": "użycie: template.sh relation BAZA PLIK [TYTUŁ]",
    "pl": "użycie: template.sh relation BAZA PLIK [TYTUŁ]",
    "en": "usage: template.sh relation BASE FILE [TITLE]",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:20 (skrypt)"
@@ -15631,7 +15631,7 @@
    "pl_code": "użycie: template.sh <new|edit|delete> NAZWA",
    "pl": "użycie: template.sh <new|edit|delete> NAZWA",
    "en": "usage: template.sh <new|edit|delete> NAME",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:21 (skrypt)"
@@ -15642,7 +15642,7 @@
    "pl_code": "template: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny",
    "pl": "template: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny",
    "en": "template: $HERE/tui/wt-lib.sh is missing -- the checkout is incomplete",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:26 (skrypt)"
@@ -15653,7 +15653,7 @@
    "pl_code": "Szablony -- kolektor $(hostname)",
    "pl": "Szablony -- kolektor $(hostname)",
    "en": "Templates -- collector $(hostname)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:27 (skrypt)"
@@ -15664,7 +15664,7 @@
    "pl_code": "Czytam szablony...",
    "pl": "Czytam szablony...",
    "en": "Reading templates...",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:32 (skrypt)"
@@ -15675,7 +15675,7 @@
    "pl_code": "Nie ma szablonu '$NAME'.",
    "pl": "Nie ma szablonu '$NAME'.",
    "en": "No template '$NAME'.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:67 (skrypt)"
@@ -15686,7 +15686,7 @@
    "pl_code": "Plik szablonu '$NAME' w /etc/zfs-snapshot-all/profiles ma nazwę fabrycznego i pakiet go pomija. Zmień nazwę pliku.",
    "pl": "Plik szablonu '$NAME' w /etc/zfs-snapshot-all/profiles ma nazwę fabrycznego i pakiet go pomija. Zmień nazwę pliku.",
    "en": "Template file '$NAME' in /etc/zfs-snapshot-all/profiles has a factory template's name and the package skips it. Rename the file.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:72 (skrypt)"
@@ -15697,7 +15697,7 @@
    "pl_code": "=== GOTOWE: $okmsg (rc=$RC). Enter = dalej",
    "pl": "=== GOTOWE: $okmsg (rc=$RC). Enter = dalej",
    "en": "=== DONE: $okmsg (rc=$RC). Enter = next",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:86 run_cmd"
@@ -15708,7 +15708,7 @@
    "pl_code": "=== NIE UDAŁO SIĘ (rc=$RC) -- powód powyżej. Enter = dalej",
    "pl": "=== NIE UDAŁO SIĘ (rc=$RC) -- powód powyżej. Enter = dalej",
    "en": "=== FAILED (rc=$RC) -- reason above. Enter = next",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:87 run_cmd"
@@ -15719,7 +15719,7 @@
    "pl_code": "Fabrycznego szablonu nie usuniesz.",
    "pl": "Fabrycznego szablonu nie usuniesz.",
    "en": "You cannot delete a factory template.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:95 run_cmd"
@@ -15741,7 +15741,7 @@
    "pl_code": "Usunięcie szablonu $NAME",
    "pl": "Usunięcie szablonu $NAME",
    "en": "Deleting template $NAME",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:111 run_cmd"
@@ -15752,7 +15752,7 @@
    "pl_code": "szablon '$NAME' usunięty",
    "pl": "szablon '$NAME' usunięty",
    "en": "template '$NAME' deleted",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:112 run_cmd"
@@ -15763,7 +15763,7 @@
    "pl_code": "${RTITLE:-Harmonogram i retencja kopii w celu i źródle}",
    "pl": "${RTITLE:-Harmonogram i retencja kopii w celu i źródle}",
    "en": "${RTITLE:-Schedule and retention of copies at the target and source}",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:117 run_cmd"
@@ -15774,7 +15774,7 @@
    "pl_code": "Fabrycznego szablonu '$NAME' nie zmienisz -- Ins na nim tworzy kopię, którą można zmienić.",
    "pl": "Fabrycznego szablonu '$NAME' nie zmienisz -- Ins na nim tworzy kopię, którą można zmienić.",
    "en": "You cannot change factory template '$NAME' -- Ins on it creates a copy that can be changed.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:121 run_cmd"
@@ -15785,7 +15785,7 @@
    "pl_code": "Nowy szablon na podstawie $NAME",
    "pl": "Nowy szablon na podstawie $NAME",
    "en": "New template based on $NAME",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:128 run_cmd"
@@ -15796,7 +15796,7 @@
    "pl_code": "Szablon: przerwane, nic nie zmieniono",
    "pl": "Szablon: przerwane, nic nie zmieniono",
    "en": "Template: aborted, nothing changed",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:245 run_cmd"
@@ -15807,7 +15807,7 @@
    "pl_code": "Nic nie zmieniono.",
    "pl": "Nic nie zmieniono.",
    "en": "Nothing changed.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:319 run_cmd"
@@ -15818,7 +15818,7 @@
    "pl_code": "PLAN -- nic jeszcze nie zostało zapisane:",
    "pl": "PLAN -- nic jeszcze nie zostało zapisane:",
    "en": "PLAN -- nothing has been saved yet:",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:328 run_cmd"
@@ -15829,7 +15829,7 @@
    "pl_code": "Nowy szablon: $NEW (na podstawie $NAME)",
    "pl": "Nowy szablon: $NEW (na podstawie $NAME)",
    "en": "New template: $NEW (based on $NAME)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:330 run_cmd"
@@ -15840,7 +15840,7 @@
    "pl_code": "Opis: ${DESC:-(brak)}",
    "pl": "Opis: ${DESC:-(brak)}",
    "en": "Description: ${DESC:-(none)}",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:332 run_cmd"
@@ -15851,7 +15851,7 @@
    "pl_code": "Zbudowano z niego relacji: $USED -- one zostają, jak są.",
    "pl": "Zbudowano z niego relacji: $USED -- one zostają, jak są.",
    "en": "Relations built from it: $USED -- they stay as they are.",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "template.sh:333 run_cmd"
@@ -15860,9 +15860,9 @@
   {
    "k": "u1393",
    "pl_code": "Zbudowane relacje się nie zmieniają; szablon jest dla nowych relacji (i dla 'Zmień relację -> Szablon').",
-   "pl": "Zbudowane relacje się nie zmieniają; szablon jest dla nowych relacji (i dla 'Zmień relację -> Szablon').",
-   "en": "Built relations do not change; the template is for new relations (and for 'Change relation -> Template').",
-   "origin": "auto",
+   "pl": "Zbudowane relacje na podstawie szablonu pozostają niezmienione; szablon jest dla nowych relacji (i dla 'Zmień relację -> Szablon').",
+   "en": "Relations created using a template remain unchanged; the template applies to new relations (and to “Edit Relation -> Template”).",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "template.sh:335 run_cmd"
@@ -15873,7 +15873,7 @@
    "pl_code": "okna: brak '$WT' (pakiet whiptail)",
    "pl": "okna: brak '$WT' (pakiet whiptail)",
    "en": "windows: '$WT' is missing (whiptail package)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "wt-lib.sh:19 (skrypt)"
@@ -15884,7 +15884,7 @@
    "pl_code": "okna: brak dzialajacego python3",
    "pl": "okna: brak dzialajacego python3",
    "en": "windows: no working python3",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "wt-lib.sh:20 (skrypt)"
@@ -15895,7 +15895,7 @@
    "pl_code": " | cut -c1-$((W - 6)))",
    "pl": " | cut -c1-$((W - 6)))",
    "en": " | cut -c1-$((W - 6)))",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "wt-lib.sh:76 run_progress"
@@ -15906,7 +15906,7 @@
    "pl_code": "${5:-Nie udało się.}",
    "pl": "${5:-Nie udało się.}",
    "en": "${5:-Failed.}",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "wt-lib.sh:85 result_box"
@@ -15917,7 +15917,7 @@
    "pl_code": " \"$okt\" | fold -s -w $((W - 4)) | grep -c ",
    "pl": " \"$okt\" | fold -s -w $((W - 4)) | grep -c ",
    "en": " \"$okt\" | fold -s -w $((W - 4)) | grep -c ",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "wt-lib.sh:89 result_box"
@@ -15928,7 +15928,7 @@
    "pl_code": "Powód:\\n",
    "pl": "Powód:\\n",
    "en": "Reason:\\n",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "wt-lib.sh:95 result_box"
@@ -15939,7 +15939,7 @@
    "pl_code": "$t  [strzałki przewijają, Enter = dalej]",
    "pl": "$t  [strzałki przewijają, Enter = dalej]",
    "en": "$t  [arrows scroll, Enter = next]",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "wt-lib.sh:120 yesno_text"
@@ -15950,7 +15950,7 @@
    "pl_code": "Plan był w poprzednim oknie ($lines wierszy). $y?",
    "pl": "Plan był w poprzednim oknie ($lines wierszy). $y?",
    "en": "The plan was in the previous window ($lines lines). $y?",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "wt-lib.sh:122 yesno_text"
@@ -15961,7 +15961,7 @@
    "pl_code": "Który usunąć?",
    "pl": "Który usunąć?",
    "en": "Which one to delete?",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "wt-lib.sh:167 list_editor"
@@ -15972,7 +15972,7 @@
    "pl_code": "${CARD_VALUES[$i]:-…}",
    "pl": "${CARD_VALUES[$i]:-…}",
    "en": "${CARD_VALUES[$i]:-…}",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "wt-lib.sh:194 card_menu"
@@ -15983,7 +15983,7 @@
    "pl_code": " $((w - 10)))  (stałe)",
    "pl": " $((w - 10)))  (stałe)",
    "en": " $((w - 10)))  (fixed)",
-   "origin": "auto",
+   "origin": "owner-ok",
    "unclear": false,
    "where": [
     "wt-lib.sh:199 card_menu"
