@@ -75,14 +75,43 @@ przeszkody na poziomie 0. Aktualna bramka rozróżnia identyfikatory GUID
 i import własny od zastanego; poprawki #741/#742 należy liczyć oddzielnie.
 Próby CI main `40112247542`: mediagate 160/0, twins 94/0, cron 232/0,
 gencron 123/0, składnia i graf PASS. PR-head `37495811929`: SUCCESS.
-Historyczne `cron2conf` usunięto świadomie w X27 S4, więc jego starego
-round-trip nie przypisuje się współczesnej suicie. Live USB/pve9 opisane
-przez implementera, niepowtórzone przez recenzenta. Bez nowego findingu/REV.
-Następny zakres: **#480/#482** — rozjazd kopii i `recv -F`, ochrona
-uruchomionego gościa.
+Historyczne `cron2conf` usunięto świadomie w X27 S4, ale dokładny head
+odtworzono w worktree: 31/0; ta sama suita z parserem dokładnej bazy przegrywa
+trzy nowe kształty repliki. Dawna liczba czterech porażek z opisu PR nie jest
+reprodukowalna. Historyczny `twins` daje dziś 93/94 wyłącznie przez termin
+portowania `process_dataset`, który upłynął 2026-10-19; port jest ukończony na
+bieżącym main. Live USB/pve9 opisane przez implementera, niepowtórzone przez
+recenzenta. Bez nowego findingu/REV. Następny zakres: **#453/#455** — końcowy
+rekord postępu i rc 75/raportowanie pominięcia przez blokadę. #480/#482 są już
+objęte REV-151 i jego zatwierdzoną kontynuacją.
 
 Zakres PR #463 zamknięto powyższym audytem. Granicy kasowania lustra z PR #460 / REV-150
-nie otwierać bez nowego diffu lub dowodu. Kolejny przegląd: PR #480 / #482.
+nie otwierać bez nowego diffu lub dowodu.
+
+**Rozstrzygnięcie recenzenta 2026-10-24 — PR #453 / #455.** PR #453:
+`45d0dc0c54d8f24df776743dbdcafd9ddde8c840..27072f9bedf39cf9fdb2fffea651eb9ec6f66935`,
+produkcja `e03c2df2372e54191cec9c389b3dfe83dfa0e871`, merge
+`9de180bf0213e3b3c3ee14eee64181d9f2d5e09e`. `progress_done` zastępuje
+bieżący albo już zakończony terminal rekordu i leczy dawną sklejoną końcówkę;
+nieznany kształt zostawia bez zmian, a rekord nie steruje transferem. Dokładny
+head ma dziś twins 82/83 tylko przez termin portowania `process_dataset`, który
+upłynął 2026-10-19; biblioteka z dokładnej bazy dodaje właściwą drugą porażkę
+(81/83). CI heada `37450082594` było zielone przed terminem.
+
+PR #455: `2a5c8201afc67628fa6b79c067984e2c304d8277..2d433ca7955f97c2f944c4c77d3a67093ea6eaa0`,
+produkcja `b11cd9e1420edf62ff52a95f873c79ee1a9080a0`, merge
+`2daddf61d3171a2613906df75c70c964da4a4e84`. Oba silniki zwracają 75 po
+utracie blokady, zachowując tekst i `skipped_lock`; `zfs-job` zapisuje ten rc i
+woła wyłącznie warning, podczas gdy rc 1 nadal woła failure. Dokładny head:
+pairpause 22/22, cron 146/146. Dokładna baza z testami heada: 20/22 (po jednej
+porażce na silnik) i 145/146 (złe mapowanie notyfikacji). Bieżące drzewo:
+twins 94/94, pairpause 22/22, cron 232/232; oba `diff --check` przechodzą, CI
+heada `37452537070` jest zielone. Live pve10 autora potwierdziło drugą równoległą
+kopię jako rc 75 i jeden WARN bez ALERT; recenzent nie powtarzał operacji na
+żywym hoście. Brak nowego REV.
+
+Kolejny przegląd: PR #465 — destrukcyjne `prune_foreign = yes`, ze sprawdzeniem
+rodzin chronionych, odmowy zdalnego zakresu i wyjątków strażnika instalacji.
 
 Uwaga do terminologii: wpis 2026-10-06 w `ENGINE-FREEZE.md` (~819) nazywa zmianę „PRE-AUTHORISED by the owner”, choć
 dokument (~1016–1035) mówi, że autoryzacja zamrożonego pliku należy do recenzenta. Żaden z wpisów 2026-10-06/-08/-12
