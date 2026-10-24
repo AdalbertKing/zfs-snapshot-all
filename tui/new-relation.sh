@@ -413,15 +413,21 @@ load_profiles() {   # -> $TMPD/prof.tsv: nazwa <TAB> zdanie ; słowa z tui/zfs-t
 import sys, json, importlib.util
 spec = importlib.util.spec_from_file_location("zfs_tui", sys.argv[2])
 tui = importlib.util.module_from_spec(spec); spec.loader.exec_module(tui)
+tui.load_lang(tui.ui_lang())     # słowa w języku okna (ZFS_TUI_LANG z wt-lib.sh)
 d = json.load(open(sys.argv[1], encoding="utf-8"))
 def short_cadence(p):
     # "co godzinę (:01), co dobę 01:11, co tydzień nd 02:21" -> "co godzinę, dobę, tydzień"
+    # (po angielsku "hourly (:01), daily 01:11" -> "hourly, daily": bez wspólnego "co")
+    pl = tui._(u"co dobę %s").split()[0] == "co"
     out = []
     for t in p.get("tiers", []):
         if t.get("send_schedule"):
             w = tui.cron_words(t["send_schedule"]).split()
-            out.append(w[1] if len(w) > 1 and w[0] == "co" else " ".join(w[:2]))
-    return ("co " + ", ".join(out)) if out else "?"
+            if pl:
+                out.append(w[1] if len(w) > 1 and w[0] == "co" else " ".join(w[:2]))
+            else:
+                out.append(" ".join(w[:3]) if w and w[0] == "every" else (w[0] if w else "?"))
+    return (("co " if pl else "") + ", ".join(out)) if out else "?"
 rows = []
 # Szczeble retencji do okna "Jak długo trzymać w źródle" (uwaga 19): profil, szczebel,
 # rodzina, ile trzyma. Tylko szczeble z keep -- tworzące (send_schedule bez keep) nie.
@@ -444,7 +450,7 @@ for p in d.get("profiles", []):
     # UKRYTY szablon relacji (relacja-<NAZWA>, P4): w pliku jest (zamrażanie, kształt
     # dla kroku 8), na liście kroku 6 -- nie (7. kolumna = 1).
     w = tui.profile_words(p)
-    mech = {"flat": "N najnowszych", "gfs": "GFS", "age": "wg wieku"}.get(p.get("mechanism", ""), p.get("mechanism") or "?")
+    mech = {"flat": tui._(u"N najnowszych"), "gfs": "GFS", "age": tui._(u"wg wieku")}.get(p.get("mechanism", ""), p.get("mechanism") or "?")
     # Wiersz listy: co trzyma + mechanizm (to odróżnia d30h24 / -age / -gfs). Rytm wynika
     # z najdrobniejszego szczebla; pełne zdanie z rytmem idzie do podsumowania (3. pole).
     frozen = [t for t in p.get("tiers", []) if t.get("send_schedule") and t.get("quiesce")]
@@ -565,7 +571,8 @@ step_profile() {
         # ZNACZNIKI ZARAZ ZA NAZWĄ, opis retencji na końcu: przy przycięciu
         # wiersza do okna (U5) ginie koniec opisu, nigdy [zamraża]/[drabina]/[polecany]
         # -- to one rozstrzygają wybór (kroki 8 i 9).
-        local marks="" mech=""
+        local marks="" mech="" kp
+        kp="$(T 'trzyma %s')"; kp="${kp%'%s'}"     # "trzyma " / "keeps "
         [ "$chain" -eq 1 ] && [ "$n" = "$REC_PROFILE" ] && marks="${marks}$(T '[polecany]') "
         [ "$f" = 1 ] && marks="${marks}$(T '[zamraża]') "
         [ "$sh" = ladder ] && { marks="${marks}$(T '[drabina]') "; has_ladder=1; }
@@ -575,7 +582,7 @@ step_profile() {
         case "$w" in *"  ["*"]") mech="[${w##*  [}"; w="${w%  \[*}" ;; esac
         # Pytanie okna mówi już "Jak długo trzymać" -- na liście same liczby (przy 100 kolumnach
         # `full` kończył się "5…" zamiast "5 lat"; kampania 3, 2026-10-23).
-        w="${w#trzyma }"
+        w="${w#"$kp"}"
         label="$(printf '%-15s %s%s%s' "$n" "${mech:+$mech }" "$marks" "$w")"
         # Ta sama ramka co w kroku 9 (U5): w 80 kolumnach wiersze szablonów z
         # [zamraża] [drabina] były szersze niż okno i ucinały jej prawy bok.

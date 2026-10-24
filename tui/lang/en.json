@@ -1461,6 +1461,7 @@
 "trwa przeglądanie starszą wersją (pid $p, $f) -- nic nie zmieniam, spróbuj po jego zakończeniu": "browsing by an older version is in progress (pid $p, $f) -- changing nothing, try after it ends",
 "tryb offline: check-source nie uruchomiono": "offline mode: check-source was not run",
 "tryb offline: list-datasets nie uruchomiono": "offline mode: list-datasets was not run",
+"trzyma %s": "keeps %s",
 "trzyma %s   co: %s%s": "keeps %s   every: %s%s",
 "tutaj; następny bieg z crona dogania przyrostowo. Gdy źródło jest": "here; the next scheduled run sends only the missing changes. When the source is",
 "tyg.": "wk",

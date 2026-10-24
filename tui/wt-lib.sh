@@ -198,8 +198,8 @@ list_editor() {  # <tytuł> <wstęp> <tekst gdy pusto> <etykieta dodaj> <etykiet
         fi
         menu=(__add__ "+ $(clip_label "$addl" $((W - 14)))")
         [ "$n" -gt 0 ] && menu+=(__del__ "− $(clip_label "$dell" $((W - 14)))")
-        menu+=(__done__ "Gotowe")
-        wt --title "$ttl" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item __done__ \
+        menu+=(__done__ "$(T Gotowe)")
+        wt --title "$ttl" --ok-button "$(T Wybierz)" --cancel-button "$(T Wstecz)" --notags --default-item __done__ \
            --menu "$text" "$(fit $((il + ${#menu[@]} / 2 + 1)))" "$W" "$(lhfit $((${#menu[@]} / 2)) "$il")" \
            "${menu[@]}" || { LE_ITEMS=(${saved[@]+"${saved[@]}"}); return 1; }
         choice="$WT_OUT"

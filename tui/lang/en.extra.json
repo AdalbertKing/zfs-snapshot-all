@@ -190,5 +190,6 @@
 "Migawki zdalne: szablon z drabiną GFS na szczeblu (np. m12w4d7h24-gfs) zostanie odrzucony przy aktywacji -- wybierz szablon liczony, np. d7h24.\\n\\n": "Remote snapshots: a template with a GFS ladder per tier (e.g. m12w4d7h24-gfs) is refused at activation -- choose a counted template, e.g. d7h24.\\n\\n",
 "WYKONAJ": "EXECUTE",
 " Kursor: %s": " Cursor: %s",
-"Enter wybiera  →/+ rozwija  ←/- zwija  Esc wraca": "Enter selects  →/+ expands  ←/- collapses  Esc back"
+"Enter wybiera  →/+ rozwija  ←/- zwija  Esc wraca": "Enter selects  →/+ expands  ←/- collapses  Esc back",
+"trzyma %s": "keeps %s"
 }
