@@ -65,7 +65,7 @@ the payload and **refuses to go on**. This is not an error:
 
 ```
 >>> created target dataset hdd/backups/10.0.0.9
->>> Wsad gotowy: /root/scripts/pairing/kolektor-to-10.0.0.9.tgz
+>>> Package ready: /root/scripts/pairing/kolektor-to-10.0.0.9.tgz
 FATAL: cannot reach zfsbackup-kolektor@10.0.0.9 to find out whether it has
 signed a scope ... Refusing; nothing was changed.
 ```
