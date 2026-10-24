@@ -52,7 +52,7 @@ PYEOF
         [ -n "$n" ] || continue
         T_NAME+=("$n"); T_KIDS+=("$k"); T_LABEL+=("$l")
     done <"$TMPD/tree.tsv"
-    [ "${#T_NAME[@]}" -gt 0 ] || { echo "źródło nie ma żadnego datasetu" >"$TMPD/ds.err"; return 1; }
+    [ "${#T_NAME[@]}" -gt 0 ] || { { T 'źródło nie ma żadnego datasetu'; echo; } >"$TMPD/ds.err"; return 1; }
     return 0
 }
 
@@ -61,11 +61,11 @@ describe() {    # <indeks> -> jedno zdanie o pozycji koszyka
     local r="${B_ROOT[$1]}" e="${B_EXCL[$1]}" k short x
     k="$(kids_count "$r")"; short=""
     while IFS= read -r x; do [ -n "$x" ] && short="$short${short:+, }${x#"$r"/}"; done <<<"$e"
-    if [ "$k" -eq 0 ]; then echo "dziś nic pod nim; nowe skopiują się same"
-    elif [ -z "$short" ]; then echo "dziś $k pod nim; nowe skopiują się same"
-    else echo "dziś $k pod nim; BEZ: $short"; fi
+    if [ "$k" -eq 0 ]; then T 'dziś nic pod nim; nowe skopiują się same'; echo
+    elif [ -z "$short" ]; then Tv 'dziś $k pod nim; nowe skopiują się same' '$k' "$k"; echo
+    else Tv 'dziś $k pod nim; BEZ: $short' '$k' "$k" '$short' "$short"; echo; fi
 }
-mode_words() { [ "$RECURSION" = atomic ] && echo "cała gałąź atomowo (-r)" || echo "każdy dataset osobno (-R)"; }
+mode_words() { [ "$RECURSION" = atomic ] && T 'cała gałąź atomowo (-r)' || T 'każdy dataset osobno (-R)'; echo; }
 any_excl() { local i; for i in "${!B_ROOT[@]}"; do [ -n "${B_EXCL[$i]}" ] && return 0; done; return 1; }
 
 # basket_step -> 0 = Dalej z niepustym wyborem, 1 = Wstecz. X12 (właściciel 2026-10-12): JEDNO
@@ -81,10 +81,11 @@ basket_step() {
     [ "${BASKET_NO_EXC:-0}" = 1 ] && noexc=1
     # Kampania 2026-10-22: przy migawkach (lokalnych albo zdalnych) nic się nie kopiuje, a okno
     # pytało "Co kopiować z ...?" i mówiło "[x] kopiowane". Słowa okna z rodzaju relacji.
-    local q="Co kopiować z $HOST?" lg=""
+    local q lg=""
+    q="$(Tv 'Co kopiować z $HOST?' '$HOST' "$HOST")"
     if [ "${NOCOPY:-0}" = 1 ] || [ "${MODE:-}" = snaponly ]; then
-        q="Gdzie robić migawki na $HOST?"
-        lg=" [x] z migawkami, razem z tym, co pod nim POWSTANIE   [-] część   [ ] bez"
+        q="$(Tv 'Gdzie robić migawki na $HOST?' '$HOST' "$HOST")"
+        lg="$(T ' [x] z migawkami, razem z tym, co pod nim POWSTANIE   [-] część   [ ] bez')"
     fi
     BASKET_LEGEND="$lg" "$PY" - "$BASKET_DS_JSON" "$TMPD/tree-spec.json" "$(title 4 "$q")" "$HOST" "$mode" "$noexc" \
         "${RECURSION:-flat}" "${BASKET_HIDE:-}" "${#B_ROOT[@]}" ${B_ROOT[@]+"${B_ROOT[@]}"} ${B_EXCL[@]+"${B_EXCL[@]}"} <<'PYEOF' || return 1
