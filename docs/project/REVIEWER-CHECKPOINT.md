@@ -2,7 +2,78 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-24 (PR #510 / W19 and W14 engine reconciliation)
+## Latest final-audit batch — 2026-10-24 (PR #463 removable replica -> snapget -M)
+
+**No new confirmed defect and no new REV** in the exact PR #463 transition
+`9fb9a7afd2904c8ac58d1a7e989b1ed19e49e428..91954aafa0ca1305d86669ab5c4159ec768f9674`,
+merged as `76ee2e94f7da0eedcee593bd8c5f11293cfab75f`.
+Current published tree reviewed: `7ff2b0bd1d11ab865a03100023b0606c2a3fbc0e`.
+
+- **Engine/target:** `gen-cron.sh::replica_engine_cmd` switched the local
+  `snapsend.sh -m P` call to `snapget.sh -m P -M`. The mirror uses the shared
+  transfer library, then reconciles the target's extra snapshots; it does not
+  enable a new unconditional `receive -F` or independently authorize deleting
+  source datasets. The destructive mirror/P-0 boundary is already documented
+  separately and is not silently reapproved by this batch.
+- **Bookmark identity:** both `snapsend.sh` and `snapget.sh` source the same
+  `lib-zfs-snap.sh`; both call `record_send_bookmark` with the same destination
+  name and `IDENTIFIER`. `bookmark_target_tag` hashes
+  `printf '%s\\0%s' target identifier` and takes 8 hexadecimal characters.
+  The PR #463 generator's ordinary replica does not introduce a `-j`
+  identifier. The old and new transport therefore retain the same per-target
+  anchor calculation, not merely the same comment.
+- **Medium identity:** PR #463 itself did not implement GUID registration;
+  subsequent owner-directed changes did. On current `main`,
+  `zfs-media-gate.sh` checks explicit allowed pool GUIDs before importing,
+  handles multiple same-name candidates, and distinguishes its own import
+  from a pool left imported by another actor. Its detach path refuses a
+  nonmatching ownership marker rather than exporting a different disk.
+  Later PRs #741 and #742 additionally record success on media already
+  imported and decouple the copy-current marker from the all-or-nothing
+  skip record. Those follow-ups matter to present-day correctness and are
+  not mistaken for evidence on the original PR head.
+- **Error reporting:** the PR #463 `snapget.sh::mirror_target` change raises
+  the summary to log level 0 when at least one snapshot was removed or
+  could not be removed; a no-change run remains level 1. Current
+  `test/twins` exercises these three outcomes. A stuck removal still
+  yields a failed mirror result rather than a silent success.
+- **Compatibility boundary:** at the original PR head `cron2conf.sh`
+  accepted both old installed `snapsend` and new `snapget -M` replica
+  envelopes and kept flags. Later X27 S4 intentionally removed
+  `cron2conf.sh` and its own suite; it would be misleading to claim
+  those old legacy round-trip tests still run on current main. The
+  current cron generator instead has direct tests for ordinary/pasive
+  replicas, `-M`, GUID gating, own `keep=N` pruning without `-M`,
+  and long-command dispatch.
+
+**Evidence measured from repository and actual CI logs:**
+
+- Exact PR #463 head Actions run `37495811929` completed SUCCESS.
+  Its submitted report says historical `test/cron2conf` 31/0 and old-main
+  discriminator 4 failures, and `test/twins` 94/0; reviewer did not rerun
+  the deleted historic tool.
+- Current `main` push Actions run `40112247542` completed SUCCESS,
+  51/51 jobs successful. Logs examined: `mediagate` **160 PASS / 0 FAIL**,
+  including L8r (foreign/same-name GUID), L8s (two disks), L8f (pre-imported
+  medium), AG1–AG8; `twins` **94 PASS / 0 FAIL** including mirror log
+  levels; `cron` **232 PASS / 0 FAIL**; `gencron` **123 PASS / 0 FAIL**.
+  Syntax and dependency graph jobs also succeeded.
+- The original PR describes a live pve9/USB replication followed by removal
+  of a source snapshot and target reconciliation. This is implementer
+  operational evidence only: reviewer has not repeated USB, pool import,
+  destruction, bookmark continuity or hardware checks on a live host.
+  Successful CI is not a claim of a second independent live test.
+
+**Outcome:** no distinct newly confirmed PR #463 regression against current
+published implementation; no review state transition needed. Keep closed REV
+findings closed. No production script or host was changed by this audit.
+
+**Next reviewer scope:** reconcile PRs **#480 and #482** (P-0 source/target
+divergence, `receive -F`, guest-running protection) against their exact bases,
+current tests and live-risk evidence. Do not duplicate prior reviewed mirror
+destruction contract absent a genuinely new counterexample.
+
+## Previous final-audit batch — 2026-10-24 (PR #510 / W19 and W14 engine reconciliation)
 
 **PR #510's encrypted-parent receive and replica-only log classification remain
 correct on the current tree; no new REV was opened.** The exact PR range is
