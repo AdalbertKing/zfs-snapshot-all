@@ -25,6 +25,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FB="$(mktemp -d)"; D=""
 trap 'rm -rf "$FB" ${D:+"$D"}' EXIT
 export TERM="${TERM:-xterm}"
+export ZFS_TUI_LANG=pl   # okna po polsku niezależnie od settings.ini hosta (asercje niżej są po polsku)
 
 mkfake(){ cat >"$FB/$1"; chmod +x "$FB/$1"; }
 

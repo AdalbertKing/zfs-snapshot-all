@@ -14940,7 +14940,7 @@
    "k": "u1300",
    "pl_code": "Przenieść też wszystkie starsze migawki (z historią)?\\nNie = tylko wybrany punkt.",
    "pl": "Przenieść też wszystkie starsze migawki (z historią)?\\nNie = tylko wybrany punkt.",
-   "en": "move all older snapshots too (with history)?\\nNo = only the selected point.",
+   "en": "Move all older snapshots too (with history)?\\nNo = only the selected point.",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -15094,7 +15094,7 @@
    "k": "u1314",
    "pl_code": "$TARGET nie wydał temu kolektorowi zgody na odzysk.",
    "pl": "$TARGET nie wydał temu kolektorowi zgody na odzysk.",
-   "en": "$TARGET did not grant that debt collector permission to collect the debt.",
+   "en": "$TARGET has not allowed this collector to restore.",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -15425,7 +15425,7 @@
    "k": "u1344",
    "pl_code": "($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)",
    "pl": "($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)",
-   "en": "($GRANT_LABEL = this collector's name on $TARGET; list: ls /var/lib/zfs-snapshot-all/relations)",
+   "en": "($GRANT_LABEL = this collector's name on $TARGET; list: ls /var/lib/zfs-snapshot-all/relationships)",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
