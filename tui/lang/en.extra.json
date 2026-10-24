@@ -67,7 +67,7 @@
 "tyg.": "wk",
 "mies.": "mo",
 "lat": "yr",
-"Dane wciąż się odświeżają (ponad %d s) -- klawisz pominięty, ekran jest NIEAKTUALNY. Naciśnij klawisz ponownie, gdy zniknie „odświeżam w tle”; F12 wychodzi.%s": "Data is still refreshing (over %d s) -- key dropped, the screen is NOT CURRENT. Press the key again once „refreshing in the background” is gone; F12 quits.%s",
+"Dane wciąż się odświeżają (ponad %d s) -- klawisz pominięty, ekran jest NIEAKTUALNY. Naciśnij klawisz ponownie, gdy zniknie „odświeżam w tle”; F12 wychodzi.%s": "Data is still refreshing (over %d s) -- key dropped, the screen is NOT CURRENT. Press the key again once „refreshing in background” is gone; F12 quits.%s",
 "Odświeżenie danych nie wyszło -- ekran jest NIEAKTUALNY, czynność pominięta. Ctrl-R odświeża; po udanym odświeżeniu naciśnij klawisz ponownie.": "Data refresh failed -- the screen is NOT CURRENT, action skipped. Ctrl-R refreshes; after a successful refresh press the key again.",
 "t wykonuje   ": "t runs   ",
 "Tab do linii poleceń   Esc wraca": "Tab to command line   Esc goes back",
@@ -93,5 +93,8 @@
 " w ": " in ",
 "przyrost.": "increm.",
 "Repliki backupu kolektora (%d)": "Collector backup replicas (%d)",
-"TU": "HERE"
+"TU": "HERE",
+"   trzyma %s": "   keeps %s",
+"%d-%d z %d": "%d-%d of %d",
+"szablon %s": "template %s"
 }

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e340c451c932a86f -->
+<!-- status-covers-digest: a2665fa35616177d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,15 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Przejście GUI w obu językach na żywo (pve10, 2026-10-24).** Skrypt przechodzi każdy ekran (F2-F6, F11, F1, F10,
+  linia poleceń), okna Enterem, przewijanie, panel dzieci i jego zakładki -- 47 widoków na język, tylko klawisze
+  bez skutków. Po polsku (`--lang=pl`): żadnych wtrąceń angielskich poza nazwami rodzin migawek, terminem
+  „prune” i ścieżkami. Po angielsku (`--lang=en`) poprawione ostatnie napisy z `tui/zfs-tui.py` („trzyma” w
+  polityce, „1-35 z 134” w stopce okien, tytuł okna szablonu, „odświeżam w tle”). Zostaje po polsku: okna
+  whiptail (Przywróć z F11, Ustawienia z F10 -- paczki P2-P6) i dane (treść configu, opisy szablonów). Na pve10
+  `settings.ini` ma `[gui] language = pl`, więc tam GUI startuje po polsku także po zmianie domyślnego języka.
+  `tui` 406/0 (pve9).
 
 - **GUI domyślnie po angielsku (`feat/gui-default-en`, właściciel 2026-10-24: „zfsbackup gui domyślnie po angielsku,
   polski przełączany parametrem” -- publikacja dla społeczności Proxmoxa).** Bez `--lang`, `ZFS_TUI_LANG` i
