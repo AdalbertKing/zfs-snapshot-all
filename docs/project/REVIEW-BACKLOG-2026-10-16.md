@@ -46,6 +46,29 @@ git diff 7fe07cab a141553e -- snapsend.sh snapget.sh lib-zfs-snap.sh
 **Proszę zacząć od zmian, przy których silnik sam niszczy dane na celu:** #460 (lustro `-M` kasuje na celu migawki,
 których źródło nie ma), #480 i #482 (P-0, `recv -F`). Kontrakt P-0 i jego testy: `test/snapsend` P5–P10, opis w PROJECT_STATUS (szukać „P-0”).
 
+**Rozstrzygnięcie recenzenta 2026-10-24 — PR #510 / W19 i W14.**
+Dokładny zakres `71b51681f7d576db47fad7b70598f35efea034a4..bb509c2ebacf2db2bdc93f8f6855d5a311f5d8de`,
+zmiana produkcyjna `ed97b9bdc83fa4cf284e68fb6685de20f98c3b84`,
+merge `bfbc3b5d20c937b60c9532469e237f194603e9aa`. W19 poprawnie pozostawia
+nieistniejący liść zaszyfrowanego rodzica dla `zfs receive`; błąd odczytu
+szyfrowania zachowuje dawną ścieżkę i nie daje fałszywego sukcesu ani nowego
+uprawnienia do kasowania. W14 nie zmienia decyzji `receive -F`, tylko obniża
+głośność wpisu przy `written@base=0`, niepustej liście i wyłącznie migawkach
+`replica_*`; obce, zapisane i puste przypadki pozostają głośne.
+
+Niezależne kontrole na `main` `ba2b561dd04f47c914c08d2e64385b07dae1b880`:
+W14 4/4, sztuczny ZFS dla W19 (rodzic zaszyfrowany i kontrola niezaszyfrowana),
+negatywna kontrola dokładnej bazy bez obu helperów, twins 94/94, eval-free
+16/16, składnia, `diff --check` i `impact --verify` — PASS. CI dokładnego heada:
+run `38242689996` — success. Ręczny dowód na jednorazowych pulach `pve9b`
+obejmował pierwszy i przyrostowy push oraz pierwszy pull; recenzent nie
+powtarzał operacji na żywym hoście. Brak nowego REV.
+
+Następny zakres: PR #463 — przenośna replika na `snapget -M`, ze szczególnym
+sprawdzeniem tożsamości nośnika, ciągłości bookmarków i raportowania błędów.
+Granicy kasowania lustra z PR #460 / REV-150 nie otwierać bez nowego diffu lub
+dowodu.
+
 Uwaga do terminologii: wpis 2026-10-06 w `ENGINE-FREEZE.md` (~819) nazywa zmianę „PRE-AUTHORISED by the owner”, choć
 dokument (~1016–1035) mówi, że autoryzacja zamrożonego pliku należy do recenzenta. Żaden z wpisów 2026-10-06/-08/-12
 nie ma znacznika `authorizes-frozen`.
