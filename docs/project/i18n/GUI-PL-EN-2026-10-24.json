@@ -14815,9 +14815,9 @@
   {
    "k": "u1298",
    "pl_code": "Punkt odzysku (czas utworzenia migawki na dysku, strefa tego hosta: $TZN). Pozostałe źródła dostają swój najbliższy punkt z tej chwili lub wcześniejszy.",
-   "pl": "Punkt odzysku (czas utworzenia migawki na dysku, strefa tego hosta: $TZN). Pozostałe źródła dostają swój najbliższy punkt z tej chwili lub wcześniejszy.",
-   "en": "Restore point (creation time of the snapshot on the disk, this host's time zone: $TZN). The other sources get their nearest point at or before that moment.",
-   "origin": "auto",
+   "pl": "Wybierz migawkę do odzyskania.",
+   "en": "Choose the snapshot to restore.",
+   "origin": "owner-edit",
    "unclear": false,
    "where": [
     "restore.sh:224 pool_ok"
