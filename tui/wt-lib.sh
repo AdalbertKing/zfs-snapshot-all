@@ -216,8 +216,8 @@ list_editor() {  # <tytuł> <wstęp> <tekst gdy pusto> <etykieta dodaj> <etykiet
                 geom
                 menu=()
                 for i in "${!LE_ITEMS[@]}"; do menu+=("i:$i" "$(clip_label "${LE_ITEMS[i]}" $((W - 14)))"); done
-                wt --title "$ttl" --ok-button "Usuń" --cancel-button "Wstecz" --notags \
-                   --menu "Który usunąć?" "$(fit $((${#menu[@]} / 2 + 3)))" "$W" "$(lhfit $((${#menu[@]} / 2)) 3)" \
+                wt --title "$ttl" --ok-button "$(T Usuń)" --cancel-button "$(T Wstecz)" --notags \
+                   --menu "$(T 'Który usunąć?')" "$(fit $((${#menu[@]} / 2 + 3)))" "$W" "$(lhfit $((${#menu[@]} / 2)) 3)" \
                    "${menu[@]}" || continue
                 choice="${WT_OUT#i:}"
                 keep=()

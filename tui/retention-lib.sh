@@ -139,7 +139,7 @@ src_words_of() {   # <profil>
     s="${p##*-src-}"
     while [ -n "$s" ]; do
         l="${s:0:1}"; s="${s:1}"; n="${s%%[!0-9]*}"; s="${s#"$n"}"
-        case "$l" in H) l=godzinowe ;; D) l=dobowe ;; W) l=tygodniowe ;; M) l=miesięczne ;; Y) l=roczne ;; *) echo "$p"; return ;; esac
+        case "$l" in H) l="$(T godzinowe)" ;; D) l="$(T dobowe)" ;; W) l="$(T tygodniowe)" ;; M) l="$(T miesięczne)" ;; Y) l="$(T roczne)" ;; *) echo "$p"; return ;; esac
         out="${out:+$out, }$l ${n:-?}"
     done
     echo "$out"
