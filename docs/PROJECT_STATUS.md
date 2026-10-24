@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a2665fa35616177d -->
+<!-- status-covers-digest: 042b512987391655 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,20 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **GUI po angielsku -- kreator nowej relacji (P2, `feat/gui-lang-p2`).** Teksty `tui/new-relation.sh` idą przez
+  `T` i nowe `Tv` (`tui/wt-lib.sh`: podstawia nazwane zmienne bez `eval`, więc polski klucz zachowuje `$HOST`
+  itp.). Tłumaczone są też wspólne części kreatora: drzewo datasetów `tui/tree.py` i tabela szczebli `tui/grid.py`
+  (osobne procesy, czytają `ZFS_TUI_LANG` eksportowane przez `wt-lib.sh`; teksty ze specyfikacji okna też
+  przechodzą przez katalog), koszyk `tui/basket-lib.sh`, słowa szczebli w `tui/retention-lib.sh`, przyciski
+  edytora list w `wt-lib.sh`, opisy szablonów w kroku szablonu i w podsumowaniu (`trzyma %s`). Angielska legenda
+  drzewa jest dłuższa niż okno, więc się zawija, a lista oddaje te linie (po polsku układ bez zmian). Katalog
+  1569 wpisów, z czego 202 w `tui/lang/en.extra.json`, w tym 105 nowych w P2 -- do akceptacji właściciela. Na
+  żywo pve10 (`--lang=en` i `--lang=pl`): kreator kopii lokalnej od rodzaju relacji do podsumowania (bez
+  WYKONAJ) -- po angielsku bez polskich słów, po polsku bez angielskich. Nie przechodzone na żywo: ścieżki
+  backup/lustro/migawki zdalne z innym hostem (na pve10 każdy host labu ma już relację); ich teksty pilnuje test
+  katalogu. Zostaje po polsku: zmiana relacji, szablony, ustawienia, repliki, odzysk (P3-P6) i nazwa relacji
+  proponowana przez kreator (`lokalna-…`). `tui` 406/0 (pve9).
 
 - **Przejście GUI w obu językach na żywo (pve10, 2026-10-24).** Skrypt przechodzi każdy ekran (F2-F6, F11, F1, F10,
   linia poleceń), okna Enterem, przewijanie, panel dzieci i jego zakładki -- 47 widoków na język, tylko klawisze
