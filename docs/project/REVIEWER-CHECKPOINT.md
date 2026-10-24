@@ -2,7 +2,49 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-24 (source-side GFS and relation export/import reconciliation)
+## Latest final-audit batch — 2026-10-24 (PR #510 / W19 and W14 engine reconciliation)
+
+**PR #510's encrypted-parent receive and replica-only log classification remain
+correct on the current tree; no new REV was opened.** The exact PR range is
+`71b51681f7d576db47fad7b70598f35efea034a4..bb509c2ebacf2db2bdc93f8f6855d5a311f5d8de`,
+with production commit `ed97b9bdc83fa4cf284e68fb6685de20f98c3b84`
+and merge commit `bfbc3b5d20c937b60c9532469e237f194603e9aa`.
+
+W19 leaves an absent target leaf to `zfs receive` when its nearest existing
+parent is encrypted, matching the raw-send path. Ancestors are created with
+`canmount=noauto`, target reachability is checked, and the saved `canmount`
+value is restored after transfer. Failure to read the parent's encryption
+state preserves the previous pre-create behaviour; it neither grants deletion
+authority nor reports a failed transfer as successful. W14 does not change the
+existing `receive -F` decision: it lowers log severity only when
+`written@base` is zero, there is at least one newer snapshot, and every such
+snapshot is named `replica_*`; all other divergence remains loud.
+
+Independent evidence on current `main`
+`ba2b561dd04f47c914c08d2e64385b07dae1b880`:
+
+- the helper blob is byte-identical to the PR head and both reviewed branches
+  remain present;
+- focused W14 controls pass 4/4, and fake-ZFS W19 encrypted/unencrypted-parent
+  controls both pass;
+- the exact base has neither helper (negative control), while shell syntax and
+  exact-range `diff --check` pass;
+- twins pass 94/94, eval-free passes 16/16, and `impact --verify` passes;
+- exact PR-head CI run `38242689996` completed successfully. The recorded
+  manual evidence used disposable file-backed `pve9b` pools for first and
+  incremental push plus first pull; the reviewer did not repeat live-host work.
+
+The former U49 handoff was stale: U49 was already audited in the historical
+note of REV-152 and its separate bare-`user@host` routing defect REV-154 is
+closed. U35, browse/mount, U42-U47, and GFS/configuration round-trip scopes are
+also published; do not repeat them without new code or evidence.
+
+**Next reviewer scope:** PR #463, concentrating on the removable-replica move
+onto `snapget -M`: media identity gating, bookmark continuity, and failure
+reporting. Treat the mirror-deletion boundary already reviewed in PR #460 /
+REV-150 as prior evidence rather than reopening it without a new delta.
+
+## Previous final-audit batch — 2026-10-24 (source-side GFS and relation export/import reconciliation)
 
 **The scope named after the X27 batch was already independently reviewed, but
 that completion was buried in REV-152's historical audit note and the later
@@ -48,9 +90,8 @@ No new REV was opened.  This batch makes the already-published result visible
 in the continuation artifact and removes the stale instruction to repeat the
 same campaign.  No live host, crontab, account or ZFS dataset was touched.
 
-**Next reviewer scope:** audit PR #644 / U49, the switch of local copies to
-`snapget` and local quiesce, starting from its exact base/head diff and the
-negative controls that prove the source is thawed on every failure path.
+This batch's former U49 handoff is superseded by the latest reconciliation
+above; U49 was already completed and must not be repeated without new evidence.
 
 ## Previous final-audit batch — 2026-10-24 (X27 pre-block compatibility reconciliation)
 
