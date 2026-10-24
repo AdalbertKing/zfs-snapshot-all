@@ -2671,7 +2671,11 @@ build_dataset() {
             # drops only the target prune (see tier_mirror above).
             resolve_bool_field prune_foreign "$ds" "" "[dataset:$ds_path]" 0
             [ "$BOOL_FIELD" -eq 1 ] && [ "$tier_mirror" -eq 0 ] && FOREIGN_SCOPES["$ds_path"]=1
-            [ "$tier_mirror" -eq 1 ] || INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${rec_scope}${SEP}${pair_label}${SEP}${tier_gfs}")
+            # A PASSIVE section adopts snapshots somebody else makes (passive = yes,
+            # -e), so they are not ours to prune either: no inline prune of the
+            # source, only the monitor (2026-10-24, lab rehearsal of Metropolis pve2 --
+            # a local copy of a pvesr replica rendered a GFS delsnaps on the replica).
+            [ "$tier_mirror" -eq 1 ] || [ "$scope_passive" = yes ] || INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${rec_scope}${SEP}${pair_label}${SEP}${tier_gfs}")
             SCOPE_PATTERNS+=("${ds_path}${SEP}${pattern}")
 
             # ---- monitor (rides this same pattern and the same scope) ----
