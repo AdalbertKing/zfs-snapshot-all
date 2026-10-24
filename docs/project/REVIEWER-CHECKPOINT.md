@@ -2,7 +2,58 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-24 (REV-084 / PR #551 reconciliation)
+## Latest final-audit batch — 2026-10-24 (F23 / PR #547 reconciliation)
+
+**The original F23 guard was not fail-closed for a multi-dataset scope; PR
+#547 corrected both halves and the current destructive boundary is reachable.**
+F23 entered in
+`08ab57cdd25f257d28f369eaf9f4399358872b3f` without a separate REV,
+approval or closure artifact. Its prose said an absent/unparseable scope made
+the root refusal inert and called that safe; no test changed in that commit.
+The later live incident showed the composition was unsafe: the gate's
+`:-\ ` bracket expression emptied every space-separated scope while the
+collector treated an empty scope as permission to skip the root check.
+
+The exact PR #547 range is
+`f7478b700fa294c63fd17dbf31b8bc56ff054ff8..41ea9ae9fad01266e1c6ba2384ca4f75ab4166d8`;
+the corrective commit is
+`77e755e966b2796e2e50bd14385f5b47f3c5a547` and the merge is
+`3070e49c064d0ce4190d6f3d9964b177679fae70`. The patch moved `-` to the end
+of the gate whitelist and made a remote destructive `replace` refuse an empty
+reported scope before the engine. PR #548 later refined a root to a scope
+member whose parent is not in the same scope; PR #550's already-published audit
+proves the package refresh carries the corrected gate to an existing install.
+
+Independent evidence on current `main`
+`6146dbab2d34296d1b195ec233ac56c6753225e6`:
+
+- running PR #547's corrected test instrument against its exact base reproduced
+  both failures: the multi-dataset gate assertion failed, and an empty-scope
+  `replace` invoked the recorder engine; the same focused assertions on current
+  main all pass, including both engine-not-invoked controls;
+- current `test/pairgate/run.sh` is 92/92 and `test/restore/run.sh` is 335/335;
+  the relevant five `test/restoregrant` assertions pass. Its full run is 207/210
+  in this root-only reviewer container; the three failures are its known
+  non-root precondition/message checks and do not traverse the reviewed scope
+  guard;
+- `test/deadcode/run.sh` is 7/7; `bash -n`, `git diff --check`, the exact-range
+  `test/impact.sh` selection and `./test/impact.sh --verify` pass;
+- exact-head CI run 38726889526 passed:
+  https://github.com/AdalbertKing/zfs-snapshot-all/actions/runs/38726889526;
+- the repository's bounded live evidence records root refusal before mutation,
+  successful child recovery, intact delegation and subsequent successful chain
+  runs. No live host or dataset was touched by this reviewer batch.
+
+No new REV was opened. This is a historical proof gap plus later corrective
+code, not a current defect. There is no F23 review to reopen; the current ledger
+and open-thread view remain empty.
+
+**Next reviewer scope:** reconcile the remaining paired local-restore backlog
+items PR #539 and #541 against their exact fixes: public dispatcher diagnostics
+for a local relation and a production-path off-point recovery control that
+proves the local dataset is actually changed rather than merely reported.
+
+## Previous final-audit batch — 2026-10-24 (REV-084 / PR #551 reconciliation)
 
 **PR #551 restored the reachable fail-closed diagnostic; REV-20260809-084
 remains CLOSED.** The exact PR range is
