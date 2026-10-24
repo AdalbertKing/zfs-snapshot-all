@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 042b512987391655 -->
+<!-- status-covers-digest: 57a6e15ae0fcf28a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,26 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Migawki naszej rodziny już na źródle: admin mówi, kto je robi (`feat/own-snapshots-declared`, decyzja
+  właściciela 2026-10-24, wariant A+D).** Gdy źródło ma już migawki `automated_*`, seed (a przy lustrze także
+  linia crona) robi relację pasywną: przyjmuje cudze, nic nie tworzy i nie sprząta źródła. Sonda nie odróżnia
+  żywego łańcucha od resztek usuniętej relacji. Zmierzone na pve10<>pve11: lustro cb założone od nowa na
+  migawkach poprzedniczki wyszło pasywne, choć plan obiecywał „własne migawki”, a źródło przestało dostawać
+  nowe (F3: „stale”). Teraz kreator pokazuje nowe pole „Migawki na źródle” (lustro, backup, tylko gdy rodzina
+  jest): liczbę migawek i wiek najnowszej (`list-datasets --own-snapshots` podaje `family_newest`) i pyta
+  „ktoś je robi -- łańcuch, przyjmuję” albo „nikt -- resztki, robię własne”. Odpowiedź „resztki” dodaje do
+  komendy `--own-snapshots` (add-client i jednokomendowa forma; rekord `OWN_SNAPSHOTS=1`, tylko gdy podane;
+  odmowa razem z `--passive` i przy `--snaponly`; eksport i import ją niosą). Z tą deklaracją seed i sonda
+  lustra przy generowaniu configu nie robią relacji pasywnej. Plan mówi, co wyjdzie: przy „łańcuchu” dla
+  lustra z szablonem innym niż passive-flat „lustro będzie PASYWNE … szablon tego nie zmieni”, przy
+  „resztkach” „WŁASNE MIGAWKI”. Bez
+  odpowiedzi (stare rekordy, CLI bez flagi) zachowanie bez zmian. Na żywo pve10<>pve11 (kreator po
+  angielsku): pasywne cb usunięte i założone od nowa z odpowiedzią „resztki”. Seed postawił własną bazę,
+  cron ma aktywne linie bez `-e` i sprzątanie na źródle, nowe migawki doszły do lustra przyrostowo.
+  Testy: `zfsbackup` (rekord, odmowy, seed, sonda lustra, eksport/import, `family_newest`) i `tui` (okno,
+  `--own-snapshots`, tekst planu). Dalej: usuwanie relacji sprząta jej migawki na źródle (C) i „przejmij
+  migawki” w zmianie relacji (migracja z snapsend.sh).
 
 - **GUI po angielsku -- kreator nowej relacji (P2, `feat/gui-lang-p2`).** Teksty `tui/new-relation.sh` idą przez
   `T` i nowe `Tv` (`tui/wt-lib.sh`: podstawia nazwane zmienne bez `eval`, więc polski klucz zachowuje `$HOST`
