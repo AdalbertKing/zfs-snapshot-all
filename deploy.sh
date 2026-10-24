@@ -442,7 +442,7 @@ while [ "$#" -gt 0 ]; do
         # Basket C: deploy.sh and zfs-backup.sh were the only two tools without
         # --version; the checkout SHA is the honest version here, because
         # deployment IS the hourly git pull.
-        --version) echo "deploy.sh (zfs-snapshot-all) $(git -C "$_DEPLOY_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"; exit 0 ;;
+        --version) echo "deploy.sh (zfs-snapshot-all) $(git -C "$_DEPLOY_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)$([ -r "$_DEPLOY_DIR/RELEASE-OF" ] && printf ' -- release of %s' "$(head -c 12 "$_DEPLOY_DIR/RELEASE-OF")")"; exit 0 ;;
         --test-mail)    SEND_TEST_MAIL=1; shift ;;
         --alerts=*)     ALERT_MODE="${1#*=}"; shift ;;
         --alerts)       ALERT_MODE="${2:-}"; shift 2 ;;

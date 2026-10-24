@@ -3584,6 +3584,28 @@ foreign_normalized_identity() {
     sed -E -e '/delsnaps\.sh/ s/ -P "[^"]*"//g' \
            -e '/delsnaps\.sh/ s/ "[^"]*"( -[HDWMYhdwmy][0-9 ])/ "<PAT>"\1/'
 }
+# REV-20261024-174 F1: the identity above drops EVERY -P, so a pre-existing floor
+# (-P "vzdump:2" from an [excluded:] section) weakened or removed in the same proposal
+# rode along with the rewrite. The rewrite only ADDS protections, in the two shapes
+# gen-cron's apply_foreign_prune generates ("<other family>:all", "<replica prefix>:2");
+# every -P the installed line carries must still be there, count included.
+foreign_protections_kept() {   # <installed line> <proposed line> -> 0 when only generated -P were added
+    local old new tok
+    old=$(printf '%s\n' "$1" | grep -oE ' -P "[^"]*"' | sed -E 's/^ -P "(.*)"$/\1/')
+    new=$(printf '%s\n' "$2" | grep -oE ' -P "[^"]*"' | sed -E 's/^ -P "(.*)"$/\1/')
+    while IFS= read -r tok; do
+        [ -n "$tok" ] || continue
+        printf '%s\n' "$new" | grep -qxF -- "$tok" || return 1        # removed, or its count changed
+    done <<< "$old"
+    while IFS= read -r tok; do
+        [ -n "$tok" ] || continue
+        printf '%s\n' "$old" | grep -qxF -- "$tok" && continue
+        # a new token for a prefix the installed line already protects is a changed floor
+        printf '%s\n' "$old" | awk -v p="${tok%:*}" '{ q = $0; sub(/:[^:]*$/, "", q) } q == p { found = 1 } END { exit !found }' && return 1
+        case "${tok##*:}" in all|2) ;; *) return 1 ;; esac
+    done <<< "$new"
+    return 0
+}
 foreign_pattern_empty() {   # <line> -> 0 when its delsnaps pattern argument is ""
     printf '%s\n' "$1" | grep -qE '/?delsnaps\.sh .* "" -[HDWMYhdwmy][0-9 ]'
 }
@@ -3917,6 +3939,9 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
                     [ -n "$pline" ] || continue
                     foreign_pattern_empty "$pline" || continue
                     [ "$(printf '%s\n' "$pline" | foreign_normalized_identity)" = "$fnorm" ] || continue
+                    # ...and no existing protection moved (REV-20261024-174): otherwise the
+                    # line is held to the ordinary guard and refused.
+                    foreign_protections_kept "$norm" "$pline" || continue
                     ftwin="$pline"; break
                 done <<< "$proposed_norm"
                 if [ -n "$ftwin" ]; then
@@ -21790,7 +21815,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         # arguments, so a local --source is still byte-for-byte cmd_local_backup.
         # `local-backup` stays a LOCAL-only internal alias, unchanged.
         --source=*|--target=*) rux_entry "$@" ;;
-        --version) echo "zfs-backup.sh (zfs-snapshot-all) $(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"; exit 0 ;;
+        --version) echo "zfs-backup.sh (zfs-snapshot-all) $(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)$([ -r "$SCRIPT_DIR/RELEASE-OF" ] && printf ' -- release of %s' "$(head -c 12 "$SCRIPT_DIR/RELEASE-OF")")"; exit 0 ;;
         local-backup)     shift; cmd_local_backup "$@" ;;
         add-replica)      shift; cmd_add_replica "$@" ;;
         list-replicas)    shift; cmd_list_replicas "$@" ;;

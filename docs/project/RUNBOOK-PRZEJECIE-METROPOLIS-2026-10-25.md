@@ -81,6 +81,12 @@ Przećwiczone w labie 2026-10-24 (pve11 = „pve1”, pve9 = „pve2”, dataset
     pvesr status                                                  # replikacje z pve1 bez błędu
     # F3: relacje "działa", kopie "aktualne"; F7 na kopii 107 -> "Snapshot already exists" albo przyrost
 
+Uwaga (z labu): linia szczebla pasywnej kopii bierze NAJNOWSZĄ migawkę swojego szczebla. Gdy ta jest
+starsza od najnowszej migawki kopii i kopii jej brakuje (kopia z jedną migawką), bieg kończy się rc=1
+(„send -I nowsza starsza”) i mija sam z pierwszą nowszą migawką tego szczebla. Kopie pve2 mają pełną
+historię z `-I`, więc tam zwykle zobaczysz „already exists - skipping”. Jeden mail z rc=1 tuż po
+przejęciu -- sprawdź, czy następny bieg tego szczebla przeszedł.
+
 ## Wycofanie (host po hoście)
 
     # usuń relacje (F3 -> Del, kopii NIE kasować), potem przywróć config i crona konta:

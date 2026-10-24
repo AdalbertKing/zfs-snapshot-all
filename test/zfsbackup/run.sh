@@ -8828,6 +8828,35 @@ got=$(mg_guard "$MG/cnt.txt" "")
 got=$(mg_guard "$MG/pat.txt" "")
 [ "$got" != 0 ] && ok "mirrorguard: U4 -- ...and a different non-empty pattern is still a deletion" \
                 || bad "mirrorguard: U4 -- a changed pattern was excused as the foreign rewrite" "$(cat "$MG/out")"
+# REV-20261024-174 F1: an EXISTING floor (-P "vzdump:2", an [excluded:] section) must
+# survive the rewrite unchanged. The identity drops every -P, so a weakened or removed
+# floor used to ride along with the empty-pattern rewrite and pass.
+{ echo '# BEGIN zfs-backup-managed'
+  echo "$mg_hp -P \"vzdump:2\" \"tank/a\" \"automated_hourly\" -H24"
+  echo '# END zfs-backup-managed'; } > "$MG/target.cron"
+for _v in 'keep:-P "vzdump:2" -P "automated_daily:all" ' 'zero:-P "vzdump:0" -P "automated_daily:all" ' 'gone:-P "automated_daily:all" ' 'other:-P "vzdump:2" -P "automated_daily:5" '; do
+    _n="${_v%%:*}"; _pp="${_v#*:}"
+    { echo '# BEGIN zfs-backup-managed'
+      echo "$mg_hp ${_pp}\"tank/a\" \"\" -H24"
+      echo '# END zfs-backup-managed'; } > "$MG/f174-$_n.txt"
+done
+got=$(mg_guard "$MG/f174-keep.txt" "")
+if [ "$got" = 0 ] && grep -q 'foreign snapshots on this landing are now pruned with this tier' "$MG/out"; then
+    ok "mirrorguard: REV-174 -- the U4 rewrite that KEEPS the existing -P \"vzdump:2\" and adds :all is still the same job (positive control)"
+else
+    bad "mirrorguard: REV-174 -- the U4-only rewrite with a kept floor was refused" "rc=$got" "$(cat "$MG/out")"
+fi
+got=$(mg_guard "$MG/f174-zero.txt" "")
+[ "$got" != 0 ] && grep -q 'would be DELETED' "$MG/out" \
+    && ok "mirrorguard: REV-174 -- ...vzdump:2 -> vzdump:0 beside the rewrite is refused (fail closed)" \
+    || bad "mirrorguard: REV-174 -- a weakened floor rode along with the foreign rewrite" "rc=$got" "$(cat "$MG/out")"
+got=$(mg_guard "$MG/f174-gone.txt" "")
+[ "$got" != 0 ] && grep -q 'would be DELETED' "$MG/out" \
+    && ok "mirrorguard: REV-174 -- ...the floor REMOVED during the rewrite is refused" \
+    || bad "mirrorguard: REV-174 -- a removed floor rode along with the foreign rewrite" "rc=$got" "$(cat "$MG/out")"
+got=$(mg_guard "$MG/f174-other.txt" "")
+[ "$got" != 0 ] && ok "mirrorguard: REV-174 -- ...an added protection not in the generated shape (:all / :2) is refused" \
+    || bad "mirrorguard: REV-174 -- a non-generated added protection was excused" "rc=$got" "$(cat "$MG/out")"
 
 fi   # --- koniec sekcji mirrorguard ---
 

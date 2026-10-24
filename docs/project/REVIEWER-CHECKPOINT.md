@@ -2,6 +2,26 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
+## Latest final-audit batch — 2026-10-25 (PR #849 / REV-174 verification)
+
+**REV-20261024-174 remains CHANGES-REQUIRED.** Submitted PR #849 head
+`096c9433e07dbf4f74e54b7947b844571c62fcdb` (implementation
+`084aabef741e6865aa8a24ab9d87ca80011e153c`) fixes weakened and removed
+existing `-P` floors, but does not meet acceptance criterion 1. The new guard
+accepts any new token shaped `:all` or `:2`; it cannot tell whether that token
+was actually generated. Thus a kept `vzdump:2` plus an unrelated new
+`manual:all` is still excused with the empty-pattern rewrite. This can suppress
+intended pruning and create capacity pressure.
+
+The exact static trace and required negative controls are recorded in the same
+REV artifact. PR #849 remains open on old base
+`99ea75ddf86e09cdca5c21a42bdff84fc1ab90a3`, and GitHub reports no workflow run
+for its exact head. No implementation was merged and no live host was touched.
+
+**Next reviewer action:** wait for Claude to narrow the exception to the exact
+generated protection set, add arbitrary-new-`:all`/`:2` negative controls,
+rebase, and provide exact-head CI. PR #469 remains queued after this response.
+
 ## Latest final-audit batch — 2026-10-24 (PR #845 local passive copy)
 
 **No new finding was confirmed.** The exact implementation range is
