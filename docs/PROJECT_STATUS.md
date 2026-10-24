@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: dd889e94833b60f4 -->
+<!-- status-covers-digest: 35c3840af55403ec -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,26 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Pasywna kopia lokalna i przejęcie starych zadań (`feat/local-passive-copy`, 2026-10-24, do wdrożenia
+  1.0 na Metropolis).** Kopia lokalna umie być pasywna (`--passive`): przyjmuje migawki, które robi kto
+  inny (replika pvesr na pve2: migawki robi pve1). Sekcja `[dataset:]` dostaje `passive = yes`, czyli
+  `-e` na linii kopiowania. Nie powstaje sprzątanie źródła ani w `[prune:<źródło>]`, ani w szczeblach
+  sekcji (gen-cron nie emituje przycinania źródła dla sekcji pasywnej; monitor zostaje). Seed bierze
+  najnowszą migawkę całej rodziny (`-m automated_ -e`), w rekordzie jest `PASSIVE=1`, a `edit-relation`
+  powtarza flagę z sekcji. `--passive` z `--target=''` jest odrzucane. Kreator: pole „Migawki na
+  źródle” także przy kopii lokalnej, gdy źródło ma naszą rodzinę; odpowiedź „łańcuch” daje
+  `--passive`, bez kroku retencji źródła. Strażnik nakładania: z `--recursive` źródło jest
+  roszczeniem rekursywnym, więc stara sekcja dziecka pod nowym miejscem jest odrzucana; komunikat
+  każe najpierw `edit-config`. `edit-config` z `--yes` albo bez terminala kończy się przy odmowie
+  generatora (wcześniej domyślne „tak” otwierało odrzucony plik w kółko). Próba przejęcia w labie
+  (pve11 jak pve1, pve9 jak pve2, datasety `hdd/mt`, kopie `hdd/bkmt`): stare sekcje v4 zdjęte
+  `edit-config`, relacje założone po kolei; na pve9 kopie replik 107 i 106 z `-e`, replik nikt nie
+  przycina, 103 aktywnie z retencją źródła; zmiana szablonu zachowała pasywność. Runbook:
+  `docs/project/RUNBOOK-PRZEJECIE-METROPOLIS-2026-10-25.md`. Testy: `localbackup` 171/0, `cron`
+  232/0, `tui` 411/0 (pve9); nowe przypadki padają na main. Znane: retencja GFS po stronie celu
+  renderuje się płasko (`-H24` bez `-G`), osobna sprawa.
+
 
 - **Migawki naszej rodziny już na źródle: admin mówi, kto je robi (`feat/own-snapshots-declared`, decyzja
   właściciela 2026-10-24, wariant A+D).** Gdy źródło ma już migawki `automated_*`, seed (a przy lustrze także
