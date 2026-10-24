@@ -507,5 +507,5 @@
 "GOTOWE: replika '$NAME' zainstalowana (rc=$RC).": "DONE: replica '$NAME' installed (rc=$RC).",
 "Replika $NAME: GOTOWE": "Replica $NAME: DONE",
 "Po podłączeniu: kopia z opóźnieniem (replica.insert_wait, domyślnie 60 s) -- krok: reguła udev ZOSTANIE $_rw": "On connect: copy after a delay (replica.insert_wait, default 60 s) -- step: udev rule WILL BE $_rw",
-"[tryb testowy] polecenie nie zostało uruchomione, tylko zapisane do dziennika: ": "[test mode] the command was not run, only written to the log: "
+"[tryb testowy] nie uruchomiono, zapisano do dziennika: ": "[test mode] not run, written to the log: "
 }

@@ -4118,7 +4118,7 @@ class UI(object):
         if self.exec_log:
             with io.open(self.exec_log, "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
-            self.message = _(u"[tryb testowy] polecenie nie zostało uruchomione, tylko zapisane do dziennika: ") + line
+            self.message = _(u"[tryb testowy] nie uruchomiono, zapisano do dziennika: ") + line
             return "stay"
         self.pending_shell = line
         return "shell"
@@ -4154,7 +4154,7 @@ class UI(object):
         if self.exec_log:
             with io.open(self.exec_log, "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
-            self.message = _(u"[tryb testowy] polecenie nie zostało uruchomione, tylko zapisane do dziennika: ") + line
+            self.message = _(u"[tryb testowy] nie uruchomiono, zapisano do dziennika: ") + line
             return "stay"
         line = self.window_env(argv[1] if len(argv) > 1 else "cmd", line)
         self.pending_shell, self.pending_nowait = line, True
@@ -4240,7 +4240,7 @@ class UI(object):
         if self.exec_log:
             with io.open(self.exec_log, "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
-            self.message = _(u"[tryb testowy] polecenie nie zostało uruchomione, tylko zapisane do dziennika: ") + line
+            self.message = _(u"[tryb testowy] nie uruchomiono, zapisano do dziennika: ") + line
             return "stay"
         line = self.window_env("new-relation", line)
         self.pending_shell, self.pending_nowait = line, True
@@ -4424,7 +4424,7 @@ class UI(object):
             with open(self.exec_log, "a", encoding="utf-8") as fh:
                 fh.write(shell + "\n")
             self.window = ("output", {"title": title, "path": None, "proc": None, "shell": shell,
-                                      "lines": [_(u"[tryb testowy] polecenie nie zostało uruchomione, tylko zapisane do dziennika:"), "  " + shell], "rc": 0})
+                                      "lines": [_(u"[tryb testowy] nie uruchomiono, zapisano do dziennika:"), "  " + shell], "rc": 0})
             self.scroll = 0
             return
         logdir = os.path.join(home_dir(), ".zfs-tui")

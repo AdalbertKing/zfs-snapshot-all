@@ -6070,9 +6070,9 @@
   },
   {
    "k": "u510",
-   "pl_code": "[tryb testowy] polecenie nie zostało uruchomione, tylko zapisane do dziennika:",
-   "pl": "[tryb testowy] polecenie nie zostało uruchomione, tylko zapisane do dziennika:",
-   "en": "[test mode] the command was not run, only written to the log:",
+   "pl_code": "[tryb testowy] nie uruchomiono, zapisano do dziennika:",
+   "pl": "[tryb testowy] nie uruchomiono, zapisano do dziennika:",
+   "en": "[test mode] not run, written to the log:",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [

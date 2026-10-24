@@ -1905,7 +1905,7 @@ else
     bad "linia: edycja" "$C"
 fi
 C="$(: > "$XL"; screen relacje "text:ls -l,enter" --exec-log "$XL")"
-if [ "$(cat "$XL")" = "ls -l" ] && has "$C" '[tryb testowy] polecenie nie zostało uruchomione, tylko zapisane do dziennika: ls -l'; then
+if [ "$(cat "$XL")" = "ls -l" ] && has "$C" '[tryb testowy] nie uruchomiono, zapisano do dziennika: ls -l'; then
     ok "linia: Enter wykonuje DOKLADNIE wpisana linie (atrapa: dziennik) i czysci linie"
 else
     bad "linia: Enter" "$(cat "$XL")" "$C"
