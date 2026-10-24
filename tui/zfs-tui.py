@@ -742,7 +742,7 @@ def cron_next(spec, now):
 TIER_WORDS = [("hourly", u"godz."), ("daily", u"dni"), ("weekly", u"tyg."), ("monthly", u"mies."), ("yearly", u"lat")]
 TIER_ADJ = [("hourly", u"godzinowe"), ("daily", u"dobowe"), ("weekly", u"tygodniowe"), ("monthly", u"miesięczne"), ("yearly", u"roczne")]
 DOW = [u"nd", u"pn", u"wt", u"śr", u"cz", u"pt", u"so"]
-# Dni tygodnia nie idą przez katalog: "śr" jest w nim już kluczem "średnia" (kolumna statystyk).
+# Dni tygodnia: osobna lista skrótów angielskich, jeden wybór wg języka okien.
 DOW_EN = [u"Sun", u"Mon", u"Tue", u"Wed", u"Thu", u"Fri", u"Sat"]
 
 
