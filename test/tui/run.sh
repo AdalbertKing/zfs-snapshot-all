@@ -2478,7 +2478,19 @@ NRCS=$(nr_run "0${T}sync
 0${T}192.168.28.98
 0${T}
 0${T}chain
-${NRTS}" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCSW="$(cat "$NR/wt.log")"
+0${T}default
+0${T}pve9b
+0${T}adv
+0${T}acct
+0${T}root
+0${T}extra
+0${T}grant
+0${T}__done__
+1${T}
+0${T}create
+0${T}
+0${T}
+" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCSW="$(cat "$NR/wt.log")"
 "$PY" - "$NRC/list-datasets-pve9b.json" <<'PYEOF'
 import sys, json
 p = sys.argv[1]; d = json.load(open(p, encoding="utf-8"))
