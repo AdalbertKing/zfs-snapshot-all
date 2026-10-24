@@ -38,6 +38,7 @@ for c in python3 python; do "$c" -c 'import sys' >/dev/null 2>&1 && { PY="$c"; b
 [ -n "$PY" ] || { echo "FATAL: brak dzialajacego interpretera python" >&2; exit 2; }
 export PYTHONIOENCODING=utf-8
 
+export ZFS_TUI_LANG=pl   # okna po polsku niezależnie od settings.ini hosta (testy języka niżej zdejmują to)
 NOW=1788960000   # 2026-09-09, srodek dnia -- deterministyczny "nastepny bieg"
 ALL="--status $P10/status.json --jobs $P10/list-jobs.json --monitors $P10/monitor.json --progress $P10/progress.json --replicas $P10/replicas.json --config $P10/show-config.json --stats $P10/job-stats.json"
 PAUSED="--status $P10/status-paused.json --jobs $P10/list-jobs.json --monitors $P10/monitor-paused.json --progress $P10/progress.json --replicas $P10/replicas.json"
@@ -5375,13 +5376,37 @@ fi
 
 # Limit czytnika GUI: zawieszony czytnik (ssh do martwego hosta) wraca błędem w limicie i nie
 # zostawia procesów; zwykły czytnik dalej daje JSON. Prawdziwe run_verb() z produkcji.
-rto_out="$("$PY" "$REPO/test/tui/reader_timeout.py" "$TUI" 2>&1 | tr -d '')"
+rto_out="$("$PY" "$REPO/test/tui/reader_timeout.py" "$TUI" 2>&1 | tr -d '
+')"
 if [ "$(printf '%s
 ' "$rto_out" | grep -c '^ok ')" -eq 3 ] && ! printf '%s
 ' "$rto_out" | grep -q '^bad '; then
     ok "czytnik GUI: limit czasu -- zawieszony wraca błędem i ginie z dziećmi, zwykły daje JSON"
 else
     bad "czytnik GUI: limit czasu" "$rto_out"
+fi
+
+# JĘZYK OKIEN (P0 tłumaczenia, 2026-10-24): katalog tui/lang/en.json ma wpis dla każdego tekstu
+# podanego do T/_(); pasek F i T dają angielski z --lang=en / ZFS_TUI_LANG=en / [gui] language,
+# a bez nich polski (domyślny język; testy wyżej są po polsku).
+lc_out="$("$PY" "$REPO/test/tui/lang_catalog.py" "$REPO" 2>&1 | tr -d '\r')"
+LGS="$(mktemp -d)"; printf '[gui]\nlanguage = en\n' > "$LGS/settings.ini"
+bar_pl="$(env -u ZFS_TUI_LANG SETTINGS_FILE=/nonexistent "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --screen relacje --width 100 2>&1 | tail -1)"
+bar_en="$(env -u ZFS_TUI_LANG SETTINGS_FILE=/nonexistent "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --screen relacje --width 100 --lang en 2>&1 | tail -1)"
+bar_set="$(env -u ZFS_TUI_LANG SETTINGS_FILE="$LGS/settings.ini" "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --screen relacje --width 100 2>&1 | tail -1)"
+t_pl="$(env -u ZFS_TUI_LANG SETTINGS_FILE=/nonexistent WHIPTAIL=true bash -c '. "$1/tui/wt-lib.sh"; T Dalej; T "Nowa relacja -- krok %s z %s: %s" 1 6 X' x "$REPO")"
+t_en="$(ZFS_TUI_LANG=en WHIPTAIL=true bash -c '. "$1/tui/wt-lib.sh"; T Dalej; T "Nowa relacja -- krok %s z %s: %s" 1 6 X; T "tekst bez wpisu"' x "$REPO")"
+t_set="$(env -u ZFS_TUI_LANG SETTINGS_FILE="$LGS/settings.ini" WHIPTAIL=true bash -c '. "$1/tui/wt-lib.sh"; T Wstecz' x "$REPO")"
+rm -rf "$LGS"
+if [ "$(printf '%s\n' "$lc_out" | grep -c '^ok ')" -eq 2 ] \
+   && has "$bar_pl" '3Relacje' && has "$bar_pl" '12Wyjście' \
+   && has "$bar_en" '3Relations' && has "$bar_en" '12Quit' && ! has "$bar_en" 'Relacje' \
+   && has "$bar_set" '3Relations' \
+   && [ "$t_pl" = "DalejNowa relacja -- krok 1 z 6: X" ] \
+   && [ "$t_en" = "NextNew relation -- step 1 of 6: Xtekst bez wpisu" ] && [ "$t_set" = "Back" ]; then
+    ok "język okien: katalog pełny dla T/_(), pasek F i T po angielsku z --lang/ZFS_TUI_LANG/settings, bez nich po polsku"
+else
+    bad "język okien (P0)" "$lc_out" "pl=[$bar_pl]" "en=[$bar_en]" "set=[$bar_set]" "t_pl=[$t_pl] t_en=[$t_en] t_set=[$t_set]"
 fi
 
 echo "--------------------------------------------"

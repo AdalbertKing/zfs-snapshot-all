@@ -960,7 +960,7 @@ settings_write_default() {   # <path> -> 0 written, 1 already there
 # and applies it (cron lines regenerated where the key is a schedule).
 # ============================================================================
 [gui]
-#language = en                 # en | pl
+#language = pl                 # pl | en (okna GUI; komunikaty poleceń po angielsku)
 
 [alerts]
 #email = root                  # who gets the mail

@@ -49,8 +49,8 @@ MODE="backup"; HOST=""; PORT="22"; HOSTNAME_R=""; RECURSION="flat"; NOCOPY=0
 # U66 (właściciel 2026-10-21, przebudowa): kreator KROK PO KROKU -- tytuł mówi, który to krok
 # z ilu (liczą się tylko kroki tego rodzaju relacji); w podsumowaniu bez licznika.
 title() {
-    if [ -n "${WZ_SN:-}" ]; then printf 'Nowa relacja -- krok %s z %s: %s' "$WZ_SI" "$WZ_SN" "$2"
-    else printf 'Nowa relacja: %s' "$2"; fi
+    if [ -n "${WZ_SN:-}" ]; then T 'Nowa relacja -- krok %s z %s: %s' "$WZ_SI" "$WZ_SN" "$2"
+    else T 'Nowa relacja: %s' "$2"; fi
 }
 # Kopia lokalna nie ma drugiego hosta: czytelniki pytamy bez adresu (= ten host).
 hostport() { [ "$MODE" = local ] && return 0; [ "$PORT" = 22 ] && echo "$HOST" || echo "$HOST:$PORT"; }
@@ -63,13 +63,16 @@ step_mode() {
     local cur="$MODE"
     [ "$NOCOPY" -eq 1 ] && cur=snap
     case "$cur" in sync|local|snap|snaponly) ;; *) cur=backup ;; esac
-    wt --title "$(title 1 'Jaka relacja?')" --ok-button "Dalej" --cancel-button "Wyjdź" --notags --default-item "$cur" \
-       --menu "Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\nKopia lokalna: kopia na tym samym hoście, np. rpool/data -> hdd/backup.\nMigawki lokalne: migawki i ich sprzątanie w datasetach tego hosta, bez kopii.\nMigawki zdalne: ten host robi i sprząta migawki NA innym hoście, bez kopii.\n\nStrzałki = ruch, spacja = wybierz, Enter = dalej." "$(fit 10)" "$W" 5 \
-       backup "Backup    (ten host pobiera ze źródła)" \
-       sync   "Lustro    (to samo po obu stronach)" \
-       local  "Kopia lokalna  (na tym hoście)" \
-       snap   "Migawki lokalne  (na tym hoście, bez kopii)" \
-       snaponly "Migawki zdalne  (na innym hoście, bez kopii)" || return 1
+    # Przejście 2026-10-24: opis miał 8 linii przy oknie na 10 (z listą) -- linia o migawkach
+    # zdalnych nie mieściła się wcale, a ostatnia mówiła o klawiszach w treści okna (E88).
+    # Teksty przez T (język okien; pilot P0 tłumaczenia).
+    wt --title "$(title 1 "$(T 'Jaka relacja?')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wyjdź)" --notags --default-item "$cur" \
+       --menu "$(T 'Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\nKopia lokalna: kopia na tym samym hoście, np. rpool/data -> hdd/backup.\nMigawki lokalne: migawki i ich sprzątanie w datasetach tego hosta, bez kopii.\nMigawki zdalne: ten host robi i sprząta migawki NA innym hoście, bez kopii.')" "$(fit 13)" "$W" 5 \
+       backup "$(T 'Backup    (ten host pobiera ze źródła)')" \
+       sync   "$(T 'Lustro    (to samo po obu stronach)')" \
+       local  "$(T 'Kopia lokalna  (na tym hoście)')" \
+       snap   "$(T 'Migawki lokalne  (na tym hoście, bez kopii)')" \
+       snaponly "$(T 'Migawki zdalne  (na innym hoście, bez kopii)')" || return 1
     # "Same migawki" = kopia lokalna bez celu: te same kroki co Lokalnie, bez "Dokąd".
     if [ "$WT_OUT" = snap ]; then NOCOPY=1; WT_OUT=local; TARGET=""; else NOCOPY=0; fi
     if [ -n "$WT_OUT" ] && [ "$WT_OUT" != "$MODE" ]; then
