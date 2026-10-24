@@ -392,7 +392,7 @@ class Grid(object):
         top = u"┌─" + title + u"─" * max(0, w - 3 - len(title)) + u"┐"
         bot = u"└─ " + hint[:w - 6] + u" " + u"─" * max(0, w - 5 - len(hint[:w - 6])) + u"┘"
         out = [top] + [u"│" + (l[:w - 2]).ljust(w - 2) + u"│" for l in lines] + [bot]
-        kind, idx, _ = self.items[self.cur]
+        kind, idx, _seg = self.items[self.cur]
         sp = spans.get((kind, idx))
         focus = (sp[0] + 1, sp[1] + 1, sp[2] + 1) if sp else None
         self.caret = None
