@@ -81,10 +81,8 @@ przez implementera, niepowtórzone przez recenzenta. Bez nowego findingu/REV.
 Następny zakres: **#480/#482** — rozjazd kopii i `recv -F`, ochrona
 uruchomionego gościa.
 
-Następny zakres: PR #463 — przenośna replika na `snapget -M`, ze szczególnym
-sprawdzeniem tożsamości nośnika, ciągłości bookmarków i raportowania błędów.
-Granicy kasowania lustra z PR #460 / REV-150 nie otwierać bez nowego diffu lub
-dowodu.
+Zakres PR #463 zamknięto powyższym audytem. Granicy kasowania lustra z PR #460 / REV-150
+nie otwierać bez nowego diffu lub dowodu. Kolejny przegląd: PR #480 / #482.
 
 Uwaga do terminologii: wpis 2026-10-06 w `ENGINE-FREEZE.md` (~819) nazywa zmianę „PRE-AUTHORISED by the owner”, choć
 dokument (~1016–1035) mówi, że autoryzacja zamrożonego pliku należy do recenzenta. Żaden z wpisów 2026-10-06/-08/-12
