@@ -15585,9 +15585,9 @@
   {
    "k": "u1368",
    "pl_code": "Pozycja zmienia jedną wartość; nic nie jest zapisane przed WYKONAJ. W nawiasie: skąd jest wartość, gdy nie z pliku ustawień.",
-   "pl": "Pozycja zmienia jedną wartość; nic nie jest zapisane przed WYKONAJ. W nawiasie: skąd jest wartość, gdy nie z pliku ustawień.",
-   "en": "An item changes one value; nothing is saved before EXECUTE. In brackets: where the value comes from when not from the settings file.",
-   "origin": "auto",
+   "pl": "Wybierz pozycję, aby zmienić jej wartość. Nic nie zostanie zapisane, dopóki nie wybierzesz „Zapisz zmiany” i WYKONAJ. Nawias przy wartości mówi, skąd ona pochodzi, jeśli nie ma jej w pliku ustawień.",
+   "en": "Choose an item to change its value. Nothing is saved until you choose \"Zapisz zmiany\" (save changes) and EXECUTE. The note in brackets says where a value comes from when it is not in the settings file.",
+   "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "settings.sh:124 save"
@@ -15728,9 +15728,9 @@
   {
    "k": "u1381",
    "pl_code": "Relacje zbudowane z tego szablonu zostają; ich późniejsze 'Zmień relację -> Szablon' nie będzie miało z czego odświeżyć.",
-   "pl": "Relacje zbudowane z tego szablonu zostają; ich późniejsze 'Zmień relację -> Szablon' nie będzie miało z czego odświeżyć.",
-   "en": "Relations built from this template stay; their later 'Change relation -> Template' will have nothing to refresh from.",
-   "origin": "auto",
+   "pl": "Relacje utworzone z tego szablonu zostaną i będą działać dalej. Później nie odświeżysz ich jednak przez 'Zmień relację -> Szablon', bo tego szablonu już nie będzie.",
+   "en": "Relations built from this template stay and keep running. Later you cannot refresh them through 'Zmień relację -> Szablon', because this template will be gone.",
+   "origin": "owner-reworded",
    "unclear": false,
    "where": [
     "template.sh:108 run_cmd"
