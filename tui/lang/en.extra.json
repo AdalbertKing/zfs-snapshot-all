@@ -1,5 +1,5 @@
 {
-"_note": "Texts the review table did not contain (the extractor missed short ASCII words). Added 2026-10-24, to be confirmed by the owner. build.py merges this file into en.json.",
+"_note": "Texts outside the first review table (the extractor missed them). Reviewed by the owner 2026-10-24 on the review page as NOWE: all 94 accepted (one edit, PULLS -> GETS, withdrawn: pull is the term used across the GUI). build.py merges this file into en.json.",
 "Eksport/Import": "Export/Import",
 "Klucz": "Key",
 "Odśwież": "Refresh",
