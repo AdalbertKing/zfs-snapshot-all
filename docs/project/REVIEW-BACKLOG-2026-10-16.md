@@ -64,6 +64,23 @@ run `38242689996` — success. Ręczny dowód na jednorazowych pulach `pve9b`
 obejmował pierwszy i przyrostowy push oraz pierwszy pull; recenzent nie
 powtarzał operacji na żywym hoście. Brak nowego REV.
 
+**Rozstrzygnięcie recenzenta 2026-10-24 — PR #463 / replika na snapget -M.**
+Dokładna baza `9fb9a7afd2904c8ac58d1a7e989b1ed19e49e428`, head
+`91954aafa0ca1305d86669ab5c4159ec768f9674`, merge
+`76ee2e94f7da0eedcee593bd8c5f11293cfab75f`.
+Wersja współczesna: `7ff2b0bd1d11ab865a03100023b0606c2a3fbc0e`. Zmiana `snapsend -m` na
+`snapget -m -M` zachowuje bookmark po tym samym celu i identyfikatorze
+(wspólna funkcja `bookmark_target_tag`); lustro raportuje usuwanie i
+przeszkody na poziomie 0. Aktualna bramka rozróżnia identyfikatory GUID
+i import własny od zastanego; poprawki #741/#742 należy liczyć oddzielnie.
+Próby CI main `40112247542`: mediagate 160/0, twins 94/0, cron 232/0,
+gencron 123/0, składnia i graf PASS. PR-head `37495811929`: SUCCESS.
+Historyczne `cron2conf` usunięto świadomie w X27 S4, więc jego starego
+round-trip nie przypisuje się współczesnej suicie. Live USB/pve9 opisane
+przez implementera, niepowtórzone przez recenzenta. Bez nowego findingu/REV.
+Następny zakres: **#480/#482** — rozjazd kopii i `recv -F`, ochrona
+uruchomionego gościa.
+
 Następny zakres: PR #463 — przenośna replika na `snapget -M`, ze szczególnym
 sprawdzeniem tożsamości nośnika, ciągłości bookmarków i raportowania błędów.
 Granicy kasowania lustra z PR #460 / REV-150 nie otwierać bez nowego diffu lub
