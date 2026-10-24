@@ -152,6 +152,23 @@ Kolejność: odzysk (najwięcej nowych uprawnień), potem wdrożenie.
   klucz), #489 (bramka nośnika: pasywna replika zawsze uruchamia kopię).
 - #542: kolizja dwóch relacji na jednym datasecie -- odmowa w obrębie hosta, ostrzeżenie przy kolektorze zdalnym.
 
+**Rozstrzygnięcie recenzenta 2026-10-24 — PR #553 / REV-20261023-170.**
+Ostrzeżenie backlogu było zasadne i zostało już obsłużone formalnym review.
+Dokładny head #553 `30710f595b475a68c383a552d27c3e03b9a38641`
+reprodukuje odebranie wspólnego `<pool>/restore` pierwszemu z dwóch aktywnych
+grantów tego samego konta (**5/5 PASS reprodukcji**) oraz po zmianie konta w
+manifeście cofa niewłaściwy tuple (**3 PASS / 3 FAIL**). REV-170 objął oba
+kryteria, współbieżne `deny`, awarię i retry właściciela locka, niejednoznaczny
+stary rekord oraz izolację kont i pul. Po dwóch odrzuconych implementacjach
+zatwierdzono `e6b0be67f7060b7d427c952c047929bcaf37a0bc` i osobno zamknięto review.
+Na bieżącym main reproducer wspólnego namespace ma 4 PASS / 1 oczekiwany FAIL
+(uprawnienie prawidłowo zostaje dla drugiego właściciela), account-drift ma
+6/6 PASS, właściwe testy `restoregrant` przechodzą, `restore` ma 335/335,
+`deadcode` 7/7, a `impact --verify` jest zielone. Uprawnienie ogranicza się do
+`receive,rollback,create,canmount,mountpoint,mount`; ostatni właściciel odbiera
+je przed wznowieniem writerów, a namespace i odzyskane dane pozostają. Nie
+otwarto nowego REV; REV-170 pozostaje CLOSED.
+
 ## 4. Zmiana modelu configu (X27) -- duża zmiana semantyki generatora
 
 Etapy S1–S4 zrobione 2026-10-14 (PROJECT_STATUS); zamknięcie etapu ogłosił właściciel w czacie, w drzewie nie ma

@@ -2,7 +2,63 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-24 (local restore / PRs #539 and #541)
+## Latest final-audit batch — 2026-10-24 (PR #553 / REV-170 reconciliation)
+
+**The widened `<pool>/restore` delegation was unsafe in PR #553, but that
+exact defect and its continuation are already covered by CLOSED REV-170; the
+current capability lifecycle satisfies the published acceptance boundary.**
+The exact PR #553 range is
+`b3660d3fc593e8824214174d2930d77c085565d0..30710f595b475a68c383a552d27c3e03b9a38641`
+and its merge is `23dd574486db30f94849504e92bd0339ac72898f`.
+The final approved implementation is
+`e6b0be67f7060b7d427c952c047929bcaf37a0bc`; approval commit
+`1a4911261f4d5bec9604830947e498e8bb766985` and the canonical closure agree.
+
+Independent evidence on current `main`
+`77c8a3b89d2806f2273e63f21e345cd947dfb128`:
+
+- the published shared-namespace reproducer against exact PR #553 head is
+  **5/5 PASS**: withdrawing the first of two same-account grants removes their
+  one shared namespace capability while the second grant remains active;
+- the same reproducer on current main is **4 PASS / 1 expected FAIL** because
+  the capability correctly remains effective for the second owner;
+- the account-drift control against exact PR #553 head is **3 PASS / 3 FAIL**:
+  no grant-time account is recorded, withdrawal revokes the rejoined account,
+  leaves the original tuple delegated and removes the other active account's
+  tuple. Current main is **6/6 PASS** and its trace names only the grant-time
+  account;
+- the current `restoregrant` suite's REV-170 sequential-owner, pending retry,
+  cross-account/pool, concurrent withdrawal, killed lock-holder, ambiguous
+  legacy record and account-drift controls all pass. The full run is 207/210
+  in this root-only reviewer container; all three failures are the known tests
+  that deliberately require a non-root caller. The supported CI evidence in
+  the approval records 210/210;
+- `test/restore/run.sh` is 335/335 and `test/deadcode/run.sh` is 7/7;
+  `bash -n`, exact-range `git diff --check`, `test/impact.sh` selection and
+  `./test/impact.sh --verify` pass;
+- exact PR #553 head CI run 38787893215 and final REV-170 implementation run
+  39939015319 passed:
+  https://github.com/AdalbertKing/zfs-snapshot-all/actions/runs/38787893215 and
+  https://github.com/AdalbertKing/zfs-snapshot-all/actions/runs/39939015319.
+
+The current namespace capability is limited to the restore verbs
+`receive,rollback,create,canmount,mountpoint,mount`; it does not add snapshot,
+destroy,hold or delegation-management rights. A global grant transaction lock
+serializes all labels sharing the namespace. Active and pending owners keep the
+tuple; the last owner removes it before resuming its writers; failed or
+ambiguous revocation remains durable and fail-closed. The namespace and
+recovered contents are never destroyed by grant withdrawal. No live host or
+dataset was touched in this reviewer batch.
+
+No new REV was opened and REV-170 remains CLOSED. This batch reconciles the
+stale #553 backlog warning with the already-published finding, two rejected
+implementations, approval and closure; it does not rewrite that history.
+
+**Next reviewer scope:** reconcile the X27 backward-compatibility warning for
+pre-X27 fleet configs against the actual migration/reader code, published
+reviews and a production-shaped old-config render negative control.
+
+## Previous final-audit batch — 2026-10-24 (local restore / PRs #539 and #541)
 
 **Both local-restore backlog defects reproduce on their exact bases and are
 corrected in the current tree; no current defect was found.** PR #539 spans
