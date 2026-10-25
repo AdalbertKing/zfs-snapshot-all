@@ -4686,10 +4686,12 @@ class D: pass
 x = D(); x.jobs = {"host": "pve10", "jobs": [{"account": "root"}]}; x.read_at = 0; x.host_ip = None; x.guards = ("on", "off")
 print("WIDE", u"ochrona: bezpiecznik wł. · przyrost wył." in zt.top_bar(x, 140, 0, False, 0))
 print("NARROW", u"ochrona" not in zt.top_bar(x, 70, 0, False, 0), len(zt.top_bar(x, 70, 0, False, 0)) <= 70)
+w = zt.top_bar(x, 200, 0, False, 0)
+print("CREDIT", u"by Wojciech Król (Adalbert King)" in w and u"ochrona" in w and len(w) <= 200, u"Król" not in zt.top_bar(x, 80, 0, False, 0))
 PYEOF
 )"
-if has "$GT" "A ('on', 'on')" && has "$GT" "B ('off', 'off')" && has "$GT" "C ('off', 'off')" && has "$GT" 'WIDE True' && has "$GT" 'NARROW True True'; then
-    ok "pasek: stan straznikow hosta -- F10 przed starym conf, F10 wyl. wygrywa z conf wl., brak plikow = wyl.; waski pasek pomija"
+if has "$GT" "A ('on', 'on')" && has "$GT" "B ('off', 'off')" && has "$GT" "C ('off', 'off')" && has "$GT" 'WIDE True' && has "$GT" 'NARROW True True' && has "$GT" 'CREDIT True True'; then
+    ok "pasek: stan straznikow hosta -- F10 przed starym conf, F10 wyl. wygrywa z conf wl., brak plikow = wyl.; waski pasek pomija; autor tylko przy zapasie miejsca"
 else
     bad "pasek: stan straznikow" "$GT"
 fi
