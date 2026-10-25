@@ -28,6 +28,30 @@
     <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
   - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
     `update-control` jako „not clean”.
+- **Relacja = jej config: jeden zakres, jedno drzewo, jedno wywołanie (2026-10-26, projekt
+  `docs/project/DESIGN-RELACJA-TO-CONFIG-2026-10-25.md`).** Na `main` (repo dev), jeszcze nie wydane.
+  - Odczyt zakresu jest jeden dla każdego rodzaju relacji: `relation_sources` czyta sekcje relacji
+    z configu. Własność sekcji daje `managed-by: … client=NAZWA` albo `pair_label` bez znacznika
+    `client=`. Status (`sources`) i GUI (`relation-sources NAZWA`) biorą zakres stąd.
+  - Zapis jest jeden: `set-datasets NAZWA --dataset=DS:flat|no … [--yes]`. Ustawia zgodę na źródle
+    (relacja zdalna), przepisuje sekcje relacji, waliduje i instaluje cron, a nowe pozycje
+    dostają pierwszy bieg. Reguła drzewa: [x] = `DS:flat` (z dziećmi, także przyszłymi),
+    [-] = `DS:no` z zaznaczonymi dziećmi jako osobnymi pozycjami, [ ] = nic. Wyjątków nie
+    zapisuje (`-X`, `exclude_child_N` znikają przy pierwszej zmianie).
+  - Okno zmiany relacji i kreator: to samo drzewo i jedno `set-datasets`, wyjątki w każdym
+    rodzaju relacji. W oknie nie ma już `add-source`/`remove-source` ani przebudowy tylko dla
+    snaponly. Kreator przestaje odmawiać wyjątków przy migawkach zdalnych z PR #886.
+  - Zmiana szablonu nie gubi zakresu. Relacja snaponly przebudowuje się z własnego configu, a
+    gdy zakres czytany jest ze zgody na źródle, dziecko z [x] pod rodzicem z [-] (np.
+    `hdd/ct/subvol-301` pod `hdd/ct`) zostaje rekurencyjne.
+  - Sprawdzone na labie prawdziwymi czasownikami i biegami crona dla pięciu rodzajów relacji
+    (migawki zdalne pve9 → pve9b, backup pve10 ← pve9, lustro pve10 ↔ pve11, migawki lokalne
+    pve11, kopia lokalna pve9). Okno zmiany na żywo: pve9 i pve11; kreator na żywo: pve9.
+    `test/tui` 414/0 na pve9.
+  - Znane drobiazgi: przy tworzeniu relacji z [-] zgoda na źródle obejmuje najpierw całe drzewo
+    (jedna migawka na wyłączonym dziecku), a zawęża ją dopiero `set-datasets`. Plan okna zmiany
+    mówi „pierwsza kopia” / „kopie zostają” także przy migawkach. Podsumowanie kreatora nie
+    pokazuje [-].
 - **Metropolis: jeden kolektor pve2 (przejęcie 2026-10-25).** Wszystkie zadania pakietu są na koncie
   `zfsbackup` hosta pve2, w configu `jobs.pve2.v4.conf`. W cronie pve1 nie ma zadań pakietu: migawki na jego dyskach robi i przycina pve2 przez SSH.
   - `pve1`: migawki zdalne (snaponly) na 7 dyskach pve1 i labowym CT 990, h24 d7 w4 m6, bez zamrażania.
