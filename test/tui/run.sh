@@ -5272,7 +5272,7 @@ if declare -F pool_roots_to_children >/dev/null; then
     u67_got="$(printf '%s;' "${SRC_ROOT[@]}")|$(printf '%s;' "${SRC_EXCL[@]}" | tr '\n' ',')"
     # H-1: the basket itself keeps the pool as chosen (Wstecz shows it ticked, not "[-]")
     [ "${B_ROOT[0]}" = hdd ] || u67_got="$u67_got (basket changed: ${B_ROOT[*]})"
-    if [ "$u67_rc" -eq 0 ] && [ "$u67_got" = "hdd/a;hdd/c;tank/z;|;hdd/c/y;;" ] && printf '%b' "$POOL_NOTE" | grep -q 'Cała pula hdd = 2 datasetów'; then
+    if [ "$u67_rc" -eq 0 ] && [ "$u67_got" = "hdd/a;hdd/c;tank/z;|;hdd/c/y;;" ] && printf '%b' "$POOL_NOTE" | grep -q 'Wybrana cała pula hdd: replika kopiuje 2 datasetów'; then
         ok "U67: a pool root becomes its direct children (excluded child dropped, deeper exclusion follows its child), and the window says so"
     else
         bad "U67: pool root expansion" "rc=$u67_rc got=$u67_got" "$(printf '%b' "$POOL_NOTE")"

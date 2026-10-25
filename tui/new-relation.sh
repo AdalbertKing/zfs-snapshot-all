@@ -114,7 +114,7 @@ step_host() {
 
 Z jednym hostem jest tylko jedna relacja, za to z dowolną liczbą datasetów.
 Dataset do istniejącej relacji dodaje się w jej zmianie,' '$h' "$h" '$rel' "$rel")
-$(T 'pozycja „Datasety” (zfs-backup.sh add-source).\n\nTutaj podaj host, z którym nie ma jeszcze relacji.')" 14 "$W"
+$(T 'pozycja „Datasety” (zfs-backup.sh add-source).\n\nWskaż host, z którym nie ma jeszcze relacji.')" 14 "$W"
             continue
         fi
         [ "$h" = "$HOST" ] || { B_ROOT=(); B_EXCL=(); }
