@@ -668,6 +668,14 @@ Inspection / teardown:
                                     relationship. Copies already received are KEPT --
                                     this verb never destroys data. Plans without --yes,
                                     and a failed step stops the next one.
+  zfs-backup.sh set-datasets NAME --dataset=DS:flat|no ... [--yes]
+                                    What a relationship covers, for every kind, in one
+                                    call: DS:flat = the dataset and its children, today's
+                                    and future ([x]); DS:no = the dataset only, its listed
+                                    children are their own entries ([-]). The config is
+                                    the truth: the relationship's sections are rewritten
+                                    to exactly this list (a remote source's scope follows
+                                    it), then the cron. Plans without --yes.
   zfs-backup.sh new-relation
                                     The new-relationship wizard as a chain of whiptail
                                     windows: type, source host, what is on it, WHICH
@@ -10776,6 +10784,18 @@ resolve_mode_datasets() {
         done
         return 1
     }
+    # NESTED ROOTS (set-datasets, 2026-10-25): a solid root may sit under a listed parent
+    # (hdd/ct [-] with hdd/ct/subvol-301 [x]). The parent's enumeration must not take the
+    # solid root's subtree dataset by dataset, and the solid root stays recursive even when
+    # the parent's enumeration reached it first -- it was skipped as "already resolved" and
+    # re-rendered as 'recursive = no' (lab pve9 -> pve9b).
+    local -a _solid=()
+    for root in "${SCOPE_ROOTS[@]}"; do
+        if [ "${SCOPE_PARENT[$root]}" = yes ] && [ "${SCOPE_CHILDREN[$root]}" = yes ] \
+           && [ -z "${SCOPE_EXCLUDE[$root]}" ] && [ -z "${SCOPE_EXCLUDE_TREE[$root]}" ]; then
+            _solid+=("$root")
+        fi
+    done
     for root in "${SCOPE_ROOTS[@]}"; do
         if ! scope_root_is_ours "$root"; then
             log "scope root '$root' is outside this relationship's request (a sibling relationship's grant) -- skipped"
@@ -10783,13 +10803,16 @@ resolve_mode_datasets() {
         fi
         if [ "${SCOPE_PARENT[$root]}" = yes ] && [ "${SCOPE_CHILDREN[$root]}" = yes ] \
            && [ -z "${SCOPE_EXCLUDE[$root]}" ] && [ -z "${SCOPE_EXCLUDE_TREE[$root]}" ]; then
-            case " ${resolved[*]:-} " in *" $root "*) continue ;; esac
-            resolved+=("$root")
-            PEER_SAVED_RECURSIVE_ROOTS="${PEER_SAVED_RECURSIVE_ROOTS:+$PEER_SAVED_RECURSIVE_ROOTS }$root"
+            case " ${resolved[*]:-} " in *" $root "*) ;; *) resolved+=("$root") ;; esac
+            case " ${PEER_SAVED_RECURSIVE_ROOTS:-} " in *" $root "*) ;;
+                *) PEER_SAVED_RECURSIVE_ROOTS="${PEER_SAVED_RECURSIVE_ROOTS:+$PEER_SAVED_RECURSIVE_ROOTS }$root" ;; esac
             continue
         fi
         while IFS= read -r ds; do
             [ -n "$ds" ] || continue
+            local _s _under=0
+            for _s in ${_solid[@]+"${_solid[@]}"}; do case "$ds" in "$_s"/*) _under=1 ;; esac; done
+            [ "$_under" -eq 1 ] && continue
             scope_includes "$ds" || continue
             case " ${resolved[*]:-} " in *" $ds "*) continue ;; esac
             resolved+=("$ds")
@@ -12333,6 +12356,15 @@ snaponly_prepare_workfile() {   # <workfile> <name> [rerender 0|1]
     SNAPONLY_REUSED=0
     while IFS= read -r sc; do [ -n "$sc" ] && scopes+=("$sc"); done < <(snaponly_installed_scopes "$wf" "$name")
     if [ "${#scopes[@]}" -eq 0 ] || [ "$rerender" -eq 1 ]; then
+        # RELATION = ITS CONFIG: an installed relationship is re-rendered over what its
+        # sections cover today, not over the source's scope re-resolved -- that lost the
+        # recursion of a root nested under a listed parent (lab pve9 -> pve9b, 2026-10-25:
+        # hdd/ct [-] + hdd/ct/subvol-301 [x], a template change turned the child to 'no').
+        local _rs
+        if [ "${#scopes[@]}" -gt 0 ] && _rs=$(relation_sources "$name" "$wf"); then
+            PEER_SAVED_DATASETS=$(printf '%s\n' "$_rs" | cut -f1 | sed 's/^[^:]*://' | paste -sd' ' -)
+            PEER_SAVED_RECURSIVE_ROOTS=$(printf '%s\n' "$_rs" | awk -F'\t' '$2 != "no" { s = $1; sub(/^[^:]*:/, "", s); print s }' | paste -sd' ' -)
+        fi
         apply_client_profile_choice 1 "${PROFILE:-}"
         emit_snaponly_sections "$wf" "$name"
         return 0
@@ -12523,6 +12555,19 @@ snaponly_first_snapshots() {   # <name>
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         cmd=$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')
+        # A line that groups several datasets in one quoted list ("a,b,c" -- local snapshots)
+        # runs for the new dataset alone: the same engine and flags, the list narrowed to it,
+        # so its siblings get no extra snapshot (set-datasets, 2026-10-25).
+        if [ -n "${SNAPONLY_FIRST_ONLY:-}" ] && [ "${FIRST_RUN_ANY:-0}" = 1 ]; then
+            cmd=$(printf '%s' "$cmd" | awk -v d="$SNAPONLY_FIRST_ONLY" '{
+                n = split($0, p, "\""); out = p[1]
+                for (i = 2; i <= n; i++) {
+                    s = p[i]
+                    if (i % 2 == 0) { m = split(s, q, ","); if (m > 1) for (j = 1; j <= m; j++) if (q[j] == d) { s = d; break } }
+                    out = out "\"" s
+                }
+                print out }')
+        fi
         label=$(printf '%s' "$cmd" | sed -nE 's/.*zfs-job\.sh "([^"]+)".*/\1/p')
         logf=$(printf '%s' "$cmd" | sed -nE 's/.* --log=([^ ]+).*/\1/p')
         if [ "$(cron_target_user)" = root ]; then bash -c "$cmd" </dev/null
@@ -12537,8 +12582,10 @@ snaponly_first_snapshots() {   # <name>
             *) failed=$((failed + 1)); warn "activate-client: first snapshot '$label' did not finish (rc=${rc:-?}) -- cron runs it again at its next tick" ;;
         esac
     done < <(printf '%s\n' "$tab" | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
-                 | grep -F -- " -L $name " | grep -F 'snapget.sh -s ' \
-                 | { if [ -n "${SNAPONLY_FIRST_ONLY:-}" ]; then grep -F -- ":$SNAPONLY_FIRST_ONLY\""; else cat; fi; })
+                 | grep -F -- " -L $name " \
+                 | { if [ "${FIRST_RUN_ANY:-0}" = 1 ]; then grep -E 'snap(get|send)\.sh '; else grep -F 'snapget.sh -s '; fi; } \
+                 | { if [ -n "${SNAPONLY_FIRST_ONLY:-}" ]; then grep -F -e ":$SNAPONLY_FIRST_ONLY\"" -e "\"$SNAPONLY_FIRST_ONLY\"" \
+                       -e ",$SNAPONLY_FIRST_ONLY\"" -e "\"$SNAPONLY_FIRST_ONLY," -e ",$SNAPONLY_FIRST_ONLY,"; else cat; fi; })
     log "activate-client: first snapshot of each tier: $ok done, $failed not done"
 }
 
@@ -14217,7 +14264,7 @@ relation_sources() {   # <name> [config]
 status_sources_from_config() {   # <client name> -> the sources of every section it owns (relation_sources)
     local out
     out=$(relation_sources "$1") || return 1
-    printf '%s\n' "$out" | cut -f1 | paste -sd' ' -
+    printf '%s' "$(printf '%s\n' "$out" | cut -f1 | paste -sd' ' -)"
 }
 
 status_last_result() {   # <local target prefix> -> "<time> <status> <duration>s" or nothing
@@ -15548,6 +15595,193 @@ cmd_remove_source() {
 #      (REV-089), and activation's own coverage and foreign-pruner guards apply;
 #   4. the new dataset's finest copy job runs once now, so the first (full)
 #      copy is not left waiting for the next tick.
+# relation_rewrite_sections <config> <name> <entries file> -> the new config on stdout.
+# THE ONE WRITER of what a relationship covers (design: relation = its config). The entries
+# file holds the target state, one "DATASET<TAB>flat|no" per line (the tree: [x] = flat, [-] =
+# no and its ticked children listed). Every section the relationship owns that belongs to one
+# of its CURRENT sources -- its header is S, ends in ":S" or in "/S" -- is dropped; in its place
+# the group of the FIRST current source is cloned once per entry, with the dataset substituted
+# in the header, in src and in notify, and the recursion set: [dataset:]/[snaponly:] flat|no,
+# [prune:] yes|no. Templates, schedules and retention stay as installed. No exclusion is
+# written: the old -X / exclude_child_N are dropped (a [-] root is listed child by child).
+# Ownership is relation_sources' rule. Sections of nobody, or of another relationship, are
+# copied through untouched, in place.
+relation_rewrite_sections() {   # <config> <name> <entries file>
+    local cfg="$1" name="$2" ent="$3" cur
+    cur=$(relation_sources "$name" "$cfg" | cut -f1 | sed 's/^[^:]*://') || return 1
+    [ -n "$cur" ] || return 1
+    awk -v N="$name" -v CUR="$(printf '%s\n' "$cur" | paste -sd'|' -)" -v ENTF="$ent" '
+        function owner_ok(i) { return (mb[i] == N || (mb[i] == "" && pl[i] == N)) }
+        function belongs(p, s) { return (p == s || substr(p, length(p) - length(s)) == ":" s \
+                                       || substr(p, length(p) - length(s)) == "/" s) }
+        function base(s,   t) { t = s; sub(/.*\//, "", t); return t }
+        function subst_tail(p, from, to) {   # replace the trailing S of p
+            if (p == from) return to
+            return substr(p, 1, length(p) - length(from)) to
+        }
+        BEGIN {
+            nc = split(CUR, cs, "|")
+            ne = 0
+            while ((getline l < ENTF) > 0) { if (l == "") continue; split(l, f, "\t"); ne++; eds[ne] = f[1]; erec[ne] = f[2] }
+        }
+        /^\[/ { ns++; hdr[ns] = $0; nl[ns] = 0; mb[ns] = ""; pl[ns] = ""; next }
+        {
+            if (ns == 0) { pre[++npre] = $0; next }
+            nl[ns]++; body[ns, nl[ns]] = $0
+            line = $0; sub(/^[ \t]+/, "", line)
+            if (line ~ /^# managed-by: zfs-backup\.sh client=/) { v = line; sub(/.*client=/, "", v); sub(/[ \t].*/, "", v); mb[ns] = v }
+            else if (line ~ /^pair_label[ \t]*=/) { v = line; sub(/^[^=]*=[ \t]*/, "", v); sub(/[ \t]+$/, "", v); pl[ns] = v }
+        }
+        END {
+            sib = cs[1]
+            for (i = 1; i <= ns; i++) {
+                h = substr(hdr[i], 2, length(hdr[i]) - 2); k = h; sub(/:.*/, "", k); p = substr(h, index(h, ":") + 1)
+                kind[i] = k; path[i] = p; mine[i] = 0
+                if (!owner_ok(i) || (k != "dataset" && k != "snaponly" && k != "prune")) continue
+                for (c = 1; c <= nc; c++) if (belongs(p, cs[c])) { mine[i] = 1; if (cs[c] == sib) tmpl[i] = 1 }
+            }
+            for (i = 1; i <= npre; i++) print pre[i]
+            done = 0
+            for (i = 1; i <= ns; i++) {
+                if (!mine[i]) { print hdr[i]; for (j = 1; j <= nl[i]; j++) print body[i, j]; continue }
+                if (done) continue
+                done = 1
+                for (e = 1; e <= ne; e++) for (t = 1; t <= ns; t++) {
+                    if (!tmpl[t]) continue
+                    ds = eds[e]; rv = (kind[t] == "prune") ? (erec[e] == "flat" ? "yes" : "no") : erec[e]
+                    print "[" kind[t] ":" subst_tail(path[t], sib, ds) "]"
+                    hasrec = 0
+                    for (j = 1; j <= nl[t]; j++) {
+                        b = body[t, j]; line = b; sub(/^[ \t]+/, "", line)
+                        if (line ~ /^exclude_child_[0-9]+[ \t]*=/) continue
+                        if (line ~ /^recursive[ \t]*=/) { sub(/=.*/, "= " rv, b); hasrec = 1 }
+                        else if (line ~ /^src[ \t]*=/) { v = b; sub(/^[^=]*=[ \t]*/, "", v); sub(/=.*/, "= ", b); b = b subst_tail(v, sib, ds) }
+                        else if (line ~ /^notify[ \t]*=/) { gsub(base(sib), base(ds), b) }
+                        else if (line ~ /^flags[ \t]*=/) { gsub(/[ \t]-X[ \t]+[^ \t]+/, "", b) }
+                        else if (line ~ /^# managed-by:.*(source|target|source-retention)=/) { gsub(sib, ds, b) }
+                        print b
+                    }
+                    if (!hasrec && (rv != "no")) printf "\trecursive    = %s\n", rv
+                }
+            }
+        }' "$cfg"
+}
+
+# ------------------------------------------------------------------------------
+# set-datasets NAME --dataset=DS:flat|no ... [--yes]
+#
+# THE ONE WAY TO CHANGE WHAT A RELATIONSHIP COVERS (design: relation = its config, owner
+# 2026-10-25). The arguments are the target state the tree shows -- [x] = DS:flat (the dataset
+# and its children, today's and future), [-] = DS:no (the dataset; its ticked children are
+# their own entries), unticked = absent. Same for every kind: pull, mirror, local copy, local
+# snapshots, remote snapshots. In order:
+#   1. a remote relationship: the source's scope file is written to exactly these entries
+#      (include_children = yes for flat, no for no) and committed -- grants follow it;
+#   2. the relationship's sections are rewritten (relation_rewrite_sections), validated by
+#      gen-cron as the target account and installed with the cron -- the config is the truth;
+#   3. the record's request follows (REQUESTED_DATASETS, the one-command RUX_SOURCE list);
+#   4. a dataset that was not covered before gets its first snapshot / copy now.
+# Without --yes: the plan, nothing changed.
+cmd_set_datasets() {
+    local name="" yes=0 a ds rec e
+    local -a ents=()
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y)     yes=1 ;;
+            --dataset=*)  ents+=("${a#*=}") ;;
+            -*)           die "set-datasets: unknown option '$a' (--dataset=DS:flat|no ..., --yes)" ;;
+            *)            [ -z "$name" ] && name="$a" || die "set-datasets: takes one NAME" ;;
+        esac
+    done
+    [ -n "$name" ] && [ "${#ents[@]}" -gt 0 ] || die "usage: zfs-backup.sh set-datasets NAME --dataset=DS:flat|no ... [--yes]"
+    local entf; entf=$(mktemp) || die "mktemp failed"; workfile_track "$entf"
+    local -a want=()
+    for e in "${ents[@]}"; do
+        ds="${e%:*}"; rec="${e##*:}"; [ "$ds" = "$e" ] && rec=flat
+        case "$rec" in flat|no) ;; *) die "set-datasets: '$e' -- the recursion is flat ([x], with children) or no ([-], listed children only)" ;; esac
+        case "$ds" in ''|/*|*/|*//*|*[!A-Za-z0-9_./:-]*) die "set-datasets: '$ds' does not look like a dataset name" ;; esac
+        printf '%s\t%s\n' "$ds" "$rec" >>"$entf"; want+=("$ds")
+    done
+
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "set-datasets: no relationship '$name' on this host"
+    record_load client "$cpath"
+    [ "${STATE:-}" = active ] || die "set-datasets: '$name' is in state '${STATE:-unknown}' -- only an installed relationship is changed this way"
+    local recorded_cron_config="${CRON_CONFIG:-}" recorded_local_user="${LOCAL_USER:-}"
+    cron_context_resolve record "" "" "$recorded_cron_config" "$recorded_local_user"
+    CRON_CONFIG="$CRON_CTX_FILE"
+    [ -n "${CRON_CONFIG:-}" ] && [ -f "$CRON_CONFIG" ] || die "set-datasets: '$name' has no config file to change"
+    local cur; cur=$(relation_sources "$name") \
+        || die "set-datasets: '$name' owns no source section in $CRON_CONFIG -- nothing to change from"
+    local remote=0; [ "${RUX_MODE:-}" != local ] && [ -n "${PEER_HOST:-}" ] && remote=1
+
+    echo "set-datasets '$name' ($([ "$remote" -eq 1 ] && echo "remote ${PEER_HOST}" || echo local), config $CRON_CONFIG):"
+    echo "  now:"
+    printf '%s\n' "$cur" | awk -F'\t' '{ s = $1; sub(/^[^:]*:/, "", s); printf "    %-50s %s\n", s, ($2 == "flat" ? "[x] with children, future too" : "[-] this dataset only") }'
+    echo "  after:"
+    awk -F'\t' '{ printf "    %-50s %s\n", $1, ($2 == "flat" ? "[x] with children, future too" : "[-] this dataset only") }' "$entf"
+    [ "$remote" -eq 1 ] && echo "  the source's scope is set to exactly this list and committed (grants follow it)"
+    echo "  the relationship's sections are rewritten from it; gen-cron validates; the cron is installed"
+    if [ "$yes" -ne 1 ]; then echo "plan only. Re-run with --yes to do it. Nothing was changed."; return 0; fi
+
+    local -a added=()
+    for ds in "${want[@]}"; do
+        printf '%s\n' "$cur" | cut -f1 | sed 's/^[^:]*://' | grep -qxF -- "$ds" || added+=("$ds")
+    done
+
+    if [ "$remote" -eq 1 ]; then
+        local label; label=$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')
+        local host port; read -r host port <<< "$(management_host_port)" && [ -n "$host" ] \
+            || die "set-datasets: the active endpoint of '$name' names no host -- nothing to reach. Nothing was changed."
+        local sfile="/etc/zfs-snapshot-all/peers/$label.scope" scope
+        scope=$(printf '# Scope for peer %s -- written by set-datasets on %s, %s. The relationship'"'"'s config is the truth.\n' \
+                    "$label" "$(hostname -s 2>/dev/null || hostname)" "$(date '+%Y-%m-%d %H:%M:%S')"
+                awk -F'\t' '{ printf "[dataset:%s]\ninclude_parent = yes\ninclude_children = %s\n\n", $1, ($2 == "flat" ? "yes" : "no") }' "$entf")
+        log "set-datasets: 1/3 writing and committing the scope on $PEER_HOST"
+        rux_root_ssh "$host" "$port" "printf '%s\n' $(printf '%q' "$scope") > $(printf '%q' "$sfile").new && mv -f $(printf '%q' "$sfile").new $(printf '%q' "$sfile")" \
+            || die "set-datasets: could not write the scope on $PEER_HOST -- NOTHING was changed"
+        rux_root_ssh "$host" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --commit-scope='$label'" \
+            || die "set-datasets: the source did NOT commit the new scope; its scope FILE is already written, so re-running this same command retries. This host's config is unchanged."
+    elif [ -n "${LOCAL_USER:-}" ] && [ "${#added[@]}" -gt 0 ]; then
+        for ds in "${added[@]}"; do
+            zfs allow -u "$LOCAL_USER" "$ZFS_PERMS_LOCAL_RECEIVE" -- "$ds" \
+                || die "set-datasets: zfs allow on '$ds' for '$LOCAL_USER' failed -- NOTHING was changed"
+        done
+    fi
+
+    log "set-datasets: 2/3 rewriting the sections of '$name' in $CRON_CONFIG"
+    assert_cron_config_matches_installed "$CRON_CONFIG"
+    assert_no_foreign_managed_block "$CRON_CONFIG"
+    local workfile; workfile=$(mktemp "$(dirname "$CRON_CONFIG")/.zfsbackup-work.XXXXXX") || die "set-datasets: mktemp failed next to $CRON_CONFIG"
+    workfile_track "$workfile"
+    relation_rewrite_sections "$CRON_CONFIG" "$name" "$entf" > "$workfile" \
+        || die "set-datasets: could not rewrite the sections of '$name' -- nothing here was replaced"
+    chmod 0644 "$workfile" 2>/dev/null || :
+    gencron_as_target -c "$workfile" >/dev/null 2>&1 \
+        || die "set-datasets: the rewritten config did not validate, so NOTHING here was replaced$([ "$remote" -eq 1 ] && echo " (the source's scope is already set; re-running retries)")"
+    atomic_replace_and_install "$CRON_CONFIG" "$workfile" \
+        || die "set-datasets: could not install the rewritten config"
+
+    log "set-datasets: 3/3 the request follows the config"
+    local joined; joined=$(IFS=,; printf '%s' "${want[*]}")
+    {
+        cat "$cpath"
+        write_client_field REQUESTED_DATASETS "$joined"
+        if [ -n "${RUX_SOURCE:-}" ]; then write_client_field RUX_SOURCE "${RUX_SOURCE%%:*}:$joined"; fi
+        if [ "${RUX_MODE:-}" = snaponly ]; then
+            write_client_field MANAGED_SOURCES "$(relation_sources "$name" | cut -f1 | sed "s/^[^@]*@//" | paste -sd' ' -)"
+        fi
+    } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath" || die "set-datasets: could not update the record of '$name' ($cpath); the config is already installed"
+    chmod 0600 "$cpath" 2>/dev/null || :
+
+    # The first run of a dataset that was not covered: every installed snapshot / copy line of
+    # this relationship that names it, now -- the same for every kind (no first-copy variant).
+    for ds in ${added[@]+"${added[@]}"}; do
+        FIRST_RUN_ANY=1 SNAPONLY_FIRST_ONLY="$ds" snaponly_first_snapshots "$name"
+    done
+    log "set-datasets: '$name' now covers: $(awk -F'\t' '{ printf "%s%s ", $1, ($2 == "flat" ? "[x]" : "[-]") }' "$entf")"
+}
+
 cmd_add_source() {
     local name="" ds="" yes=0 source_only=0 a
     for a in "$@"; do
@@ -22141,6 +22375,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         edit-relation)    shift; cmd_edit_relation "$@" ;;
         remove-source)    shift; cmd_remove_source "$@" ;;
         add-source)       shift; cmd_add_source "$@" ;;
+        set-datasets)     shift; cmd_set_datasets "$@" ;;
         gui)              shift; cmd_gui "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;
