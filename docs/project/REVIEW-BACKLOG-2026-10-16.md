@@ -166,6 +166,20 @@ dowód; pełnym dowodem dla heada pozostaje CI. Nie powtarzać PR #470 bez noweg
 kodu lub dowodu. Następny zakres po każdej nowej odpowiedzi do REV-174: PR
 #476, `add-source` i trzy następcze poprawki edycji relacji.
 
+**Rozstrzygnięcie recenzenta 2026-10-25 — PR #476 / REV-175.** Zakres
+`2a2f54d76acbb1b93f6f1313b51e8bdbc4af5c4e..c488c052225dad1e5c144673b4c0a3b17614427c`
+(merge `498b5fa9f1ef667f5b613a0e800717ab410f1f06`) ujawnił nowy P2 w
+`add-source`: po zmianie endpointu wrapper łączy stary `PEER_HOST` z portem
+nowego `ACTIVE_ENDPOINT`. Dla rekordu `lan.example` + `vpn.example:2222`
+produkcyjna funkcja przekazuje do SSH `lan.example:2222`; wspólny parser
+endpointu wskazuje `vpn.example:2222`. Bezpieczny stub odtwarza to na dokładnym
+headzie i bieżącym main. Pierwszy odczyt zdalny odmawia przed zmianą scope, więc
+nie potwierdzono utraty danych, lecz dodanie źródła po migracji hosta nie działa.
+REV-175 wymaga jednego spójnego tuple, zgodności starego kształtu rekordu oraz
+kontroli negatywnej niedostępnego endpointu. Dokładny head: addsource 7/7,
+`impact --verify`, `diff --check` i CI 37745914631; testy heada na bazie 0/8.
+Nie powtarzać PR #476 bez odpowiedzi implementacyjnej lub nowego dowodu.
+
 Uwaga do terminologii: wpis 2026-10-06 w `ENGINE-FREEZE.md` (~819) nazywa zmianę „PRE-AUTHORISED by the owner”, choć
 dokument (~1016–1035) mówi, że autoryzacja zamrożonego pliku należy do recenzenta. Żaden z wpisów 2026-10-06/-08/-12
 nie ma znacznika `authorizes-frozen`.

@@ -2,7 +2,33 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-25 (PR #470 installed-relation edit)
+## Latest final-audit batch — 2026-10-25 (PR #476 / REV-175)
+
+**A new P2 finding was opened in the remote endpoint boundary of
+`add-source`.** The exact audited range is
+`2a2f54d76acbb1b93f6f1313b51e8bdbc4af5c4e..c488c052225dad1e5c144673b4c0a3b17614427c`,
+merged as `498b5fa9f1ef667f5b613a0e800717ab410f1f06`.
+
+The scope mutator itself passes its six shape controls and preserves unrelated
+entries. The operational wrapper, however, connects with `PEER_HOST` plus the
+port extracted from `ACTIVE_ENDPOINT`. After a supported endpoint move from
+`lan.example:22` to `vpn.example:2222`, the production function attempts
+`lan.example:2222`, not the verified `vpn.example:2222`. A safe stub reproduces
+the same tuple on the exact PR head and current main. It fails before any scope
+write, so data safety remains fail-closed, but `add-source` is unavailable after
+the host part of an endpoint migration.
+
+Exact-head evidence: addsource 7/7, `impact --verify`, range `diff --check`, and
+CI run 37745914631 pass. The head tests against the exact base yield 0/8 because
+the command and mutator do not exist there; neither test set covers endpoint
+migration. No network, cron, ZFS, scope, record, or live-host write was made.
+
+**Next reviewer action:** pick up any `IMPLEMENTED | Reviewer` response first.
+Claude now owns two separate findings: older REV-174 and new REV-175; do not
+combine their implementations. Otherwise continue the historical high-risk
+queue without repeating PR #476.
+
+## Previous final-audit batch — 2026-10-25 (PR #470 installed-relation edit)
 
 **No new finding was confirmed.** The exact audited range is
 `851b79abd083632823e01efc7a68ff311bd9b8a3..05ff13778f2d28d52c1230c852ffa73142c4db20`,
