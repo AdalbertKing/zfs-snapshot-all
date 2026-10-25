@@ -114,7 +114,7 @@ step_host() {
 
 Z jednym hostem jest tylko jedna relacja, za to z dowolną liczbą datasetów.
 Dataset do istniejącej relacji dodaje się w jej zmianie,' '$h' "$h" '$rel' "$rel")
-$(T 'pozycja „Datasety” (zfs-backup.sh add-source).\n\nTutaj podaj host, z którym nie ma jeszcze relacji.')" 14 "$W"
+$(T 'pozycja „Datasety” (zfs-backup.sh add-source).\n\nWskaż host, z którym nie ma jeszcze relacji.')" 14 "$W"
             continue
         fi
         [ "$h" = "$HOST" ] || { B_ROOT=(); B_EXCL=(); }
@@ -953,8 +953,8 @@ plan_only_this() {   # <nazwa relacji> ; plan na stdin -> stdout
             if (mine) { for (i = 1; i <= nb; i++) print buf[i]; kept++ } else skipped++
             nb = 0
         }
-        /^--- kandydat CONFIG/ { part = "cfg"; print "--- nowe sekcje configu (tej relacji) ---"; next }
-        /^--- wygenerowany blok crona/ { flush(); part = "cron"; print ""; print "--- nowe linie crona (tej relacji) ---"; next }
+        /^--- candidate CONFIG/ { part = "cfg"; print "--- nowe sekcje configu (tej relacji) ---"; next }
+        /^--- generated cron block/ { flush(); part = "cron"; print ""; print "--- nowe linie crona (tej relacji) ---"; next }
         part == "cfg" {
             if ($0 ~ /^\[/) { flush(); hdr = $0 }
             if (hdr != "") buf[++nb] = $0

@@ -117,14 +117,14 @@ out="$(run "$empty" --plan)"; rc=$?
 out="$(run "$cfg" --plan)"
 printf '%s' "$out" | grep -q 'hdd/store/rpool/data' \
     && ok "local push: the copy path nests the source under the target" \
-    || bad "local push: the copy path nests the source under the target" "$(printf '%s' "$out"|grep -i kopia)"
+    || bad "local push: the copy path nests the source under the target" "$(printf '%s' "$out"|grep -i copy)"
 
 pull="$WORK/pull.conf"
 mkcfg "$pull" '\n[dataset:hdd/mirror]\n\tsrc          = zfsbackup@10.0.0.9:tank/x\n'
 out="$(run "$pull" --plan)"
-{ printf '%s' "$out" | grep -q 'zfsbackup@10.0.0.9:tank/x' && printf '%s' "$out" | grep -qE 'Kopia:[[:space:]]+hdd/mirror$'; } \
+{ printf '%s' "$out" | grep -q 'zfsbackup@10.0.0.9:tank/x' && printf '%s' "$out" | grep -qE 'Copy:[[:space:]]+hdd/mirror$'; } \
     && ok "remote pull: the local dataset IS the copy, the remote is the source" \
-    || bad "remote pull: the local dataset IS the copy, the remote is the source" "$(printf '%s' "$out"|grep -iE 'zrodlo|kopia')"
+    || bad "remote pull: the local dataset IS the copy, the remote is the source" "$(printf '%s' "$out"|grep -iE 'source|copy')"
 
 # ---- THE PAIR: creation, never the name --------------------------------------
 # name says 2026-01-01 03:00:00, ZFS creation says 2026-06-15 12:00:00.
@@ -132,9 +132,9 @@ printf 'hdd/store/rpool/data@automated_hourly_2026-01-01_03-00-00\t%s\t7771\n' "
     > "$WORK/snaps.hdd_store_rpool_data"
 out="$(run "$cfg" --plan)"
 { printf '%s' "$out" | grep -q '2026-06-15 12:00:00' \
-  && printf '%s' "$out" | grep -qi 'UWAGA'; } \
+  && printf '%s' "$out" | grep -qi 'WARNING'; } \
     && ok "a snapshot whose name lies is shown at its REAL creation time, and flagged" \
-    || bad "a snapshot whose name lies is shown at its REAL creation time, and flagged" "$(printf '%s' "$out"|grep -A2 Snapshoty)"
+    || bad "a snapshot whose name lies is shown at its REAL creation time, and flagged" "$(printf '%s' "$out"|grep -A2 Snapshots)"
 
 # negative control: name and creation agree -> the same code path must stay quiet.
 # Without this, an implementation that flagged every snapshot would pass above.
@@ -142,22 +142,22 @@ printf 'hdd/store/rpool/data@automated_hourly_2026-06-15_12-00-00\t%s\t7772\n' "
     > "$WORK/snaps.hdd_store_rpool_data"
 out="$(run "$cfg" --plan)"
 { printf '%s' "$out" | grep -q '2026-06-15 12:00:00' \
-  && ! printf '%s' "$out" | grep -qi 'UWAGA'; } \
+  && ! printf '%s' "$out" | grep -qi 'WARNING'; } \
     && ok "a snapshot whose name agrees with creation is NOT flagged (control)" \
-    || bad "a snapshot whose name agrees with creation is NOT flagged (control)" "$(printf '%s' "$out"|grep -A2 Snapshoty)"
+    || bad "a snapshot whose name agrees with creation is NOT flagged (control)" "$(printf '%s' "$out"|grep -A2 Snapshots)"
 
 # a snapshot carrying no timestamp in its name at all must not be flagged either.
 printf 'hdd/store/rpool/data@manual-before-upgrade\t%s\t7773\n' "$(date -d '2026-06-15 12:00:00' +%s)" \
     > "$WORK/snaps.hdd_store_rpool_data"
 out="$(run "$cfg" --plan)"
-{ printf '%s' "$out" | grep -q 'manual-before-upgrade' && ! printf '%s' "$out" | grep -qi 'UWAGA'; } \
+{ printf '%s' "$out" | grep -q 'manual-before-upgrade' && ! printf '%s' "$out" | grep -qi 'WARNING'; } \
     && ok "a name with no embedded timestamp is listed, not flagged" \
-    || bad "a name with no embedded timestamp is listed, not flagged" "$(printf '%s' "$out"|grep -A2 Snapshoty)"
+    || bad "a name with no embedded timestamp is listed, not flagged" "$(printf '%s' "$out"|grep -A2 Snapshots)"
 
 # ---- honest about an absent copy ---------------------------------------------
 rm -f "$WORK/snaps.hdd_store_rpool_data"
 out="$(run "$cfg" --plan)"
-printf '%s' "$out" | grep -qi 'BRAK' \
+printf '%s' "$out" | grep -q 'Snapshots:  NONE' \
     && ok "a copy that does not exist is reported as nothing to restore from" \
     || bad "a copy that does not exist is reported as nothing to restore from" ""
 
@@ -165,10 +165,10 @@ printf '%s' "$out" | grep -qi 'BRAK' \
 two="$WORK/two.conf"
 mkcfg "$two" '\n[dataset:rpool/data]\n\tdst          = hdd/store\n\n[dataset:rpool/other]\n\tdst          = hdd/store\n'
 out="$(run "$two" --plan --dataset=rpool/other)"
-{ printf '%s' "$out" | grep -q 'rpool/other' && ! printf '%s' "$out" | grep -qE 'Zrodlo:[[:space:]]+rpool/data$'; } \
-    && ok "--dataset selects one relationship" || bad "--dataset selects one relationship" "$(printf '%s' "$out"|grep -i zrodlo)"
+{ printf '%s' "$out" | grep -q 'rpool/other' && ! printf '%s' "$out" | grep -qE 'Source:[[:space:]]+rpool/data$'; } \
+    && ok "--dataset selects one relationship" || bad "--dataset selects one relationship" "$(printf '%s' "$out"|grep -i source)"
 out="$(run "$two" --plan --dataset=rpool/nosuch)"
-printf '%s' "$out" | grep -qi 'Nic nie pasuje' \
+printf '%s' "$out" | grep -q 'Nothing matches the filter' \
     && ok "a filter that matches nothing says so instead of printing an empty plan" \
     || bad "a filter that matches nothing says so instead of printing an empty plan" ""
 
@@ -234,21 +234,21 @@ printf 'hdd/store/rpool/data@automated_hourly_2026-06-15_12-00-00\t%s\t991\n' "$
 out="$(run "$cfg" --plan)"
 printf '%s' "$out" | grep -q 'guid=991' \
     && ok "planner: the recovery point carries its guid" \
-    || bad "planner: the recovery point carries its guid" "$(printf '%s' "$out"|grep -A2 Snapshoty)"
+    || bad "planner: the recovery point carries its guid" "$(printf '%s' "$out"|grep -A2 Snapshots)"
 
 # ---- consistency comes from CONFIG: flat ------------------------------------
 { printf '%s' "$out" | grep -qi 'INDEPENDENT' && printf '%s' "$out" | grep -qi 'frontier' \
   && ! printf '%s' "$out" | grep -qi 'ATOMIC'; } \
     && ok "planner: a CONFIG without recursive=atomic reports an INDEPENDENT frontier" \
-    || bad "planner: a CONFIG without recursive=atomic reports an INDEPENDENT frontier" "$(printf '%s' "$out"|grep -i spojnosc)"
+    || bad "planner: a CONFIG without recursive=atomic reports an INDEPENDENT frontier" "$(printf '%s' "$out"|grep -i coherence)"
 
 # ---- consistency comes from CONFIG: atomic ----------------------------------
 acfg="$WORK/atomic.conf"
 mkcfg "$acfg" '\n[dataset:rpool/data]\n\tdst          = hdd/store\n\trecursive    = atomic\n'
 out="$(run "$acfg" --plan)"
-{ printf '%s' "$out" | grep -qi 'ATOMIC' && printf '%s' "$out" | grep -qi 'punkt odtworzenia'; } \
+{ printf '%s' "$out" | grep -qi 'ATOMIC' && printf '%s' "$out" | grep -qi 'restore point'; } \
     && ok "planner: recursive = atomic in CONFIG reports an ATOMIC recovery point" \
-    || bad "planner: recursive = atomic in CONFIG reports an ATOMIC recovery point" "$(printf '%s' "$out"|grep -i spojnosc)"
+    || bad "planner: recursive = atomic in CONFIG reports an ATOMIC recovery point" "$(printf '%s' "$out"|grep -i coherence)"
 
 # ---- THE MEASURED TRAP, encoded ---------------------------------------------
 # On pve2 two datasets in different subtrees share the snapshot name
@@ -267,7 +267,7 @@ out="$(run "$tcfg" --plan)"
   && printf '%s' "$out" | grep -q 'guid=111' && printf '%s' "$out" | grep -q 'guid=222'; } \
     && ok "planner: identical snapshot NAMES across datasets do not promote a flat set to atomic" \
     || bad "planner: identical snapshot NAMES across datasets do not promote a flat set to atomic" \
-           "$(printf '%s' "$out"|grep -iE 'spojnosc|guid=')"
+           "$(printf '%s' "$out"|grep -iE 'coherence|guid=')"
 
 # and the same pair under an ATOMIC config must report atomic -- so the verdict is
 # demonstrably keyed on CONFIG, not on the snapshots, which are identical here.
@@ -277,7 +277,7 @@ out="$(run "$tacfg" --plan)"
 { [ "$(printf '%s\n' "$out" | grep -ci 'ATOMIC')" -ge 2 ] && ! printf '%s' "$out" | grep -qi 'INDEPENDENT'; } \
     && ok "planner: the SAME snapshots under an atomic CONFIG report atomic (verdict keyed on CONFIG)" \
     || bad "planner: the SAME snapshots under an atomic CONFIG report atomic (verdict keyed on CONFIG)" \
-           "$(printf '%s' "$out"|grep -i spojnosc)"
+           "$(printf '%s' "$out"|grep -i coherence)"
 rm -f "$WORK/snaps.hdd_store_rpool_db"
 
 # ==============================================================================
@@ -408,7 +408,7 @@ out="$(runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
 # ---- happy path: staged, verified, promoted ---------------------------------
 reset_ds
 out="$(runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
-{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qi 'Odtworzenie OK' && grep -qx "$LAND" "$WORK/ds"; } \
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qi 'Restore OK' && grep -qx "$LAND" "$WORK/ds"; } \
     && ok "slice2: a good restore is promoted to the public landing path" \
     || bad "slice2: a good restore is promoted to the public landing path" "rc=$rc $(printf '%s' "$out"|tail -2)"
 grep -q 'restore-staging-' "$WORK/ds" \
@@ -792,25 +792,25 @@ SRC=rpool_data
 printf 'hdd/store/rpool/data@s1\t100\t11\n' > "$WORK/rows.$COPY"
 printf 'hdd/store\nhdd/store/rpool/data\n' > "$WORK/exists"
 out="$(runstrat "$stcfg")"
-{ printf '%s' "$out" | grep -q 'Strategia:  FULL' && printf '%s' "$out" | grep -qi 'nie istnieje'; } \
+{ printf '%s' "$out" | grep -q 'Strategy:   FULL' && printf '%s' "$out" | grep -qi 'does not exist'; } \
     && ok "strategy: an absent source is FULL with nothing to destroy" \
-    || bad "strategy: an absent source is FULL with nothing to destroy" "$(printf '%s' "$out"|grep -i strategia)"
+    || bad "strategy: an absent source is FULL with nothing to destroy" "$(printf '%s' "$out"|grep -i strategy)"
 
 # ---- source exists, no shared guid -> FULL over a live source ---------------
 printf 'rpool/data@x1\t50\t99\n' > "$WORK/rows.$SRC"
 printf 'hdd/store\nhdd/store/rpool/data\nrpool/data\n' > "$WORK/exists"
 out="$(runstrat "$stcfg")"
-{ printf '%s' "$out" | grep -q 'FULL na ISTNIEJACE' && printf '%s' "$out" | grep -qi 'niszczaca'; } \
+{ printf '%s' "$out" | grep -q 'FULL onto an EXISTING' && printf '%s' "$out" | grep -qi 'a destructive operation'; } \
     && ok "strategy: a live source with no common guid is FULL and flagged destructive" \
-    || bad "strategy: a live source with no common guid is FULL and flagged destructive" "$(printf '%s' "$out"|grep -i strategia)"
+    || bad "strategy: a live source with no common guid is FULL and flagged destructive" "$(printf '%s' "$out"|grep -i strategy)"
 
 # ---- backup ahead of source -> incremental from the GUID-proven base ---------
 printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
 printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
 out="$(runstrat "$stcfg")"
-{ printf '%s' "$out" | grep -q 'INKREMENT' && printf '%s' "$out" | grep -q 'guid=11'; } \
+{ printf '%s' "$out" | grep -q 'INCREMENT' && printf '%s' "$out" | grep -q 'guid=11'; } \
     && ok "strategy: a backup ahead of the source is an incremental from the proven base" \
-    || bad "strategy: a backup ahead of the source is an incremental from the proven base" "$(printf '%s' "$out"|grep -iE 'strategia|baza')"
+    || bad "strategy: a backup ahead of the source is an incremental from the proven base" "$(printf '%s' "$out"|grep -iE 'strategy|base')"
 
 # ---- THE CASE THE LIVE LAB CAUGHT -------------------------------------------
 # The source holds the backup's latest point AND two snapshots past it. No data
@@ -820,11 +820,11 @@ out="$(runstrat "$stcfg")"
 printf 'hdd/store/rpool/data@s1\t100\t11\n' > "$WORK/rows.$COPY"
 printf 'rpool/data@s1\t100\t11\nrpool/data@s2\t200\t22\nrpool/data@s3\t300\t33\n' > "$WORK/rows.$SRC"
 out="$(runstrat "$stcfg")"
-{ printf '%s' "$out" | grep -q 'SAM ROLLBACK' \
+{ printf '%s' "$out" | grep -q 'ROLLBACK ONLY' \
   && printf '%s' "$out" | grep -qE '^    s2$' && printf '%s' "$out" | grep -qE '^    s3$' \
-  && ! printf '%s' "$out" | grep -q 'NIC DO ZROBIENIA'; } \
+  && ! printf '%s' "$out" | grep -q 'NOTHING TO DO'; } \
     && ok "strategy: a source PAST the latest backup point is a destructive rollback, not 'nothing to do'" \
-    || bad "strategy: a source PAST the latest backup point is a destructive rollback, not 'nothing to do'" "$(printf '%s' "$out"|grep -iE 'strategia|^    s')"
+    || bad "strategy: a source PAST the latest backup point is a destructive rollback, not 'nothing to do'" "$(printf '%s' "$out"|grep -iE 'strategy|^    s')"
 
 # ---- REV-118 F1 residual: accounted-zero is UNPROVEN, never a no-op ----------
 # The same fixture that used to be "the true no-op". The live lab showed written
@@ -834,9 +834,9 @@ out="$(runstrat "$stcfg")"
 # state merely being hedged.
 printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
 zero_out="$(runstrat "$stcfg")"
-{ ! printf '%s' "$zero_out" | grep -q 'NIC DO ZROBIENIA' \
+{ ! printf '%s' "$zero_out" | grep -q 'NOTHING TO DO' \
   && ! printf '%s' "$zero_out" | grep -q 'ROLLBACK' \
-  && printf '%s' "$zero_out" | grep -q 'STAN ZRODLA NIEDOWIEDZIONY' \
+  && printf '%s' "$zero_out" | grep -q 'SOURCE STATE UNPROVEN' \
   && printf '%s' "$zero_out" | grep -q 'written=0' \
   && printf '%s' "$zero_out" | grep -q 'txg'; } \
     && ok "strategy: written=0 is unproven, not a no-op, and says why" \
@@ -850,10 +850,10 @@ zero_out="$(runstrat "$stcfg")"
 # "nothing to do", hiding data loss that no snapshot can undo.
 printf '4096\n' > "$WORK/written.$SRC"
 out="$(runstrat "$stcfg")"
-{ ! printf '%s' "$out" | grep -q 'NIC DO ZROBIENIA' \
-  && printf '%s' "$out" | grep -q 'ODRZUCENIE ZYWYCH ZMIAN' \
+{ ! printf '%s' "$out" | grep -q 'NOTHING TO DO' \
+  && printf '%s' "$out" | grep -q 'DISCARD LIVE CHANGES' \
   && printf '%s' "$out" | grep -q 'written=4096' \
-  && printf '%s' "$out" | grep -qi 'ODRZUCI'; } \
+  && printf '%s' "$out" | grep -qi 'DISCARDS'; } \
     && ok "strategy: live unsnapshotted source data is named and never reads as 'nothing to do'" \
     || bad "strategy: live unsnapshotted source data is named and never reads as 'nothing to do'" "$out"
 
@@ -861,9 +861,9 @@ out="$(runstrat "$stcfg")"
 # be the lazy way to satisfy the residual: declare everything destructive and
 # stop distinguishing. The zero case must NOT claim data will be discarded, and
 # the dirty case must.
-{ printf '%s' "$out" | grep -q 'ODRZUCI' \
-  && ! printf '%s' "$zero_out" | grep -q 'ODRZUCI' \
-  && ! printf '%s' "$zero_out" | grep -q 'ODRZUCENIE ZYWYCH ZMIAN'; } \
+{ printf '%s' "$out" | grep -q 'DISCARDS' \
+  && ! printf '%s' "$zero_out" | grep -q 'DISCARDS' \
+  && ! printf '%s' "$zero_out" | grep -q 'DISCARD LIVE CHANGES'; } \
     && ok "strategy: unproven and proven-dirty stay distinct verdicts" \
     || bad "strategy: unproven and proven-dirty stay distinct verdicts" "$zero_out"
 
@@ -871,9 +871,9 @@ out="$(runstrat "$stcfg")"
 # the transfer is genuinely possible, so the temptation to call it clean is real.
 printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
 out="$(runstrat "$stcfg")"
-{ printf '%s' "$out" | grep -q 'INKREMENT' \
+{ printf '%s' "$out" | grep -q 'INCREMENT' \
   && printf '%s' "$out" | grep -q 'written=4096' \
-  && printf '%s' "$out" | grep -qi 'ODRZUCI'; } \
+  && printf '%s' "$out" | grep -qi 'DISCARDS'; } \
     && ok "strategy: an incremental over a dirty source still declares the live changes" \
     || bad "strategy: an incremental over a dirty source still declares the live changes" "$out"
 
@@ -884,10 +884,10 @@ out="$(runstrat "$stcfg")"
 printf 'FAIL\n' > "$WORK/written.$SRC"
 printf 'hdd/store/rpool/data@s1\t100\t11\n' > "$WORK/rows.$COPY"
 out="$(runstrat "$stcfg")"
-{ printf '%s' "$out" | grep -q 'STAN ZYWY NIEDOWIEDZIONY' \
-  && printf '%s' "$out" | grep -q "nie dal" \
+{ printf '%s' "$out" | grep -q 'LIVE STATE UNPROVEN' \
+  && printf '%s' "$out" | grep -q "no number" \
   && ! printf '%s' "$out" | grep -q 'written=0' \
-  && ! printf '%s' "$out" | grep -q 'NIC DO ZROBIENIA'; } \
+  && ! printf '%s' "$out" | grep -q 'NOTHING TO DO'; } \
     && ok "strategy: an unreadable live state is unproven for its own stated reason" \
     || bad "strategy: an unreadable live state is unproven for its own stated reason" "$out"
 rm -f "$WORK/written.$SRC"
@@ -897,9 +897,9 @@ rcfg="$WORK/stratremote.conf"
 mkcfg "$rcfg" '\n[dataset:hdd/mirror]\n\tsrc          = zfsbackup@10.0.0.9:tank/x\n'
 printf 'hdd/mirror@s1\t100\t11\n' > "$WORK/rows.hdd_mirror"
 out="$(runstrat "$rcfg")"
-printf '%s' "$out" | grep -qi 'ZDALNE' \
+printf '%s' "$out" | grep -q 'is REMOTE' \
     && ok "strategy: a remote source says so instead of applying the local answer" \
-    || bad "strategy: a remote source says so instead of applying the local answer" "$(printf '%s' "$out"|grep -i strategia)"
+    || bad "strategy: a remote source says so instead of applying the local answer" "$(printf '%s' "$out"|grep -i strategy)"
 
 # ==============================================================================
 # `restore --replace` -- the DESTRUCTIVE verb, slice 1: all gates, no execution.
@@ -968,8 +968,8 @@ reset_src
 for name in rpool/data hdd/store/rpool/data; do
     reset_src
     out="$(runrepl "$stcfg" "$name")"; rc=$?
-    { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'INKREMENT' \
-      && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE'; } \
+    { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'INCREMENT' \
+      && printf '%s' "$out" | grep -q 'RESTORE COMPLETE'; } \
         && ok "replace: '$name' resolves to the relationship, previews and executes" \
         || bad "replace: '$name' resolves to the relationship, previews and executes" "rc=$rc" "$out"
 done
@@ -997,8 +997,8 @@ reset_src
 reset_src
 printf 'rpool/data@x1\t50\t99\n' > "$WORK/rows.$SRC"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'PELNE zastapienie' \
-  && ! printf '%s' "$out" | grep -q 'krok WYKONAWCZY'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'FULL replacement' \
+  && ! printf '%s' "$out" | grep -q 'the EXECUTION step'; } \
     && ok "replace: no proven base is refused as full replacement, not run as an increment" \
     || bad "replace: no proven base is refused as full replacement, not run as an increment" "$out"
 
@@ -1006,7 +1006,7 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 # destructive path must decline to ACT, and say why.
 reset_src
 out="$(runrepl "$rcfg" hdd/mirror)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'jest ZDALNE'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'is REMOTE'; } \
     && ok "replace: a remote source is refused by the destructive path" \
     || bad "replace: a remote source is refused by the destructive path" "$out"
 
@@ -1014,7 +1014,7 @@ out="$(runrepl "$rcfg" hdd/mirror)"; rc=$?
 reset_src
 printf '' > "$WORK/rows.$COPY"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ani jednego snapshota'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'has no snapshot at all'; } \
     && ok "replace: a copy with no snapshots is refused" \
     || bad "replace: a copy with no snapshots is refused" "$out"
 
@@ -1030,7 +1030,7 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 echo 7777 > "$WORK/livebytes"
 out="$(runrepl "$stcfg" rpool/data)"
-{ printf '%s' "$out" | grep -q 'zbior ZMIERZONY' \
+{ printf '%s' "$out" | grep -q 'a MEASURED set' \
   && printf '%s' "$out" | grep -q '7777 B'; } \
     && ok "REV-119: the loss set is measured from the technical snapshot, not from the live read" \
     || bad "REV-119: the loss set is measured from the technical snapshot, not from the live read" "$out"
@@ -1040,8 +1040,8 @@ out="$(runrepl "$stcfg" rpool/data)"
 reset_src
 echo 7777 > "$WORK/livebytes"
 out="$(runrepl "$stcfg" rpool/data 0 </dev/null)"
-set_line=$(printf '%s\n' "$out" | grep -n 'zbior ZMIERZONY' | head -1 | cut -d: -f1)
-ask_line=$(printf '%s\n' "$out" | grep -n 'niepotwierdzone' | head -1 | cut -d: -f1)
+set_line=$(printf '%s\n' "$out" | grep -n 'a MEASURED set' | head -1 | cut -d: -f1)
+ask_line=$(printf '%s\n' "$out" | grep -n 'not confirmed' | head -1 | cut -d: -f1)
 { [ -n "$set_line" ] && [ -n "$ask_line" ] && [ "$set_line" -lt "$ask_line" ]; } \
     && ok "REV-119: the measured loss set is shown BEFORE the confirmation is resolved" \
     || bad "REV-119: the measured loss set is shown BEFORE the confirmation is resolved" "set=$set_line ask=$ask_line" "$out"
@@ -1057,9 +1057,9 @@ ask_line=$(printf '%s\n' "$out" | grep -n 'niepotwierdzone' | head -1 | cut -d: 
 reset_src
 echo 4096 > "$WORK/arrivebytes"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'stan zrodla sie ZMIENIL' \
-  && printf '%s' "$out" | grep -q 'nowe dane: 4096 B' \
-  && ! printf '%s' "$out" | grep -q 'krok WYKONAWCZY'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'the state of the source CHANGED' \
+  && printf '%s' "$out" | grep -q 'new data: 4096 B' \
+  && ! printf '%s' "$out" | grep -q 'the EXECUTION step'; } \
     && ok "REV-119: data arriving after the approval refuses instead of being destroyed" \
     || bad "REV-119: data arriving after the approval refuses instead of being destroyed" "$out"
 [ "$(srccount)" = 1 ] \
@@ -1071,8 +1071,8 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 touch "$WORK/arrivesnap"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'stan zrodla sie ZMIENIL' \
-  && printf '%s' "$out" | grep -q 'nowy snapshot: intruder'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'the state of the source CHANGED' \
+  && printf '%s' "$out" | grep -q 'new snapshot: intruder'; } \
     && ok "REV-119: a snapshot arriving after the approval is named and refuses the run" \
     || bad "REV-119: a snapshot arriving after the approval is named and refuses the run" "$out"
 
@@ -1082,8 +1082,8 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 #    holding is now proven by the restore actually finishing, not by a placeholder.
 reset_src
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
-  && ! printf '%s' "$out" | grep -q 'ZMIENIL'; } \
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'RESTORE COMPLETE' \
+  && ! printf '%s' "$out" | grep -q 'CHANGED'; } \
     && ok "REV-119: with nothing arriving the boundary holds and the restore completes (control)" \
     || bad "REV-119: with nothing arriving the boundary holds and the restore completes (control)" "rc=$rc" "$out"
 
@@ -1093,8 +1093,8 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 echo 7777 > "$WORK/livebytes"
 out="$(runrepl "$stcfg" rpool/data)"
-{ printf '%s' "$out" | grep -qi 'to POMIAR, nie kopia bezpieczenstwa' \
-  && ! printf '%s' "$out" | grep -qi 'zachowan'; } \
+{ printf '%s' "$out" | grep -qi 'a MEASUREMENT, not a backup' \
+  && ! printf '%s' "$out" | grep -qi 'preserv'; } \
     && ok "REV-119: the technical snapshot is described as a measurement, never as preservation" \
     || bad "REV-119: the technical snapshot is described as a measurement, never as preservation" "$out"
 
@@ -1103,7 +1103,7 @@ out="$(runrepl "$stcfg" rpool/data)"
 reset_src
 echo FAIL > "$WORK/livebytes"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'z dziura w srodku'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'with a hole in the middle'; } \
     && ok "REV-119: an unmeasurable live delta refuses instead of showing a partial loss set" \
     || bad "REV-119: an unmeasurable live delta refuses instead of showing a partial loss set" "$out"
 [ "$(srccount)" = 1 ] \
@@ -1165,8 +1165,8 @@ out="$(runrepl "$stcfg" rpool/data)"
 reset_src
 touch "$WORK/fencefail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'nie udalo sie zablokowac zapisu' \
-  && ! printf '%s' "$out" | grep -q 'krok WYKONAWCZY'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'could not block writes' \
+  && ! printf '%s' "$out" | grep -q 'the EXECUTION step'; } \
     && ok "REV-119 fence: a fence that cannot be raised refuses the run" \
     || bad "REV-119 fence: a fence that cannot be raised refuses the run" "$out"
 [ "$(srccount)" = 1 ] \
@@ -1184,8 +1184,8 @@ reset_src
 touch "$WORK/unfencefail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'readonly' \
-  && printf '%s' "$out" | grep -qi 'odtworzenie sie POWIODLO' \
-  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+  && printf '%s' "$out" | grep -qi 'the restore SUCCEEDED' \
+  && ! printf '%s' "$out" | grep -q 'is exactly in its state from before this command'; } \
     && ok "REV-119 fence: a completed restore that cannot lower the fence says so loudly and names the fix" \
     || bad "REV-119 fence: a completed restore that cannot lower the fence says so loudly and names the fix" "rc=$rc" "$out"
 
@@ -1201,8 +1201,8 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 touch "$WORK/arrivesnap_samesecond"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'stan zrodla sie ZMIENIL' \
-  && printf '%s' "$out" | grep -q 'nowy snapshot: intruder-samesec'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'the state of the source CHANGED' \
+  && printf '%s' "$out" | grep -q 'new snapshot: intruder-samesec'; } \
     && ok "REV-119 F1.1: a same-second intruder snapshot is still caught" \
     || bad "REV-119 F1.1: a same-second intruder snapshot is still caught" "$out"
 
@@ -1212,7 +1212,7 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 touch "$WORK/verifyfail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'nie udalo sie zablokowac zapisu'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'could not block writes'; } \
     && ok "REV-119 F1.2: an unverifiable fence refuses the run" \
     || bad "REV-119 F1.2: an unverifiable fence refuses the run" "$out"
 [ "$(cat "$WORK/ro.value" 2>/dev/null)" = off ] \
@@ -1226,7 +1226,7 @@ printf 'garbage' > "$WORK/ro.value"
 before=$({ grep -c '^set readonly=on rpool/data$' "$WORK/zfs-calls3"; true; } | head -1)
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 after=$({ grep -c '^set readonly=on rpool/data$' "$WORK/zfs-calls3"; true; } | head -1)
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "nie umiem jej pozniej przywrocic" \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "I cannot restore it later" \
   && [ "$before" = "$after" ]; } \
     && ok "REV-119 F1.2: an unreadable readonly refuses BEFORE the property is touched" \
     || bad "REV-119 F1.2: an unreadable readonly refuses BEFORE the property is touched" "$out"
@@ -1249,8 +1249,8 @@ reset_src
 touch "$WORK/destroyfail"
 out="$(runrepl "$stcfg" rpool/data 0 </dev/null)"; rc=$?
 { [ "$rc" -ne 0 ] \
-  && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
-  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+  && printf '%s' "$out" | grep -q 'is NOT in its state from before the command' \
+  && ! printf '%s' "$out" | grep -q 'is exactly in its state from before this command'; } \
     && ok "REV-119 F1.4: a failed cleanup is reported, never called an unchanged source" \
     || bad "REV-119 F1.4: a failed cleanup is reported, never called an unchanged source" "$out"
 
@@ -1258,8 +1258,8 @@ out="$(runrepl "$stcfg" rpool/data 0 </dev/null)"; rc=$?
 #     succeeds, the path DOES get to say the source is unchanged.
 reset_src
 out="$(runrepl "$stcfg" rpool/data 0 </dev/null)"
-{ printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia' \
-  && ! printf '%s' "$out" | grep -q 'NIE jest w stanie'; } \
+{ printf '%s' "$out" | grep -q 'is exactly in its state from before this command' \
+  && ! printf '%s' "$out" | grep -q 'is NOT in its state'; } \
     && ok "REV-119 F1.4: a successful cleanup may say the source is unchanged (control)" \
     || bad "REV-119 F1.4: a successful cleanup may say the source is unchanged (control)" "$out"
 
@@ -1281,10 +1281,10 @@ touch "$WORK/verifyfail" "$WORK/unfencefail"
 printf 'off' > "$WORK/ro.value"; printf 'default' > "$WORK/ro.source"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 { [ "$rc" -ne 0 ] \
-  && printf '%s' "$out" | grep -q "NIE jest w stanie sprzed polecenia" \
+  && printf '%s' "$out" | grep -q "is NOT in its state from before the command" \
   && printf '%s' "$out" | grep -q "readonly" \
   && printf '%s' "$out" | grep -q 'zfs inherit readonly rpool/data' \
-  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+  && ! printf '%s' "$out" | grep -q 'is exactly in its state from before this command'; } \
     && ok "REV-119 F1.2: a failed fence restoration blocks the exact-state claim and names the fix" \
     || bad "REV-119 F1.2: a failed fence restoration blocks the exact-state claim and names the fix" "$out"
 
@@ -1295,9 +1295,9 @@ reset_src
 touch "$WORK/arrivebytes_x"; echo 4096 > "$WORK/arrivebytes"; touch "$WORK/unfencefail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 { [ "$rc" -ne 0 ] \
-  && printf '%s' "$out" | grep -q 'stan zrodla sie ZMIENIL' \
-  && printf '%s' "$out" | grep -q "NIE jest w stanie sprzed polecenia" \
-  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+  && printf '%s' "$out" | grep -q 'the state of the source CHANGED' \
+  && printf '%s' "$out" | grep -q "is NOT in its state from before the command" \
+  && ! printf '%s' "$out" | grep -q 'is exactly in its state from before this command'; } \
     && ok "REV-119 F1.2: the arrival refusal also reports a failed fence restoration" \
     || bad "REV-119 F1.2: the arrival refusal also reports a failed fence restoration" "$out"
 
@@ -1311,7 +1311,7 @@ echo 4096 > "$WORK/arrivebytes"; touch "$WORK/unfencefail" "$WORK/destroyfail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 { [ "$rc" -ne 0 ] \
   && printf '%s' "$out" | grep -q "readonly" \
-  && printf '%s' "$out" | grep -q "techniczne snapshoty"; } \
+  && printf '%s' "$out" | grep -q "technical snapshots"; } \
     && ok "REV-119 F1.2: both leftovers are named when both happen" \
     || bad "REV-119 F1.2: both leftovers are named when both happen" "$out"
 
@@ -1321,8 +1321,8 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 #     above.
 reset_src
 out="$(runrepl "$stcfg" rpool/data 0 </dev/null)"
-{ printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia' \
-  && ! printf '%s' "$out" | grep -q 'NIE jest w stanie'; } \
+{ printf '%s' "$out" | grep -q 'is exactly in its state from before this command' \
+  && ! printf '%s' "$out" | grep -q 'is NOT in its state'; } \
     && ok "REV-119 F1.2: a clean declined run still makes the exact-state claim (control)" \
     || bad "REV-119 F1.2: a clean declined run still makes the exact-state claim (control)" "$out"
 
@@ -1335,11 +1335,11 @@ out="$(runrepl "$stcfg" rpool/data 0 </dev/null)"
 reset_src
 touch "$WORK/commitsnapfail" "$WORK/unfencefail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ printf '%s' "$out" | grep -q 'nie udalo sie zamknac granicy zatwierdzenia' \
+{ printf '%s' "$out" | grep -q 'could not close the commit boundary' \
   && [ "$rc" -ne 0 ] \
   && printf '%s' "$out" | grep -q 'readonly' \
   && printf '%s' "$out" | grep -q 'zfs inherit readonly rpool/data' \
-  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+  && ! printf '%s' "$out" | grep -q 'is exactly in its state from before this command'; } \
     && ok "REV-119 F1.2: a failed boundary snapshot reports the fence it could not put back" \
     || bad "REV-119 F1.2: a failed boundary snapshot reports the fence it could not put back" "$out"
 [ "$(srccount)" = 1 ] \
@@ -1365,7 +1365,7 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 head_guid="$(grep '^rpool/data@' "$WORK/rows.$SRC" | tail -1 | cut -f3)"
-{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'RESTORE COMPLETE' \
   && grep -q '^rpool/data@s2	' "$WORK/rows.$SRC" \
   && [ "$head_guid" = 22 ] \
   && ! grep -q 'restore-' "$WORK/rows.$SRC"; } \
@@ -1383,7 +1383,7 @@ sends_before=$(grep -c '^send ' "$WORK/zfs-calls3" 2>/dev/null || echo 0)
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 sends_after=$(grep -c '^send ' "$WORK/zfs-calls3" 2>/dev/null || echo 0)
 head_guid="$(grep '^rpool/data@' "$WORK/rows.$SRC" | tail -1 | cut -f3)"
-{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'RESTORE COMPLETE' \
   && ! grep -q '^rpool/data@s2	' "$WORK/rows.$SRC" \
   && ! grep -q '^rpool/data@s3	' "$WORK/rows.$SRC" \
   && [ "$head_guid" = 11 ] \
@@ -1400,7 +1400,7 @@ printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
 printf '4096\n' > "$WORK/written.$SRC"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 head_guid="$(grep '^rpool/data@' "$WORK/rows.$SRC" | tail -1 | cut -f3)"
-{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'RESTORE COMPLETE' \
   && [ "$head_guid" = 11 ]; } \
     && ok "EXEC discard-live: a source with live changes is rolled back to the recovery point" \
     || bad "EXEC discard-live: a source with live changes is rolled back to the recovery point" "rc=$rc head=$head_guid" "$out"
@@ -1413,9 +1413,9 @@ rm -f "$WORK/written.$SRC"
 reset_src
 printf '999' > "$WORK/recvguid"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'weryfikacja GUID zawiodla' \
-  && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
-  && ! printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'GUID verification failed' \
+  && printf '%s' "$out" | grep -q 'is NOT in its state from before the command' \
+  && ! printf '%s' "$out" | grep -q 'RESTORE COMPLETE'; } \
     && ok "EXEC guid: a clean pipeline with the wrong guid fails and never claims an unchanged source" \
     || bad "EXEC guid: a clean pipeline with the wrong guid fails and never claims an unchanged source" "rc=$rc" "$out"
 
@@ -1425,9 +1425,9 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 touch "$WORK/recvfail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'COFNIETE do wspolnej bazy' \
-  && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
-  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ROLLED BACK to the common base' \
+  && printf '%s' "$out" | grep -q 'is NOT in its state from before the command' \
+  && ! printf '%s' "$out" | grep -q 'is exactly in its state from before this command'; } \
     && ok "EXEC transfer-fail: a broken receive after the rollback reports partial destruction, not a clean source" \
     || bad "EXEC transfer-fail: a broken receive after the rollback reports partial destruction, not a clean source" "rc=$rc" "$out"
 
@@ -1446,9 +1446,9 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 touch "$WORK/setdestroyfail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'NIC nie zniszczono' \
-  && printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia' \
-  && ! printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'NOTHING was destroyed' \
+  && printf '%s' "$out" | grep -q 'is exactly in its state from before this command' \
+  && ! printf '%s' "$out" | grep -q 'is NOT in its state from before the command'; } \
     && ok "EXEC set-destroy-fail: the all-or-none destroy of the approved set fails, destroys nothing, and may claim an unchanged source" \
     || bad "EXEC set-destroy-fail: the all-or-none destroy of the approved set fails, destroys nothing, and may claim an unchanged source" "rc=$rc" "$out"
 rm -f "$WORK/setdestroyfail"
@@ -1459,8 +1459,8 @@ rm -f "$WORK/setdestroyfail"
 reset_src
 touch "$WORK/rollbackfail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
-  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'is NOT in its state from before the command' \
+  && ! printf '%s' "$out" | grep -q 'is exactly in its state from before this command'; } \
     && ok "EXEC rollback-fail: a rollback failing after the approved destroys is a PARTIAL failure, never an unchanged source" \
     || bad "EXEC rollback-fail: a rollback failing after the approved destroys is a PARTIAL failure, never an unchanged source" "rc=$rc" "$out"
 
@@ -1508,7 +1508,7 @@ grep -q '^rpool/data#bmnew	' "$WORK/bmarks.$SRC" \
 #      the EFFECT, not the wording -- the stub models what ZFS was measured doing.
 bmfixture
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'RESTORE COMPLETE' \
   && ! grep -q '^rpool/data#bmnew	' "$WORK/bmarks.$SRC" \
   && grep -q '^rpool/data#bmold	' "$WORK/bmarks.$SRC"; } \
     && ok "REV-120 F1: an approved run destroys the newer bookmark and keeps the older one" \
@@ -1521,7 +1521,7 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 printf 'rpool/data#bmold\t50\t66\t50\n' > "$WORK/bmarks.$SRC"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q 'BOOKMARKI' \
+{ [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q 'BOOKMARKS' \
   && ! printf '%s' "$out" | grep -q 'bookmark  bmold' \
   && grep -q '^rpool/data#bmold	' "$WORK/bmarks.$SRC"; } \
     && ok "REV-120 F1: a bookmark older than the base is neither announced nor destroyed (control)" \
@@ -1534,8 +1534,8 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 touch "$WORK/bmarkfail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'pelnego zbioru snapshotow i bookmarkow' \
-  && ! printf '%s' "$out" | grep -q 'krok WYKONAWCZY' \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'the full set of snapshots and bookmarks' \
+  && ! printf '%s' "$out" | grep -q 'the EXECUTION step' \
   && [ "$(srccount)" = 1 ]; } \
     && ok "REV-120 F1: an unreadable bookmark listing refuses instead of reading as 'none'" \
     || bad "REV-120 F1: an unreadable bookmark listing refuses instead of reading as 'none'" "rc=$rc" "$out"
@@ -1546,9 +1546,9 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 touch "$WORK/arrivebm"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'stan zrodla sie ZMIENIL' \
-  && printf '%s' "$out" | grep -q 'nowy bookmark: intruder-bm' \
-  && ! printf '%s' "$out" | grep -q 'krok WYKONAWCZY' \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'the state of the source CHANGED' \
+  && printf '%s' "$out" | grep -q 'new bookmark: intruder-bm' \
+  && ! printf '%s' "$out" | grep -q 'the EXECUTION step' \
   && grep -q 'intruder-bm' "$WORK/bmarks.$SRC"; } \
     && ok "REV-120 F1: a bookmark arriving after the approval is caught by the commit boundary and survives" \
     || bad "REV-120 F1: a bookmark arriving after the approval is caught by the commit boundary and survives" "rc=$rc" "$out"
@@ -1560,10 +1560,10 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 touch "$WORK/latebm"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'NIE jest tym zatwierdzonym' \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'is NOT the approved one' \
   && printf '%s' "$out" | grep -q 'late-bm' \
-  && printf '%s' "$out" | grep -q 'NIC nie zniszczono' \
-  && printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia' \
+  && printf '%s' "$out" | grep -q 'NOTHING was destroyed' \
+  && printf '%s' "$out" | grep -q 'is exactly in its state from before this command' \
   && grep -q 'late-bm' "$WORK/bmarks.$SRC" \
   && [ "$(srccount)" = 1 ]; } \
     && ok "REV-120 F1: a bookmark arriving after the boundary is caught before destruction, and nothing is destroyed" \
@@ -1587,10 +1587,10 @@ touch "$WORK/execbm"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 { [ "$rc" -ne 0 ] \
   && grep -q '^rpool/data#exec-bm	' "$WORK/bmarks.$SRC" \
-  && printf '%s' "$out" | grep -q 'NIE usunieto' \
-  && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
-  && ! printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
-  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+  && printf '%s' "$out" | grep -q 'was NOT removed' \
+  && printf '%s' "$out" | grep -q 'is NOT in its state from before the command' \
+  && ! printf '%s' "$out" | grep -q 'RESTORE COMPLETE' \
+  && ! printf '%s' "$out" | grep -q 'is exactly in its state from before this command'; } \
     && ok "REV-120 r2: a bookmark arriving after the LAST validation survives, and the run fails truthfully" \
     || bad "REV-120 r2: a bookmark arriving after the LAST validation survives, and the run fails truthfully" \
            "rc=$rc bookmarks=[$(tr '\n' ';' < "$WORK/bmarks.$SRC")]" "$out"
@@ -1615,7 +1615,7 @@ grep -q '^rollback -r ' "$WORK/zfs-calls3" \
 #      still deciding, not only inside the destructive verb.
 bmfixture
 out="$(runstrat "$stcfg")"
-{ printf '%s' "$out" | grep -q 'BOOKMARKI' && printf '%s' "$out" | grep -q 'bmnew' \
+{ printf '%s' "$out" | grep -q 'BOOKMARKS' && printf '%s' "$out" | grep -q 'bmnew' \
   && ! printf '%s' "$out" | grep -q 'bmold'; } \
     && ok "REV-120 F1: the read-only plan announces the bookmarks a recovery would destroy" \
     || bad "REV-120 F1: the read-only plan announces the bookmarks a recovery would destroy" "$out"
@@ -1645,7 +1645,7 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 # the last row of a creation-sorted listing is the PEER, not the recovery point.
 tie_guid="$( ( PATH="$WORK/bin3:$PATH" zfs list -H -p -t snapshot -o name,guid -s creation -d 1 rpool/data ) | tail -1 | cut -f2)"
 { [ "$tie_guid" = 55 ] && [ "$rc" -eq 0 ] \
-  && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
+  && printf '%s' "$out" | grep -q 'RESTORE COMPLETE' \
   && grep -q '^rpool/data@zz-peer	' "$WORK/rows.$SRC" \
   && ! grep -q '^rpool/data@s9	' "$WORK/rows.$SRC"; } \
     && ok "REV-120 F2: rollback -- a same-second peer sorting last does not turn a correct restore into a failure" \
@@ -1661,10 +1661,10 @@ printf 'hdd/store/rpool/data@aa-base\t100\t11\n' > "$WORK/rows.$COPY"
 printf 'rpool/data@aa-base\t100\t11\t100\nrpool/data@zz-peer\t100\t55\t90\nrpool/data@s9\t300\t33\t300\n' > "$WORK/rows.$SRC"
 printf 'rpool/data@leak\t400\t44\t400\n' > "$WORK/rollbackleak"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'weryfikacja stanu koncowego zawiodla' \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'final-state verification failed' \
   && printf '%s' "$out" | grep -q 'leak' \
-  && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
-  && ! printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE'; } \
+  && printf '%s' "$out" | grep -q 'is NOT in its state from before the command' \
+  && ! printf '%s' "$out" | grep -q 'RESTORE COMPLETE'; } \
     && ok "REV-120 F2: a rollback that returns 0 and leaves something newer is a post-destruction failure" \
     || bad "REV-120 F2: a rollback that returns 0 and leaves something newer is a post-destruction failure" "rc=$rc" "$out"
 
@@ -1680,7 +1680,7 @@ printf 'rpool/data@aa-base\t100\t11\t100\nrpool/data@zz-peer\t500\t55\t90\n' > "
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 tie_guid="$( ( PATH="$WORK/bin3:$PATH" zfs list -H -p -t snapshot -o name,guid -s creation -d 1 rpool/data ) | tail -1 | cut -f2)"
 { [ "$rc" -eq 0 ] && [ "$tie_guid" = 55 ] \
-  && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
+  && printf '%s' "$out" | grep -q 'RESTORE COMPLETE' \
   && grep -q '^rpool/data@bb-target	' "$WORK/rows.$SRC"; } \
     && ok "REV-120 F2: increment -- a received recovery point tying on creation is still verified by identity" \
     || bad "REV-120 F2: increment -- a received recovery point tying on creation is still verified by identity" \
@@ -1703,9 +1703,9 @@ tie_guid="$( ( PATH="$WORK/bin3:$PATH" zfs list -H -p -t snapshot -o name,guid -
 reset_src
 printf 'hdd/store/rpool/data@aa-one\t500\t71\nhdd/store/rpool/data@zz-two\t500\t72\n' > "$WORK/rows.$COPY"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'NIEJEDNOZNACZNY' \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'AMBIGUOUS' \
   && printf '%s' "$out" | grep -q 'aa-one' && printf '%s' "$out" | grep -q 'zz-two' \
-  && ! printf '%s' "$out" | grep -q 'DO ZNISZCZENIA' \
+  && ! printf '%s' "$out" | grep -q 'TO BE DESTROYED' \
   && ! grep -q 'restore-preview-' "$WORK/rows.$SRC" \
   && [ "$(srccount)" = 1 ]; } \
     && ok "REV-121: a tied maximum creation refuses, names both candidates, and mutates nothing" \
@@ -1717,8 +1717,8 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'guid=22' \
-  && ! printf '%s' "$out" | grep -q 'NIEJEDNOZNACZNY' \
-  && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE'; } \
+  && ! printf '%s' "$out" | grep -q 'AMBIGUOUS' \
+  && printf '%s' "$out" | grep -q 'RESTORE COMPLETE'; } \
     && ok "REV-121: a unique maximum creation still selects the expected recovery point (control)" \
     || bad "REV-121: a unique maximum creation still selects the expected recovery point (control)" "rc=$rc" "$out"
 
@@ -1730,7 +1730,7 @@ printf 'hdd/store/rpool/data@aa-old\t100\t81\nhdd/store/rpool/data@zz-old\t100\t
 printf 'rpool/data@aa-old\t100\t81\t100\n' > "$WORK/rows.$SRC"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'guid=83' \
-  && ! printf '%s' "$out" | grep -q 'NIEJEDNOZNACZNY'; } \
+  && ! printf '%s' "$out" | grep -q 'AMBIGUOUS'; } \
     && ok "REV-121: a tie BELOW the maximum is not an ambiguity (control)" \
     || bad "REV-121: a tie BELOW the maximum is not an ambiguity (control)" "rc=$rc" "$out"
 
@@ -1739,7 +1739,7 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 printf 'hdd/store/rpool/data@s1\tnotatime\t11\n' > "$WORK/rows.$COPY"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'NIEJEDNOZNACZNY'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'AMBIGUOUS'; } \
     && ok "REV-121: a copy whose capture times cannot be read refuses instead of picking one" \
     || bad "REV-121: a copy whose capture times cannot be read refuses instead of picking one" "rc=$rc" "$out"
 
@@ -1978,7 +1978,7 @@ sc_refuses() {   # <desc> <expected substring of the refusal> <args...>
 
 # The case the decision exists for: two disks of one VM, one command.
 out="$(sc_run pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1)"
-n="$(printf '%s\n' "$out" | grep -c 'Zrodlo:')"
+n="$(printf '%s\n' "$out" | grep -c 'Source:')"
 if [ "$n" = 2 ]; then ok "scope: two disks of one VM in ONE command"
 else bad "scope: two disks of one VM in ONE command" "expected 2 datasets in the plan, got $n"; fi
 # ...and it must not have quietly included the relationship's other members or
@@ -1990,7 +1990,7 @@ esac
 
 # The same two, named on the collector side instead. Same plan.
 out2="$(sc_run pve2 --source hdd/store,hdd/store2)"
-n2="$(printf '%s\n' "$out2" | grep -c 'Zrodlo:')"
+n2="$(printf '%s\n' "$out2" | grep -c 'Source:')"
 if [ "$n2" = 2 ]; then ok "scope: the same two named on the collector side"
 else bad "scope: the same two named on the collector side" "expected 2, got $n2"; fi
 
@@ -2031,7 +2031,7 @@ sc_refuses "scope: a trailing comma after two members is still a refusal" \
 # output, so no confirmation, no fence, no snapshot, nothing downstream can have
 # run. Checked on the output rather than assumed from the exit code.
 out="$(sc_run pve2 --target rpool/data/vm-101-disk-0, 2>&1)"
-n="$(printf '%s\n' "$out" | grep -c 'Zrodlo:')"
+n="$(printf '%s\n' "$out" | grep -c 'Source:')"
 if [ "$n" = 0 ]; then ok "scope: a trailing comma refuses BEFORE any plan is shown"
 else bad "scope: a trailing comma refuses BEFORE any plan is shown" "$n plan lines were printed"; fi
 
@@ -2058,7 +2058,7 @@ case "$out" in
     *) bad "scope: without --plan the scope RUNS, it does not plan" \
            "expected the per-dataset runner's report" "got: $(printf '%s' "$out" | head -2)" ;;
 esac
-n="$(printf '%s\n' "$out" | grep -c 'Zrodlo:')"
+n="$(printf '%s\n' "$out" | grep -c 'Source:')"
 if [ "$n" = 0 ]; then ok "scope: ...and prints no plan while doing it"
 else bad "scope: ...and prints no plan while doing it" "$n plan lines were printed by a run"; fi
 
@@ -2310,10 +2310,10 @@ esac
 # a well-formed list of the same length still resolves completely, in the order
 # written. Without this, a parser that refused every list would pass all of them.
 out="$(sc_run pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1)"
-n="$(printf '%s\n' "$out" | grep -c 'Zrodlo:')"
+n="$(printf '%s\n' "$out" | grep -c 'Source:')"
 if [ "$n" = 2 ]; then ok "scope control: the same list WITHOUT the trailing comma still resolves both"
 else bad "scope control: the same list without the trailing comma resolves both" "expected 2, got $n"; fi
-first="$(printf '%s\n' "$out" | grep 'Zrodlo:' | head -1)"
+first="$(printf '%s\n' "$out" | grep 'Source:' | head -1)"
 case "$first" in
     *vm-101-disk-0*) ok "scope control: ...and in the order written" ;;
     *) bad "scope control: ...and in the order written" "$first" ;;
@@ -2398,11 +2398,11 @@ at_rc=$?
 
 # at1 -- neither the newest nor the oldest.
 case "$at_out" in
-    *"WYBRANO WANTED"*) ok "at: picks the greatest creation AT OR BEFORE the moment" ;;
-    *) bad "at: picks the greatest creation AT OR BEFORE the moment" "$(printf '%s' "$at_out" | grep -E 'WYBRANO|PUNKT' | head -3)" ;;
+    *"CHOSEN WANTED"*) ok "at: picks the greatest creation AT OR BEFORE the moment" ;;
+    *) bad "at: picks the greatest creation AT OR BEFORE the moment" "$(printf '%s' "$at_out" | grep -E 'CHOSEN|POINT' | head -3)" ;;
 esac
 case "$at_out" in
-    *"WYBRANO toonew"*) bad "at: ...and never a snapshot from AFTER it" "picked toonew" ;;
+    *"CHOSEN toonew"*) bad "at: ...and never a snapshot from AFTER it" "picked toonew" ;;
     *) ok "at: ...and never a snapshot from AFTER it" ;;
 esac
 # The guid and the real creation travel with the choice: the operator has to be
@@ -2419,20 +2419,20 @@ case "$at_out" in
 esac
 # A dataset with nothing old enough is that dataset's error, and the run goes on.
 case "$at_out" in
-    *"BRAK -- ten dataset nie ma snapshotu"*) ok "at: a dataset with nothing old enough is named" ;;
+    *"NONE -- this dataset has no snapshot"*) ok "at: a dataset with nothing old enough is named" ;;
     *) bad "at: a dataset with nothing old enough is named" ;;
 esac
 case "$at_out" in
-    *"WYBRANO WANTED"*) ok "at: ...and the OTHER datasets are still planned" ;;
+    *"CHOSEN WANTED"*) ok "at: ...and the OTHER datasets are still planned" ;;
     *) bad "at: ...and the OTHER datasets are still planned" ;;
 esac
 # A tie is fail-closed: the name is not a tie-breaker.
 case "$at_out" in
-    *"NIEJEDNOZNACZNE"*) ok "at: a tie on the greatest creation refuses to choose" ;;
+    *"AMBIGUOUS"*) ok "at: a tie on the greatest creation refuses to choose" ;;
     *) bad "at: a tie on the greatest creation refuses to choose" ;;
 esac
 case "$at_out" in
-    *"WYBRANO twinA"*|*"WYBRANO twinB"*) bad "at: ...and does NOT break the tie by name" "picked one of the twins" ;;
+    *"CHOSEN twinA"*|*"CHOSEN twinB"*) bad "at: ...and does NOT break the tie by name" "picked one of the twins" ;;
     *) ok "at: ...and does NOT break the tie by name" ;;
 esac
 # Owner decision 7: incomplete is not clean. The exit status is the only part of
@@ -2472,11 +2472,11 @@ esac
 f1_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --plan --config="$SC/cfg" 2>&1)"
 case "$f1_out" in
     *"root@pve2:rpool/data/vm-101-disk-0"*) ok "f1: the ORIGINAL side resolves to its exact recorded value" ;;
-    *) bad "f1: the ORIGINAL side resolves to its exact recorded value" "$(printf '%s' "$f1_out" | grep Zrodlo | head -2)" ;;
+    *) bad "f1: the ORIGINAL side resolves to its exact recorded value" "$(printf '%s' "$f1_out" | grep Source | head -2)" ;;
 esac
 case "$f1_out" in
     *"hdd/store"*) ok "f1: the COPY side resolves to its exact recorded value" ;;
-    *) bad "f1: the COPY side resolves to its exact recorded value" "$(printf '%s' "$f1_out" | grep -i kopia | head -2)" ;;
+    *) bad "f1: the COPY side resolves to its exact recorded value" "$(printf '%s' "$f1_out" | grep -i copy | head -2)" ;;
 esac
 # The shape a broken tab-split would produce, named so the assertion cannot pass
 # by accident on a truncated value.
@@ -2484,7 +2484,7 @@ esac
 # as a SUBSTRING -- which the correct value `root@pve2:...` also contains, so it
 # failed against working code. That is the other way a test can be wrong.
 if printf '%s
-' "$f1_out" | grep -qE '^[[:space:]]*(Zrodlo|Kopia):[[:space:]]+(roo|ore)[[:space:]]*$'; then
+' "$f1_out" | grep -qE '^[[:space:]]*(Source|Copy):[[:space:]]+(roo|ore)[[:space:]]*$'; then
     bad "f1: and is not truncated at the letter t" "found a value cut down to roo or ore"
 else
     ok "f1: and is not truncated at the letter t"
@@ -2522,7 +2522,7 @@ chmod +x "$F2/bin/zfs"
 
 f2_out="$(PATH="$F2/bin:$PATH" bash "$ZB" loc --at '2026-08-10 12:00' --plan --config="$F2/cfg" 2>&1)"
 # The block under "Punkt docelowy" is what the confirmation would be about.
-f2_point="$(printf '%s\n' "$f2_out" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
+f2_point="$(printf '%s\n' "$f2_out" | sed -n '/Target point/,+1p' | tail -1)"
 case "$f2_point" in
     *WANTED*guid=G2*) ok "f2: the strategy classifies the point --at chose" ;;
     *) bad "f2: the strategy classifies the point --at chose" "got: $f2_point" ;;
@@ -2534,34 +2534,34 @@ esac
 # The caption over it stated a POLICY. Under --at that policy is not in force,
 # and a right answer under a wrong caption is still an untrue preview.
 case "$f2_out" in
-    *"domyslna polityka: NAJNOWSZY"*) bad "f2: the caption does not still claim the default-newest policy" ;;
+    *"default policy: NEWEST"*) bad "f2: the caption does not still claim the default-newest policy" ;;
     *) ok "f2: the caption does not still claim the default-newest policy" ;;
 esac
 # NEGATIVE CONTROL: without --at the default policy is in force and says so, and
 # the newest IS the point -- otherwise the two assertions above would pass
 # against a build that had simply stopped classifying anything.
 f2_plain="$(PATH="$F2/bin:$PATH" bash "$ZB" loc --plan --config="$F2/cfg" 2>&1)"
-f2_ppoint="$(printf '%s\n' "$f2_plain" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
+f2_ppoint="$(printf '%s\n' "$f2_plain" | sed -n '/Target point/,+1p' | tail -1)"
 case "$f2_ppoint" in
     *toonew*) ok "f2: without --at the newest is still the point" ;;
     *) bad "f2: without --at the newest is still the point" "got: $f2_ppoint" ;;
 esac
 case "$f2_plain" in
-    *"domyslna polityka: NAJNOWSZY"*) ok "f2: ...and the default caption is still shown" ;;
+    *"default policy: NEWEST"*) ok "f2: ...and the default caption is still shown" ;;
     *) bad "f2: ...and the default caption is still shown" ;;
 esac
 # When --at resolved nothing for a dataset, no strategy is computed at all.
 f2_none="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-1 --at '2026-08-10 12:00' --plan --config="$AT/cfg" 2>&1)"
 case "$f2_none" in
-    *"Strategia:  (POMINIETA"*) ok "f2: a dataset --at could not resolve gets NO strategy" ;;
-    *) bad "f2: a dataset --at could not resolve gets NO strategy" "$(printf '%s' "$f2_none" | grep Strategia | head -2)" ;;
+    *"Strategy:   (SKIPPED"*) ok "f2: a dataset --at could not resolve gets NO strategy" ;;
+    *) bad "f2: a dataset --at could not resolve gets NO strategy" "$(printf '%s' "$f2_none" | grep Strategy | head -2)" ;;
 esac
 
 # --- F3: both sides may be stated, and then they are PAIRED -----------------
 # The mutual exclusion was the reviewer's tightening of an approved UX and was
 # withdrawn. All three forms work; stating both is not remapping.
 f3_both="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store,hdd/store2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --plan --config="$SC/cfg" 2>&1)"
-f3_n="$(printf '%s\n' "$f3_both" | grep -c 'Zrodlo:')"
+f3_n="$(printf '%s\n' "$f3_both" | grep -c 'Source:')"
 if [ "$f3_n" = 2 ]; then ok "f3: both sides stated explicitly is accepted"
 else bad "f3: both sides stated explicitly is accepted" "expected 2 datasets, got $f3_n" "$(printf '%s' "$f3_both" | head -3)"; fi
 
@@ -2635,23 +2635,23 @@ BBSTUB
 chmod +x "$BB/bin/zfs"
 
 bb_out="$(PATH="$BB/bin:$PATH" bash "$ZB" loc --at '2026-08-10 12:00' --plan --config="$BB/cfg" 2>&1)"
-bb_point="$(printf '%s\n' "$bb_out" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
+bb_point="$(printf '%s\n' "$bb_out" | sed -n '/Target point/,+1p' | tail -1)"
 case "$bb_point" in
     *WANTED*guid=G2*) ok "base: --at still selects the target it chose" ;;
     *) bad "base: --at still selects the target it chose" "got: $bb_point" ;;
 esac
-bb_base="$(printf '%s\n' "$bb_out" | sed -n '/Wspolna baza/,+1p' | tail -1)"
+bb_base="$(printf '%s\n' "$bb_out" | sed -n '/Common base/,+1p' | tail -1)"
 case "$bb_base" in
     *guid=G1*) ok "base: the OLDER common base survives --at" ;;
     *) bad "base: the OLDER common base survives --at" "got: $bb_base" ;;
 esac
 case "$bb_out" in
-    *"Wspolnej bazy NIE MA"*) bad "base: and is never reported as FULL/no-base" ;;
+    *"There is NO common base"*) bad "base: and is never reported as FULL/no-base" ;;
     *) ok "base: and is never reported as FULL/no-base" ;;
 esac
 case "$bb_out" in
-    *"INKREMENT"*) ok "base: so the classification is INKREMENT, not a full replacement" ;;
-    *) bad "base: so the classification is INKREMENT, not a full replacement" "$(printf '%s' "$bb_out" | grep Strategia | head -1)" ;;
+    *"INCREMENT"*) ok "base: so the classification is INCREMENT, not a full replacement" ;;
+    *) bad "base: so the classification is INCREMENT, not a full replacement" "$(printf '%s' "$bb_out" | grep Strategy | head -1)" ;;
 esac
 # A snapshot from AFTER the moment must not become the base either -- the filter
 # is "at or before", and it applies to both uses of the listing.
@@ -2663,7 +2663,7 @@ esac
 # the base is still found, so these assertions are about --at and not about the
 # strategy having stopped working.
 bb_plain="$(PATH="$BB/bin:$PATH" bash "$ZB" loc --plan --config="$BB/cfg" 2>&1)"
-bb_ppoint="$(printf '%s\n' "$bb_plain" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
+bb_ppoint="$(printf '%s\n' "$bb_plain" | sed -n '/Target point/,+1p' | tail -1)"
 case "$bb_ppoint" in
     *toonew*guid=G3*) ok "base: without --at the newest is the target, as before" ;;
     *) bad "base: without --at the newest is the target, as before" "got: $bb_ppoint" ;;

@@ -223,8 +223,8 @@ out="$( (
     false
 ) 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] \
-        && [ "$(printf '%s\n' "$out" | grep -c '^PONOW DOKLADNIE:')" -eq 1 ] \
-        && printf '%s' "$out" | grep -qF 'PONOW DOKLADNIE: ./deploy.sh --join=/root/pve1-package.tgz' \
+        && [ "$(printf '%s\n' "$out" | grep -c '^RE-RUN EXACTLY:')" -eq 1 ] \
+        && printf '%s' "$out" | grep -qF 'RE-RUN EXACTLY: ./deploy.sh --join=/root/pve1-package.tgz' \
         && [ ! -e "$TMPD/cleanup-work" ]; then
     ok "guided join: an interrupted run prints exactly one full rerun command and cleans its workdir"
 else
@@ -574,11 +574,11 @@ else
     bad "STALE DRAFT: A GRANT IS NOT OFFERED FROM A DRAFT THAT PREDATES THE REQUEST" "rc=$rc calls=$(cat "$GUIDED_CALLS")"
 fi
 case "$out" in
-    *"INNEJ prosby"*) ok "stale draft: ...and says the draft was built for a different request" ;;
+    *"DIFFERENT request"*) ok "stale draft: ...and says the draft was built for a different request" ;;
     *) bad "stale draft: ...and says the draft was built for a different request" "$out" ;;
 esac
 case "$out" in
-    *"caly majatek hosta"*) ok "stale draft: ...naming what it was built for, not just that it differs" ;;
+    *"the host's whole estate"*) ok "stale draft: ...naming what it was built for, not just that it differs" ;;
     *) bad "stale draft: ...naming what it was built for, not just that it differs" "$out" ;;
 esac
 
@@ -606,7 +606,7 @@ else
     bad "legacy draft: no recorded request is a warning, not a refusal" "rc=$rc out=$out"
 fi
 case "$out" in
-    *"NIE zostal sprawdzony"*) ok "legacy draft: ...and the operator is told it was not checked" ;;
+    *"was NOT checked"*) ok "legacy draft: ...and the operator is told it was not checked" ;;
     *) bad "legacy draft: ...and the operator is told it was not checked" "$out" ;;
 esac
 rm -f "$SCOPE" "$HASH" "$SCOPE.request"

@@ -284,14 +284,14 @@ restore_safe_land() {   # <copy> <snapshot> <landing> <what the source WAS> <yes
     fi
 
     echo
-    echo "Bezpieczne odtworzenie (do namespace restore -- produkcja NIE jest dotykana):"
-    echo "  Kopia:      ${copy}@${snap}"
-    echo "  Zrodlo:     $src   (oryginalna sciezka -- NIE jest celem)"
-    echo "  Wyladuje w: $landing"
+    echo "Safe restore (into the restore namespace -- production is NOT touched):"
+    echo "  Copy:       ${copy}@${snap}"
+    echo "  Source:     $src   (original path -- NOT the target)"
+    echo "  Lands in:   $landing"
     echo
     if [ "$yes" -ne 1 ]; then
         local ans
-        read -rp "Odtworzyc? [t/N] " ans
+        read -rp "Restore? [y/N] " ans
         case "$ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) die "not confirmed -- nothing was created" ;; esac
     fi
 
@@ -410,16 +410,16 @@ restore_safe_land() {   # <copy> <snapshot> <landing> <what the source WAS> <yes
     fi
 
     echo
-    echo "Odtworzenie OK."
-    echo "  Powstalo:   $landing"
+    echo "Restore OK."
+    echo "  Created:    $landing"
     echo "  Snapshot:   ${landing}@${snap}"
     if [ "${RESTORE_WITH_HISTORY:-0}" -eq 1 ]; then
-        echo "  Historia:   $_hist_n snapshot(ow) kopii, od ${_hist_first:-$snap} do $snap (--with-history)"
+        echo "  History:    $_hist_n snapshot(s) of the copy, from ${_hist_first:-$snap} to $snap (--with-history)"
     else
-        echo "  Historia:   tylko punkt (bez wczesniejszych snapshotow; --with-history przenosi je tez)"
+        echo "  History:    the point only (no earlier snapshots; --with-history carries them too)"
     fi
-    echo "  GUID:       $src_guid (zgodny ze zrodlem -- zweryfikowany, nie zalozony)"
-    echo "  Nadpisane:  nic -- cel byl wolny. Nadpisanie istniejacego: --from-copy ... --overwrite albo restore <relacja>."
+    echo "  GUID:       $src_guid (matches the source -- verified, not assumed)"
+    echo "  Overwrote:  nothing -- the target was free. To overwrite an existing one: --from-copy ... --overwrite or restore <relation>."
 }
 
 cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
@@ -713,12 +713,12 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
     fi
 
     echo
-    echo "Odtworzenie z KOPII (bez rekordu relacji) -- nic nie zostalo jeszcze zmienione."
+    echo "Restore from a COPY (no relation record) -- nothing has been changed yet."
     if [ "$overwrite" -eq 1 ]; then
-        echo "  --overwrite: cele PONIZEJ JUZ ISTNIEJA i zostana nadpisane. Kazdy z nich"
-        echo "  dostanie osobny podglad zbioru strat i osobne pytanie, zanim cokolwiek zginie."
+        echo "  --overwrite: the targets BELOW ALREADY EXIST and will be overwritten. Each of them"
+        echo "  gets its own preview of what is lost and its own question, before anything is gone."
     else
-        echo "  Bez --overwrite nic nie jest nadpisywane: kazdy cel musi byc wolny, inaczej odmowa."
+        echo "  Without --overwrite nothing is overwritten: every target must be free, otherwise it is refused."
     fi
     for (( i=0; i<${#from[@]}; i++ )); do
         printf '  %s@%s  ->  %s\n' "${from[$i]}" "${snaps[$i]}" "${to[$i]}"
@@ -726,7 +726,7 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
     echo
     if [ "$yes" -ne 1 ]; then
         local ans
-        read -rp "Odtworzyc? [t/N] " ans
+        read -rp "Restore? [y/N] " ans
         case "$ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) die "not confirmed -- nothing was created" ;; esac
     fi
 
@@ -759,7 +759,7 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
             # and took the newest -- `--at 06:30` restored to 09:01, previewed a
             # 0 B loss and reported success (lab, pve9b usb9 replica, 2026-10-15).
             restore_replace_pair "${to[$i]}" "${from[$i]}" "$yes" \
-                "replika -> kopia (dwa datasety podane wprost)" "${snaps[$i]}" || rc=1
+                "replica -> copy (two datasets given directly)" "${snaps[$i]}" || rc=1
         else
             restore_safe_land "${from[$i]}" "${snaps[$i]}" "${to[$i]}" "${from[$i]}" 1 || rc=1
         fi
@@ -799,7 +799,7 @@ restore_copy_key_ready() {
         RESTORE_KEYS_LOADED+=("$root"); return 0
     fi
     # -s: a typed key is a secret and is not echoed.
-    read -rsp "Klucz nosnika ($root) nie jest zaladowany. Wpisz klucz albo podaj sciezke pliku z kluczem: " ans || ans=""
+    read -rsp "The medium's key ($root) is not loaded. Type the key or give the path of a key file: " ans || ans=""
     echo >&2
     [ -n "$ans" ] || return 1
     if [ -f "$ans" ]; then
@@ -860,7 +860,7 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     # that policy is not the one in force. A preview that classifies the right
     # snapshot under a caption naming a different rule is still telling the
     # operator something untrue.
-    local point_label="${4:-domyslna polityka: NAJNOWSZY -> oryginalna sciezka}"
+    local point_label="${4:-default policy: NEWEST -> original path}"
     RESTORE_STRATEGY=""; RESTORE_BASE_GUID=""; RESTORE_TARGET_SNAP=""
     RESTORE_TARGET_GUID=""; RESTORE_BLOCKERS=""; RESTORE_BLOCK_BOOKMARKS=""
     RESTORE_COPY_BASE_SNAP=""; RESTORE_SRC_BASE_SNAP=""; RESTORE_SRC_BASE_TXG=""
@@ -870,7 +870,7 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     # strategy needs that host, which is an SSH read this read-only slice does not
     # take. Say so rather than implying the local answer applies.
     case "$srcpath" in
-        *:*) echo "  Strategia:  (zrodlo '$srcpath' jest ZDALNE -- ustalenie strategii wymaga odpytania tamtego hosta; ten wycinek tego nie robi)"
+        *:*) echo "  Strategy:   (source '$srcpath' is REMOTE -- working out the strategy needs a query to that host; this slice does not do that)"
              RESTORE_STRATEGY=remote
              return 0 ;;
     esac
@@ -898,32 +898,32 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     ntied="$(printf '%s\n' "$tied" | grep -c .)"
     if [ "$ntied" -ne 1 ]; then
         RESTORE_STRATEGY=ambiguous
-        echo "  Punkt docelowy: NIEJEDNOZNACZNY -- nie wybieram."
+        echo "  Target point: AMBIGUOUS -- not choosing."
         if [ "$ntied" -eq 0 ]; then
-            echo "    Zaden snapshot kopii '$copy' nie ma czytelnego czasu powstania, wiec nie ma"
-            echo "    z czego wyznaczyc najnowszego punktu."
+            echo "    No snapshot of the copy '$copy' has a readable creation time, so there is"
+            echo "    nothing to pick the newest point from."
         else
-            echo "    $ntied snapshotow kopii dzieli ten sam czas powstania (creation=$maxc):"
+            echo "    $ntied snapshots of the copy share the same creation time (creation=$maxc):"
             printf '%s\n' "$tied" | while IFS="$(printf '\t')" read -r tn tg; do
                 [ -n "$tn" ] && echo "      ${tn#*@}  guid=$tg"
             done
-            echo "    'creation' ma rozdzielczosc jednej sekundy, wiec ktory z nich jest"
-            echo "    NAJNOWSZY nie wynika z niczego poza przypadkowa kolejnoscia listy. Wybor"
-            echo "    zgadniety tutaj wyznaczylby punkt, do ktorego cofnieto by zrodlo, wiec nie"
-            echo "    jest zgadywany. Rozstrzygnij po stronie kopii albo wskaz punkt jawnie."
+            echo "    'creation' has a resolution of one second, so which of them is the"
+            echo "    NEWEST follows from nothing but the accidental order of the list. A choice"
+            echo "    guessed here would set the point the source is rolled back to, so it"
+            echo "    is not guessed. Settle it on the copy side or name the point explicitly."
         fi
         return 0
     fi
     latest="${tied%%	*}"
     latest_guid="${tied##*	}"
     RESTORE_TARGET_SNAP="${latest#*@}"; RESTORE_TARGET_GUID="$latest_guid"
-    echo "  Punkt docelowy ($point_label):"
+    echo "  Target point ($point_label):"
     echo "    ${latest#*@}  guid=$latest_guid"
 
     if ! zfs list -H -o name "$srcpath" >/dev/null 2>&1; then
         RESTORE_STRATEGY=full-absent
-        echo "  Strategia:  FULL -- zrodlo '$srcpath' nie istnieje, wiec nie ma czego niszczyc"
-        echo "              ani z czym robic przyrostu. Odtworzenie stworzy je od zera."
+        echo "  Strategy:   FULL -- source '$srcpath' does not exist, so there is nothing to destroy"
+        echo "              and nothing to increment from. The restore creates it from scratch."
         return 0
     fi
 
@@ -940,10 +940,10 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
 
     if [ -z "$base_guid" ]; then
         RESTORE_STRATEGY=full-live
-        echo "  Strategia:  FULL na ISTNIEJACE zrodlo -- zaden snapshot kopii nie ma guida"
-        echo "              obecnego na '$srcpath'. Wspolnej bazy NIE MA, wiec przyrost jest"
-        echo "              niemozliwy, a pelne odtworzenie zastapiloby zywe zrodlo. To jest"
-        echo "              operacja niszczaca (forma relacyjna restore, tryb replace)."
+        echo "  Strategy:   FULL onto an EXISTING source -- no snapshot of the copy has a guid"
+        echo "              present on '$srcpath'. There is NO common base, so an increment is"
+        echo "              impossible, and a full restore would replace the live source. This is"
+        echo "              a destructive operation (relation form of restore, replace mode)."
         return 0
     fi
 
@@ -975,7 +975,7 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
         RESTORE_SRC_BASE_SNAP="${srcbase%%	*}"
         RESTORE_SRC_BASE_TXG="${srcbase##*	}"
     fi
-    echo "  Wspolna baza (dowiedziona GUID-em, nie nazwa):"
+    echo "  Common base (proven by GUID, not by name):"
     echo "    ${base_snap#*@}  guid=$base_guid"
 
     # What stands in the way, named precisely. Two different kinds of source-side
@@ -1063,67 +1063,67 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     if [ "$base_guid" = "$latest_guid" ]; then
         if [ -z "$blockers" ] && [ "$live_state" = dirty ]; then
             RESTORE_STRATEGY=discard-live
-            echo "  Strategia:  ODRZUCENIE ZYWYCH ZMIAN, bez transferu -- zrodlo stoi na zadanym"
-            echo "              punkcie i nie ma nowszych snapshotow, ale po nim zapisano dane."
-            echo "              Powrot do zadanego stanu oznacza ich utrate. Nic sie nie przesyla."
+            echo "  Strategy:   DISCARD LIVE CHANGES, no transfer -- the source stands on the requested"
+            echo "              point and has no newer snapshots, but data was written after it."
+            echo "              Going back to the requested state means losing that data. Nothing is transferred."
         elif [ -z "$blockers" ]; then
             RESTORE_STRATEGY=unproven
-            echo "  Strategia:  STAN ZRODLA NIEDOWIEDZIONY, traktowany jako potencjalnie NISZCZACY"
-            echo "              -- zrodlo stoi na zadanym punkcie i nie ma nowszych snapshotow, ale"
-            echo "              biezacego stanu zywego nie da sie tu dowiesc (szczegol nizej)."
-            echo "              'Nic do zrobienia' byloby odpowiedzia na wiare, wiec jej nie ma."
+            echo "  Strategy:   SOURCE STATE UNPROVEN, treated as potentially DESTRUCTIVE"
+            echo "              -- the source stands on the requested point and has no newer snapshots, but"
+            echo "              the current live state cannot be proven here (detail below)."
+            echo "              'Nothing to do' would be an answer on faith, so there is none."
         else
             RESTORE_STRATEGY=rollback
-            echo "  Strategia:  SAM ROLLBACK, bez transferu -- zrodlo MA juz najnowszy punkt kopii,"
-            echo "              ale przeszlo poza niego. Zeby wrocic do zadanego stanu, ponizsze"
-            echo "              snapshoty zrodla musza zniknac. Nic sie nie przesyla."
+            echo "  Strategy:   ROLLBACK ONLY, no transfer -- the source ALREADY HAS the newest point of the copy,"
+            echo "              but has moved past it. To return to the requested state, the snapshots"
+            echo "              of the source below must go. Nothing is transferred."
         fi
     else
         RESTORE_STRATEGY=increment
-        echo "  Strategia:  INKREMENT od wspolnej bazy do najnowszego punktu."
+        echo "  Strategy:   INCREMENT from the common base to the newest point."
     fi
 
     if [ -n "$blockers" ]; then
-        echo "  BLOKUJE / DO USUNIECIA (snapshoty zrodla NOWSZE niz wspolna baza):"
+        echo "  BLOCKING / TO BE REMOVED (source snapshots NEWER than the common base):"
         printf '%s\n' "$blockers" | sed 's/.*@/    /'
     fi
     if [ -n "$bookmarks" ]; then
-        echo "  BLOKUJE / DO USUNIECIA (BOOKMARKI zrodla NOWSZE niz wspolna baza):"
+        echo "  BLOCKING / TO BE REMOVED (source BOOKMARKS NEWER than the common base):"
         printf '%s\n' "$bookmarks" | sed 's/.*#/    /'
-        echo "  Bookmark nie zajmuje miejsca, wiec nie widac go w bajtach -- ale jest NOWSZY niz"
-        echo "  punkt docelowy, wiec odtworzenie musi go usunac (dopoki istnieje, ZFS odmawia"
-        echo "  cofniecia zrodla). Bookmark jest punktem zaczepienia przyszlego wysylania"
-        echo "  przyrostowego, wiec jego strata jest nieodwracalna tak samo jak strata snapshota."
+        echo "  A bookmark takes no space, so it does not show in the bytes -- but it is NEWER than"
+        echo "  the target point, so the restore must remove it (while it exists, ZFS refuses"
+        echo "  to roll the source back). A bookmark is the anchor of a future incremental"
+        echo "  send, so losing it is as irreversible as losing a snapshot."
     fi
     if [ -n "$blockers" ] || [ -n "$bookmarks" ]; then
-        echo "  To jest operacja NISZCZACA dla powyzszych obiektow zrodla i wymaga jawnego"
-        echo "  potwierdzenia. Wykonuje ja forma relacyjna: restore <relacja> [--at=...]."
+        echo "  This is a DESTRUCTIVE operation for the source objects above and needs explicit"
+        echo "  confirmation. The relation form runs it: restore <relation> [--at=...]."
     fi
     if [ "$setstate" != ok ]; then
-        echo "  ZBIOR STRAT NIEDOWIEDZIONY: nie udalo sie ustalic pelnej listy snapshotow i"
-        echo "  bookmarkow zrodla nowszych niz wspolna baza. Powyzsza lista moze byc NIEPELNA;"
-        echo "  operacja niszczaca na tym stanie jest niedopuszczalna."
+        echo "  LOSS SET UNPROVEN: could not establish the full list of source snapshots and"
+        echo "  bookmarks newer than the common base. The list above may be INCOMPLETE;"
+        echo "  a destructive operation on this state is not acceptable."
     fi
 
     case "$live_state" in
         dirty)
-            echo "  ZYWE ZMIANY PO OSTATNIM SNAPSHOCIE ZRODLA: ZFS rozlicza written=$live_written B"
-            echo "  zapisanych na '$srcpath' po jego najnowszym snapshocie. Tych danych NIE MA w"
-            echo "  zadnym snapshocie, wiec nie da sie ich odzyskac po fakcie -- odtworzenie"
-            echo "  niszczace je ODRZUCI. Ten stan sam w sobie czyni operacje niszczaca, nawet"
-            echo "  gdyby zaden snapshot nie blokowal." ;;
+            echo "  LIVE CHANGES AFTER THE SOURCE'S LAST SNAPSHOT: ZFS accounts written=$live_written B"
+            echo "  written on '$srcpath' after its newest snapshot. This data is in NO"
+            echo "  snapshot, so it cannot be recovered afterwards -- the destructive restore"
+            echo "  DISCARDS it. This state alone makes the operation destructive, even"
+            echo "  if no snapshot blocked." ;;
         unreadable)
-            echo "  STAN ZYWY NIEDOWIEDZIONY: odczyt wlasciwosci 'written' dla '$srcpath' nie dal"
-            echo "  liczby. NIE twierdze, ze nic nie blokuje -- traktuj operacje jako niszczaca"
-            echo "  do czasu, az stan zywy zostanie potwierdzony." ;;
+            echo "  LIVE STATE UNPROVEN: reading the 'written' property of '$srcpath' gave"
+            echo "  no number. I do NOT claim nothing blocks -- treat the operation as destructive"
+            echo "  until the live state is confirmed." ;;
         unaccounted)
-            echo "  STAN ZYWY NIEDOWIEDZIONY: ZFS nie rozlicza zadnych zmian zapisanych po"
-            echo "  ostatnim snapshocie zrodla (written=0)."
-            echo "  To NIE jest dowod stanu biezacego: 'written' pokazuje ostatni ZATWIERDZONY"
-            echo "  txg. Zmierzone (pve1, zfs-2.1.9): 4 MiB zapisane i przepuszczone przez"
-            echo "  sync(1) dalej pokazywaly written=0, az do commitu txg -- na tej puli okolo"
-            echo "  minuty pozniej. Zapis sprzed chwili jest wiec dla tego odczytu niewidoczny."
-            echo "  Przed operacja niszczaca potwierdz, ze zrodlo jest bezczynne." ;;
+            echo "  LIVE STATE UNPROVEN: ZFS accounts no changes written after the"
+            echo "  source's last snapshot (written=0)."
+            echo "  This is NOT proof of the current state: 'written' shows the last COMMITTED"
+            echo "  txg. Measured (pve1, zfs-2.1.9): 4 MiB written and pushed through"
+            echo "  sync(1) still showed written=0 until the txg committed -- on that pool about a"
+            echo "  minute later. A write from a moment ago is therefore invisible to this read."
+            echo "  Before a destructive operation, confirm the source is idle." ;;
     esac
 }
 
@@ -1702,7 +1702,7 @@ restore_fence_lower() {   # <dataset> <previous value> <previous source>
     fi
 
     [ "$rc" -eq 0 ] || {
-        echo "UWAGA: nie udalo sie przywrocic wlasciwosci 'readonly' na '$ds' -- dataset moze byc nadal readonly=on. Stan sprzed: wartosc '$val', pochodzenie '$srcp'. Przywroc recznie:" >&2
+        echo "WARNING: could not restore the 'readonly' property on '$ds' -- the dataset may still be readonly=on. State before: value '$val', source '$srcp'. Restore it by hand:" >&2
         case "$srcp" in
             local)    echo "  zfs set readonly=$val $ds" >&2 ;;
             received) echo "  zfs inherit -S readonly $ds" >&2 ;;
@@ -1725,7 +1725,7 @@ restore_drop_tech_snapshots() {   # <source dataset> <snapshot names...>
         [ -n "$s" ] || continue
         zfs list -H -o name -t snapshot "${src}@${s}" >/dev/null 2>&1 || continue
         zfs destroy "${src}@${s}" >/dev/null 2>&1 || {
-            echo "UWAGA: nie udalo sie usunac technicznego snapshota '${src}@${s}' -- usun go recznie: zfs destroy ${src}@${s}" >&2
+            echo "WARNING: could not remove the technical snapshot '${src}@${s}' -- remove it by hand: zfs destroy ${src}@${s}" >&2
             rc=1
         }
     done
@@ -1751,13 +1751,13 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
     restore_drop_tech_snapshots "$src" "$@" || snaps=dirty
 
     if [ "$fence" = ok ] && [ "$snaps" = ok ]; then
-        die "$msg Zrodlo '$src' jest dokladnie w stanie sprzed tego polecenia."
+        die "$msg Source '$src' is exactly in its state from before this command."
     fi
 
     local left=""
-    [ "$fence" = dirty ] && left="wlasciwosc 'readonly' (szczegoly i komenda naprawcza wyzej)"
-    [ "$snaps" = dirty ] && left="${left:+$left oraz }techniczne snapshoty tego przebiegu (wypisane wyzej)"
-    die "$msg UWAGA: '$src' NIE jest w stanie sprzed polecenia -- zostalo do naprawienia recznie: $left."
+    [ "$fence" = dirty ] && left="the 'readonly' property (details and the repair command above)"
+    [ "$snaps" = dirty ] && left="${left:+$left and }the technical snapshots of this run (listed above)"
+    die "$msg WARNING: '$src' is NOT in its state from before the command -- left to repair by hand: $left."
 }
 # ------------------------------------------------------------------------------
 # restore_one -- ONE dataset, from the copy back onto the machine it came from
@@ -3665,7 +3665,7 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     if [ "${#_ow[@]}" -gt 0 ] && [ "${yes:-0}" -ne 1 ]; then
         log 0 "restore: this run OVERWRITES ${#_ow[@]} dataset(s) -- whatever is newer than the point there is destroyed (the full loss set: the same command with --plan):"
         for _l in "${_ow[@]}"; do log 0 "restore:   ${_l%%|*}   ${_l#*|}"; done
-        read -rp "Nadpisac? [t/N] " _ans || _ans=""
+        read -rp "Overwrite? [y/N] " _ans || _ans=""
         case "$_ans" in
             t|T|tak|TAK|y|Y|yes|YES) ;;
             *)  log 0 "restore: not confirmed -- nothing was changed. (--yes confirms in advance.)"
@@ -4123,16 +4123,16 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
 
     # Preconditions FIRST, all before the rollback, so a failure here is a clean 1.
     [ -n "$RESTORE_SRC_BASE_SNAP" ] && [ -n "$RESTORE_SRC_BASE_TXG" ] || {
-        echo "restore-exec: brak snapshotu bazowego na zrodle '$src' -- nie wiem, do ktorego punktu cofnac. Nic nie zmieniono." >&2
+        echo "restore-exec: no base snapshot on the source '$src' -- I do not know which point to roll back to. Nothing was changed." >&2
         return 1
     }
     [ "$RESTORE_SET_STATE" = ok ] || {
-        echo "restore-exec: zbior obiektow nowszych niz baza na '$src' nie zostal dowiedziony, wiec nie wiem, co ten rollback zniszczy. Nic nie zmieniono." >&2
+        echo "restore-exec: the set of objects newer than the base on '$src' was not proven, so I do not know what this rollback will destroy. Nothing was changed." >&2
         return 1
     }
     if [ "$RESTORE_STRATEGY" = increment ]; then
         [ -n "$RESTORE_COPY_BASE_SNAP" ] && [ -n "$RESTORE_TARGET_SNAP" ] || {
-            echo "restore-exec: brak nazwy snapshotu bazy kopii lub punktu docelowego -- nie moge zlozyc przyrostu. Nic nie zmieniono." >&2
+            echo "restore-exec: no name for the copy's base snapshot or the target point -- I cannot build the increment. Nothing was changed." >&2
             return 1
         }
     fi
@@ -4156,22 +4156,22 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
     local approved observed exsnap exbm
     approved="$(printf '%s\n%s\n%s' "$RESTORE_BLOCKERS" "$RESTORE_BLOCK_BOOKMARKS" "$own" | grep -v '^$' | sort)"
     exsnap="$(zfs list -H -p -t snapshot -o name,createtxg -d 1 "$src" 2>/dev/null)" || {
-        echo "restore-exec: nie udalo sie odczytac snapshotow '$src' tuz przed zniszczeniem -- nie potwierdze, ze zbior do zniszczenia jest tym zatwierdzonym. Nic nie zmieniono." >&2
+        echo "restore-exec: could not read the snapshots of '$src' just before the destruction -- I cannot confirm the set to be destroyed is the approved one. Nothing was changed." >&2
         return 1
     }
     exbm="$(zfs list -H -p -t bookmark -o name,createtxg -d 1 "$src" 2>/dev/null)" || {
-        echo "restore-exec: nie udalo sie odczytac bookmarkow '$src' tuz przed zniszczeniem -- 'zfs rollback -r' kasuje rowniez je, wiec bez tej listy nie znam zbioru strat. Nic nie zmieniono." >&2
+        echo "restore-exec: could not read the bookmarks of '$src' just before the destruction -- 'zfs rollback -r' deletes them too, so without this list I do not know the loss set. Nothing was changed." >&2
         return 1
     }
     observed="$(printf '%s\n%s\n' "$exsnap" "$exbm" \
                 | awk -F'\t' -v t="$RESTORE_SRC_BASE_TXG" 'NF>=2 && ($2+0)>(t+0){print $1}' | sort)"
     if [ "$approved" != "$observed" ]; then
-        echo "restore-exec: zbior do zniszczenia NIE jest tym zatwierdzonym -- stan zrodla '$src' zmienil sie po potwierdzeniu." >&2
+        echo "restore-exec: the set to be destroyed is NOT the approved one -- the state of source '$src' changed after the confirmation." >&2
         printf '%s\n' "$observed" | grep -v '^$' | grep -F -x -v -f <(printf '%s\n' "$approved") \
-            | sed 's/^/    doszlo (NIE zatwierdzone, zostaloby zniszczone): /' >&2
+            | sed 's/^/    appeared (NOT approved, would have been destroyed): /' >&2
         printf '%s\n' "$approved" | grep -v '^$' | grep -F -x -v -f <(printf '%s\n' "$observed") \
-            | sed 's/^/    zniklo (zatwierdzone, juz go nie ma): /' >&2
-        echo "restore-exec: nic nie zniszczono. Uruchom ponownie -- zobaczysz aktualny zbior i zdecydujesz na nim." >&2
+            | sed 's/^/    gone (approved, no longer there): /' >&2
+        echo "restore-exec: nothing was destroyed. Run again -- you will see the current set and decide on it." >&2
         return 1
     fi
 
@@ -4220,7 +4220,7 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
     local destroyed=0
     if [ -n "$snapnames" ]; then
         if ! zfs destroy "${src}@${snapnames}"; then
-            echo "restore-exec: nie udalo sie usunac zatwierdzonych snapshotow zrodla ('${src}@${snapnames}'). To jedno wywolanie obejmujace caly zbior, wiec albo zniknely wszystkie, albo zaden -- ZFS zglosil blad, czyli nie zniknal zaden. Nic nie zniszczono." >&2
+            echo "restore-exec: could not remove the approved source snapshots ('${src}@${snapnames}'). This is a single call covering the whole set, so either all of them went or none -- ZFS reported an error, so none went. Nothing was destroyed." >&2
             return 1
         fi
         destroyed=1
@@ -4228,7 +4228,7 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
     while IFS= read -r b; do
         [ -n "$b" ] || continue
         if ! zfs destroy "$b"; then
-            echo "restore-exec: nie udalo sie usunac zatwierdzonego bookmarka '$b'. Bookmarkow nie da sie usunac jednym wywolaniem (skladnia z przecinkiem dziala tylko dla snapshotow), wiec czesc zatwierdzonego zbioru moze byc juz usunieta." >&2
+            echo "restore-exec: could not remove the approved bookmark '$b'. Bookmarks cannot be removed in one call (the comma syntax works only for snapshots), so part of the approved set may already be removed." >&2
             [ "$destroyed" -eq 1 ] && return 2
             return 1
         fi
@@ -4241,10 +4241,10 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
     # including the late object.
     if ! zfs rollback "$RESTORE_SRC_BASE_SNAP"; then
         if [ "$destroyed" -eq 1 ]; then
-            echo "restore-exec: ZFS odmowil cofniecia zrodla do '$RESTORE_SRC_BASE_SNAP' (powod wyzej) -- na zrodle jest cos NOWSZEGO niz punkt docelowy, czego nie bylo w zatwierdzonym zbiorze. Tego obiektu NIE usunieto i nie zostanie usuniety. Zatwierdzony zbior zostal juz jednak usuniety, wiec zrodlo NIE jest w stanie sprzed polecenia." >&2
+            echo "restore-exec: ZFS refused to roll the source back to '$RESTORE_SRC_BASE_SNAP' (reason above) -- there is something NEWER than the target point on the source that was not in the approved set. That object was NOT removed and will not be. The approved set has already been removed, however, so the source is NOT in its state from before the command." >&2
             return 2
         fi
-        echo "restore-exec: cofniecie zrodla do '$RESTORE_SRC_BASE_SNAP' nie powiodlo sie (powod wyzej). Nic nie zniszczono." >&2
+        echo "restore-exec: rolling the source back to '$RESTORE_SRC_BASE_SNAP' failed (reason above). Nothing was destroyed." >&2
         return 1
     fi
 
@@ -4253,7 +4253,7 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
     # to the recovery point with one incremental receive.
     if [ "$RESTORE_STRATEGY" = increment ]; then
         if ! zfs send -i "$RESTORE_COPY_BASE_SNAP" "${copy}@${RESTORE_TARGET_SNAP}" | zfs recv "$src"; then
-            echo "restore-exec: przyrostowy transfer '${RESTORE_COPY_BASE_SNAP} .. ${copy}@${RESTORE_TARGET_SNAP}' -> '$src' nie powiodl sie. Zrodlo zostalo COFNIETE do wspolnej bazy, ale NIE doprowadzone do punktu docelowego." >&2
+            echo "restore-exec: incremental transfer '${RESTORE_COPY_BASE_SNAP} .. ${copy}@${RESTORE_TARGET_SNAP}' -> '$src' failed. The source was ROLLED BACK to the common base but NOT brought up to the target point." >&2
             return 2
         fi
     fi
@@ -4276,20 +4276,20 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
     # a read that fails. An unverifiable final state is not a success.
     local vsnap vbm tline tcount ttxg newer
     vsnap="$(zfs list -H -p -t snapshot -o name,guid,createtxg -d 1 "$src" 2>/dev/null)" || {
-        echo "restore-exec: nie udalo sie odczytac snapshotow '$src' po operacji -- stanu koncowego NIE potwierdzono. Zrodlo zostalo juz zmienione." >&2
+        echo "restore-exec: could not read the snapshots of '$src' after the operation -- the final state was NOT confirmed. The source has already been changed." >&2
         return 2
     }
     vbm="$(zfs list -H -p -t bookmark -o name,createtxg -d 1 "$src" 2>/dev/null)" || {
-        echo "restore-exec: nie udalo sie odczytac bookmarkow '$src' po operacji -- stanu koncowego NIE potwierdzono. Zrodlo zostalo juz zmienione." >&2
+        echo "restore-exec: could not read the bookmarks of '$src' after the operation -- the final state was NOT confirmed. The source has already been changed." >&2
         return 2
     }
     tline="$(printf '%s\n' "$vsnap" | awk -F'\t' -v g="$RESTORE_TARGET_GUID" '$2==g{print $1"\t"$3}')"
     tcount="$(printf '%s\n' "$tline" | grep -c .)"
     if [ "$tcount" -ne 1 ]; then
         if [ "$tcount" -eq 0 ]; then
-            echo "restore-exec: weryfikacja GUID zawiodla -- na '$src' NIE MA snapshotu o guidzie '$RESTORE_TARGET_GUID' (punkt docelowy '${RESTORE_TARGET_SNAP}'). Stan zrodla NIE jest potwierdzony jako punkt docelowy." >&2
+            echo "restore-exec: GUID verification failed -- there is NO snapshot with guid '$RESTORE_TARGET_GUID' on '$src' (target point '${RESTORE_TARGET_SNAP}'). The state of the source is NOT confirmed as the target point." >&2
         else
-            echo "restore-exec: weryfikacja GUID zawiodla -- guid '$RESTORE_TARGET_GUID' wystepuje na '$src' $tcount razy, wiec tozsamosc punktu docelowego jest niejednoznaczna. Stan zrodla NIE jest potwierdzony." >&2
+            echo "restore-exec: GUID verification failed -- guid '$RESTORE_TARGET_GUID' occurs $tcount times on '$src', so the identity of the target point is ambiguous. The state of the source is NOT confirmed." >&2
         fi
         return 2
     fi
@@ -4298,9 +4298,9 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
                 printf '%s\n' "$vbm"   | awk -F'\t' 'NF>=2{print $1"\t"$2}'; } \
               | awk -F'\t' -v t="$ttxg" 'NF>=2 && ($2+0)>(t+0){print $1}')"
     if [ -n "$newer" ]; then
-        echo "restore-exec: weryfikacja stanu koncowego zawiodla -- punkt docelowy '$RESTORE_TARGET_SNAP' (guid $RESTORE_TARGET_GUID) jest na '$src', ale cos jest od niego NOWSZE:" >&2
+        echo "restore-exec: final-state verification failed -- target point '$RESTORE_TARGET_SNAP' (guid $RESTORE_TARGET_GUID) is on '$src', but something is NEWER than it:" >&2
         printf '%s\n' "$newer" | sed 's/^/    /' >&2
-        echo "restore-exec: zrodlo NIE stoi na zadanym punkcie. Zostalo juz zmienione." >&2
+        echo "restore-exec: the source does NOT stand on the requested point. It has already been changed." >&2
         return 2
     fi
     return 0
@@ -4391,43 +4391,43 @@ restore_replace_pair() {   # <src: overwritten> <copy: restored from> <yes> [wha
     # The preview prints this. With a relation it is the relation's kind; with
     # two paths handed in there is no relation, and saying so is better than an
     # empty field where an operator expects one.
-    [ -n "$kind" ] || kind="dwa datasety podane wprost (bez rekordu relacji)"
+    [ -n "$kind" ] || kind="two datasets given directly (no relation record)"
     local snaps
     snaps=$(zfs list -H -p -t snapshot -o name,creation,guid -s creation -d 1 "$copy" 2>/dev/null) || snaps=""
-    [ -n "$snaps" ] || die "restore (odtworzenie niszczace): kopia '$copy' nie ma ani jednego snapshota, wiec nie ma z czego odtwarzac"
+    [ -n "$snaps" ] || die "restore (destructive restore): the copy '$copy' has no snapshot at all, so there is nothing to restore from"
     # A CHOSEN POINT bounds the listing the planner sees -- the same filter the
     # read-only `--plan --at` uses: creation <= the point's, so the planner's own
     # "newest" IS the point and every older base candidate stays.
     if [ -n "$point" ]; then
         local _pc
         _pc="$(printf '%s\n' "$snaps" | awk -F'\t' -v p="${copy}@${point}" '$1 == p { print $2; exit }')"
-        [ -n "$_pc" ] || die "restore (odtworzenie niszczace): punkt '$point' nie istnieje na kopii '$copy'. Nic nie zmieniono."
+        [ -n "$_pc" ] || die "restore (destructive restore): point '$point' does not exist on the copy '$copy'. Nothing was changed."
         snaps="$(printf '%s\n' "$snaps" | awk -F'\t' -v c="$_pc" 'NF>=3 && $2 ~ /^[0-9]+$/ && ($2+0) <= (c+0)')"
         echo
-        echo "  PUNKT:      $point (wybrany na kopii; nowsze snapshoty kopii nie sa ani celem, ani baza)"
+        echo "  POINT:      $point (chosen on the copy; newer snapshots of the copy are neither the target nor the base)"
     fi
 
     echo
-    echo "ODTWORZENIE NISZCZACE -- podglad. Nic nie zostalo jeszcze zmienione."
-    echo "  Zrodlo:     $src   (CEL odtworzenia: to jego stan zostanie zmieniony)"
-    echo "  Kopia:      $copy  (zrodlo danych)"
-    echo "  Relacja:    $kind"
-    restore_plan_strategy "$copy" "$src" "$snaps" ${point:+"punkt wybrany (--at / --snapshot) -> ten cel"}
+    echo "DESTRUCTIVE RESTORE -- preview. Nothing has been changed yet."
+    echo "  Source:     $src   (TARGET of the restore: its state will be changed)"
+    echo "  Copy:       $copy  (source of the data)"
+    echo "  Relation:   $kind"
+    restore_plan_strategy "$copy" "$src" "$snaps" ${point:+"point chosen (--at / --snapshot) -> this target"}
     echo
 
     case "$RESTORE_STRATEGY" in
         remote)
-            die "restore (odtworzenie niszczace): zrodlo '$src' jest ZDALNE, a zdalny wykonawca jeszcze nie istnieje. To, czego brakowalo tu wczesniej -- KTO wykonuje zniszczenie po tamtej stronie -- jest juz rozstrzygniete: kolektor zaczyna, a maszyna zagrozona publikuje zgode (deploy.sh --allow-restore). Sprawdzenie tej zgody jest zbudowane i przetestowane (restore_grant_require). Brakuje ostatniego kawalka: samego przeslania i zniszczenia po tamtej stronie. Nic nie zmieniono." ;;
+            die "restore (destructive restore): source '$src' is REMOTE, and the remote executor does not exist yet. What was missing here before -- WHO performs the destruction on the other side -- is now settled: the collector starts it, and the endangered machine publishes the consent (deploy.sh --allow-restore). The check of that consent is built and tested (restore_grant_require). The last piece is missing: the sending and the destruction itself on the other side. Nothing was changed." ;;
         full-absent|full-live)
             # Owner 2026-10-15: the way out is named, in two steps, not left to guess.
-            die "restore (odtworzenie niszczace): nie ma wspolnej bazy dowiedzionej GUID-em, wiec jedyna droga jest PELNE zastapienie -- inny mechanizm i inne ryzyko niz przyrost; nadpisanie przyrostem go nie udaje. Nic nie zmieniono.
-Droga w dwoch krokach:
-  1. usun cel (po upewnieniu sie, ze nic z niego nie jest potrzebne):  zfs destroy -r $src
-  2. odtworz go obok, z kopii:  zfs-backup.sh restore --from-copy $copy --onto $src${point:+ --snapshot=$point}" ;;
+            die "restore (destructive restore): there is no common base proven by GUID, so the only way is a FULL replacement -- a different mechanism and a different risk than an increment; overwriting by increment does not pretend to be it. Nothing was changed.
+The way in two steps:
+  1. remove the target (after making sure nothing in it is needed):  zfs destroy -r $src
+  2. restore it next to it, from the copy:  zfs-backup.sh restore --from-copy $copy --onto $src${point:+ --snapshot=$point}" ;;
         ambiguous)
-            die "restore (odtworzenie niszczace): punkt docelowy na kopii '$copy' jest NIEJEDNOZNACZNY (szczegoly wyzej). Ten czasownik cofa zrodlo do jednego punktu, wiec zgadniecie ktorego zniszczyloby stan pod decyzje, ktorej nikt nie podjal. Nic nie zmieniono." ;;
+            die "restore (destructive restore): the target point on the copy '$copy' is AMBIGUOUS (details above). This verb rolls the source back to one point, so guessing which would destroy state on a decision nobody made. Nothing was changed." ;;
         increment|rollback|discard-live|unproven) ;;
-        *)  die "restore (odtworzenie niszczace): nie ustalono strategii dla '$src' -- odmawiam dzialania na nieokreslonym stanie" ;;
+        *)  die "restore (destructive restore): no strategy was established for '$src' -- refusing to act on an undefined state" ;;
     esac
 
     # REV-120 F1: the loss set has to be COMPLETE before it can be shown, and its
@@ -4435,15 +4435,15 @@ Droga w dwoch krokach:
     # before the first mutation, rather than presenting a list that may be missing
     # the very object this run would destroy.
     [ -n "$RESTORE_SRC_BASE_SNAP" ] && [ -n "$RESTORE_SRC_BASE_TXG" ] \
-        || die "restore (odtworzenie niszczace): nie udalo sie jednoznacznie wskazac snapshotu bazowego na '$src' po guidzie $RESTORE_BASE_GUID. Bez niego nie wiem, do ktorego punktu cofnac ani co jest od niego nowsze. Nic nie zmieniono."
+        || die "restore (destructive restore): could not identify the base snapshot on '$src' unambiguously by guid $RESTORE_BASE_GUID. Without it I do not know which point to roll back to or what is newer than it. Nothing was changed."
     [ "$RESTORE_SET_STATE" = ok ] \
-        || die "restore (odtworzenie niszczace): nie udalo sie ustalic pelnego zbioru snapshotow i bookmarkow '$src' nowszych niz wspolna baza. 'zfs rollback -r' kasuje jedne i drugie, wiec bez tej listy pytanie o zgode dotyczyloby zbioru, ktorego nikt nie zna. Nic nie zmieniono."
+        || die "restore (destructive restore): could not establish the full set of snapshots and bookmarks of '$src' newer than the common base. 'zfs rollback -r' deletes both, so without this list the question for consent would be about a set nobody knows. Nothing was changed."
 
     local stamp="$$-$(date +%s)-${RANDOM}"
     local preview_snap="restore-preview-$stamp" commit_snap="restore-commit-$stamp"
 
     zfs snapshot "${src}@${preview_snap}" 2>/dev/null \
-        || die "restore (odtworzenie niszczace): nie udalo sie zrobic technicznego snapshota '${src}@${preview_snap}'. Bez niego nie umiem podac DOKLADNEGO zbioru strat, a pytanie o zgode na niezmierzony zbior nie jest zgoda swiadoma. Nic nie zmieniono."
+        || die "restore (destructive restore): could not create the technical snapshot '${src}@${preview_snap}'. Without it I cannot give the EXACT loss set, and a question for consent about an unmeasured set is not informed consent. Nothing was changed."
 
     # REV-119 F1.1: the snapshot SET, captured as identities. The previous version
     # decided what was new by position in a list sorted by wall-clock `creation`,
@@ -4468,7 +4468,7 @@ Droga w dwoch krokach:
     live_exact="$(zfs get -Hp -o value written "${src}@${preview_snap}" 2>/dev/null)"
     case "$live_exact" in ''|*[!0-9]*) live_exact="" ;; esac
 
-    echo "  DO ZNISZCZENIA -- zbior ZMIERZONY, nie oszacowany:"
+    echo "  TO BE DESTROYED -- a MEASURED set, not an estimate:"
     local b used total=0
     if [ -n "$RESTORE_BLOCKERS" ]; then
         while IFS= read -r b; do
@@ -4489,32 +4489,32 @@ Droga w dwoch krokach:
             [ -n "$b" ] || continue
             printf '    bookmark  %-40s %s B\n' "${b#*#}" 0
         done <<< "$RESTORE_BLOCK_BOOKMARKS"
-        echo "      (bookmark nie zajmuje miejsca, ale jest nowszy niz punkt docelowy, wiec"
-        echo "       zostanie usuniety -- tracisz punkt zaczepienia przyszlego wysylania"
-        echo "       przyrostowego, bezpowrotnie)"
+        echo "      (a bookmark takes no space, but it is newer than the target point, so"
+        echo "       it will be removed -- you lose the anchor of a future incremental"
+        echo "       send, irreversibly)"
     fi
     if [ -n "$live_exact" ]; then
-        printf '    dane zapisane po ostatnim snapshocie zrodla:   %s B\n' "$live_exact"
+        printf '    data written after the last snapshot of the source:   %s B\n' "$live_exact"
         total=$((total + live_exact))
-        echo "      (zamrozone w '${preview_snap}' -- to POMIAR, nie kopia bezpieczenstwa:"
-        echo "       odtworzenie niszczy rowniez ten snapshot)"
+        echo "      (frozen in '${preview_snap}' -- this is a MEASUREMENT, not a backup:"
+        echo "       the restore destroys this snapshot too)"
     else
         # Refuse rather than show a set with a hole in it. An operator cannot give
         # informed consent to "everything above, plus an unknown amount".
         restore_die_after_cleanup "$src" ok \
-            "restore (odtworzenie niszczace): nie udalo sie zmierzyc danych zapisanych po ostatnim snapshocie '$src'. Nie pokaze zbioru strat z dziura w srodku. Nic nie zniszczono." \
+            "restore (destructive restore): could not measure the data written after the last snapshot of '$src'. I will not show a loss set with a hole in the middle. Nothing was destroyed." \
             "$preview_snap"
     fi
-    printf '    RAZEM: %s B\n' "$total"
+    printf '    TOTAL: %s B\n' "$total"
     echo
 
     if [ "$yes" -ne 1 ]; then
         local ans
-        read -rp "Zniszczyc powyzsze i odtworzyc '$src' z kopii? [t/N] " ans
+        read -rp "Destroy the above and restore '$src' from the copy? [y/N] " ans
         case "$ans" in
             t|T|tak|TAK|y|Y|yes|YES) ;;
             *) restore_die_after_cleanup "$src" ok \
-                   "restore (odtworzenie niszczace): niepotwierdzone -- nic nie zniszczono." \
+                   "restore (destructive restore): not confirmed -- nothing was destroyed." \
                    "$preview_snap" ;;
         esac
     fi
@@ -4538,7 +4538,7 @@ Droga w dwoch krokach:
     local fence_state fence_val fence_src fence_after=ok
     fence_state="$(restore_fence_capture "$src")" || {
         restore_die_after_cleanup "$src" ok \
-            "restore (odtworzenie niszczace): nie udalo sie odczytac wlasciwosci 'readonly' na '$src', wiec nie umiem jej pozniej przywrocic i nie zaczne jej zmieniac. Nic nie zniszczono." \
+            "restore (destructive restore): could not read the 'readonly' property of '$src', so I cannot restore it later and will not start changing it. Nothing was destroyed." \
             "$preview_snap"
     }
     fence_val="${fence_state%% *}"; fence_src="${fence_state##* }"
@@ -4549,7 +4549,7 @@ Droga w dwoch krokach:
         fence_after=ok
         restore_fence_lower "$src" "$fence_val" "$fence_src" || fence_after=dirty
         restore_die_after_cleanup "$src" "$fence_after" \
-            "restore (odtworzenie niszczace): nie udalo sie zablokowac zapisu na '$src' (readonly=on). Bez tej blokady nie umiem zagwarantowac, ze miedzy sprawdzeniem a zniszczeniem nikt nic nie dopisze. Nic nie zniszczono." \
+            "restore (destructive restore): could not block writes on '$src' (readonly=on). Without that lock I cannot guarantee nobody writes anything between the check and the destruction. Nothing was destroyed." \
             "$preview_snap"
     fi
 
@@ -4557,7 +4557,7 @@ Droga w dwoch krokach:
         fence_after=ok
         restore_fence_lower "$src" "$fence_val" "$fence_src" || fence_after=dirty
         restore_die_after_cleanup "$src" "$fence_after" \
-            "restore (odtworzenie niszczace): nie udalo sie zamknac granicy zatwierdzenia na '$src'. Nic nie zniszczono." \
+            "restore (destructive restore): could not close the commit boundary on '$src'. Nothing was destroyed." \
             "$preview_snap"
     }
 
@@ -4575,12 +4575,12 @@ Droga w dwoch krokach:
     if [ "$arrived" != 0 ] || [ -n "$unexpected" ] || [ -n "$unexpected_bm" ]; then
         fence_after=ok
         restore_fence_lower "$src" "$fence_val" "$fence_src" || fence_after=dirty
-        echo "  PO ZATWIERDZENIU stan zrodla sie ZMIENIL:" >&2
-        [ "$arrived" != 0 ] && echo "    nowe dane: ${arrived} B zapisane po podgladzie" >&2
-        [ -n "$unexpected" ] && printf '    nowy snapshot: %s\n' "${unexpected#*@}" >&2
-        [ -n "$unexpected_bm" ] && printf '    nowy bookmark: %s\n' "${unexpected_bm#*#}" >&2
+        echo "  AFTER THE CONFIRMATION the state of the source CHANGED:" >&2
+        [ "$arrived" != 0 ] && echo "    new data: ${arrived} B written after the preview" >&2
+        [ -n "$unexpected" ] && printf '    new snapshot: %s\n' "${unexpected#*@}" >&2
+        [ -n "$unexpected_bm" ] && printf '    new bookmark: %s\n' "${unexpected_bm#*#}" >&2
         restore_die_after_cleanup "$src" "$fence_after" \
-            "restore (odtworzenie niszczace): zatwierdziles zbior strat, ktory juz nie opisuje zrodla. NIC nie zniszczono. Uruchom ponownie -- zobaczysz aktualny zbior i zdecydujesz na nim." \
+            "restore (destructive restore): you approved a loss set that no longer describes the source. NOTHING was destroyed. Run again -- you will see the current set and decide on it." \
             "$preview_snap" "$commit_snap"
     fi
 
@@ -4604,7 +4604,7 @@ Droga w dwoch krokach:
         fence_after=ok
         restore_fence_lower "$src" "$fence_val" "$fence_src" || fence_after=dirty
         restore_die_after_cleanup "$src" "$fence_after" \
-            "restore (odtworzenie niszczace): krok wykonawczy nie ruszyl (szczegoly wyzej) -- NIC nie zniszczono." \
+            "restore (destructive restore): the execution step did not start (details above) -- NOTHING was destroyed." \
             "$preview_snap" "$commit_snap"
     fi
 
@@ -4618,9 +4618,9 @@ Droga w dwoch krokach:
         local snaps_left=ok
         restore_drop_tech_snapshots "$src" "$preview_snap" "$commit_snap" || snaps_left=dirty
         local extra=""
-        [ "$fence_after" = dirty ] && extra=" Ponadto nie udalo sie zdjac blokady zapisu (readonly) ze zrodla -- komenda naprawcza wyzej."
-        [ "$snaps_left" = dirty ] && extra="${extra} Techniczne snapshoty tego przebiegu pozostaly (wypisane wyzej)."
-        die "restore (odtworzenie niszczace): krok WYKONAWCZY nie zakonczyl sie sukcesem (szczegoly wyzej). Zrodlo '$src' zostalo czesciowo zmienione i NIE jest w stanie sprzed polecenia -- sprawdz jego snapshoty i biezacy stan zanim ponowisz.${extra}"
+        [ "$fence_after" = dirty ] && extra=" In addition, the write lock (readonly) could not be removed from the source -- repair command above."
+        [ "$snaps_left" = dirty ] && extra="${extra} The technical snapshots of this run remain (listed above)."
+        die "restore (destructive restore): the EXECUTION step did not succeed (details above). Source '$src' was partly changed and is NOT in its state from before the command -- check its snapshots and current state before you retry.${extra}"
     fi
 
     # Success. The execution step already destroyed this run's technical snapshots
@@ -4632,15 +4632,15 @@ Droga w dwoch krokach:
     restore_drop_tech_snapshots "$src" "$preview_snap" "$commit_snap" || snaps_left=dirty
 
     echo
-    echo "ODTWORZENIE ZAKONCZONE: '$src' odtworzono do punktu '${RESTORE_TARGET_SNAP}' (guid ${RESTORE_TARGET_GUID}). Potwierdzone tozsamoscia: snapshot o tym GUID-zie jest na zrodle i nic na zrodle nie jest od niego nowsze."
+    echo "RESTORE COMPLETE: '$src' was restored to point '${RESTORE_TARGET_SNAP}' (guid ${RESTORE_TARGET_GUID}). Confirmed by identity: the snapshot with that GUID is on the source and nothing on the source is newer than it."
     if [ "$fence_after" = ok ] && [ "$snaps_left" = ok ]; then
-        echo "Blokada zapisu zdjeta; technicznych snapshotow tego przebiegu nie pozostalo."
+        echo "Write lock removed; no technical snapshots of this run remain."
         return 0
     fi
     # The restore succeeded; housekeeping did not fully. Keep the two facts apart --
     # a single sentence would send the operator to fix only half of it.
-    [ "$fence_after" = dirty ] && echo "UWAGA: odtworzenie sie POWIODLO, ale nie udalo sie zdjac blokady zapisu (readonly=on) ze zrodla '$src' -- komenda naprawcza wyzej. To osobna awaria od tej, ktora naprawiales." >&2
-    [ "$snaps_left" = dirty ] && echo "UWAGA: odtworzenie sie POWIODLO, ale techniczny snapshot tego przebiegu pozostal (wypisany wyzej) -- usun go recznie." >&2
+    [ "$fence_after" = dirty ] && echo "WARNING: the restore SUCCEEDED, but the write lock (readonly=on) could not be removed from source '$src' -- repair command above. This is a separate failure from the one you were repairing." >&2
+    [ "$snaps_left" = dirty ] && echo "WARNING: the restore SUCCEEDED, but a technical snapshot of this run remains (listed above) -- remove it by hand." >&2
     return 3
 }
 
@@ -5072,17 +5072,17 @@ cmd_restore() {
 
     local at_missing=0 at_ambig=0 at_row_ok=""
     echo
-    echo "Plan odtworzenia (TYLKO ODCZYT -- nic nie zostalo zmienione):"
+    echo "Restore plan (READ-ONLY -- nothing was changed):"
     if [ -n "$at_epoch" ]; then
         echo
-        echo "  PER-DATASET FRONTIER -- NIE atomowy stan calej relacji."
-        echo "  Kazdy dataset dostaje WLASNY najpozniejszy snapshot z chwili"
-        echo "  $(date -d "@$at_epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$at_epoch") lub wczesniejszej. Czasy ponizej moga sie roznic"
-        echo "  i to NIE jest blad -- to jest to, co naprawde zostalo zapisane."
-        echo "  Wybor idzie po wlasciwosci ZFS 'creation', NIGDY po nazwie snapshotu."
+        echo "  PER-DATASET FRONTIER -- NOT an atomic state of the whole relation."
+        echo "  Each dataset gets its OWN latest snapshot from"
+        echo "  $(date -d "@$at_epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$at_epoch") or earlier. The times below may differ"
+        echo "  and that is NOT an error -- it is what was really written."
+        echo "  The choice goes by the ZFS property 'creation', NEVER by the snapshot name."
     fi
     echo "  Config:     $config"
-    [ -n "$dataset" ] && echo "  Filtr:      $dataset"
+    [ -n "$dataset" ] && echo "  Filter:     $dataset"
     local i shown=0
     for i in "${!src[@]}"; do
         if [ -n "$dataset" ]; then
@@ -5095,9 +5095,9 @@ cmd_restore() {
         fi
         shown=$((shown + 1))
         echo
-        echo "  Zrodlo:     ${src[$i]}"
-        echo "  Relacja:    ${kind[$i]}"
-        echo "  Kopia:      ${copy[$i]}"
+        echo "  Source:     ${src[$i]}"
+        echo "  Relation:   ${kind[$i]}"
+        echo "  Copy:       ${copy[$i]}"
         local snaps
         # `-d 1` is explicit on purpose (REV-20260812-113 F1). Measured on
         # zfs-2.1.9-pve1 the default already behaves identically -- it returns this
@@ -5111,21 +5111,21 @@ cmd_restore() {
         # fields, rc=0. One process per dataset instead of one per recovery point.
         case "$(restore_addr_machine "${copy[$i]}" >/dev/null && echo remote)" in
             remote)
-                echo "  Snapshoty:  kopia lezy na INNYM hoscie (${copy[$i]%%:*}) -- relacja PUSH, ten host jej nie czyta."
-                echo "              Odtworzenie z niej: na tamtym hoscie, zfs-backup.sh restore --from-copy ${copy[$i]#*:} --onto <dataset>"
+                echo "  Snapshots:  the copy lives on ANOTHER host (${copy[$i]%%:*}) -- a PUSH relation, this host does not read it."
+                echo "              To restore from it: on that host, zfs-backup.sh restore --from-copy ${copy[$i]#*:} --onto <dataset>"
                 continue ;;
         esac
         snaps=$(zfs list -H -p -t snapshot -o name,creation,guid -s creation -d 1 "${copy[$i]}" 2>/dev/null) || snaps=""
         if [ -z "$snaps" ]; then
-            echo "  Snapshoty:  BRAK -- ta kopia nie istnieje albo nie ma snapshotow. Nie ma z czego odtwarzac."
+            echo "  Snapshots:  NONE -- this copy does not exist or has no snapshots. There is nothing to restore from."
             continue
         fi
         if [ "${cons[$i]}" = atomic ]; then
-            echo "  Spojnosc:   ATOMIC (punkt odtworzenia) -- z CONFIG 'recursive = atomic'."
-            echo "              Wszyscy wybrani czlonkowie musza isc z TEGO SAMEGO punktu."
+            echo "  Coherence:  ATOMIC (restore point) -- from CONFIG 'recursive = atomic'."
+            echo "              All selected members must come from the SAME point."
         else
-            echo "  Spojnosc:   INDEPENDENT (frontier, NIE punkt w czasie) -- kazdy dataset ma"
-            echo "              wlasny najnowszy snapshot; czasy ponizej moga sie roznic i to nie jest blad."
+            echo "  Coherence:  INDEPENDENT (frontier, NOT a point in time) -- each dataset has"
+            echo "              its own newest snapshot; the times below may differ and that is not an error."
         fi
         at_row_ok=""
         if [ -n "$at_epoch" ]; then
@@ -5152,24 +5152,24 @@ cmd_restore() {
                     # newest" lands on exactly the point --at chose.
                     at_row_ok="$(printf '%s
 ' "$snaps" | awk -F'	' -v c="$ac" 'NF>=3 && $2 ~ /^[0-9]+$/ && ($2+0) <= (c+0)')"
-                    echo "  PUNKT --at:  ZADANO $(date -d "@$at_epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$at_epoch")"
-                    printf '               WYBRANO %s\n' "${an#*@}"
+                    echo "  POINT --at:  REQUESTED $(date -d "@$at_epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$at_epoch")"
+                    printf '               CHOSEN %s\n' "${an#*@}"
                     printf '               creation=%s  guid=%s\n' "$(date -d "@$ac" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$ac")" "${ag:--}"
                     ;;
                 1)
-                    echo "  PUNKT --at:  BRAK -- ten dataset nie ma snapshotu z chwili $(date -d "@$at_epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$at_epoch") ani wczesniejszego."
-                    echo "               To jest BLAD TEGO DATASETU. Pozostale sa dalej planowane, a koncowy status przebiegu bedzie niezerowy."
+                    echo "  POINT --at:  NONE -- this dataset has no snapshot from $(date -d "@$at_epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$at_epoch") or earlier."
+                    echo "               This is an ERROR OF THIS DATASET. The others are still planned, and the final status of the run will be non-zero."
                     at_missing=$((at_missing + 1))
                     ;;
                 2)
-                    echo "  PUNKT --at:  NIEJEDNOZNACZNE -- kilka snapshotow ma ten sam, najpozniejszy czas utworzenia w tej chwili."
-                    echo "               Odmowa wyboru: nazwa snapshotu NIE jest rozstrzygajaca (patrz --at powyzej)."
-                    echo "               Wskaz konkretny snapshot recznie albo podaj inna chwile."
+                    echo "  POINT --at:  AMBIGUOUS -- several snapshots share the same, latest creation time at that moment."
+                    echo "               Refusing to choose: the snapshot name does NOT decide it (see --at above)."
+                    echo "               Name a specific snapshot by hand or give another moment."
                     at_ambig=$((at_ambig + 1))
                     ;;
             esac
         fi
-        echo "  Snapshoty (czas z wlasciwosci ZFS 'creation', nie z nazwy):"
+        echo "  Snapshots (time from the ZFS property 'creation', not from the name):"
         local line sname screat sguid nts human flag
         while IFS=$'\t' read -r sname screat sguid; do
             [ -n "$sname" ] || continue
@@ -5178,7 +5178,7 @@ cmd_restore() {
             nts=$(restore_name_timestamp "${sname#*@}")
             if [ -n "$nts" ]; then
                 local delta=$(( nts > screat ? nts - screat : screat - nts ))
-                [ "$delta" -gt 120 ] && flag="   <-- UWAGA: nazwa mowi $(date -d "@$nts" '+%Y-%m-%d %H:%M:%S' 2>/dev/null), ZFS mowi $human"
+                [ "$delta" -gt 120 ] && flag="   <-- WARNING: the name says $(date -d "@$nts" '+%Y-%m-%d %H:%M:%S' 2>/dev/null), ZFS says $human"
             fi
             printf '    %s  guid=%-22s %s%s\n' "$human" "${sguid:--}" "${sname#*@}" "$flag"
         done <<< "$snaps"
@@ -5194,9 +5194,9 @@ cmd_restore() {
         # to a question the operator did not ask.
         if [ -n "$at_epoch" ]; then
             if [ -n "$at_row_ok" ]; then
-                restore_plan_strategy "${copy[$i]}" "${src[$i]}" "$at_row_ok"                     "wybrany przez --at, NIE najnowszy -> oryginalna sciezka"
+                restore_plan_strategy "${copy[$i]}" "${src[$i]}" "$at_row_ok"                     "chosen by --at, NOT the newest -> original path"
             else
-                echo "  Strategia:  (POMINIETA -- --at nie wskazal punktu dla tego datasetu; nic nie jest klasyfikowane)"
+                echo "  Strategy:   (SKIPPED -- --at did not point at a point for this dataset; nothing is classified)"
             fi
         else
             restore_plan_strategy "${copy[$i]}" "${src[$i]}" "$snaps"
@@ -5204,18 +5204,18 @@ cmd_restore() {
     done
     if [ "$shown" -eq 0 ]; then
         echo
-        echo "  Nic nie pasuje do filtra '$dataset' w tym configu."
+        echo "  Nothing matches the filter '$dataset' in this config."
     fi
     echo
-    echo "To jest wylacznie plan odczytu. Zaden dataset, snapshot ani cron nie zostal dotkniety."
+    echo "This is a read-only plan only. No dataset, snapshot or cron entry was touched."
     # Owner decision 7 (OWNER-RESTORE-GRANT-AND-MODES-2026-08-26): a run that
     # could not answer for every dataset continues and REPORTS, but it does not
     # exit 0. Nine of ten is not ten, and the exit status is the only part of
     # this a cron job reads.
     if [ "$at_missing" -gt 0 ] || [ "$at_ambig" -gt 0 ]; then
         echo
-        echo "PODSUMOWANIE --at: $at_missing dataset(ow) bez snapshotu z tej chwili, $at_ambig niejednoznacznych."
-        echo "Plan jest NIEPELNY. Status niezerowy, zeby nie zostalo to zapisane jako czysty przebieg."
+        echo "SUMMARY --at: $at_missing dataset(s) without a snapshot from that moment, $at_ambig ambiguous."
+        echo "The plan is INCOMPLETE. Non-zero status, so that it is not recorded as a clean run."
         return 1
     fi
     return 0

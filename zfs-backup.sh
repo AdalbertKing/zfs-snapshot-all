@@ -578,7 +578,7 @@ Inspection / teardown:
                                     with the reason in words, never skipped and never
                                     OK. Exit status follows the engine: 0/1/2/3.
   zfs-backup.sh list-profiles [--json]
-  zfs-backup.sh delete-profile NAZWA [--yes|--ask]
+  zfs-backup.sh delete-profile NAME [--yes|--ask]
                                     Delete an OWN template (factory ones are not
                                     deleted). Relationships built from it keep running;
                                     the plan says how many there are. Plans without --yes.
@@ -680,7 +680,7 @@ Inspection / teardown:
                                     for in a yes/no window. Ins on the GUI's F3 starts
                                     it and returns there. Needs whiptail and python3.
   zfs-backup.sh show-scope DATASET [--pattern=PREFIX]... [--recursive] [--json]
-  zfs-backup.sh pair-snapshots NAME SOURCE_DATASET --json   (GUI: migawki obu stron pary)
+  zfs-backup.sh pair-snapshots NAME SOURCE_DATASET --json   (GUI: snapshots of both sides of the pair)
                                     What is actually ON THE DISK for one scope:
                                     per family, how many snapshots, from when, and
                                     how many bytes they hold; plus bookmarks and the
@@ -708,18 +708,18 @@ Inspection / teardown:
                                     from template thresholds. Field resolution is
                                     one level -- section, tier template, [defaults] --
                                     and show-config remains the byte-exact authority.
-  zfs-backup.sh save-profile --from=NAZWA --as=NAZWA2
-                                    [--tier=SZCZEBEL --pole=wartosc ...]...
+  zfs-backup.sh save-profile --from=NAME --as=NAME2
+                                    [--tier=TIER --field=value ...]...
                                     (several --tier= in one call: each field goes to
-                                    the --tier= before it; NAZWA2 may not be the name
+                                    the --tier= before it; NAME2 may not be the name
                                     of a factory template)
-  zfs-backup.sh save-profile --ask --from=NAZWA | --ask --edit=NAZWA
+  zfs-backup.sh save-profile --ask --from=NAME | --ask --edit=NAME
                                     The same as windows (F5 in the GUI: Ins = a new
-                                    template based on NAZWA, Enter + 'e' = change an own one).
-                                    [--description=TEKST] [--force]
+                                    template based on NAME, Enter + 'e' = change an own one).
+                                    [--description=TEXT] [--force]
                                     [--drop-tier=T] [--add-tier=T [--keep|--retain|--quiesce=..]]
                                     [--method=gfs|age|flat] [--hidden] -- --hidden marks a
-                                    relationship's own template (relacja-NAZWA): F5 and
+                                    relationship's own template (relacja-NAME): F5 and
                                     the GUI template lists do not show it (list-profiles
                                     --json carries "hidden"); a copy without
                                     --hidden is an ordinary template.
@@ -1083,9 +1083,9 @@ check_inherited_grants() {
         fi
     done
     if [ -n "$ancestors" ]; then
-        warn "konto $account ma szerszy odziedziczony dostep z:$ancestors -- '$ds' NIE jest izolowany do tej relacji"
+        warn "account $account has wider inherited access from:$ancestors -- '$ds' is NOT isolated to this relation"
     fi
-    [ "$found_exact" -eq 1 ] || warn "brak jawnego grantu dokladnie na '$ds' -- sprawdz recznie (zfs allow $ds na $host)"
+    [ "$found_exact" -eq 1 ] || warn "no explicit grant exactly on '$ds' -- check by hand (zfs allow $ds on $host)"
 }
 
 # REV-20260811-102 step 3 (owner "Q4"): before a collector-scheduled REMOTE source
@@ -1347,15 +1347,15 @@ propose_backup_sources() {   # <target> <installed config or ""> -> candidates, 
         skip=""; why=""
         case "$ds" in
             */*) ;;
-            *) skip=1; why="pula, nie zbior danych" ;;
+            *) skip=1; why="a pool, not a dataset" ;;
         esac
         if [ -z "$skip" ] && local_backup_overlap "$ds" "$target"; then
-            skip=1; why="cel backupu (albo lezy w nim)"
+            skip=1; why="the backup target (or inside it)"
         fi
         if [ -z "$skip" ]; then
             case "$ds" in
-                */ROOT|*/ROOT/*) skip=1; why="system operacyjny -- ten pakiet nie odtwarza bootowalnego systemu" ;;
-                */swap|*/swap/*) skip=1; why="swap -- snapshot przypina kazdy zapisany blok i nie niesie danych" ;;
+                */ROOT|*/ROOT/*) skip=1; why="operating system -- this package does not restore a bootable system" ;;
+                */swap|*/swap/*) skip=1; why="swap -- a snapshot pins every written block and carries no data" ;;
             esac
         fi
         # "Already covered" is EXACT dataset identity, not path overlap -- and
@@ -1381,7 +1381,7 @@ propose_backup_sources() {   # <target> <installed config or ""> -> candidates, 
             while IFS= read -r c; do
                 [ -n "$c" ] || continue
                 if [ "$ds" = "$c" ]; then
-                    skip=1; why="juz objety zainstalowana polityka ([dataset:$c])"; break
+                    skip=1; why="already covered by the installed policy ([dataset:$c])"; break
                 fi
                 case "$ds" in
                     "$c"/*)
@@ -1389,14 +1389,14 @@ propose_backup_sources() {   # <target> <installed config or ""> -> candidates, 
                         crec="$(printf '%s' "$crec" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
                         case "$crec" in
                             ""|no|off|0) ;;   # flat parent: does NOT cover this child
-                            *) skip=1; why="juz objety rekurencyjna sekcja [dataset:$c] (recursive=$crec)"; break ;;
+                            *) skip=1; why="already covered by the recursive section [dataset:$c] (recursive=$crec)"; break ;;
                         esac
                         ;;
                 esac
             done <<< "$covered"
         fi
         if [ -n "$skip" ]; then
-            skipped="${skipped}  pominieto $ds -- $why"$'\n'
+            skipped="${skipped}  skipped $ds -- $why"$'\n'
         else
             eligible="${eligible}${ds}"$'\n'
         fi
@@ -1446,12 +1446,12 @@ propose_backup_sources() {   # <target> <installed config or ""> -> candidates, 
             if [ "$hit" -eq 1 ]; then amb="${amb}$a"$'\n'; else keep="${keep}$a"$'\n'; fi
         done <<< "$eligible"
         {
-            printf '  poddrzewo dwuznaczne -- NIE proponuje go, wybierz jawnie:\n'
+            printf '  ambiguous subtree -- NOT proposing it, choose explicitly:\n'
             printf '%s' "$pairs"
-            printf '  rodzic trzyma wlasne pliki niezaleznie od dzieci, wiec dzieci NIE pokrywaja\n'
-            printf '  rodzica; a plaskie zadanie na rodzica nie kopiuje dzieci, i oba w jednym\n'
-            printf '  zestawie sa odrzucane jako nakladajace sie. Zadna z tych postaci nie jest\n'
-            printf '  prawdziwa, wiec wybor nalezy do Ciebie:\n'
+            printf '  a parent holds its own files independently of its children, so the children do NOT\n'
+            printf '  cover the parent; a flat job on the parent does not copy the children, and both in one\n'
+            printf '  set are rejected as overlapping. Neither shape is\n'
+            printf '  right on its own, so the choice is yours:\n'
             printf '%s' "$amb" | sed 's/^/    --source=/'
         } >&2
         eligible="$keep"
@@ -6371,21 +6371,21 @@ show_activation_proposal() {   # <current config> <proposed config>
     fi
     rm -f "$render_err"
 
-    echo "--- proponowany config: $cronfile ---"
+    echo "--- proposed config: $cronfile ---"
     if [ -f "$cronfile" ]; then
         if diff -q "$cronfile" "$workfile" >/dev/null 2>&1; then
-            echo "  (bez zmian)"
+            echo "  (no change)"
         else
             diff -u "$cronfile" "$workfile" | tail -n +3 | sed 's/^/  /'
         fi
     else
-        echo "  (nowy plik)"
+        echo "  (new file)"
         sed 's/^/  + /' "$workfile"
     fi
     echo
-    echo "--- co sie zmieni w crontabie (lewa strona = to, co JEST teraz zainstalowane) ---"
+    echo "--- what will change in the crontab (left side = what IS installed now) ---"
     if diff -q "$before" "$after" >/dev/null 2>&1; then
-        echo "  (bez zmian -- zainstalowany blok jest juz dokladnie taki)"
+        echo "  (no change -- the installed block is already exactly this)"
     else
         diff -u "$before" "$after" | tail -n +3 | sed 's/^/  /'
     fi
@@ -6545,15 +6545,15 @@ cmd_progress() {
                 match($0,/"updated_epoch":[0-9]*/);upd=substr($0,RSTART+16,RLENGTH-16)+0
                 pct = (tot>0) ? don*100/tot : 0
                 age = now-upd
-                stale = (st=="running" && age>30) ? "  (bez aktualizacji od " age "s -- moze nie zyc)" : ""
+                stale = (st=="running" && age>30) ? "  (no update for " age "s -- may be dead)" : ""
                 # The filename is a hash now, so the record has to say what it
                 # is about. Target included because it is what distinguishes
                 # two simultaneous jobs for the same source.
                 if (tg != "") printf "  %s  ->  %s\n", ds, tg; else printf "  %s\n", ds
-                printf "    %s  %s / %s  (%.1f%%)   %s/s   pozostalo %s%s\n", st, h(don), h(tot), pct, h(rt), dur(eta), stale
+                printf "    %s  %s / %s  (%.1f%%)   %s/s   remaining %s%s\n", st, h(don), h(tot), pct, h(rt), dur(eta), stale
             }' "$f"
     done
-    [ "$any" -eq 1 ] || echo "  brak transferow w toku"
+    [ "$any" -eq 1 ] || echo "  no transfers in progress"
 }
 
 
@@ -6673,7 +6673,7 @@ resolve_link_bandwidth() {   # <manifest value> <record value> <client> <peer> -
     local from_pair="$1" from_record="$2" client="$3" peer="$4"
     if [ -n "$from_pair" ]; then printf '%s' "$from_pair"; return 0; fi
     if [ -n "$from_record" ]; then
-        log "limit pasma '$from_record' pochodzi z rekordu relacji '$client' (zapis sprzed przeniesienia). Lacze nalezy do PARY hostow, wiec docelowe miejsce to manifest parowania -- ustaw je raz przez 'deploy.sh --pair --peer=$peer --bandwidth=$from_record', a bedzie obowiazywac kazda relacje z tym peerem." >&2
+        log "bandwidth limit '$from_record' comes from the record of relation '$client' (a record from before the move). The link belongs to the PAIR of hosts, so its proper home is the pairing manifest -- set it once with 'deploy.sh --pair --peer=$peer --bandwidth=$from_record' and it will apply to every relation with this peer." >&2
         printf '%s' "$from_record"
         return 0
     fi
@@ -6888,17 +6888,17 @@ cmd_run_replicas() {
         # and still a ZFS member. Gone or changed = it was pulled again: nothing to do,
         # no import, no alert (a quick re-plug fires the rule again anyway).
         local wsec; wsec="$(insert_wait)"
-        log "run-replicas: dysk włożony${device:+ ($device)} -- czekam ${wsec}s, zanim cokolwiek go dotknie"
+        log "run-replicas: disk inserted${device:+ ($device)} -- waiting ${wsec}s before anything touches it"
         sleep "$wsec"
         if [ -n "$device" ]; then
             local dp="${REPLICA_DEV_DIR:-/dev}/$device" fst
             if ! [ -e "$dp" ]; then
-                log "run-replicas: $dp zniknął w ciągu ${wsec}s od włożenia -- nic nie robię"
+                log "run-replicas: $dp disappeared within ${wsec}s of insertion -- doing nothing"
                 return 0
             fi
             fst="$(blkid -o value -s TYPE "$dp" 2>/dev/null)"
             if [ "$fst" != zfs_member ]; then
-                log "run-replicas: $dp nie jest już dyskiem ZFS (TYPE='${fst:-?}') -- nic nie robię"
+                log "run-replicas: $dp is no longer a ZFS disk (TYPE='${fst:-?}') -- doing nothing"
                 return 0
             fi
         fi
@@ -7566,7 +7566,7 @@ cmd_set_tiers() {
         die "gen-cron.sh rejected the changed config -- $cronfile was NOT touched (see output above)"
     fi
     show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not render the preview -- nothing was touched"; }
-    echo "Relacja '$name' -- szczeble:"
+    echo "Relation '$name' -- tiers:"
     printf '  %s\n' "${TIERS_CHANGES[@]}"
     if [ "$plan" -eq 1 ] || [ "$yes" -ne 1 ]; then
         rm -f "$workfile"
@@ -7608,7 +7608,7 @@ cmd_set_transfer() {
             *)  [ -z "$name" ] || die "set-transfer: takes exactly one NAME"; name="$a" ;;
         esac
     done
-    [ -n "$name" ] || die "uzycie: zfs-backup.sh set-transfer NAZWA [--history=all|newest|auto:N] [--compression=zstd|gzip|none|default] [--cipher=SPEC|default] [--autotune=yes|no] [--plan|--yes]"
+    [ -n "$name" ] || die "usage: zfs-backup.sh set-transfer NAME [--history=all|newest|auto:N] [--compression=zstd|gzip|none|default] [--cipher=SPEC|default] [--autotune=yes|no] [--plan|--yes]"
     [ "${#fk[@]}" -gt 0 ] || die "set-transfer: nothing to set -- name at least one of --history --compression --cipher --autotune"
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "set-transfer: no relationship '$name' on this host"
@@ -7659,7 +7659,7 @@ cmd_set_transfer() {
         die "gen-cron.sh rejected the changed config -- $cronfile was NOT touched (see output above)"
     fi
     show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not render the preview -- nothing was touched"; }
-    echo "Relacja '$name': $(for i in "${!fk[@]}"; do printf '%s=%s ' "${fk[$i]}" "${fv[$i]:-<fabryczne>}"; done)(blok [relation:$name])"
+    echo "Relation '$name': $(for i in "${!fk[@]}"; do printf '%s=%s ' "${fk[$i]}" "${fv[$i]:-<factory>}"; done)(block [relation:$name])"
     if [ "$plan" -eq 1 ] || [ "$yes" -ne 1 ]; then
         rm -f "$workfile"
         echo "plan only -- nothing installed (add --yes to install)"
@@ -7851,14 +7851,14 @@ ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", \\
   RUN+="$(command -v systemd-run) --no-block --unit=zfs-replica-insert-%k --setenv=HOME=/root $SCRIPT_DIR/zfs-backup.sh run-replicas --on-insert --device=%k --config=$config"
 EOF
 )"
-    echo ">>> reguła do zapisania w $rules:"
+    echo ">>> rule to be written to $rules:"
     echo "------------------------------------------------------------"
     printf '%s\n' "$body"
     echo "------------------------------------------------------------"
     if [ "$do_install" -ne 1 ]; then
         echo
-        echo "To jest wylacznie plan -- nic nie zostalo zapisane."
-        echo "Aby zainstalowac: powtorz to samo polecenie z --install."
+        echo "This is a plan only -- nothing was written."
+        echo "To install: repeat the same command with --install."
         return 0
     fi
     printf '%s\n' "$body" > "$rules" || die "install-media-trigger: could not write $rules"
@@ -7887,9 +7887,9 @@ cmd_remove_media_trigger() {
     grep -q 'Managed by zfs-backup.sh install-media-trigger' "$rules" \
         || die "remove-media-trigger: $rules exists but was not written by this tool. Refusing to delete somebody else's udev rule -- look at it and remove it by hand if it is yours."
     if [ "$do_install" -ne 1 ]; then
-        echo ">>> do usuniecia: $rules"
-        echo "To jest wylacznie plan -- nic nie zostalo usuniete."
-        echo "Aby usunac: powtorz to samo polecenie z --install."
+        echo ">>> to be removed: $rules"
+        echo "This is a plan only -- nothing was removed."
+        echo "To remove: repeat the same command with --install."
         return 0
     fi
     rm -f "$rules" || die "remove-media-trigger: could not remove $rules"
@@ -7912,7 +7912,7 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
     if [ "$_ask" -eq 1 ]; then
         [ "$#" -le 2 ] || die "add-replica --ask takes at most a NAME -- the windows ask for the rest"
         local dlg="$SCRIPT_DIR/tui/replica.sh"
-        [ -f "$dlg" ] || die "add-replica: brak $dlg -- checkout jest niekompletny"
+        [ -f "$dlg" ] || die "add-replica: $dlg is missing -- incomplete checkout"
         ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg" ${_askname:+"$_askname"}
         return $?
     fi
@@ -7987,7 +7987,7 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
             *)             if [ -z "$name" ]; then name="$a"; else die "add-replica: takes exactly one name; got a second: '$a'"; fi ;;
         esac
     done
-    [ -n "$name" ] || die "uzycie: zfs-backup.sh add-replica NAZWA --source=DATASET [--source=DATASET2 ...] --dst=PULA/BAZA [--schedule='10 * * * *'] [--fixed] [--install]"
+    [ -n "$name" ] || die "usage: zfs-backup.sh add-replica NAME --source=DATASET [--source=DATASET2 ...] --dst=POOL/BASE [--schedule='10 * * * *'] [--fixed] [--install]"
     case "$name" in [-.]*|*[!A-Za-z0-9._-]*) die "add-replica: '$name' -- letters, digits, dot, dash, underscore only, not starting with a dot or dash (it names the medium and becomes the media gate's state file)" ;; esac
     [ "${#sources[@]}" -gt 0 ] || die "add-replica: --source= names the dataset on THIS host to copy (repeat it for more than one)"
     if [ "$passive" -eq 1 ]; then
@@ -8121,14 +8121,14 @@ REPEOF
     }
     if [ "$do_install" -ne 1 ]; then
         echo
-        echo "To jest wylacznie plan -- nic nie zostalo zainstalowane."
-        echo "Aby zainstalowac: powtorz to samo polecenie z --install."
+        echo "This is a plan only -- nothing was installed."
+        echo "To install: repeat the same command with --install."
         rm -f "$cand"
         return 0
     fi
     if [ "$assume_yes" -ne 1 ]; then
         _ans=""
-        read -rp "Zainstalowac powyzsze? [t/N] " _ans </dev/tty 2>/dev/null || _ans=""
+        read -rp "Install the above? [y/N] " _ans </dev/tty 2>/dev/null || _ans=""
         case "$_ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) rm -f "$cand"; die "not confirmed -- nothing was installed" ;; esac
     fi
     atomic_replace_and_install "$config" "$cand" \
@@ -8208,7 +8208,7 @@ cmd_list_replicas() {
     local name src dst sched pref media rec hist mw mc mg oi pool present last first=1 _sg
     if [ "$as_json" -eq 1 ]; then printf '{"replicas":['; fi
     if [ -z "$rows" ]; then
-        if [ "$as_json" -eq 1 ]; then printf ']}\n'; else echo "brak sekcji [replica:] w $config"; fi
+        if [ "$as_json" -eq 1 ]; then printf ']}\n'; else echo "no [replica:] sections in $config"; fi
         return 0
     fi
     # '|' AND NOT A TAB. Tab is IFS whitespace, and bash collapses a run of IFS
@@ -8290,7 +8290,7 @@ JSRC
                 "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$mg" "${oi:-no}" "$kp" "${rw:-no}" "$_mk"
         else
             printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
-            [ -n "$last" ] && printf '%-14s   ostatnio widziany: %s\n' "" "$last"
+            [ -n "$last" ] && printf '%-14s   last seen: %s\n' "" "$last"
         fi
     done <<EOF
 $rows
@@ -8355,7 +8355,7 @@ cmd_replica_restart() {
             *)          [ -z "$name" ] || die "replica-restart: takes exactly one NAME"; name="$a" ;;
         esac
     done
-    [ -n "$name" ] || die "uzycie: zfs-backup.sh replica-restart NAZWA [--yes]"
+    [ -n "$name" ] || die "usage: zfs-backup.sh replica-restart NAME [--yes]"
     local resolver_user; resolver_user="$(cron_target_user)"
     cron_context_resolve adopt "$config" "$resolver_user" "" ""
     config="$CRON_CTX_FILE"
@@ -8384,16 +8384,16 @@ cmd_replica_restart() {
     # temporary BASE beside the old copy, mapped exactly as the replica's own run maps it,
     # and is moved into place after the old copy is gone.
     local tbase="$dst/restart-tmp" kept_new=0
-    echo "replica-restart '$name' -- pelna kopia od nowa NA TYM SAMYM DYSKU ($dst):"
+    echo "replica-restart '$name' -- full copy from scratch ON THE SAME DISK ($dst):"
     for s in ${src//,/ }; do
         echo "  $s:"
-        echo "     1. snapget.sh $opts \"$s\" \"$tbase\"   -- pelna kopia OBOK starej (pod $tbase/$s)"
-        echo "     2. zfs destroy -r $dst/$s   -- stara kopia, dopiero po udanym kroku 1"
+        echo "     1. snapget.sh $opts \"$s\" \"$tbase\"   -- full copy NEXT TO the old one (under $tbase/$s)"
+        echo "     2. zfs destroy -r $dst/$s   -- the old copy, only after step 1 succeeded"
         echo "     3. zfs rename -p $tbase/$s $dst/$s"
     done
-    echo "  na koniec: zfs destroy -r $tbase   -- pusta baza tymczasowa"
-    [ "$media" = removable ] && echo "  nosnik wymienny: podlaczany bramka (zfs-media-gate.sh attach/detach), jak w biegu z crona"
-    echo "  Na dysku musi sie zmiescic chwilowo stara i nowa kopia. Gdy krok 1 sie nie uda, stara zostaje nietknieta."
+    echo "  at the end: zfs destroy -r $tbase   -- the empty temporary base"
+    [ "$media" = removable ] && echo "  removable medium: attached through the gate (zfs-media-gate.sh attach/detach), as in a cron run"
+    echo "  The disk must briefly hold both the old and the new copy. If step 1 fails, the old copy stays untouched."
     if [ "$yes" -ne 1 ]; then
         echo "plan only. Re-run with --yes to do it. Nothing was changed."
         return 0
@@ -8447,7 +8447,7 @@ replica_restart_warning() {   # <copies, space-separated>
         for p in ${src//,/ }; do
             for cp in $1; do
                 case "$cp" in "$p"|"$p"/*)
-                    echo "  !  replika '$rs' (wlasne migawki) czyta z tej kopii -- po ponownym zalozeniu relacji zacznie od PELNEJ kopii (F6 -> e -> Zacznij od nowa na tym dysku)"
+                    echo "  !  replica '$rs' (own snapshots) reads from this copy -- after the relation is created again it will start from a FULL copy (F6 -> e -> Start over on this disk)"
                     continue 3 ;;
                 esac
             done
@@ -8468,14 +8468,14 @@ cmd_remove_replica() {
             *)          if [ -z "$name" ]; then name="$a"; else die "remove-replica: takes exactly one name"; fi ;;
         esac
     done
-    [ -n "$name" ] || die "uzycie: zfs-backup.sh remove-replica NAZWA [--install]"
+    [ -n "$name" ] || die "usage: zfs-backup.sh remove-replica NAME [--install]"
     # --ask: the GUI's windows (Del on F6) -- remove-replica, shown as a plan before
     # anything runs. The data on the disks stays (owner, W12 2026-10-11); a disk is
     # cleared by formatting it (change of replica -> "Dodaj dysk"). The verb that
     # destroyed the copy on the medium is gone (owner 2026-10-18: "nie chcemy tego").
     if [ "$ask" -eq 1 ]; then
         local dlg="$SCRIPT_DIR/tui/replica-delete.sh"
-        [ -f "$dlg" ] || die "remove-replica: brak $dlg -- checkout jest niekompletny"
+        [ -f "$dlg" ] || die "remove-replica: $dlg is missing -- incomplete checkout"
         ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg" "$name"
         return $?
     fi
@@ -8509,14 +8509,14 @@ cmd_remove_replica() {
     fi
     if [ "$do_install" -ne 1 ]; then
         echo
-        echo "To jest wylacznie plan -- nic nie zostalo zainstalowane."
-        echo "Aby zainstalowac: powtorz to samo polecenie z --install."
+        echo "This is a plan only -- nothing was installed."
+        echo "To install: repeat the same command with --install."
         rm -f "$cand"
         return 0
     fi
     if [ "$assume_yes" -ne 1 ]; then
         _ans=""
-        read -rp "Zainstalowac powyzsze? [t/N] " _ans </dev/tty 2>/dev/null || _ans=""
+        read -rp "Install the above? [y/N] " _ans </dev/tty 2>/dev/null || _ans=""
         case "$_ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) rm -f "$cand"; die "not confirmed -- nothing was installed" ;; esac
     fi
     if [ "$empties_schedule" -eq 1 ]; then
@@ -8776,7 +8776,7 @@ cmd_local_backup() {
         [ "$_prc" -eq 0 ] || die "local-backup: no --source given and this host's ZFS inventory could not be read -- name the dataset(s) with --source=<dataset>[,<dataset>...]"
         [ -n "$proposed" ]             || die "local-backup: no --source given and nothing on this host is a sensible candidate (see the skip reasons above) -- name the dataset(s) explicitly with --source=<dataset>[,<dataset>...]"
         sources_from=heuristic
-        log "brak --source -- PROPOZYCJA z inwentarza ZFS tego hosta (przekaz --source=..., zeby wybrac inaczej):"
+        log "no --source -- PROPOSAL from this host's ZFS inventory (pass --source=... to choose differently):"
         while IFS= read -r _p; do [ -n "$_p" ] && log "  $_p"; done <<< "$proposed"
         source_flags=("$(printf '%s' "$proposed" | tr '
 ' ',' | sed 's/,$//')")
@@ -8977,11 +8977,11 @@ Taking over older jobs (a v4 config written by hand): remove their sections firs
             done
             [ -z "$_own" ] || die "local-backup: --name=$lb_name -- these sources already belong to another relationship in $config: $_own. A dataset is in one relationship; change or delete that one instead. Nothing was changed."
         fi
-        log "local-backup: zrodla ${roots[*]} sa juz zainstalowane w $config dla celu '$target' -- nic do zrobienia."
+        log "local-backup: sources ${roots[*]} are already installed in $config for target '$target' -- nothing to do."
         echo
-        echo "Backup lokalny JUZ AKTYWNY (bez zmian)."
-        echo "  Zrodla:  ${roots[*]}"
-        echo "  Cel:     ${target:-(brak -- snapshoty zostaja w zrodle, nic nie jest kopiowane)}"
+        echo "Local backup ALREADY ACTIVE (no change)."
+        echo "  Sources: ${roots[*]}"
+        echo "  Target:  ${target:-(none -- snapshots stay on the source, nothing is copied)}"
         echo "  Config:  $config"
         return 0
     fi
@@ -9304,12 +9304,12 @@ Taking over older jobs (a v4 config written by hand): remove their sections firs
     rm -f "$cand.err"
 
     echo
-    echo "Plan lokalnego backupu (PODGLAD -- nic nie zostalo zainstalowane):"
-    echo "  Zrodla (WHAT):    ${roots[*]}"
-    echo "  Cel:              ${target:-(brak -- snapshoty zostaja w zrodle, nic nie jest kopiowane)}"
+    echo "Local backup plan (PREVIEW -- nothing was installed):"
+    echo "  Sources (WHAT):   ${roots[*]}"
+    echo "  Target:           ${target:-(none -- snapshots stay on the source, nothing is copied)}"
     for r in "${roots[@]}"; do
         local_backup_same_pool "$r" "$target" \
-            && echo "  Uwaga:            zrodlo '$r' i cel dziela pule '${target%%/*}' -- awaria puli dotknie oba (to fakt, nie zakaz)"
+            && echo "  Warning:          source '$r' and target share pool '${target%%/*}' -- a pool failure hits both (a fact, not a ban)"
     done
     echo "  Preset:           $profile"
     # REV-102: the two independent retention policies, both from the same preset
@@ -9318,31 +9318,31 @@ Taking over older jobs (a v4 config written by hand): remove their sections firs
     ladder="$(grep -oE 'retain *= *-[HDWMYhdwmy][0-9]+' "$PROFILE_TPL_FILE" 2>/dev/null | grep -oE '\-[HDWMYhdwmy][0-9]+' | tr '\n' ' ')"
     sladder="$ladder"
     [ -n "${SRC_PROFILE_TPL_FILE:-}" ] && sladder="$(grep -oE 'retain *= *-[HDWMYhdwmy][0-9]+' "$SRC_PROFILE_TPL_FILE" 2>/dev/null | grep -oE '\-[HDWMYhdwmy][0-9]+' | tr '\n' ' ')"
-    echo "  Retencja ZRODLA:  ${sladder:-(patrz profil)}$([ -n "${SRC_PROFILE_NAME:-}" ] && echo "z '$SRC_PROFILE_NAME' ")(na kazdym zrodle)"
+    echo "  Source retention: ${sladder:-(see profile)}$([ -n "${SRC_PROFILE_NAME:-}" ] && echo "from '$SRC_PROFILE_NAME' ")(on each source)"
     # No target, no target retention -- REV-20260901-132 acceptance 3, which
     # the no-copy fix left printing a ladder for a store that does not exist.
     if [ "$no_copy" -eq 1 ]; then
-        echo "  Retencja CELU:    (brak celu -- nic nie jest kopiowane)"
+        echo "  Target retention: (no target -- nothing is copied)"
     else
-        echo "  Retencja CELU:    ${ladder:-(patrz profil)}(na magazynie -- NIEZALEZNA od zrodla)"
+        echo "  Target retention: ${ladder:-(see profile)}(on the store -- INDEPENDENT of the source)"
     fi
-    [ -n "$lb_recursion" ] && echo "  Rekursja:         $lb_recursion -- migawki, prune i straznik obejmuja tez dzieci (obecne i przyszle)"
-    echo "  Config docelowy:  $config$([ -f "$config" ] && echo ' (istnieje -- plan jest ADDYTYWNY: stare joby zachowane)' || echo ' (nowy)')"
+    [ -n "$lb_recursion" ] && echo "  Recursion:        $lb_recursion -- snapshots, prune and monitor also cover children (present and future)"
+    echo "  Target config:    $config$([ -f "$config" ] && echo ' (exists -- the plan is ADDITIVE: old jobs are kept)' || echo ' (new)')"
     if [ "${#EDIT_TIER_OPS[@]}" -gt 0 ] && [ -n "$lb_name" ]; then
         local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
         tiers_apply_ops "$cand" "$lb_name" "${EDIT_TIER_OPS[@]}"
-        echo "Szczeble po zmianie (ta sama podmiana configu):"; printf '  %s\n' "${TIERS_CHANGES[@]}"
+        echo "Tiers after the change (same config swap):"; printf '  %s\n' "${TIERS_CHANGES[@]}"
     fi
     echo
-    echo "--- kandydat CONFIG v4 (pelny: istniejace + nowy job) ---"
+    echo "--- candidate CONFIG v4 (full: existing + new job) ---"
     cat "$cand"
     echo
-    echo "--- wygenerowany blok crona (gen-cron.sh -c, pelny) ---"
+    echo "--- generated cron block (gen-cron.sh -c, full) ---"
     gencron_as_target -c "$cand"
     if [ "$do_install" -ne 1 ]; then
         echo
-        echo "To jest wylacznie plan -- nic nie zostalo zainstalowane."
-        echo "Aby zainstalowac: powtorz to samo polecenie z --install."
+        echo "This is a plan only -- nothing was installed."
+        echo "To install: repeat the same command with --install."
         rm -f "$cand"
         return 0
     fi
@@ -9388,8 +9388,8 @@ Taking over older jobs (a v4 config written by hand): remove their sections firs
 
     if [ "$assume_yes" -ne 1 ]; then
         local ans
-        [ "$sources_from" = heuristic ]             && log "zrodla powyzej sa PROPOZYCJA tego przebiegu, nie Twoim wyborem -- potwierdzajac, akceptujesz ten zestaw"
-        read -rp "Zainstalowac ten backup lokalny? [t/N] " ans
+        [ "$sources_from" = heuristic ]             && log "the sources above are a PROPOSAL of this run, not your choice -- by confirming you accept this set"
+        read -rp "Install this local backup? [y/N] " ans
         case "$ans" in
             t|T|tak|TAK|y|Y|yes|YES) ;;
             *) rm -f "$cand"; die "not confirmed -- $config was NOT touched, nothing installed" ;;
@@ -9480,7 +9480,7 @@ Taking over older jobs (a v4 config written by hand): remove their sections firs
     # than the newest hourly, and `send -I <newer> <older>` failed the seed. With the
     # family root the engine finds that snapshot on the target and skips (rc 0).
     [ "$lb_passive" -eq 1 ] && seed_prefix="$(profile_family_root)"
-    log "seed: pierwsza wysylka kazdego zrodla, prefiks '$seed_prefix' (to moze potrwac)..."
+    log "seed: first send of each source, prefix '$seed_prefix' (this may take a while)..."
     local seed_failed=0 sr
     # The seed makes the FIRST snapshot the same way the installed line will,
     # so --recursive reaches it too: without this the seed on pve9
@@ -9522,7 +9522,7 @@ Taking over older jobs (a v4 config written by hand): remove their sections firs
     done
     if [ "$seed_failed" -ne 0 ]; then
         rm -f "$cand"
-        die "$seed_failed zrodlo/zrodla nie przeszly seeda -- NIC nie zainstalowano, $config nietkniety. Napraw przyczyne i powtorz to samo polecenie."
+        die "$seed_failed source(s) failed the seed -- NOTHING installed, $config untouched. Fix the cause and repeat the same command."
     fi
 
     # Same pre-install assertions as activate-client, in the same order: a config
@@ -9542,7 +9542,7 @@ Taking over older jobs (a v4 config written by hand): remove their sections firs
     local installed_block
     installed_block="$(crontab_for_target 2>/dev/null | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p')"
     printf '%s' "$installed_block" | grep -qF -- "$target" \
-        || die "instalacja zglosila sukces, ale odczyt zwrotny nie znalazl '$target' w zainstalowanym bloku -- sprawdz crontab recznie zanim uznasz backup za dzialajacy"
+        || die "the install reported success, but the read-back did not find '$target' in the installed block -- check the crontab by hand before you consider the backup working"
 
     if [ -n "$lb_name" ]; then
         local _lbc _lbm="" _lbr
@@ -9581,17 +9581,17 @@ Taking over older jobs (a v4 config written by hand): remove their sections firs
     fi
 
     echo
-    echo "Backup lokalny AKTYWNY."
-    [ -n "$lb_name" ] && echo "  Relacja: $lb_name (lokalna)"
-    echo "  Zrodla:  ${roots[*]}"
+    echo "Local backup ACTIVE."
+    [ -n "$lb_name" ] && echo "  Relation: $lb_name (local)"
+    echo "  Sources: ${roots[*]}"
     # Named separately rather than folded into the line above: this run neither
     # seeded nor re-rendered them, and reporting them as though it had would be
     # the report claiming work it did not do.
-    [ "${#have_roots[@]}" -gt 0 ] && echo "  Juz bylo: ${have_roots[*]} (bez zmian -- ani seeda, ani nowej sekcji)"
-    echo "  Cel:     ${target:-(brak -- snapshoty zostaja w zrodle, nic nie jest kopiowane)}"
+    [ "${#have_roots[@]}" -gt 0 ] && echo "  Already:  ${have_roots[*]} (no change -- neither a seed nor a new section)"
+    echo "  Target:  ${target:-(none -- snapshots stay on the source, nothing is copied)}"
     echo "  Config:  $config"
-    echo "  Seed:    OK (${#roots[@]} zrodlo/zrodel wyslane)"
-    echo "  Cron:    zainstalowany i odczytany zwrotnie"
+    echo "  Seed:    OK (${#roots[@]} source(s) sent)"
+    echo "  Cron:    installed and read back"
 }
 
 # ------------------------------------------------------------------------------
@@ -10081,7 +10081,7 @@ cmd_add_client() {
         # direction.
         local _mf_bw; _mf_bw=$(record_get "$_mf_user_path" PEER_SAVED_BANDWIDTH)
         if [ -n "$bandwidth" ] && [ "$bandwidth" != "$_mf_bw" ]; then
-            die "add-client: this host's link to '$lan_host' is already capped at '${_mf_bw:-<bez limitu>}' by the pairing, and this relationship asked for '--bandwidth=$bandwidth'. The cap belongs to the PAIR of hosts -- changing it here would silently re-cap every relationship that already uses this link. Either drop --bandwidth to accept the pairing's limit, or change it deliberately for the whole link with 'deploy.sh --pair --peer=$lan_host --bandwidth=$bandwidth'. Nothing was changed."
+            die "add-client: this host's link to '$lan_host' is already capped at '${_mf_bw:-<no limit>}' by the pairing, and this relationship asked for '--bandwidth=$bandwidth'. The cap belongs to the PAIR of hosts -- changing it here would silently re-cap every relationship that already uses this link. Either drop --bandwidth to accept the pairing's limit, or change it deliberately for the whole link with 'deploy.sh --pair --peer=$lan_host --bandwidth=$bandwidth'. Nothing was changed."
         fi
     fi
     [ -n "$local_user" ] && [ "$local_user" != root ] && pair_args+=(--local-user="$local_user")
@@ -11098,14 +11098,14 @@ cmd_seed() {
 
     local base; base=$(snapget_local_base)
     if [ "$yes" -ne 1 ]; then
-        echo "Klient:  $name"
-        echo "Zrodla:  $PEER_SAVED_DATASETS"
+        echo "Client:  $name"
+        echo "Sources: $PEER_SAVED_DATASETS"
         if [ -n "$base" ]; then
-            echo "Cel:     $base"
+            echo "Target:  $base"
         else
-            echo "Cel:     (sync -- ta sama sciezka co zrodlo, dla kazdego datasetu osobno)"
+            echo "Target:  (sync -- the same path as the source, for each dataset separately)"
         fi
-        read -rp "Wykonac PELNY transfer teraz (rzeczywiste dane, bez -n)? [t/N] " ans
+        read -rp "Run the FULL transfer now (real data, no -n)? [y/N] " ans
         case "$ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) die "not confirmed -- no transfer performed, state stays 'seeding'" ;; esac
     fi
 
@@ -11278,10 +11278,10 @@ cmd_final_catchup() {
     [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list"
 
     if [ "$yes" -ne 1 ]; then
-        echo "Klient:   $name"
+        echo "Client:   $name"
         echo "Endpoint: $(endpoint_display)"
-        echo "Zrodla:   $PEER_SAVED_DATASETS"
-        read -rp "Wykonac koncowy transfer przyrostowy teraz? [t/N] " ans
+        echo "Sources:  $PEER_SAVED_DATASETS"
+        read -rp "Run the final incremental transfer now? [y/N] " ans
         case "$ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) die "not confirmed -- nothing transferred" ;; esac
     fi
 
@@ -12436,22 +12436,22 @@ $PROBE_DETAIL"
         || { rm -f "$workfile"; die "could not find out who else prunes these source datasets -- $cronfile was NOT touched, nothing installed."; }
 
     echo
-    echo "Klient:              $name"
-    echo "Tryb:                snaponly -- migawki na zrodle, BEZ kopii (nic nie powstaje na tym hoscie)"
+    echo "Client:              $name"
+    echo "Mode:                snaponly -- snapshots on the source, NO copy (nothing is created on this host)"
     echo "Peer:                $PEER_HOST"
-    echo "Endpoint aktywny:    $(endpoint_display)"
-    echo "Zrodla:              $PEER_SAVED_DATASETS"
-    echo "Rodzina:             $(snaponly_collector_tag)_<prefiks szczebla> -- tylko ten kolektor ja tworzy i przycina"
-    echo "Profil:              ${PROFILE:-${PROFILE_ACTIVE:-?}}${SOURCE_PROFILE:+, retencja zrodla: $SOURCE_PROFILE}"
-    echo "Uwaga:               gdy ten kolektor nie dziala, na zrodle nie powstaja migawki"
-    echo "                     ani nie sa przycinane; monitor wieku alarmuje z tego hosta."
+    echo "Active endpoint:     $(endpoint_display)"
+    echo "Sources:             $PEER_SAVED_DATASETS"
+    echo "Family:              $(snaponly_collector_tag)_<tier prefix> -- only this collector creates and prunes it"
+    echo "Profile:             ${PROFILE:-${PROFILE_ACTIVE:-?}}${SOURCE_PROFILE:+, source retention: $SOURCE_PROFILE}"
+    echo "Warning:             when this collector is down, no snapshots are created on the source"
+    echo "                     or pruned; the age monitor alarms from this host."
     echo
     show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "gen-cron.sh could not render the proposed config -- nothing was touched"; }
     if [ "$plan_only" -eq 1 ]; then
         rm -f "$workfile"; echo "plan only -- nothing was changed (run again with --yes to apply)"; return 0
     fi
     if [ "$yes" -ne 1 ]; then
-        read -rp "Aktywowac migawki na zrodle? [t/N] " ans
+        read -rp "Activate snapshots on the source? [y/N] " ans
         case "$ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, nothing installed" ;; esac
     fi
     assert_cron_config_matches_installed "$cronfile"
@@ -12779,7 +12779,7 @@ cmd_activate_client() {
     if [ "$regen" -eq 1 ] && [ "${#EDIT_TIER_OPS[@]}" -gt 0 ]; then
         local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
         tiers_apply_ops "$workfile" "$name" "${EDIT_TIER_OPS[@]}"
-        echo "Szczeble po zmianie (ta sama podmiana configu):"; printf '  %s\n' "${TIERS_CHANGES[@]}"; echo
+        echo "Tiers after the change (same config swap):"; printf '  %s\n' "${TIERS_CHANGES[@]}"; echo
     fi
     if [ "$regen" -eq 1 ]; then
         # THE FAMILY STAYS. A profile stamping another prefix is a different
@@ -12933,24 +12933,24 @@ cmd_activate_client() {
     fi
 
     echo
-    echo "Klient:              $name"
-    echo "Peer (LAN parowania): $PEER_HOST"
-    echo "Endpoint aktywny:    $(endpoint_display)"
-    echo "Zrodla:              $PEER_SAVED_DATASETS"
+    echo "Client:              $name"
+    echo "Peer (pairing LAN):  $PEER_HOST"
+    echo "Active endpoint:     $(endpoint_display)"
+    echo "Sources:             $PEER_SAVED_DATASETS"
     if [ -n "$base" ]; then
-        echo "Cel:                 $base"
+        echo "Target:              $base"
     else
-        echo "Cel:                 (sync -- ta sama sciezka co zrodlo, dla kazdego datasetu osobno)"
+        echo "Target:              (sync -- the same path as the source, for each dataset separately)"
     fi
-    echo "Tryb:                pull"
+    echo "Mode:                pull"
     # THIS relationship's profile and shape. The old text described the HOST
     # (any flat template anywhere read as "legacy") and named a fixed -H24 -D7
     # -W4 -M12 whatever the profile said -- seen re-activating pve11 on pve10
     # next to a flat sync relationship, 2026-10-07.
     if [ -n "${prune_scope:-}" ]; then
-        echo "Profil:              ${PROFILE:-${PROFILE_ACTIVE:-?}} -- drabina GFS w osobnej sekcji prune"
+        echo "Profile:             ${PROFILE:-${PROFILE_ACTIVE:-?}} -- GFS ladder in a separate prune section"
     else
-        echo "Profil:              ${PROFILE:-${PROFILE_ACTIVE:-?}} -- retencja w szczeblach wysylki"
+        echo "Profile:             ${PROFILE:-${PROFILE_ACTIVE:-?}} -- retention in the send tiers"
     fi
     # F7: name the passive shape out loud BEFORE consent -- a silent non-passive
     # choice on a chained middle dataset is exactly what the lab watched destroy
@@ -12963,14 +12963,14 @@ cmd_activate_client() {
         esac
     done
     if [ "$_passive_here" -eq 1 ]; then
-        echo "Tryb pasywny:        TAK dla czesci/calosci zakresu -- ta relacja KONSUMUJE"
-        echo "                     istniejaca rodzine snapshotow zrodla (snapget -e):"
-        echo "                     zadnych nowych snapshotow na zrodle, zadnego prune"
-        echo "                     zrodla; retencja rodziny zostaje u jej wlasciciela."
+        echo "Passive mode:        YES for part/all of the scope -- this relation CONSUMES"
+        echo "                     the source's existing snapshot family (snapget -e):"
+        echo "                     no new snapshots on the source, no prune"
+        echo "                     of the source; the family's retention stays with its owner."
     fi
-    echo "Spojnosc snapshotu:  crash-consistent -- quiesce NIE jest wlaczony w tym profilu."
-    echo "                     (zdalny quiesce w trybie pull istnieje: snapget -q przez"
-    echo "                      zfs-quiesce-helper, wymaga --allow-quiesce przy parowaniu)"
+    echo "Consistency:         crash-consistent -- quiesce is NOT enabled in this profile."
+    echo "                     (remote quiesce in pull mode exists: snapget -q via"
+    echo "                      zfs-quiesce-helper, needs --allow-quiesce at pairing)"
     echo "Test:                OK ($( printf '%s' "$PEER_SAVED_DATASETS" | wc -w ) dataset(s))"
     # Snapshot NAMES embed local wall-clock time; ZFS `creation` is the truth,
     # but every human and every filename sorts by the name. Found live
@@ -12984,7 +12984,7 @@ cmd_activate_client() {
     peer_tz=$(load_ssh_opts; ssh -n "${LOAD_SSH_OPTS[@]}" \
         "${LOAD_ACCOUNT}@${LOAD_HOST}" "date +%z" 2>/dev/null)
     if [ -n "$peer_tz" ] && [ "$peer_tz" != "$local_tz" ]; then
-        warn "strefy czasowe sie roznia: ten host $local_tz, zrodlo $PEER_HOST $peer_tz -- nazwy snapshotow beda nosic INNY czas niz reszta floty (restore --plan bedzie to flagowac jako rozjazd nazwa<->creation). Wyrownaj timedatectl set-timezone na obu, jesli to nie jest zamierzone."
+        warn "time zones differ: this host $local_tz, source $PEER_HOST $peer_tz -- snapshot names will carry a DIFFERENT time than the rest of the fleet (restore --plan will flag this as a name<->creation mismatch). Align with timedatectl set-timezone on both, if this is not intended."
     fi
     echo
 
@@ -12994,14 +12994,14 @@ cmd_activate_client() {
     }
 
     if [ "$regen" -eq 1 ]; then
-        echo "Edycja relacji:      profil '${old_profile:-<brak>}' -> '${PROFILE:-}'"
-        echo "                     profil zrodla '${old_src_profile:-<ten sam>}' -> '${SOURCE_PROFILE:-<ten sam>}'"
-        echo "                     sekcje relacji generowane od nowa (retencja, harmonogramy);"
-        echo "                     dane nie sa przenoszone, seed nie jest potrzebny."
+        echo "Relation edit:       profile '${old_profile:-<none>}' -> '${PROFILE:-}'"
+        echo "                     source profile '${old_src_profile:-<same>}' -> '${SOURCE_PROFILE:-<same>}'"
+        echo "                     the relation's sections are regenerated (retention, schedules);"
+        echo "                     data is not moved, no seed is needed."
         if [ -n "$EDIT_DROPPED_FAMILIES" ]; then
-            echo "UWAGA:               rodziny przestaja byc tworzone i ciete: $EDIT_DROPPED_FAMILIES"
-            echo "                     ich istniejace migawki ZOSTAJA na celu i zrodle -- usun je"
-            echo "                     recznie, jesli nie sa potrzebne."
+            echo "WARNING:             families are no longer created or pruned: $EDIT_DROPPED_FAMILIES"
+            echo "                     their existing snapshots STAY on the target and source -- remove them"
+            echo "                     by hand if not needed."
         fi
         echo
     fi
@@ -13013,7 +13013,7 @@ cmd_activate_client() {
         return 0
     fi
     if [ "$yes" -ne 1 ]; then
-        read -rp "$([ "$regen" -eq 1 ] && echo "Zastosowac zmiane relacji?" || echo "Aktywowac backup?") [t/N] " ans
+        read -rp "$([ "$regen" -eq 1 ] && echo "Apply the relation change?" || echo "Activate the backup?") [y/N] " ans
         case "$ans" in
             t|T|tak|TAK|y|Y|yes|YES) ;;
             *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, nothing installed" ;;
@@ -13359,11 +13359,11 @@ cmd_set_bandwidth() {   # --peer=HOST --bandwidth=RATE [--config=PATH] [--local-
         die "could not render the preview -- nothing was touched"
     }
 
-    echo "Limit lacza pary '$peer': '${old_rate:-<brak>}'  ->  '${rate:-<brak>}'"
-    echo "Relacji do przepisania: ${#tgt_name[@]} (sekcji: $moved)"
+    echo "Link limit of pair '$peer': '${old_rate:-<none>}'  ->  '${rate:-<none>}'"
+    echo "Relations to rewrite: ${#tgt_name[@]} (sections: $moved)"
     echo
     if [ "$yes" -ne 1 ]; then
-        read -rp "Zastosowac ten limit do WSZYSTKICH relacji tej pary? [t/N] " ans
+        read -rp "Apply this limit to ALL relations of this pair? [y/N] " ans
         case "$ans" in
             t|T|tak|TAK|y|Y|yes|YES) ;;
             *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, the manifest was NOT changed, nothing installed" ;;
@@ -13515,7 +13515,7 @@ $gcerr"
             # intentionally outside source-retention ownership instead.
             if installed_dataset_is_passive "$cronfile" "$localpath"; then
                 passive=$((passive + 1))
-                passive_report+=("  $CLIENT_NAME: source '$src' -> pasywne (-e): poza wlasnoscia retencji zrodla, pomijam")
+                passive_report+=("  $CLIENT_NAME: source '$src' -> passive (-e): outside source-retention ownership, skipping")
                 continue
             fi
             total_ds=$((total_ds + 1))
@@ -13528,24 +13528,24 @@ $gcerr"
     done
     rm -f "$rendered"
 
-    echo "Audyt retencji ZRODLA (config: $cronfile)"
-    echo "  aktywne pull-datasety (zarzadzane): $total_ds"
-    echo "  pasywne (-e, poza wlasnoscia):      $passive"
-    echo "  bez ograniczonej retencji zrodla:   $missing"
+    echo "SOURCE retention audit (config: $cronfile)"
+    echo "  active pull datasets (managed):      $total_ds"
+    echo "  passive (-e, not owned):             $passive"
+    echo "  without bounded source retention:    $missing"
     if [ "$passive" -gt 0 ]; then
         printf '%s\n' "${passive_report[@]}"
     fi
     if [ "$missing" -eq 0 ]; then
-        echo "Kazda aktywna relacja pull ma juz ograniczona retencje zrodla -- nic do dodania."
+        echo "Every active pull relation already has bounded source retention -- nothing to add."
         return 0
     fi
     printf '%s\n' "${report[@]}"
     echo
 
     if [ "$apply" -ne 1 ]; then
-        echo "To jest audyt TYLKO-DO-ODCZYTU -- $cronfile NIE zostal ruszony."
-        echo "Aby DODAC brakujaca retencje zrodla (w podgladanej, potwierdzanej, grant-checkowanej"
-        echo "transakcji, ktora ZACHOWUJE cala pozostala polityke): zfs-backup.sh audit-source-retention --apply"
+        echo "This is a READ-ONLY audit -- $cronfile was NOT touched."
+        echo "To ADD the missing source retention (in a previewed, confirmed, grant-checked"
+        echo "transaction that PRESERVES all the rest of the policy): zfs-backup.sh audit-source-retention --apply"
         return 0
     fi
 
@@ -13617,10 +13617,10 @@ $gcerr"
         rm -f "$workfile"
         die "could not render the audit preview -- nothing was touched"
     }
-    echo "Dodanie retencji ZRODLA do $missing relacji(-i) bez niej ($touched aktywny(-ch) klient(ow) zmienionych)."
+    echo "Adding SOURCE retention to $missing relation(s) without it ($touched active client(s) changed)."
     echo
     if [ "$yes" -ne 1 ]; then
-        read -rp "Dodac brakujaca retencje zrodla? [t/N] " ans
+        read -rp "Add the missing source retention? [y/N] " ans
         case "$ans" in
             t|T|tak|TAK|y|Y|yes|YES) ;;
             *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, nothing installed" ;;
@@ -14099,8 +14099,8 @@ cmd_enable_client() {
 # value of each copy job and the tier its label names.
 status_quiesce_from_cron() {   # <relationship name> -> one line
     local name="$1" tab
-    [ -n "${INSTALLED_ENDPOINT:-}${MANAGED_DATASETS:-}" ] || { echo "(jeszcze nie aktywowany)"; return 0; }
-    tab=$(crontab_for_target 2>/dev/null) || { echo "? (crontab konta ${LOCAL_USER:-root} nieczytelny)"; return 0; }
+    [ -n "${INSTALLED_ENDPOINT:-}${MANAGED_DATASETS:-}" ] || { echo "(not activated yet)"; return 0; }
+    tab=$(crontab_for_target 2>/dev/null) || { echo "? (crontab of account ${LOCAL_USER:-root} unreadable)"; return 0; }
     printf '%s\n' "$tab" \
       | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
       | grep -F -- " -L $name " | grep -E 'snap(get|send)\.sh' \
@@ -14125,10 +14125,10 @@ status_quiesce_from_cron() {   # <relationship name> -> one line
             if ($3 == "-") off = off (off ? ", " : "") $2
             else { if (!($3 in on)) ord[++k] = $3; on[$3] = on[$3] (on[$3] ? ", " : "") $2 } }
           END {
-              if (k == 0 && off == "") { print "? (brak linii tej relacji w cronie)"; exit }
-              if (k == 0) { print "crash-consistent (bez quiesce)"; exit }
+              if (k == 0 && off == "") { print "? (no line of this relation in cron)"; exit }
+              if (k == 0) { print "crash-consistent (no quiesce)"; exit }
               s = ""; for (i = 1; i <= k; i++) s = s (s ? "; " : "") "quiesce " ord[i] " (" on[ord[i]] ")"
-              if (off != "") s = s "; bez: " off
+              if (off != "") s = s "; without: " off
               print s
           }'
 }
@@ -14177,7 +14177,7 @@ status_running_now() {   # <local target prefix> -> one line per live record
               match($0,/"done_bytes":[0-9]*/);  d=substr($0,RSTART+13,RLENGTH-13)+0
               match($0,/"updated_epoch":[0-9]*/); u=substr($0,RSTART+16,RLENGTH-16)+0
               p = (t>0)? d*100/t : 0
-              stale = (now-u>30) ? sprintf("  (bez aktualizacji od %ds)", now-u) : ""
+              stale = (now-u>30) ? sprintf("  (no update for %ds)", now-u) : ""
               printf "                   %s  %s / %s (%.1f%%)%s\n", ds, h(d), h(t), p, stale }' "$f"
     done
     return $any
@@ -14411,7 +14411,7 @@ cmd_monitor() {
                 jsonw_text  reason  "$reason"
                 printf '}'
             else
-                printf '%-10s %-9s %-16s %s\n' "$acct" "$verdict" "${label:-(bez etykiety)}" "$ds"
+                printf '%-10s %-9s %-16s %s\n' "$acct" "$verdict" "${label:-(no label)}" "$ds"
                 [ -n "$reason" ] && printf '%s\n' "$reason" | sed 's/^/    /'
             fi
         done < <(sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$blk")
@@ -14432,10 +14432,10 @@ cmd_monitor() {
     else
         echo
         if [ "$seen" -eq 0 ]; then
-            echo "Zero linii monitora w zainstalowanych blokach zfs-backup-managed."
-            echo "To NIE znaczy 'wszystko zdrowe' -- znaczy 'nikt tego nie pilnuje'."
+            echo "Zero monitor lines in the installed zfs-backup-managed blocks."
+            echo "That does NOT mean 'all healthy' -- it means 'nobody is watching this'."
         else
-            echo "Najgorszy werdykt: $worst  (linii: $seen)"
+            echo "Worst verdict: $worst  (lines: $seen)"
         fi
     fi
     # The exit status is the operator's, not the reader's: OK is 0 so this can
@@ -14738,8 +14738,8 @@ cmd_prepare_source() {
 # nowa zaleznosc, tylko ta, ktora juz tam jest.
 cmd_gui() {
     local tui="$SCRIPT_DIR/tui/zfs-tui.py"
-    [ -f "$tui" ] || die "gui: brak $tui -- checkout jest niekompletny"
-    command -v python3 >/dev/null 2>&1         || die "gui: nie ma python3 na tym hoscie. Ekran go potrzebuje; same czasowniki (--json) dzialaja bez niego."
+    [ -f "$tui" ] || die "gui: $tui is missing -- incomplete checkout"
+    command -v python3 >/dev/null 2>&1         || die "gui: no python3 on this host. The screen needs it; the verbs themselves (--json) work without it."
     python3 "$tui" "$@"
 }
 
@@ -14809,7 +14809,7 @@ cmd_edit_relation() {
     if [ "$ask" -eq 1 ]; then     # the same questions, as whiptail windows ('e' on the GUI's F3)
         [ -r "$(client_conf_path "$name")" ] || die "edit-relation: no relationship '$name' on this host"
         local dlg="$SCRIPT_DIR/tui/edit-relation.sh"
-        [ -f "$dlg" ] || die "edit-relation: brak $dlg -- checkout jest niekompletny"
+        [ -f "$dlg" ] || die "edit-relation: $dlg is missing -- incomplete checkout"
         ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg" "$name"
         return $?
     fi
@@ -14856,12 +14856,12 @@ cmd_delete_relation() {
             *)                 [ -z "$name" ] || die "delete-relation: takes exactly one NAME"; name="$a" ;;
         esac
     done
-    [ -n "$name" ] || die "uzycie: zfs-backup.sh delete-relation NAZWA [--keep-source] [--keep-record] [--destroy-copies] [--yes]"
+    [ -n "$name" ] || die "usage: zfs-backup.sh delete-relation NAME [--keep-source] [--keep-record] [--destroy-copies] [--yes]"
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "delete-relation: no relationship '$name' on this host"
     if [ "$ask" -eq 1 ]; then     # the same questions, as whiptail windows (Del on the GUI's F3)
         local dlg="$SCRIPT_DIR/tui/delete-relation.sh"
-        [ -f "$dlg" ] || die "delete-relation: brak $dlg -- checkout jest niekompletny"
+        [ -f "$dlg" ] || die "delete-relation: $dlg is missing -- incomplete checkout"
         ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg" "$name"
         return $?
     fi
@@ -15174,7 +15174,7 @@ local_source_change() {   # <add|remove> <name> <dataset> <yes 0|1>
         die "gen-cron.sh rejected the changed config -- $cronfile was NOT touched (see output above)"
     fi
     show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not render the preview -- nothing was touched"; }
-    echo "Relacja '$name': $([ "$how" = add ] && echo "dochodzi zrodlo $ds" || echo "odpada zrodlo $ds") (pozostale sekcje bez zmian)"
+    echo "Relation '$name': $([ "$how" = add ] && echo "source $ds is added" || echo "source $ds is dropped") (other sections unchanged)"
     if [ "$yes" -ne 1 ]; then
         rm -f "$workfile"
         echo "plan only -- nothing installed (add --yes to install)"
@@ -15232,7 +15232,7 @@ cmd_remove_source() {
             *)        if [ -z "$name" ]; then name="$a"; elif [ -z "$ds" ]; then ds="$a"; else die "remove-source: takes exactly NAME and DATASET"; fi ;;
         esac
     done
-    [ -n "$name" ] && [ -n "$ds" ] || die "uzycie: zfs-backup.sh remove-source NAZWA DATASET [--yes]"
+    [ -n "$name" ] && [ -n "$ds" ] || die "usage: zfs-backup.sh remove-source NAME DATASET [--yes]"
     case "$ds" in
         */*) : ;;
         *)   die "remove-source: '$ds' does not look like a dataset (pool/path)" ;;
@@ -15468,7 +15468,7 @@ cmd_add_source() {
             *)        if [ -z "$name" ]; then name="$a"; elif [ -z "$ds" ]; then ds="$a"; else die "add-source: takes exactly NAME and DATASET"; fi ;;
         esac
     done
-    [ -n "$name" ] && [ -n "$ds" ] || die "uzycie: zfs-backup.sh add-source NAZWA DATASET [--yes]"
+    [ -n "$name" ] && [ -n "$ds" ] || die "usage: zfs-backup.sh add-source NAME DATASET [--yes]"
     case "$ds" in
         */*) : ;;
         *)   die "add-source: '$ds' does not look like a dataset (pool/path)" ;;
@@ -15687,10 +15687,10 @@ capacity.guard_target|85|int:40:98|-|do ilu % bezpiecznik czyści
 capacity.guard_min_keep|2|int:1:100|-|ile najnowszych migawek rodziny bezpiecznik zawsze zostawia
 growth.alert|off|enum:off,on|-|strażnik przyrostu (ransomware): alarm, gdy najnowszy przyrost jest wielokrotnie ponad normę i się nie kompresuje (tylko alarm, nic nie zatrzymuje)
 growth.factor|5|int:2:100|-|ile razy szybszy niż zwykle przyrost uznać za podejrzany
-growth.min_mib|1024|int:1:10485760|-|od ilu MiB przyrostu strażnik w ogóle reaguje
+growth.min_mib|1024|int:1:10485760|-|od ilu MiB przyrostu strażnik reaguje
 growth.max_ratio_pct|110|int:100:200|-|kompresja przyrostu (w %, 100 = żadna) do której przyrost uznać za niekompresowalny
 growth.days|7|int:2:60|-|z ilu dni strażnik liczy normę przyrostu
-replica.insert_wait|60|int:60:3600|-|ile sekund replika czeka po podłączeniu dysku, zanim go dotknie (odłączony w tym czasie = nic; mniej niż 60 się nie da)
+replica.insert_wait|60|int:60:3600|-|ile sekund zadanie repliki czeka po podłączeniu dysku, zanim wystartuje
 monitor.interval|15m|interval|cron|co ile strażnik sprawdza wiek kopii
 new_relation.template|default|profile|-|szablon proponowany nowej relacji
 update.time|:15|minute|host|minuta godzinnej aktualizacji (git pull)'
@@ -15712,13 +15712,13 @@ settings_row() {   # <key> -> "default|kind|applies|help" or rc 1
     return 1
 }
 
-# -> "<value>\t<source>" ; source: plik | zfs-alert.conf | domyślne
+# -> "<value>\t<source>" ; source: file | zfs-alert.conf | default
 settings_effective() {
     local k="$1" row def v cv
     row=$(settings_row "$k") || return 1
     def="${row%%|*}"
     v=$(settings_get "$k" "")
-    if [ -n "$v" ]; then printf '%s\tplik\n' "$v"; return 0; fi
+    if [ -n "$v" ]; then printf '%s\tfile\n' "$v"; return 0; fi
     cv=$(settings_alert_conf_var "$k")
     if [ -n "$cv" ] && [ -r /etc/zfs-alert.conf ]; then
         v=$( ( . /etc/zfs-alert.conf >/dev/null 2>&1; eval "printf '%s' \"\${$cv:-}\"" ) )
@@ -15727,46 +15727,46 @@ settings_effective() {
             printf '%s\tzfs-alert.conf\n' "$v"; return 0
         fi
     fi
-    printf '%s\tdomyślne\n' "$def"
+    printf '%s\tdefault\n' "$def"
 }
 
 settings_validate() {   # <key> <value> -> 0, or the reason on stdout and rc 1
     local k="$1" v="$2" row kind lo hi
-    row=$(settings_row "$k") || { echo "nieznany klucz '$k' (lista: zfs-backup.sh settings)"; return 1; }
+    row=$(settings_row "$k") || { echo "unknown key '$k' (list: zfs-backup.sh settings)"; return 1; }
     kind=$(printf '%s' "$row" | cut -d'|' -f2)
-    case "$v" in ''|*[\#\|]*|*' '*) echo "'$v': pusta albo z niedozwolonym znakiem (spacja, #, |)"; return 1 ;; esac
+    case "$v" in ''|*[\#\|]*|*' '*) echo "'$v': empty or contains a forbidden character (space, #, |)"; return 1 ;; esac
     case "$kind" in
         enum:*)
             case ",${kind#enum:}," in *",$v,"*) return 0 ;; esac
-            echo "'$v' -- dozwolone: ${kind#enum:}"; return 1 ;;
+            echo "'$v' -- allowed: ${kind#enum:}"; return 1 ;;
         email)
             case "$v" in
                 *@*.*) case "$v" in *@*@*|@*|*@) ;; *) return 0 ;; esac ;;
                 *@*) ;;
                 *) printf '%s' "$v" | grep -Eq '^[a-z_][a-z0-9_-]*$' && return 0 ;;
             esac
-            echo "'$v' nie wygląda na adres (user@domena albo lokalne konto)"; return 1 ;;
+            echo "'$v' does not look like an address (user@domain or a local account)"; return 1 ;;
         time)
             case "$v" in :*) ;; *) settings_time_to_cron "$v" >/dev/null && return 0 ;; esac
-            echo "'$v' -- godzina w postaci GG:MM, np. 07:00"; return 1 ;;
+            echo "'$v' -- time as HH:MM, e.g. 07:00"; return 1 ;;
         minute)
             case "$v" in :[0-5][0-9]) return 0 ;; esac
-            echo "'$v' -- minuta w postaci :MM, np. :15"; return 1 ;;
+            echo "'$v' -- minute as :MM, e.g. :15"; return 1 ;;
         dur)
             case "$v" in *[0-9]h|*[0-9]m) case "${v%[hm]}" in *[!0-9]*) ;; *) [ "${v%[hm]}" -gt 0 ] && return 0 ;; esac ;; esac
-            echo "'$v' -- czas w postaci Nh albo Nm, np. 4h"; return 1 ;;
+            echo "'$v' -- duration as Nh or Nm, e.g. 4h"; return 1 ;;
         interval)
             settings_interval_to_cron "$v" >/dev/null && return 0
-            echo "'$v' -- co ile: Nm (dzielnik godziny: 5m, 10m, 15m, 30m, 60m) albo Nh (dzielnik doby)"; return 1 ;;
+            echo "'$v' -- every: Nm (a divisor of an hour: 5m, 10m, 15m, 30m, 60m) or Nh (a divisor of a day)"; return 1 ;;
         int:*)
             lo=$(printf '%s' "$kind" | cut -d: -f2); hi=$(printf '%s' "$kind" | cut -d: -f3)
             case "$v" in *[!0-9]*) ;; *) [ "$v" -ge "$lo" ] && [ "$v" -le "$hi" ] && return 0 ;; esac
-            echo "'$v' -- liczba od $lo do $hi"; return 1 ;;
+            echo "'$v' -- a number from $lo to $hi"; return 1 ;;
         profile)
             [ -r "$(profile_file "$v")" ] && return 0
-            echo "'$v' -- nie ma takiego szablonu (lista: zfs-backup.sh list-profiles)"; return 1 ;;
+            echo "'$v' -- no such template (list: zfs-backup.sh list-profiles)"; return 1 ;;
     esac
-    echo "'$k': nieznany rodzaj '$kind'"; return 1
+    echo "'$k': unknown kind '$kind'"; return 1
 }
 
 # A cron key changed: every managed block on this host re-rendered from its own
@@ -15784,8 +15784,8 @@ settings_reinstall_crons() {
           assert_cron_config_matches_installed "$cfg"
           tmp=$(mktemp "$(dirname "$cfg")/.zfsbackup-settings.XXXXXX") || exit 1
           cp -p "$cfg" "$tmp" || exit 1
-          log "settings: konto $acct -- przeliczam blok crona z $cfg"
-          atomic_replace_and_install "$cfg" "$tmp" ) || { rc=1; warn "settings: blok crona konta $acct NIE został przeliczony (powyżej dlaczego)"; }
+          log "settings: account $acct -- recomputing the cron block from $cfg"
+          atomic_replace_and_install "$cfg" "$tmp" ) || { rc=1; warn "settings: the cron block of account $acct was NOT recomputed (why: above)"; }
     done <<< "$accts"
     return "$rc"
 }
@@ -15795,13 +15795,13 @@ settings_reinstall_crons() {
 settings_rewrite_host_line() {   # <match> <5-field schedule>
     local match="$1" sched="$2" cur line
     cur=$(crontab -l 2>/dev/null | grep -F -- "$match" | grep -v '^#' | head -1)
-    [ -n "$cur" ] || { log "settings: w crontabie roota nie ma linii '$match' -- pierwszy deploy.sh ją założy już z nową godziną"; return 0; }
+    [ -n "$cur" ] || { log "settings: root's crontab has no line '$match' -- the first deploy.sh will create it with the new time"; return 0; }
     line="$sched $(printf '%s' "$cur" | awk '{ for (i = 6; i <= NF; i++) printf "%s%s", $i, (i < NF ? " " : "") }')"
     [ "$line" = "$cur" ] && return 0
     if cron_block_ensure_line root zfs-backup-host "$match" "$line" '(host-level jobs kept by zfs-backup.sh -- do not hand-edit)'; then
         log "settings: $match -> $sched"
     else
-        warn "settings: nie przestawiłem '$match': $CRON_ERR"; return 1
+        warn "settings: could not reschedule '$match': $CRON_ERR"; return 1
     fi
 }
 
@@ -15810,12 +15810,12 @@ cmd_settings() {
     case "$sub" in
         --ask)
             local dlg="$SCRIPT_DIR/tui/settings.sh"
-            [ -f "$dlg" ] || die "settings: brak $dlg -- checkout jest niekompletny"
+            [ -f "$dlg" ] || die "settings: $dlg is missing -- incomplete checkout"
             ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg"
             return $? ;;
         ""|--tsv)
             local line k row
-            [ "$sub" = --tsv ] || echo "Ustawienia hosta: $SETTINGS_FILE   (źródło: plik | zfs-alert.conf | domyślne)"
+            [ "$sub" = --tsv ] || echo "Host settings: $SETTINGS_FILE   (source: file | zfs-alert.conf | default)"
             while IFS= read -r line; do
                 k="${line%%|*}"; row="${line#*|}"
                 if [ "$sub" = --tsv ]; then
@@ -15827,15 +15827,15 @@ cmd_settings() {
             done <<< "$SETTINGS_REGISTRY"
             return 0 ;;
         get)
-            local ev; ev=$(settings_effective "${2:-}") || die "settings get: nieznany klucz '${2:-}'"
+            local ev; ev=$(settings_effective "${2:-}") || die "settings get: unknown key '${2:-}'"
             printf '%s\n' "${ev%%$'\t'*}"; return 0 ;;
         test-mail)
             local to; to=$(settings_effective alerts.email); to="${to%%$'\t'*}"
-            command -v mail >/dev/null 2>&1 || die "settings test-mail: brak polecenia 'mail' na tym hoście -- alerty też nie wyjdą"
-            printf 'Mail próbny zfs-snapshot-all z %s (%s).\nJeśli to czytasz, alerty i dzienny mail dotrą na ten adres.\n' "$(hostname -f 2>/dev/null || hostname)" "$(date '+%F %T %Z')" \
-                | mail -s "[zfs-snapshot-all] mail próbny z $(hostname -s 2>/dev/null || hostname)" "$to" \
-                || die "settings test-mail: 'mail' odmówił wysłania do $to"
-            echo "settings: mail próbny wysłany do $to -- sprawdź skrzynkę (także spam)"
+            command -v mail >/dev/null 2>&1 || die "settings test-mail: no 'mail' command on this host -- alerts will not get out either"
+            printf 'zfs-snapshot-all test mail from %s (%s).\nIf you are reading this, alerts and the daily mail will reach this address.\n' "$(hostname -f 2>/dev/null || hostname)" "$(date '+%F %T %Z')" \
+                | mail -s "[zfs-snapshot-all] test mail from $(hostname -s 2>/dev/null || hostname)" "$to" \
+                || die "settings test-mail: 'mail' refused to send to $to"
+            echo "settings: test mail sent to $to -- check the mailbox (spam too)"
             return 0 ;;
         set) shift ;;
         *) die "usage: zfs-backup.sh settings [--tsv | get KEY | set KEY=VALUE... [--yes] | test-mail | --ask]" ;;
@@ -15846,19 +15846,19 @@ cmd_settings() {
         case "$a" in
             --yes|-y) yes=1 ;;
             *=*) k="${a%%=*}"; v="${a#*=}"
-                 why=$(settings_validate "$k" "$v") || die "settings: $k: $why -- nic nie zapisano"
+                 why=$(settings_validate "$k" "$v") || die "settings: $k: $why -- nothing saved"
                  keys+=("$k"); vals+=("$v") ;;
-            *) die "settings set: '$a' -- podaj KLUCZ=WARTOŚĆ" ;;
+            *) die "settings set: '$a' -- give KEY=VALUE" ;;
         esac
     done
-    [ "${#keys[@]}" -gt 0 ] || die "settings set: nic do ustawienia -- podaj KLUCZ=WARTOŚĆ"
+    [ "${#keys[@]}" -gt 0 ] || die "settings set: nothing to set -- give KEY=VALUE"
     local i ev cron=0 host=0 changed=0 applies
     echo "settings: $SETTINGS_FILE"
     for i in "${!keys[@]}"; do
         ev=$(settings_effective "${keys[$i]}")
         applies=$(settings_row "${keys[$i]}" | cut -d'|' -f3)
-        if [ "${ev%%$'\t'*}" = "${vals[$i]}" ] && [ "${ev#*$'\t'}" = plik ]; then
-            printf '  %-24s %s (bez zmian)\n' "${keys[$i]}" "${vals[$i]}"
+        if [ "${ev%%$'\t'*}" = "${vals[$i]}" ] && [ "${ev#*$'\t'}" = file ]; then
+            printf '  %-24s %s (no change)\n' "${keys[$i]}" "${vals[$i]}"
             continue
         fi
         changed=1
@@ -15866,18 +15866,18 @@ cmd_settings() {
         [ "$applies" = cron ] && cron=1
         [ "$applies" = host ] && host=1
     done
-    [ "$cron" -eq 1 ] && echo "  potem: przeliczenie bloków crona kont tego hosta (strażnik / alerty)"
-    [ "$host" -eq 1 ] && echo "  potem: nowa godzina w linii crona roota (blok zfs-backup-host)"
-    if [ "$changed" -eq 0 ]; then echo "settings: bez zmian -- nic do zapisania"; return 0; fi
+    [ "$cron" -eq 1 ] && echo "  then: recomputing the cron blocks of this host's accounts (monitor / alerts)"
+    [ "$host" -eq 1 ] && echo "  then: new time in root's cron line (block zfs-backup-host)"
+    if [ "$changed" -eq 0 ]; then echo "settings: no change -- nothing to save"; return 0; fi
     if [ "$yes" -ne 1 ]; then
         echo "plan only. Re-run with --yes to do it. Nothing was changed."
         return 0
     fi
-    [ "$(id -u)" -eq 0 ] || die "settings: zapis pliku ustawień hosta wymaga roota"
+    [ "$(id -u)" -eq 0 ] || die "settings: writing the host settings file requires root"
     for i in "${!keys[@]}"; do
-        settings_set "${keys[$i]}" "${vals[$i]}" || die "settings: nie zapisałem ${keys[$i]} do $SETTINGS_FILE"
+        settings_set "${keys[$i]}" "${vals[$i]}" || die "settings: could not write ${keys[$i]} to $SETTINGS_FILE"
     done
-    log "settings: zapisano $SETTINGS_FILE"
+    log "settings: wrote $SETTINGS_FILE"
     local rc=0
     if [ "$cron" -eq 1 ]; then settings_reinstall_crons || rc=1; fi
     if [ "$host" -eq 1 ]; then
@@ -15890,7 +15890,7 @@ cmd_settings() {
             esac
         done
     fi
-    [ "$rc" -eq 0 ] && echo "settings: zapisane i zastosowane." || echo "settings: zapisane; część zastosowania nie wyszła (linie '!!!'/'WARN' wyżej)."
+    [ "$rc" -eq 0 ] && echo "settings: saved and applied." || echo "settings: saved; part of the apply failed (see the '!!!'/'WARN' lines above)."
     return "$rc"
 }
 
@@ -16157,7 +16157,7 @@ cmd_edit_config() {
         "${ed[@]}" ${jump:+"$jump"} "$tmp"
         if cmp -s "$cfg" "$tmp"; then
             rm -f "$tmp" "$errf"
-            echo "edit-config: bez zmian -- nic nie zainstalowano."
+            echo "edit-config: no change -- nothing installed."
             # Its own exit code, so a front end can return at once with nothing to read
             # (owner note 22): 3 = the editor was closed with no change.
             return 3
@@ -16165,7 +16165,7 @@ cmd_edit_config() {
         if newblk=$(gencron_as_target -c "$tmp" 2>"$errf"); then
             break
         fi
-        echo "edit-config: generator odrzucił config:"
+        echo "edit-config: the generator rejected the config:"
         sed 's/^/  /' "$errf"
         # --yes or no terminal: nobody can edit again, and the default answer "yes"
         # reopened the same rejected file forever (takeover rehearsal, pve11
@@ -16173,12 +16173,12 @@ cmd_edit_config() {
         # looped). Stop instead -- nothing installed, the edit kept for a look.
         if [ "$yes" -eq 1 ] || [ ! -t 0 ]; then
             rm -f "$errf"
-            echo "edit-config: nic nie zainstalowano (bez terminala / --yes nie ma komu edytować dalej). Twoja wersja: $tmp"
+            echo "edit-config: nothing installed (with no terminal / --yes there is nobody to edit further). Your version: $tmp"
             return 1
         fi
-        if ! edit_config_ask "Edytować dalej? [T/n]" y; then
+        if ! edit_config_ask "Keep editing? [Y/n]" y; then
             rm -f "$errf"
-            echo "edit-config: nic nie zainstalowano. Twoja wersja: $tmp"
+            echo "edit-config: nothing installed. Your version: $tmp"
             return 1
         fi
     done
@@ -16217,30 +16217,30 @@ cmd_edit_config() {
         drops="${drops}${rel}"$'\t'"${v#*:}"$'\t'"${s}"$'\n'
     done
 
-    echo "edit-config: $cfg (konto $(cron_target_user))"
-    echo "Zmiany w cronie:"
+    echo "edit-config: $cfg (account $(cron_target_user))"
+    echo "Cron changes:"
     # The rendered block names its source file; the copy's temporary name is not
     # a change anyone made, so it is shown under the real one.
     local d; d=$(diff <(gencron_as_target -c "$cfg" 2>/dev/null) <(printf '%s\n' "$newblk" | sed "s#$tmp#$cfg#") | grep '^[<>]' | sed 's/^</  -/; s/^>/  +/')
-    if [ -n "$d" ]; then printf '%s\n' "$d"; else echo "  (blok crona bez zmian -- zmienił się tylko config)"; fi
+    if [ -n "$d" ]; then printf '%s\n' "$d"; else echo "  (cron block unchanged -- only the config changed)"; fi
     while IFS= read -r s; do
-        [ -n "$s" ] && echo "  uwaga: [dataset:$s] pobiera z hosta, z którego nie pobiera żadna relacja tutaj -- zwykła sekcja, bez kroków na źródle i bez rekordu"
+        [ -n "$s" ] && echo "  note: [dataset:$s] pulls from a host that no relation here pulls from -- an ordinary section, no steps on the source and no record"
     done <<< "$plain"
     if [ -n "$adds$drops" ]; then
-        echo "Kroki na źródle:"
+        echo "Steps on the source:"
         while IFS=$'\t' read -r rel ds s; do
-            [ -n "$rel" ] && echo "  + $ds do relacji $rel: na źródle zakres i prawa (add-source --source-only), tutaj rekord, potem pierwsza kopia"
+            [ -n "$rel" ] && echo "  + $ds to relation $rel: on the source the scope and grants (add-source --source-only), here the record, then the first copy"
         done <<< "$adds"
         while IFS=$'\t' read -r rel ds s; do
-            [ -n "$rel" ] && echo "  - $ds z relacji $rel: na źródle odebranie praw (remove-source --source-only), tutaj rekord; kopie zostają"
+            [ -n "$rel" ] && echo "  - $ds from relation $rel: on the source the grants are revoked (remove-source --source-only), here the record; copies stay"
         done <<< "$drops"
     fi
-    if [ "$yes" -ne 1 ] && ! edit_config_ask "Zainstalować? [t/N]" n; then
-        echo "edit-config: nic nie zainstalowano. Twoja wersja: $tmp"
+    if [ "$yes" -ne 1 ] && ! edit_config_ask "Install? [y/N]" n; then
+        echo "edit-config: nothing installed. Your version: $tmp"
         return 1
     fi
     if [ "$(sha256sum "$cfg" | cut -d' ' -f1)" != "$sum0" ]; then
-        echo "edit-config: $cfg zmienił się w trakcie edycji (inny czasownik albo admin) -- nic nie nadpisano. Twoja wersja: $tmp"
+        echo "edit-config: $cfg changed during the edit (another verb or an admin) -- nothing overwritten. Your version: $tmp"
         return 1
     fi
 
@@ -16248,13 +16248,13 @@ cmd_edit_config() {
     while IFS=$'\t' read -r rel ds s; do
         [ -n "$rel" ] || continue
         if ! bash "$SCRIPT_DIR/zfs-backup.sh" add-source "$rel" "$ds" --yes --source-only; then
-            echo "edit-config: źródło relacji $rel nie przyznało '$ds' -- tutaj nic nie zainstalowano. Twoja wersja: $tmp"
+            echo "edit-config: the source of relation $rel did not grant '$ds' -- nothing installed here. Your version: $tmp"
             return 1
         fi
-        cfg_mark_section "$tmp" "$s" "$rel" || { echo "edit-config: nie udało się oznaczyć sekcji $s. Twoja wersja: $tmp"; return 1; }
+        cfg_mark_section "$tmp" "$s" "$rel" || { echo "edit-config: could not mark section $s. Your version: $tmp"; return 1; }
     done <<< "$adds"
     if [ -n "$adds" ] && ! gencron_as_target -c "$tmp" >/dev/null 2>&1; then
-        echo "edit-config: config po oznaczeniu sekcji nie przeszedł generatora -- nic nie zainstalowano. Twoja wersja: $tmp"
+        echo "edit-config: the config did not pass the generator after the sections were marked -- nothing installed. Your version: $tmp"
         return 1
     fi
 
@@ -16262,7 +16262,7 @@ cmd_edit_config() {
     cp -p "$cfg" "$bak" || die "edit-config: could not keep the previous config as $bak -- nothing installed. Your version: $tmp"
     workfile_track "$tmp"
     atomic_replace_and_install "$cfg" "$tmp"
-    log "edit-config: zainstalowano $cfg; poprzednia wersja: $bak"
+    log "edit-config: installed $cfg; previous version: $bak"
 
     while IFS=$'\t' read -r rel ds s; do
         [ -n "$rel" ] || continue
@@ -16272,10 +16272,10 @@ cmd_edit_config() {
     while IFS=$'\t' read -r rel ds s; do
         [ -n "$rel" ] || continue
         bash "$SCRIPT_DIR/zfs-backup.sh" remove-source "$rel" "$ds" --yes --source-only \
-            || warn "edit-config: źródło relacji $rel nie odebrało praw do '$ds' -- powtórz: zfs-backup.sh remove-source $rel $ds --yes --source-only"
+            || warn "edit-config: the source of relation $rel did not revoke the grants on '$ds' -- repeat: zfs-backup.sh remove-source $rel $ds --yes --source-only"
         record_note_dataset "$rel" drop "$ds" "$s"
     done <<< "$drops"
-    echo "edit-config: gotowe."
+    echo "edit-config: done."
 }
 
 # new-relation -- the wizard, in whiptail (owner decision 2026-09-16: forms are
@@ -16284,8 +16284,8 @@ cmd_edit_config() {
 # with a stub whiptail without sourcing 15k lines.
 cmd_new_relation() {
     local wiz="$SCRIPT_DIR/tui/new-relation.sh"
-    [ -f "$wiz" ] || die "new-relation: brak $wiz -- checkout jest niekompletny"
-    [ $# -eq 0 ] || die "new-relation: kreator nie przyjmuje argumentow (wersja wsadowa: --source=... , patrz --help)"
+    [ -f "$wiz" ] || die "new-relation: $wiz is missing -- incomplete checkout"
+    [ $# -eq 0 ] || die "new-relation: the wizard takes no arguments (batch version: --source=... , see --help)"
     ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$wiz"
 }
 
@@ -16665,9 +16665,9 @@ cmd_show_scope() {
                 u=$(scope_unavail "" used_by_snapshots "the snapshot list itself could not be read, so no metric on this scope was measured")
                 scope_unavail "$u" bookmarks "the snapshot list itself could not be read, so no metric on this scope was measured")"
         else
-            echo "Zakres:  $ds"
-            echo "NIE DA SIE ODCZYTAC -- dataset nie istnieje albo to konto nie ma do niego prawa."
-            echo "To NIE znaczy 'brak migawek'."
+            echo "Scope:   $ds"
+            echo "CANNOT BE READ -- the dataset does not exist or this account has no right to it."
+            echo "That does NOT mean 'no snapshots'."
         fi
         return 1
     fi
@@ -16788,23 +16788,23 @@ SCOPEEOF
         # WHAT COULD NOT BE READ, NAMED. Empty when everything was measured.
         printf ',"unavailable":[%s]}\n' "$SCOPE_UNAVAIL"
     else
-        echo "Zakres:  $ds$([ "$rec" -eq 1 ] && echo '  (rekursywnie)')"
+        echo "Scope:   $ds$([ "$rec" -eq 1 ] && echo '  (recursive)')"
         # "?" rather than 0: the operator must be able to tell "none" from
         # "this account could not ask".
         local nb_txt="$nbook_json" ubs_txt="$ubs_json"
         [ "$nb_txt"  = null ] && nb_txt="?"
         [ "$ubs_txt" = null ] && ubs_txt="?"
-        printf 'Migawek: %s   zakladek: %s   miejsce zajete przez migawki: %s B\n' "$total" "$nb_txt" "$ubs_txt"
+        printf 'Snapshots: %s   bookmarks: %s   space used by snapshots: %s B\n' "$total" "$nb_txt" "$ubs_txt"
         echo
-        printf '%-24s %6s %14s  %s\n' RODZINA ILE BAJTOW NAJNOWSZA
+        printf '%-24s %6s %14s  %s\n' FAMILY COUNT BYTES NEWEST
         for p in ${pats[@]+"${pats[@]}"}; do
-            printf '%-24s %6s %14s  %s\n' "$p" "${cnt["$p"]:-0}" "${bytes["$p"]:-0}" "${newest_name["$p"]:-(brak)}"
+            printf '%-24s %6s %14s  %s\n' "$p" "${cnt["$p"]:-0}" "${bytes["$p"]:-0}" "${newest_name["$p"]:-(none)}"
         done
-        printf '%-24s %6s %14s  %s\n' "(pozostale)" "${cnt[@other]:-0}" "${bytes[@other]:-0}" "${newest_name[@other]:-(brak)}"
+        printf '%-24s %6s %14s  %s\n' "(other)" "${cnt[@other]:-0}" "${bytes[@other]:-0}" "${newest_name[@other]:-(none)}"
         [ "${cnt[@other]:-0}" -gt 0 ] && {
             echo
-            echo "\"Pozostale\" to migawki, ktorych nie stworzyl zaden z podanych wzorcow --"
-            echo "pvesr (__replicate_), vzdump, migracje, albo rodzina z innej relacji."
+            echo "\"Other\" are snapshots that none of the given patterns created --"
+            echo "pvesr (__replicate_), vzdump, migrations, or a family of another relation."
         }
     fi
     return 0
@@ -16969,7 +16969,7 @@ jobs_note_unreadable() {   # <account> <config> <lines in block> <as_json>
         jsonw_text error "the installed block names a config this reader cannot open or parse -- the lines are running, their declaration is not readable from here"
         printf '}')"
     [ "$as_json" -eq 1 ] || printf '%-10s %s\n' "$acct" \
-        "BLOK BEZ CZYTELNEGO CONFIGU (${cfg:-brak naglowka Source}), linii w bloku: $nlines"
+        "BLOCK WITHOUT A READABLE CONFIG (${cfg:-no Source header}), lines in the block: $nlines"
 }
 cmd_list_jobs() {
     local as_json=0 a
@@ -16987,7 +16987,7 @@ cmd_list_jobs() {
     local first=1 seen=0
     [ "$as_json" -eq 1 ] && printf '{"host":"%s","jobs":[' "$(json_escape "$(hostname -s 2>/dev/null)")"
     [ "$as_json" -eq 1 ] || printf '%-10s %-8s %-9s %-28s %-16s %s\n' \
-        KONTO KIERUNEK SZCZEBEL ZAKRES RODZINA HARMONOGRAM
+        ACCOUNT DIR TIER SCOPE FAMILY SCHEDULE
 
     local acct cfg nlines
     while IFS= read -r acct; do
@@ -17158,9 +17158,9 @@ cmd_list_jobs() {
                     case "$dir" in
                         push)     arrow="-> $peer" ;;
                         pull)     arrow="<- $peer" ;;
-                        local)    arrow="-> tutaj" ;;
-                        prune)    arrow="porzadki" ;;
-                        *)        arrow="(migawka)" ;;
+                        local)    arrow="-> here" ;;
+                        prune)    arrow="prune" ;;
+                        *)        arrow="(snapshot)" ;;
                     esac
                     printf '%-10s %-8s %-9s %-28s %-16s %s\n' \
                         "$acct" "$arrow" "$tier" "$sec" "$family" "${sched:-?}"
@@ -17174,11 +17174,11 @@ cmd_list_jobs() {
     else
         echo
         if [ "$seen" -eq 0 ]; then
-            echo "Zero zadan wyprowadzonych z zainstalowanych blokow."
-            echo "To nie znaczy 'host nic nie robi' -- znaczy, ze ten host nie ma"
-            echo "zainstalowanego bloku zfs-backup-managed albo jego config jest nieczytelny."
+            echo "Zero jobs derived from the installed blocks."
+            echo "That does not mean 'the host does nothing' -- it means this host has no"
+            echo "installed zfs-backup-managed block, or its config is unreadable."
         else
-            echo "Zadan: $seen"
+            echo "Jobs: $seen"
         fi
     fi
     return 0
@@ -17406,7 +17406,7 @@ save_profile_name_shape() {   # <name> -> normalised letter+count shape, or empt
 # ask and show the plan; the answer comes back as an ordinary save-profile/delete-profile.
 template_dialog() {
     local dlg="$SCRIPT_DIR/tui/template.sh"
-    [ -f "$dlg" ] || die "brak $dlg -- checkout jest niekompletny"
+    [ -f "$dlg" ] || die "$dlg is missing -- incomplete checkout"
     ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg" "$1" "$2"
 }
 
@@ -17633,7 +17633,7 @@ cmd_save_profile() {
     chmod 0644 "$dest" 2>/dev/null || :
     log "saved $dest (from '$from')."
     log "Nothing installed changed: a profile is what FUTURE relationships are built from."
-    log "Use it with:  zfs-backup.sh add-client NAZWA --profile=${as%.conf} ..."
+    log "Use it with:  zfs-backup.sh add-client NAME --profile=${as%.conf} ..."
 }
 
 # ------------------------------------------------------------------------------
@@ -17998,7 +17998,7 @@ import_restore_relblock() {   # <name> <export document> [--check: rc 1 = differ
 
 import_relblock_note() {   # <export document> -- one line for the preview
     case "$(json_value_of "$1" relation)" in ''|null|'{}') return 0 ;; esac
-    echo "  Potem: wlasne ustawienia relacji z pliku (szczeble, retencja u zrodla, silnik) -- jak w pliku."
+    echo "  Then: the relation's own settings from the file (tiers, source retention, engine) -- as in the file."
 }
 
 cmd_import_relation() {   # FILE [--name=NEW] [--yes]
@@ -18062,7 +18062,7 @@ ARGV
                 case "${argv[$i]}" in --source-profile=*) argv[$i]="--source-profile=$im_hp" ;; esac
             done
         fi
-        echo ">>> import-relation: szablonu '$im_p' nie ma na tym hoscie -- relacja powstaje z wlasnego bloku zapisanego w $file (szablon pomocniczy, tylko na ten import)"
+        echo ">>> import-relation: template '$im_p' is not on this host -- the relation is built from its own block saved in $file (a helper template, for this import only)"
     fi
     # U62: a file written before the fix carries --host = the pairing address and the
     # address in use only under not_replayable/ACTIVE_ENDPOINT. Connect where the relation
@@ -18075,7 +18075,7 @@ ARGV
              for i in "${!argv[@]}"; do
                  case "${argv[$i]}" in
                      --host=*) [ "${argv[$i]}" = "--host=$file_active" ] \
-                                   || { echo ">>> import-relation: plik wskazuje adres parowania ${argv[$i]#--host=}, ale relacja działała przez $file_active -- łączę się przez $file_active"; argv[$i]="--host=$file_active"; } ;;
+                                   || { echo ">>> import-relation: the file names the pairing address ${argv[$i]#--host=}, but the relation worked through $file_active -- connecting through $file_active"; argv[$i]="--host=$file_active"; } ;;
                  esac
              done ;;
     esac
@@ -18101,7 +18101,7 @@ ARGV
                 im_fhost=$(printf '%s' "$doc" | grep -o '"PEER_HOST":"[^"]*"' | head -1 | sed 's/^.*:"//; s/"$//')
                 if [ -n "$im_fhost" ]; then
                     im_landing=$(peer_label "$im_fhost"); argv+=("--landing=$im_landing")
-                    echo ">>> import-relation: kopie pod $im_target/$im_landing (katalog relacji z pliku, adres parowania $im_fhost)"
+                    echo ">>> import-relation: copies under $im_target/$im_landing (the relation's directory from the file, pairing address $im_fhost)"
                 fi
             fi
             if [ -n "$im_landing" ] && [ -n "$im_list" ] && ! zfs list -H -o name -- "$im_target/$im_landing" >/dev/null 2>&1; then
@@ -18116,7 +18116,7 @@ $(zfs list -H -o name -d 1 -- "$im_target" 2>/dev/null)
 CANDS
                 if [ "${#im_cands[@]}" -eq 1 ]; then
                     local im_new="${im_cands[0]##*/}"
-                    echo ">>> import-relation: $im_target/$im_landing nie istnieje, ale ${im_cands[0]} ma wszystkie datasety relacji ($im_list) -- kopie pójdą tam (seed sprawdzi wspólną migawkę)"
+                    echo ">>> import-relation: $im_target/$im_landing does not exist, but ${im_cands[0]} holds all the relation's datasets ($im_list) -- the copies will go there (the seed will check the common snapshot)"
                     for i in "${!argv[@]}"; do case "${argv[$i]}" in --landing=*) argv[$i]="--landing=$im_new" ;; esac; done
                 elif [ "${#im_cands[@]}" -gt 1 ]; then
                     die "import-relation: $im_target/$im_landing does not exist, and SEVERAL directories under $im_target hold all of $im_list: ${im_cands[*]} -- not guessing which copy is this relationship's. Point it at one by editing \"--landing=\" in the file's replay argv, then import again."
@@ -18158,12 +18158,12 @@ THEN
             die "import-relation: relationship '$name' is here, identical to $file, but NOT finished (state '$(record_get "$ecpath" STATE)'). Finish it instead of importing again: zfs-backup.sh seed $name, then zfs-backup.sh activate $name -- or remove it (zfs-backup.sh delete-relation $name) and import again. Nothing was changed."
         fi
         if [ "$here_argv" = "$file_argv" ] && ! import_restore_relblock "$name" "$doc" --check; then
-            echo "Relacja '$name' JUZ JEST na tym hoscie z tymi samymi deklaracjami co $file,"
-            echo "  ale jej wlasne ustawienia (szczeble, retencja u zrodla, silnik) roznia sie od pliku."
-            echo "Wykona sie: ustawienia relacji z pliku -- jak w pliku (jedna podmiana configu, cron od nowa)."
+            echo "Relation '$name' is ALREADY on this host with the same declarations as $file,"
+            echo "  but its own settings (tiers, source retention, engine) differ from the file."
+            echo "This will run: the relation's settings from the file -- as in the file (one config swap, cron again)."
             if [ "$yes" -ne 1 ]; then
                 echo
-                echo "To byl podglad. Nic nie zostalo zmienione. Dodaj --yes, zeby wykonac."
+                echo "That was a preview. Nothing was changed. Add --yes to carry it out."
                 return 0
             fi
             import_restore_relblock "$name" "$doc" || die "import-relation: the settings of '$name' from $file were not restored (above) -- nothing else was changed"
@@ -18171,14 +18171,14 @@ THEN
             return 0
         fi
         if [ "$here_argv" = "$file_argv" ]; then
-            echo "Relacja '$name' JUZ JEST na tym hoscie i jest identyczna z plikiem $file"
-            echo "  (te same deklaracje: $(printf '%s ' ${argv[@]+"${argv[@]}"}))"
-            echo "  stan: $(record_get "$ecpath" STATE)"
-            echo "Nic do zrobienia -- import zakonczony."
+            echo "Relation '$name' is ALREADY on this host and identical to the file $file"
+            echo "  (the same declarations: $(printf '%s ' ${argv[@]+"${argv[@]}"}))"
+            echo "  state: $(record_get "$ecpath" STATE)"
+            echo "Nothing to do -- import finished."
             return 0
         fi
         local diff_lines
-        diff_lines=$( { printf '%s\n' "$here_argv" | sed 's/^/  tu:   /'; printf '%s\n' "$file_argv" | sed 's/^/  plik: /'; } \
+        diff_lines=$( { printf '%s\n' "$here_argv" | sed 's/^/  here: /'; printf '%s\n' "$file_argv" | sed 's/^/  file: /'; } \
                       | awk '{ k = substr($0, 9); c[k]++; l[NR] = $0; key[NR] = k } END { for (i = 1; i <= NR; i++) if (c[key[i]] == 1) print l[i] }')
         die "import-relation: relationship '$name' already exists here and DIFFERS from $file:
 $diff_lines
@@ -18240,20 +18240,20 @@ SCOPE
             case "$x" in --host=*|--mode=*) ;; *) rux_args+=("$x") ;; esac
         done
         rux_args+=(--install --yes --grant-remotely)
-        echo "Import relacji '$name' z $file -- NOWY KOLEKTOR"
-        echo "  wyeksportowana z: ${from:-?}  ${at:-}"
+        echo "Import of relation '$name' from $file -- NEW COLLECTOR"
+        echo "  exported from: ${from:-?}  ${at:-}"
         echo
-        echo "Wykona sie DOKLADNIE to (jedno polecenie: parowanie ze zrodlem, zakres, seed, aktywacja):"
+        echo "EXACTLY this will run (one command: pairing with the source, scope, seed, activation):"
         printf '  zfs-backup.sh'
         for x in "${rux_args[@]}"; do printf ' \\\n      %q' "$x"; done
         printf '\n\n'
         import_relblock_note "$doc"
-        echo "Na $peer_host zostanie ZATWIERDZONY dla tego kolektora ten zakres (z pliku, 1:1):"
+        echo "On $peer_host this scope will be APPROVED for this collector (from the file, 1:1):"
         printf '    %s\n' "${scope_arr[@]}"
-        echo "  't' w GUI / --yes tutaj = zgoda zrodla na ten zakres (decyzja wlasciciela 2026-09-23)."
+        echo "  'y' in the GUI / --yes here = the source's consent to this scope (owner's decision 2026-09-23)."
         if [ "$yes" -ne 1 ]; then
             echo
-            echo "To byl podglad. Nic nie zostalo zmienione. Dodaj --yes, zeby wykonac."
+            echo "That was a preview. Nothing was changed. Add --yes to carry it out."
             return 0
         fi
         echo
@@ -18273,20 +18273,20 @@ SCOPE
             case "$x" in --name=*) lb_args+=("--name=$name") ;; *) lb_args+=("$x") ;; esac
         done
         lb_args+=(--install --yes)
-        echo "Import relacji '$name' z $file -- RELACJA LOKALNA"
-        echo "  wyeksportowana z: ${from:-?}  ${at:-}"
+        echo "Import of relation '$name' from $file -- LOCAL RELATION"
+        echo "  exported from: ${from:-?}  ${at:-}"
         echo
-        echo "Wykona sie DOKLADNIE to (jedno polecenie: sekcje, cron, rekord):"
+        echo "EXACTLY this will run (one command: sections, cron, record):"
         printf '  zfs-backup.sh local-backup'
         for x in "${lb_args[@]}"; do printf ' \\\n      %q' "$x"; done
         printf '\n'
         import_relblock_note "$doc"
         case " ${lb_args[*]} " in *" --target= "*)
-            echo "  --target= jest PUSTY z pliku: same migawki na zrodlach, nic nie jest kopiowane." ;;
+            echo "  --target= is EMPTY in the file: snapshots on the sources only, nothing is copied." ;;
         esac
         if [ "$yes" -ne 1 ]; then
             echo
-            echo "To byl podglad. Nic nie zostalo zmienione. Dodaj --yes, zeby wykonac."
+            echo "That was a preview. Nothing was changed. Add --yes to carry it out."
             return 0
         fi
         echo
@@ -18325,21 +18325,21 @@ SCOPE
             case "$x" in --host=*|--datasets=*) ;; *) rux_args+=("$x") ;; esac
         done
         rux_args+=(--install --yes --grant-remotely)
-        echo "Import relacji '$name' z $file -- ZRODLO NIE ZNA JUZ TEGO KOLEKTORA"
-        echo "  wyeksportowana z: ${from:-?}  ${at:-}"
-        echo "  $peer_host nie ma konta tego kolektora (relacje usunieto razem ze zrodlem), a ten host"
-        echo "  ma do niego dostep roota -- import pojdzie jednym poleceniem: parowanie, zakres (dokladnie"
-        echo "  lista datasetow z pliku), seed, aktywacja."
+        echo "Import of relation '$name' from $file -- THE SOURCE NO LONGER KNOWS THIS COLLECTOR"
+        echo "  exported from: ${from:-?}  ${at:-}"
+        echo "  $peer_host has no account for this collector (the relations were removed along with the source), and this host"
+        echo "  has root access to it -- the import will go as one command: pairing, scope (exactly the"
+        echo "  dataset list from the file), seed, activation."
         # F-2 (kampania 2026-10-21): ta notatka stała W ŚRODKU zdania powyżej.
         import_relblock_note "$doc"
         echo
-        echo "Wykona sie DOKLADNIE to:"
+        echo "EXACTLY this will run:"
         printf '  zfs-backup.sh'
         for x in "${rux_args[@]}"; do printf ' \\\n      %q' "$x"; done
         printf '\n'
         if [ "$yes" -ne 1 ]; then
             echo
-            echo "To byl podglad. Nic nie zostalo zmienione. Dodaj --yes, zeby wykonac."
+            echo "That was a preview. Nothing was changed. Add --yes to carry it out."
             return 0
         fi
         echo
@@ -18360,31 +18360,31 @@ SCOPE
        && rux_root_ssh "$peer_ep_host" "$peer_ep_port" "true" >/dev/null 2>&1; then
         jr_args=(--join-remotely)
     fi
-    echo "Import relacji '$name' z $file"
-    echo "  wyeksportowana z: ${from:-?}  ${at:-}"
+    echo "Import of relation '$name' from $file"
+    echo "  exported from: ${from:-?}  ${at:-}"
     echo
-    echo "Wykona sie DOKLADNIE to (te argumenty, ta kolejnosc, z pliku):"
+    echo "EXACTLY this will run (these arguments, this order, from the file):"
     printf '  zfs-backup.sh add-client %s' "$name"
     for x in "${argv[@]}" ${jr_args[@]+"${jr_args[@]}"}; do printf ' \\\n      %q' "$x"; done
     printf '\n'
     for x in ${then_verbs[@]+"${then_verbs[@]}"}; do printf '  zfs-backup.sh %s %s --yes\n' "$x" "$name"; done
-    [ "${#jr_args[@]}" -gt 0 ] && echo "  (--join-remotely: ten host ma roota na $peer_host -- zrodlo dolaczy sie samo, bez paczki do przenoszenia)"
+    [ "${#jr_args[@]}" -gt 0 ] && echo "  (--join-remotely: this host has root on $peer_host -- the source will join by itself, no package to carry)"
     import_relblock_note "$doc"
     local unrep; unrep=$(json_value_of "$doc" not_replayable)
     if [ -n "$unrep" ] && [ "$unrep" != "[]" ]; then
         echo
-        echo "NIE odtwarza sie z pliku -- do ustawienia RECZNIE po imporcie:"
+        echo "NOT restored from the file -- to be set BY HAND after the import:"
         local uf uv
         while IFS= read -r x; do
             [ -n "$x" ] || continue
             echo "  $x"
         done <<UNREP
-$(printf '%s' "$unrep" | awk 'BEGIN{RS="\001"} { s=$0; while (match(s, /"field":"[^"]*","value":"[^"]*"/)) { t=substr(s, RSTART, RLENGTH); f=t; sub(/^"field":"/, "", f); sub(/","value":.*$/, "", f); v=t; sub(/^.*"value":"/, "", v); sub(/"$/, "", v); if (f != "ACTIVE_ENDPOINT") printf "%-22s = %s   (set-endpoint po aktywacji)\n", f, v; s=substr(s, RSTART+RLENGTH) } }')
+$(printf '%s' "$unrep" | awk 'BEGIN{RS="\001"} { s=$0; while (match(s, /"field":"[^"]*","value":"[^"]*"/)) { t=substr(s, RSTART, RLENGTH); f=t; sub(/^"field":"/, "", f); sub(/","value":.*$/, "", f); v=t; sub(/^.*"value":"/, "", v); sub(/"$/, "", v); if (f != "ACTIVE_ENDPOINT") printf "%-22s = %s   (set-endpoint after activation)\n", f, v; s=substr(s, RSTART+RLENGTH) } }')
 UNREP
     fi
     if [ "$yes" -ne 1 ]; then
         echo
-        echo "To byl podglad. Nic nie zostalo zmienione. Dodaj --yes, zeby wykonac."
+        echo "That was a preview. Nothing was changed. Add --yes to carry it out."
         return 0
     fi
     echo
@@ -18563,10 +18563,10 @@ EXF
     done
 
     if [ "$as_json" -eq 0 ]; then
-        echo "Relacja:           $name"
-        echo "Wyeksportowano z:  $(hostname 2>/dev/null || echo '?')  $(date -Is 2>/dev/null)"
+        echo "Relation:          $name"
+        echo "Exported from:     $(hostname 2>/dev/null || echo '?')  $(date -Is 2>/dev/null)"
         echo
-        echo "Odtworzenie (te argumenty, ta kolejnosc):"
+        echo "Restore (these arguments, this order):"
         if [ "$rverb" = local-backup ]; then
             printf '  zfs-backup.sh local-backup'
             for x in ${argv[@]+"${argv[@]}"}; do printf ' \\\n      %q' "$x"; done
@@ -18582,14 +18582,14 @@ EXF
         fi
         if [ -n "$unrep_json" ]; then
             echo
-            echo "NIE odtwarza sie z tego pliku (kreator o to nie pyta):"
+            echo "NOT restored from this file (the wizard does not ask about it):"
             for fld in $EXPORT_RELATION_UNREPLAYABLE; do
                 val="${!fld:-}"
                 [ -n "$val" ] && printf '  %-22s = %s\n' "$fld" "$val"
             done
         fi
         echo
-        echo "Pelny dokument (z zainstalowanymi sekcjami): --json"
+        echo "Full document (with the installed sections): --json"
         return 0
     fi
 
@@ -19068,9 +19068,9 @@ list_profiles_text() {
 ' "$nm" "${sources[$i]}" "$(profile_meta_field "$f" description)"
         i=$((i + 1))
     done
-    [ "${#files[@]}" -gt 0 ] || echo "brak profili w $PROFILE_USER_ROOT ani w $PROFILE_ROOT"
+    [ "${#files[@]}" -gt 0 ] || echo "no profiles in $PROFILE_USER_ROOT or in $PROFILE_ROOT"
     echo
-    echo "Pelne dane (rodziny, mechanizm, szczeble, wyrenderowane retain): --json"
+    echo "Full data (families, mechanism, tiers, rendered retain): --json"
 }
 
 # ------------------------------------------------------------------------------
@@ -19279,10 +19279,10 @@ cmd_show_config() {
                 "$(json_escape "$name")" "$(json_escape "$config")"
             printf ',"sections":[],"templates":[],"host":{"defaults":{},"excluded":[]}}\n'
         else
-            echo "Klient:            $name"
-            echo "Config:            ${config:-(relacja nie wskazuje zadnego, host nie ma server.conf)}"
-            echo "                   NIECZYTELNY albo nieistniejacy -- ta relacja nie ma jeszcze"
-            echo "                   zainstalowanych sekcji. To stan, nie awaria."
+            echo "Client:            $name"
+            echo "Config:            ${config:-(the relation names none, the host has no server.conf)}"
+            echo "                   UNREADABLE or nonexistent -- this relation has no installed"
+            echo "                   sections yet. That is a state, not a failure."
         fi
         return 0
     fi
@@ -19426,19 +19426,19 @@ SCFJ
 # host with a terminal and not a front end.
 show_config_text() {   # <client> <config>
     local name="$1" config="$2"
-    echo "Klient:            $name"
+    echo "Client:            $name"
     echo "Config:            $config"
     echo
     local i
     for i in ${owned[@]+"${owned[@]}"}; do
         printf '[%s:%s]%s\n' "${_sc_kind[$i]}" "${_sc_name[$i]}" \
-            "$([ "${_sc_marker[$i]}" = "$name" ] || echo '   (bez znacznika -- rozpoznana po rekordzie relacji)')"
+            "$([ "${_sc_marker[$i]}" = "$name" ] || echo '   (no marker -- recognised by the relation record)')"
         printf '%s' "${_sc_fields[$i]}" | while IFS=$'\001' read -r k v; do
             [ -n "$k" ] && printf '\t%-14s = %s\n' "$k" "$v"
         done
         echo
     done
-    [ "${#owned[@]}" -gt 0 ] || echo "(ta relacja nie ma w tym configu ani jednej sekcji)"
+    [ "${#owned[@]}" -gt 0 ] || echo "(this relation has no section in this config)"
     local id
     for id in ${tpl_ids[@]+"${tpl_ids[@]}"}; do
         local tidx=""
@@ -19451,7 +19451,7 @@ show_config_text() {   # <client> <config>
                 [ -n "$k" ] && printf '\t%-14s = %s\n' "$k" "$v"
             done
         else
-            printf '[template:%s]   BRAK -- sekcja nie istnieje w tym configu; gen-cron odmowi calego pliku\n' "$id"
+            printf '[template:%s]   MISSING -- the section does not exist in this config; gen-cron will refuse the whole file\n' "$id"
         fi
         echo
     done
@@ -19712,7 +19712,7 @@ cmd_status() {
               record_load client "$f"
               pausemark=""
               client_paused "$CLIENT_NAME" && pausemark="  PAUSED_LOCAL"
-              [ "${RUX_MODE:-}" = local ] && ACTIVE_ENDPOINT="(lokalna)"
+              [ "${RUX_MODE:-}" = local ] && ACTIVE_ENDPOINT="(local)"
               printf '%-20s state=%-18s endpoint=%s%s\n' "$CLIENT_NAME" "$STATE" "$ACTIVE_ENDPOINT" "$pausemark" )
         done
         return 0
@@ -19756,48 +19756,48 @@ cmd_status() {
                  && peer_pair_state >/dev/null 2>&1 \
                  && printf '%s' "$PEER_PAIR_STATE" ) || peerstate=""
 
-    echo "Klient:            $CLIENT_NAME"
-    echo "Stan:              ${STATE:-unknown}"
+    echo "Client:            $CLIENT_NAME"
+    echo "State:             ${STATE:-unknown}"
     if [ "$peerstate" = "DISABLED" ]; then
-        echo "Blokada u peera:   DISABLED -- peer odmawia komend tej relacji, TAKZE recznych bez '-L $name'."
-        echo "                   To jest granica bezpieczenstwa, nie tylko pauza logiczna."
-        echo "                   Zdjecie: $0 enable-client $name"
+        echo "Peer lock:         DISABLED -- the peer refuses this relation's commands, MANUAL ones too without '-L $name'."
+        echo "                   This is a security boundary, not just a logical pause."
+        echo "                   To lift: $0 enable-client $name"
     elif [ -z "$peerstate" ]; then
-        echo "Blokada u peera:   NIEZNANA -- nie udalo sie zapytac bramy (peer nieosiagalny albo brak dostepu do klucza relacji; sprobuj jako root). Nie zakladaj, ze relacja jest aktywna u peera."
+        echo "Peer lock:         UNKNOWN -- could not ask the gate (peer unreachable or no access to the relation's key; try as root). Do not assume the relation is active on the peer."
     fi
     if client_paused "$name"; then
         local PAUSED_AT="" PAUSED_REASON=""
         record_load pause "$(pause_marker_path "$name")"
-        echo "Pauza:             PAUSED_LOCAL od ${PAUSED_AT:-?}${PAUSED_REASON:+ (powod: $PAUSED_REASON)}"
-        echo "                   joby i reczne uruchomienia Z etykieta '-L $name' sa pomijane;"
+        echo "Pause:             PAUSED_LOCAL since ${PAUSED_AT:-?}${PAUSED_REASON:+ (reason: $PAUSED_REASON)}"
+        echo "                   jobs and manual runs WITH the label '-L $name' are skipped;"
         if [ "$peerstate" != "DISABLED" ]; then
-            echo "                   reczne uruchomienie BEZ etykiety NIE jest blokowane (pauza logiczna,"
-            echo "                   nie granica bezpieczenstwa). Wznowienie: $0 resume-client $name"
+            echo "                   a manual run WITHOUT the label is NOT blocked (a logical pause,"
+            echo "                   not a security boundary). Resume: $0 resume-client $name"
         else
-            echo "                   Wznowienie: $0 enable-client $name (zdejmuje obie warstwy)"
+            echo "                   Resume: $0 enable-client $name (lifts both layers)"
         fi
-        echo "                   Pauza NIE obejmuje retencji: linie delsnaps nie maja '-L' i tna dalej,"
-        echo "                   takze po stronie zrodla. Drabinka GFS ogranicza skutek."
+        echo "                   The pause does NOT cover retention: delsnaps lines have no '-L' and keep pruning,"
+        echo "                   on the source side too. The GFS ladder limits the effect."
     fi
-    echo "Endpoint docelowy: $(endpoint_display)"
+    echo "Target endpoint:   $(endpoint_display)"
     # Legacy display (records that predate U9): the dormant slot, if any.
     [ -n "${ENDPOINT_LAN_HOST:-}" ] && echo "  lan:  ${ENDPOINT_LAN_HOST}:${ENDPOINT_LAN_PORT:-22}"
     [ -n "${ENDPOINT_VPN_HOST:-}" ] && echo "  vpn:  ${ENDPOINT_VPN_HOST}:${ENDPOINT_VPN_PORT:-22}"
-    [ -n "${ENDPOINT_KNOWN:-}" ] && echo "  znane:  $ENDPOINT_KNOWN"
+    [ -n "${ENDPOINT_KNOWN:-}" ] && echo "  known:  $ENDPOINT_KNOWN"
     # REV-20260730-005 F4: name the divergence outright rather than leaving the
     # operator to infer it from a state word. The dangerous reading this
     # prevents is "status says seed_complete, so nothing is running" while the
     # installed cron is in fact still backing up fine over the old endpoint --
     # and its mirror image, assuming a freshly-set endpoint is already live.
     if [ -n "${INSTALLED_ENDPOINT:-}" ]; then
-        echo "Cron dziala przez: $INSTALLED_ENDPOINT"
+        echo "Cron runs via:     $INSTALLED_ENDPOINT"
         if [ "${INSTALLED_ENDPOINT:-}" != "${ACTIVE_ENDPOINT:-}" ]; then
-            echo "UWAGA:             backup nadal chodzi przez '${INSTALLED_ENDPOINT}'."
-            echo "                   '${ACTIVE_ENDPOINT}' jest zapisany, ale NIEzweryfikowany i NIEwdrozony."
-            echo "Nastepny krok:     $0 verify-endpoint $CLIENT_NAME, potem $0 activate-client $CLIENT_NAME"
+            echo "WARNING:           the backup still runs through '${INSTALLED_ENDPOINT}'."
+            echo "                   '${ACTIVE_ENDPOINT}' is saved, but NOT verified and NOT deployed."
+            echo "Next step:         $0 verify-endpoint $CLIENT_NAME, then $0 activate-client $CLIENT_NAME"
         fi
     else
-        echo "Cron dziala przez: (jeszcze nie aktywowany -- brak linii cron)"
+        echo "Cron runs via:     (not activated yet -- no cron line)"
     fi
     # The manifest is the wrong place to ask for a MODE-BASED client: there the
     # dataset list lives in the peer's committed scope, which is why this line
@@ -19805,14 +19805,14 @@ cmd_status() {
     # authoritative, and describes what cron actually pulls tonight.
     local _st_src
     _st_src=$(status_sources_from_config "$CLIENT_NAME")         || _st_src="${PEER_SAVED_DATASETS:-?}"
-    echo "Zrodla:            $_st_src"
-    echo "Cel:               ${MANAGED_DATASETS:-(jeszcze nie aktywowany)}"
-    echo "Spojnosc:          $(status_quiesce_from_cron "$CLIENT_NAME")"
-    echo "Utworzono:         ${CREATED_AT:-?}"
-    [ -n "${SEED_COMPLETED_AT:-}" ]    && echo "Seed ukonczony:    $SEED_COMPLETED_AT"
-    [ -n "${ENDPOINT_VERIFIED_AT:-}" ] && echo "Endpoint zweryf.:  $ENDPOINT_VERIFIED_AT (${ENDPOINT_VERIFIED_FOR:-?})"
-    [ -n "${ACTIVATED_AT:-}" ]         && echo "Aktywowano:        $ACTIVATED_AT"
-    [ -n "${REMOVED_AT:-}" ]           && echo "Usunieto:          $REMOVED_AT"
+    echo "Sources:           $_st_src"
+    echo "Target:            ${MANAGED_DATASETS:-(not activated yet)}"
+    echo "Consistency:       $(status_quiesce_from_cron "$CLIENT_NAME")"
+    echo "Created:           ${CREATED_AT:-?}"
+    [ -n "${SEED_COMPLETED_AT:-}" ]    && echo "Seed completed:    $SEED_COMPLETED_AT"
+    [ -n "${ENDPOINT_VERIFIED_AT:-}" ] && echo "Endpoint verified: $ENDPOINT_VERIFIED_AT (${ENDPOINT_VERIFIED_FOR:-?})"
+    [ -n "${ACTIVATED_AT:-}" ]         && echo "Activated:         $ACTIVATED_AT"
+    [ -n "${REMOVED_AT:-}" ]           && echo "Removed:           $REMOVED_AT"
 
     # NOW, LAST, and what is safe next -- the three questions status could not
     # answer before. Each is stated only when it is actually known: an absent
@@ -19822,20 +19822,20 @@ cmd_status() {
     if [ -n "$_st_prefix" ]; then
         echo
         if status_running_now "$_st_prefix"; then
-            echo "Teraz:             (transfer w toku -- szczegoly wyzej)"
+            echo "Now:               (transfer in progress -- details above)"
         else
-            echo "Teraz:             nic nie biegnie dla tej relacji"
+            echo "Now:               nothing is running for this relation"
         fi
         local _st_last; _st_last=$(status_last_result "$_st_prefix")
         if [ -n "$_st_last" ]; then
             set -- $_st_last
-            echo "Ostatni wynik:     $2 ($1, trwal ${3}s)"
+            echo "Last result:       $2 ($1, took ${3}s)"
             if [ "$2" != success ]; then
-                echo "Nastepny krok:     sprawdz $0 test $CLIENT_NAME i log w ${CRON_LOG:-cron.log}"
+                echo "Next step:         check $0 test $CLIENT_NAME and the log in ${CRON_LOG:-cron.log}"
             fi
         else
-            echo "Ostatni wynik:     brak zapisu w historii (${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log})"
-            echo "                   -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"
+            echo "Last result:       no record in the history (${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log})"
+            echo "                   -- that does NOT mean 'no failures', only 'unknown'"
         fi
     fi
 }
@@ -19846,30 +19846,30 @@ cmd_status() {
 # The cron lines are counted the way status_local_view counts them.
 status_snaponly_view() {
     local name="$1" acct="${LOCAL_USER:-root}" _tab _trc=1 ncron="?"
-    echo "Klient:            ${CLIENT_NAME:-$name}"
-    echo "Typ:               zdalna, tylko migawki -- bez kopii; migawki i ich retencja na zrodle"
-    echo "Stan:              ${STATE:-unknown}"
+    echo "Client:            ${CLIENT_NAME:-$name}"
+    echo "Type:              remote, snapshots only -- no copy; snapshots and their retention on the source"
+    echo "State:             ${STATE:-unknown}"
     if client_paused "$name"; then
         local PAUSED_AT="" PAUSED_REASON=""
         record_load pause "$(pause_marker_path "$name")"
-        echo "Pauza:             PAUSED_LOCAL od ${PAUSED_AT:-?}${PAUSED_REASON:+ (powod: $PAUSED_REASON)}"
+        echo "Pause:             PAUSED_LOCAL since ${PAUSED_AT:-?}${PAUSED_REASON:+ (reason: $PAUSED_REASON)}"
     fi
-    echo "Zrodlo:            ${PEER_HOST:-?}"
-    echo "Datasety:          $(printf '%s' "${MANAGED_SOURCES:-${REQUESTED_DATASETS:-?}}" | sed 's/[ ,]\{1,\}/, /g')"
-    echo "Endpoint:          ${INSTALLED_ENDPOINT:-(jeszcze nie aktywowany)}"
-    echo "Konto:             $acct"
+    echo "Source:            ${PEER_HOST:-?}"
+    echo "Datasets:          $(printf '%s' "${MANAGED_SOURCES:-${REQUESTED_DATASETS:-?}}" | sed 's/[ ,]\{1,\}/, /g')"
+    echo "Endpoint:          ${INSTALLED_ENDPOINT:-(not activated yet)}"
+    echo "Account:           $acct"
     echo "Config:            ${CRON_CONFIG:-?}"
     if [ "$(id -un 2>/dev/null)" = "$acct" ]; then _tab="$(crontab -l 2>&1)"; _trc=$?
     elif [ "$(id -u)" = 0 ]; then _tab="$(crontab -u "$acct" -l 2>&1)"; _trc=$?; fi
     if [ "$_trc" -eq 0 ]; then ncron=""
     elif printf '%s' "${_tab:-}" | grep -q "^no crontab for"; then _tab=""; ncron=""; fi
     [ "$ncron" = "?" ] || ncron="$(printf '%s\n' "$_tab" | grep -cF -e "-L $name " -e "-L $name\"")" || ncron=0
-    if [ "$ncron" = "?" ]; then echo "Cron:              ? (crontab konta '$acct' nieczytelny)"
-    elif [ "$ncron" -gt 0 ]; then echo "Cron:              $ncron linii w crontabie konta '$acct'"
-    else echo "Cron:              BRAK linii tej relacji w crontabie konta '$acct' -- nic nie chodzi"; fi
-    echo "Utworzono:         ${CREATED_AT:-?}"
-    [ -n "${ACTIVATED_AT:-}" ] && echo "Aktywowano:        $ACTIVATED_AT"
-    [ -n "${REMOVED_AT:-}" ]   && echo "Usunieto:          $REMOVED_AT"
+    if [ "$ncron" = "?" ]; then echo "Cron:              ? (crontab of account '$acct' unreadable)"
+    elif [ "$ncron" -gt 0 ]; then echo "Cron:              $ncron lines in the crontab of account '$acct'"
+    else echo "Cron:              NO line of this relation in the crontab of account '$acct' -- nothing runs"; fi
+    echo "Created:           ${CREATED_AT:-?}"
+    [ -n "${ACTIVATED_AT:-}" ] && echo "Activated:         $ACTIVATED_AT"
+    [ -n "${REMOVED_AT:-}" ]   && echo "Removed:           $REMOVED_AT"
     return 0
 }
 
@@ -19878,23 +19878,23 @@ status_snaponly_view() {
 # config it names, the account's crontab. Nothing is asked of a peer.
 status_local_view() {
     local name="$1" acct="${LOCAL_USER:-root}" ncron="?" _st_prefix _st_last
-    echo "Klient:            ${CLIENT_NAME:-$name}"
+    echo "Client:            ${CLIENT_NAME:-$name}"
     if [ -n "${CLIENT_TARGET:-}" ]; then
-        echo "Typ:               lokalna -- zrodlo i kopia na tym hoscie"
+        echo "Type:              local -- source and copy on this host"
     else
-        echo "Typ:               lokalna, tylko migawki -- bez kopii, migawki zostaja w zrodle"
+        echo "Type:              local, snapshots only -- no copy, snapshots stay on the source"
     fi
-    echo "Stan:              ${STATE:-unknown}"
+    echo "State:             ${STATE:-unknown}"
     if client_paused "$name"; then
         local PAUSED_AT="" PAUSED_REASON=""
         record_load pause "$(pause_marker_path "$name")"
-        echo "Pauza:             PAUSED_LOCAL od ${PAUSED_AT:-?}${PAUSED_REASON:+ (powod: $PAUSED_REASON)}"
-        echo "                   joby z etykieta '-L $name' sa pomijane. Wznowienie: $0 resume-client $name"
+        echo "Pause:             PAUSED_LOCAL since ${PAUSED_AT:-?}${PAUSED_REASON:+ (reason: $PAUSED_REASON)}"
+        echo "                   jobs with the label '-L $name' are skipped. Resume: $0 resume-client $name"
     fi
-    echo "Zrodla:            $(printf '%s' "${REQUESTED_DATASETS:-?}" | sed 's/,/, /g')"
-    echo "Cel:               ${CLIENT_TARGET:-(brak -- tylko migawki)}"
-    [ -n "${MANAGED_DATASETS:-}" ] && echo "Kopie:             $MANAGED_DATASETS"
-    echo "Konto:             $acct"
+    echo "Sources:           $(printf '%s' "${REQUESTED_DATASETS:-?}" | sed 's/,/, /g')"
+    echo "Target:            ${CLIENT_TARGET:-(none -- snapshots only)}"
+    [ -n "${MANAGED_DATASETS:-}" ] && echo "Copies:            $MANAGED_DATASETS"
+    echo "Account:           $acct"
     echo "Config:            ${CRON_CONFIG:-?}"
     # The account's crontab, read here: the lines of THIS relationship carry
     # `-L <name>` (snapshot, prune) or name it in the monitor's -L.
@@ -19913,25 +19913,25 @@ status_local_view() {
     fi
     [ "$ncron" = "?" ] || ncron="$(printf '%s\n' "$_tab" | grep -cF -e "-L $name " -e "-L $name\"")" || ncron=0
     if [ "$ncron" = "?" ]; then
-        echo "Cron:              ? (crontab konta '$acct' nieczytelny -- czyta go tylko root albo to konto)"
+        echo "Cron:              ? (crontab of account '$acct' unreadable -- only root or that account can read it)"
     elif [ "$ncron" -gt 0 ]; then
-        echo "Cron:              $ncron linii w crontabie konta '$acct'"
+        echo "Cron:              $ncron lines in the crontab of account '$acct'"
     else
-        echo "Cron:              BRAK linii tej relacji w crontabie konta '$acct' -- nic nie chodzi"
+        echo "Cron:              NO line of this relation in the crontab of account '$acct' -- nothing runs"
     fi
     # A snapshot-only relationship has neither an endpoint nor copies, which is
     # what status_quiesce_from_cron reads as "not activated" -- its sources stand in.
-    echo "Spojnosc:          $(MANAGED_DATASETS="${MANAGED_DATASETS:-${REQUESTED_DATASETS:-}}" status_quiesce_from_cron "$CLIENT_NAME")"
-    echo "Utworzono:         ${CREATED_AT:-?}"
-    [ -n "${ACTIVATED_AT:-}" ] && echo "Aktywowano:        $ACTIVATED_AT"
-    [ -n "${REMOVED_AT:-}" ]   && echo "Usunieto:          $REMOVED_AT"
+    echo "Consistency:       $(MANAGED_DATASETS="${MANAGED_DATASETS:-${REQUESTED_DATASETS:-}}" status_quiesce_from_cron "$CLIENT_NAME")"
+    echo "Created:           ${CREATED_AT:-?}"
+    [ -n "${ACTIVATED_AT:-}" ] && echo "Activated:         $ACTIVATED_AT"
+    [ -n "${REMOVED_AT:-}" ]   && echo "Removed:           $REMOVED_AT"
     _st_prefix="${MANAGED_DATASETS:-${REQUESTED_DATASETS:-}}"
     _st_prefix=${_st_prefix%% *}; _st_prefix=${_st_prefix%%,*}
     echo
     if [ -n "$_st_prefix" ] && status_running_now "$_st_prefix"; then
-        echo "Teraz:             (transfer w toku)"
+        echo "Now:               (transfer in progress)"
     else
-        echo "Teraz:             nic nie biegnie dla tej relacji"
+        echo "Now:               nothing is running for this relation"
     fi
     # The ACCOUNT's stats log (the jobs run as that account), and the push
     # engine's line carries the relationship as "label" -- status_last_result
@@ -19946,10 +19946,10 @@ status_local_view() {
         | sed -n 's/.*"time":"\([^"]*\)".*"status":"\([^"]*\)".*"duration_s":\([0-9]*\).*/\1 \2 \3/p')"
     if [ -n "$_st_last" ]; then
         set -- $_st_last
-        echo "Ostatni wynik:     $2 ($1, trwal ${3}s)"
+        echo "Last result:       $2 ($1, took ${3}s)"
     else
-        echo "Ostatni wynik:     brak zapisu w historii ($_slog)"
-        echo "                   -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"
+        echo "Last result:       no record in the history ($_slog)"
+        echo "                   -- that does NOT mean 'no failures', only 'unknown'"
     fi
 }
 
@@ -20271,7 +20271,7 @@ cmd_move_to_client() {   # <from> <onto> [--yes]
                 fi ;;
         esac
     done
-    [ -n "$from" ] && [ -n "$to" ] || die "uzycie: zfs-backup.sh move-to-client <from> <onto> [--yes]
+    [ -n "$from" ] && [ -n "$to" ] || die "usage: zfs-backup.sh move-to-client <from> <onto> [--yes]
 Moves a relationship's COPY to a different machine's relationship. The copy does
 not move on disk -- what changes is which machine it is backed up from. The data
 must ALREADY be on the new machine (zfs-backup.sh restore <from> <onto>)."
@@ -20473,9 +20473,9 @@ then run this again."
     # ---- preview, confirm, install ----------------------------------------
     show_activation_proposal "$cronfile" "$workfile" || { _mv_cleanup; die "move-to-client: the proposed config could not be previewed -- nothing has been changed."; }
     if [ "$yes" -ne 1 ]; then
-        printf "Wykonac to przeniesienie? [t/N] "
+        printf "Carry out this move? [y/N] "
         local ans; read -r ans
-        case "$ans" in [tTyY]*) ;; *) die "move-to-client: przerwane -- nic nie zostalo zmienione." ;; esac
+        case "$ans" in [tTyY]*) ;; *) die "move-to-client: aborted -- nothing was changed." ;; esac
     fi
     atomic_replace_and_install "$cronfile" "$workfile" || { _mv_cleanup; rm -f "$cfg_bak" "$rec_to_bak" "$rec_from_bak" "$cron_bak"; die "move-to-client: the install failed -- see above. The config and crontab were rolled back together, and neither record was touched."; }
 
@@ -21159,8 +21159,8 @@ rux_remote_plan() {
     # one line at CREATE, because the profile's own description ("adopt someone
     # else's snapshot family, prefixlessly") does not imply it.
     if profile_prunes_prefixlessly "$profile"; then
-        local _lp; if [ "$mode" = sync ]; then _lp="$dataset"; else _lp="${target:-<cel>}"; fi
-        echo "  Uwaga:                         profil '$profile' tnie BEZPREFIKSOWO -- drabina obejmuje KAZDY snapshot na '$_lp', wliczajac baze replikacji. Snapshot zrobiony tam recznie moze wygrac kubelek, wypchnac baze i zatrzymac relacje az do decyzji czlowieka (to fakt, nie zakaz)"
+        local _lp; if [ "$mode" = sync ]; then _lp="$dataset"; else _lp="${target:-<target>}"; fi
+        echo "  Warning:                       profile '$profile' prunes WITHOUT A PREFIX -- the ladder covers EVERY snapshot on '$_lp', including the replication base. A snapshot taken there by hand can win a bucket, push out the base and stop the relation until a human decides (a fact, not a ban)"
     fi
     echo "  current lifecycle position:    $state"
     # snaponly has no seed: there is nothing to copy (verify-endpoint, then activate).
@@ -21869,7 +21869,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             [ "${3:-}" = "--ask" ] && [ -n "${2:-}" ] || die "usage: zfs-backup.sh browse NAME --ask | browse --any --ask"
             [ "${2#-}" = "$2" ] && snaponly_refuse restore "$2"
             _bw="$SCRIPT_DIR/tui/browse.sh"
-            [ -f "$_bw" ] || die "browse: brak $_bw -- checkout jest niekompletny"
+            [ -f "$_bw" ] || die "browse: $_bw is missing -- incomplete checkout"
             ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$_bw" "$2"
             exit $? ;;
         restore)
@@ -21881,7 +21881,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             # mode (the 'z dysku' row of F11); DATASET pre-selects the source.
             if [ "${3:-}" = "--ask" ] && [ -n "${2:-}" ]; then
                 _rw="$SCRIPT_DIR/tui/restore.sh"
-                [ -f "$_rw" ] || die "restore: brak $_rw -- checkout jest niekompletny"
+                [ -f "$_rw" ] || die "restore: $_rw is missing -- incomplete checkout"
                 if [ "$2" = "--from-copy" ]; then
                     ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$_rw" --from-copy ${4:+"$4"}
                 else

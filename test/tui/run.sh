@@ -3245,9 +3245,9 @@ cat > "$NR/bin/zb-set" <<'EOF'
 #!/bin/bash
 [ "$1" = settings ] || exit 9
 case "$2" in
-    --tsv) printf 'gui.language\ten\tdomyślne\tenum:en,pl\tjęzyk okien GUI\n'
+    --tsv) printf 'gui.language\ten\tdefault\tenum:en,pl\tjęzyk okien GUI\n'
            printf 'alerts.email\troot\tzfs-alert.conf\temail\tkto dostaje maile\n'
-           printf 'alerts.digest_time\t07:00\tdomyślne\ttime\to której wychodzi dzienny mail\n'; exit 0 ;;
+           printf 'alerts.digest_time\t07:00\tdefault\ttime\to której wychodzi dzienny mail\n'; exit 0 ;;
     set) printf '%s\n' "$*" >> "$NR_DIR/argv"
          case " $* " in *" --yes "*) echo "settings: zapisane i zastosowane."; exit 0 ;; esac
          echo "  alerts.digest_time       07:00 -> 06:30"; echo "plan only. Re-run with --yes to do it. Nothing was changed."; exit 0 ;;
@@ -3283,7 +3283,7 @@ fi
 [ "$1" = settings ] || exit 9
 case "$2" in
     --tsv) printf 'alerts.email\troot\tzfs-alert.conf\temail\tkto dostaje maile\n'
-           printf 'new_relation.template\tdefault\tdomyślne\tprofile\tszablon proponowany nowej relacji\n'; exit 0 ;;
+           printf 'new_relation.template\tdefault\tdefault\tprofile\tszablon proponowany nowej relacji\n'; exit 0 ;;
     set) printf '%s\n' "$*" >> "$NR_DIR/argv"
          case " $* " in *" --yes "*) echo "settings: zapisane."; exit 0 ;; esac
          echo "plan only. Nothing was changed."; exit 0 ;;
@@ -3559,7 +3559,7 @@ if [ "$NRRC" -ne 0 ] && has "$NROUT" "przerwane, nic nie zmieniono" && grep -qF 
 else
     bad "new-relation: czasownik" "rc=$NRRC" "$NROUT" "$(cat "$NR/wt.log" 2>/dev/null)"
 fi
-if ! bash "$REPO/zfs-backup.sh" new-relation --source=x >/dev/null 2>"$NR/err" && grep -qF 'nie przyjmuje argumentow' "$NR/err"; then
+if ! bash "$REPO/zfs-backup.sh" new-relation --source=x >/dev/null 2>"$NR/err" && grep -qF 'the wizard takes no arguments' "$NR/err"; then
     ok "new-relation: argumenty = odmowa ze wskazaniem wersji wsadowej (kreator nie jest druga skladnia)"
 else
     bad "new-relation: argumenty" "$(cat "$NR/err")"
@@ -3596,7 +3596,7 @@ case "$1" in
                        echo '{"datasets":[{"name":"hdd"},{"name":"hdd/backups"},{"name":"hdd/backups/192.168.28.96"},{"name":"hdd/backups/192.168.28.96/hdd/vm"},{"name":"hdd/data"},{"name":"hdd/data/mail"},{"name":"hdd/data/docs"}]}'
                    fi ;;
     add-replica) case " $* " in
-            *" --plan "*) echo "co sie zmieni w crontabie:"; echo "  +0 22 * * 5 /x/zfs-job.sh \"h replica copy ($2)\" -- ..."; exit 0 ;;
+            *" --plan "*) echo "--- what will change in the crontab (left side = what IS installed now) ---"; echo "  +0 22 * * 5 /x/zfs-job.sh \"h replica copy ($2)\" -- ..."; exit 0 ;;
             *) echo ">>> atrapa: zainstalowano"; exit 0 ;;
         esac ;;
     install-media-trigger) echo ">>> atrapa: regula"; exit 0 ;;
@@ -4341,9 +4341,9 @@ case "$1" in
     save-profile)   echo "save-profile: ok (atrapa)" ;;
     delete-profile) echo "delete-profile: ok (atrapa)" ;;
     edit-relation)  if [ -n "${ER_NEWREL:-}" ]; then echo "FATAL: edit-relation: profile 'd30h24' stamps [x] on hdd/ct, the installed relationship stamps [] -- no family in common. That is a NEW relationship (delete-relation, then create it again), not an edit. Nothing was changed."; exit 1; fi
-                    case " $* " in *" --yes "*) echo ">>> atrapa: zmieniono" ;; *) echo "Edycja relacji: r1 (atrapa)"; echo
+                    case " $* " in *" --yes "*) echo ">>> atrapa: zmieniono" ;; *) echo "Relation edit: r1 (atrapa)"; echo
                         # X6: ER_HAND = config zmieniony recznie (minuta 29), plan wpisze 31.
-                        [ -n "${ER_HAND:-}" ] && printf -- '--- proponowany config: /etc/x.conf ---\n  [template:profile__relacja-r1__daily]\n  -\tprune_schedule = 29 1 * * *\n  +\tprune_schedule = 31 1 * * *\n\n' || : ;;
+                        [ -n "${ER_HAND:-}" ] && printf -- '--- proposed config: /etc/x.conf ---\n  [template:profile__relacja-r1__daily]\n  -\tprune_schedule = 29 1 * * *\n  +\tprune_schedule = 31 1 * * *\n\n' || : ;;
                     esac ;;
     list-datasets)  echo '{"datasets":[{"name":"hdd"},{"name":"hdd/data"},{"name":"hdd/data/mail"},{"name":"hdd/iso"},{"name":"hdd/vm"}]}' ;;
     add-source|remove-source)
@@ -4351,9 +4351,9 @@ case "$1" in
                     if [ "$3" = hdd/vm ]; then echo "FATAL: add-source: target 'hdd/backups' overlaps 'hdd/vm' (atrapa)"; exit 1; fi
                     echo ">>> atrapa: $1 $2 $3" ;;
     show-config)    echo '{"sections":[{"kind":"dataset","name":"hdd/backups/192.168.28.99/hdd/data","fields":{"pair_label":"r1","compression":"none"'"${ER_RAW:+,\"raw\":\"yes\"}"'}}]}' ;;
-    set-transfer)   case " $* " in *" --yes "*) echo ">>> atrapa: set-transfer" ;; *) echo "Relacja 'r1': history=newest (sekcji: 1)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
+    set-transfer)   case " $* " in *" --yes "*) echo ">>> atrapa: set-transfer" ;; *) echo "Relation 'r1': history=newest (sections: 1)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
     show-tiers)     echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"'"${ER_SRC_KEEP:-24}"'","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}' ;;
-    set-tiers)      case " $* " in *" --yes "*) echo ">>> atrapa: set-tiers" ;; *) echo "Relacja 'r1' -- szczeble:"; echo "  hourly: keep=12 (source)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
+    set-tiers)      case " $* " in *" --yes "*) echo ">>> atrapa: set-tiers" ;; *) echo "Relation 'r1' -- tiers:"; echo "  hourly: keep=12 (source)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
     *)            echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
 EOF
@@ -4859,10 +4859,10 @@ fi
 HE="$(mktemp -d)"
 printf '[template:profile__relacja-r1__lsrc_daily]\n\tprune_schedule = 29 1 * * *\n[dataset:hdd/ct]\n\texclude_child_1 = ^hdd/vms/vm3$\n\tpair_label = r1\n[dataset:other]\n\tpair_label = r2\n' > "$HE/c.conf"
 { echo ">>> exception '^hdd/vms/vm3\$' dropped -- no source of the relationship covers hdd/vms/vm3 any more"
-  echo "  Config docelowy:  $(cygpath -m "$HE/c.conf" 2>/dev/null || echo "$HE/c.conf") (istnieje)"
-  echo "--- kandydat CONFIG v4 (pelny: istniejace + nowy job) ---"
+  echo "  Target config:    $(cygpath -m "$HE/c.conf" 2>/dev/null || echo "$HE/c.conf") (istnieje)"
+  echo "--- candidate CONFIG v4 (full: existing + new job) ---"
   printf '[template:profile__relacja-r1__lsrc_daily]\n\tprune_schedule = 31 1 * * *\n[dataset:hdd/ct]\n\tpair_label = r1\n'
-  echo "--- wygenerowany blok crona ---"; } > "$HE/plan.txt"
+  echo "--- generated cron block ---"; } > "$HE/plan.txt"
 HE1="$("$PY" "$REPO/tui/hand-edits.py" "$HE/plan.txt" r1)"
 sed -i 's/29 1/31 1/' "$HE/c.conf"; sed -i '/vm3/d' "$HE/c.conf"
 HE2="$("$PY" "$REPO/tui/hand-edits.py" "$HE/plan.txt" r1)"
@@ -5272,7 +5272,7 @@ if declare -F pool_roots_to_children >/dev/null; then
     u67_got="$(printf '%s;' "${SRC_ROOT[@]}")|$(printf '%s;' "${SRC_EXCL[@]}" | tr '\n' ',')"
     # H-1: the basket itself keeps the pool as chosen (Wstecz shows it ticked, not "[-]")
     [ "${B_ROOT[0]}" = hdd ] || u67_got="$u67_got (basket changed: ${B_ROOT[*]})"
-    if [ "$u67_rc" -eq 0 ] && [ "$u67_got" = "hdd/a;hdd/c;tank/z;|;hdd/c/y;;" ] && printf '%b' "$POOL_NOTE" | grep -q 'Cała pula hdd = 2 datasetów'; then
+    if [ "$u67_rc" -eq 0 ] && [ "$u67_got" = "hdd/a;hdd/c;tank/z;|;hdd/c/y;;" ] && printf '%b' "$POOL_NOTE" | grep -q 'Wybrana cała pula hdd: replika kopiuje 2 datasetów'; then
         ok "U67: a pool root becomes its direct children (excluded child dropped, deeper exclusion follows its child), and the window says so"
     else
         bad "U67: pool root expansion" "rc=$u67_rc got=$u67_got" "$(printf '%b' "$POOL_NOTE")"
@@ -5447,7 +5447,7 @@ POT="$(mktemp -d)"
 sed -n '/^plan_only_this()/,/^}/p' "$REPO/tui/new-relation.sh" > "$POT/f.sh"
 cat > "$POT/plan.txt" <<'EOF'
 >>> local-backup: uwaga
---- kandydat CONFIG v4 (pelny: istniejace + nowy job) ---
+--- candidate CONFIG v4 (full: existing + new job) ---
 [defaults]
 	quiesce = no
 [relation:ab]
@@ -5462,7 +5462,7 @@ cat > "$POT/plan.txt" <<'EOF'
 [prune:hdd/restore/t5/hdd/archive]
 	pair_label   = t5
 
---- wygenerowany blok crona (gen-cron.sh -c, pelny) ---
+--- generated cron block (gen-cron.sh -c, full) ---
 15 * * * * zfs-job.sh "pve10 profile__relacja-ab__hourly snapshot (ab-x)"
 29 * * * * zfs-job.sh "pve10 profile__relacja-t5__lsrc_hourly snapshot (local-archive)"
 */15 * * * * d=$(check-snap-age.sh -R -L t5 "hdd/archive")

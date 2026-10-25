@@ -5008,7 +5008,7 @@ class UI(object):
 
     # Czasownik bez --yes konczy PLAN tym zdaniem. Kazdy inny wynik z rc 0 to
     # werdykt bez niczego do wykonania (np. "relacja juz jest, identyczna").
-    IMPORT_PLAN_MARK = u"To byl podglad"
+    IMPORT_PLAN_MARK = u"That was a preview"
 
     def import_preview(self, path):
         """Krok 2 importu: WERDYKT czasownika (bez --yes). Decyduje czasownik, nie

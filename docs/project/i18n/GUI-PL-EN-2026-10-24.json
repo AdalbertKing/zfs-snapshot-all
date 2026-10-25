@@ -5262,7 +5262,7 @@
    "k": "u438",
    "pl_code": "                 Ins i Del przełączają terminal do whiptaila i wracają tu",
    "pl": "                 Ins i Del przełączają terminal do whiptaila i wracają tu",
-   "en": "                 Ins and Del hand the terminal to whiptail and come back here",
+   "en": "                 Ins, Del: the terminal goes to whiptail, then back here",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
