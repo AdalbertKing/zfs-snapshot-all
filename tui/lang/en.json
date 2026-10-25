@@ -1569,6 +1569,7 @@
 "new-relation: brak $HERE/tui/basket-lib.sh -- checkout jest niekompletny": "new-relation: missing $HERE/tui/basket-lib.sh -- checkout is incomplete",
 "new-relation: brak $HERE/tui/retention-lib.sh -- checkout jest niekompletny": "new-relation: missing $HERE/tui/retention-lib.sh -- checkout is incomplete",
 "new-relation: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny": "new-relation: missing $HERE/tui/wt-lib.sh -- checkout is incomplete",
+"nic (pasywnie)": "nothing (passive)",
 "nic, tylko wg harmonogramu": "nothing, only on schedule",
 "nie": "no",
 "nie (kopia lokalna)": "no (local copy)",

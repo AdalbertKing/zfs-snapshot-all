@@ -1397,6 +1397,18 @@ fo=$(for_run); frc=$?
 check "PLC5 control: the same section without passive prunes the source (delsnaps line) and does not send with -e" "0:1:0" \
       "$frc:$(printf '%s\n' "$fo" | grep 'delsnaps\.sh' | grep -c '"rpool/data"'):$(printf '%s\n' "$fo" | grep -cE 'snapget\.sh( .*)? -e( |$)')"
 
+# A passive scope creates no snapshot, so a freezing section adds no -q (and no -q/-e
+# warning); the same section without passive keeps its freeze (campaign 1.0, 2026-10-25).
+pl_conf "	passive      = yes
+	quiesce      = auto"
+fo=$(for_run); frc=$?
+check "PLC6 passive + quiesce: rc=0, no -q on the snapget line, no '-q has no effect' warning" "0:0:0" \
+      "$frc:$(printf '%s\n' "$fo" | grep 'snapget\.sh' | grep -cE ' -q( |$)'):$(printf '%s\n' "$fo" | grep -c 'q has no effect')"
+pl_conf "	quiesce      = auto"
+fo=$(for_run); frc=$?
+check "PLC7 control: the same section without passive freezes (-q on the snapget line)" "0:1" \
+      "$frc:$(printf '%s\n' "$fo" | grep 'snapget\.sh' | grep -cE ' -q( |$)')"
+
 # DISKS BY GUID AND ON-INSERT PER REPLICA (P5, owner 2026-10-09). media_guids goes to
 # the gate's ATTACH only (--guids), never to detach (cron's 1000 bytes); on_insert =
 # yes on a scheduled replica adds a commented '#on-insert' copy of its line for
