@@ -617,5 +617,9 @@
 "to samo co kolektor: wszystkie jego migawki, także pośrednie": "The same as the collector: all of its snapshots, including the intermediate ones",
 "sprawdza to okno Przywróć -- źródło musi wydać zgodę na dostęp (deploy.sh --allow-restore)": "the “Restore” window checks it -- the source must grant access (deploy.sh --allow-restore)",
 "Na $HOST są już migawki naszej rodziny:\\n$facts\\n\\nKto je dziś robi? Najnowsza sprzed godziny-dwóch zwykle znaczy, że ktoś je robi.\\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.": "There are already snapshots of our family on $HOST:\\n$facts\\n\\nWho is taking them today? The latest one (an hour or two old) usually\\nmeans someone is.\\nChain: this relation RECEIVES them and creates/deletes nothing there.\\nLeftovers: this relation makes its OWN; the old ones join its retention\\nand age out.",
-"lokalna": "local"
+"lokalna": "local",
+"   Po zmianie relacja obejmuje:": "   After the change the relation covers:",
+"(z dziećmi, także przyszłymi)": "(with children, future ones too)",
+"(sam dataset; dzieci tylko wymienione)": "(the dataset itself; only the listed children)",
+"Nowa relacja '$RNAME': zakres wg drzewa": "New relation '$RNAME': scope as in the tree"
 }

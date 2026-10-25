@@ -2304,6 +2304,7 @@ case "$1" in
     source-pruners) [ -n "${NR_PRUNERS:-}" ] && printf '%b' "$NR_PRUNERS"; exit 0 ;;
     save-profile)   echo "save-profile: ok (atrapa)" ;;
     delete-profile) echo "delete-profile: ok (atrapa)" ;;
+    set-datasets)   echo ">>> atrapa: set-datasets" ;;
     *)              echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
 EOF
@@ -2580,6 +2581,15 @@ if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=192.168.28.98:hdd/data,hdd/t
     ok "new-relation: koszyk -- miejsca w JEDNYM --source po przecinku, odznaczone dziecko jako --exclude-child=^nazwa\$ (zakotwiczone, bez ( | -- wzorzec jedzie nieocytowany do crona)"
 else
     bad "new-relation: koszyk, droga glowna" "rc=$NRRC" "$NROUT" "$(cat "$NR/err")" "$(cat "$NR/wt.log")"
+fi
+# RELACJA = CONFIG (2026-10-26): po założeniu z [-] kreator zapisuje zakres jak okno zmiany --
+# jedno set-datasets z pozycjami drzewa (hdd/data [-] bez mail, hdd/test-kreator [x]).
+NRSD="$(grep '^set-datasets ' "$NR/zb.log" 2>/dev/null)"
+if [ "$(printf '%s\n' "$NRSD" | grep -c .)" -eq 1 ] && has "$NRSD" "set-datasets pve9b --dataset=hdd/data:no " \
+   && has "$NRSD" " --dataset=hdd/test-kreator:flat " && ! has "$NRSD" "hdd/data/mail" && has "$NRSD" " --yes"; then
+    ok "new-relation: z [-] po założeniu jedno set-datasets z pozycjami drzewa (wyłączone dziecko poza listą)"
+else
+    bad "new-relation: set-datasets po założeniu z [-]" "$NRSD" "$(cat "$NR/zb.log")"
 fi
 NRTL="$(cat "$NR/tree.log" 2>/dev/null)"
 if ! grep -qF -- '--radiolist' <(grep -F 'Co kopiować z' "$NR/wt.log") && ! grep -qF 'Jak kopiować' "$NR/wt.log" && ! has "$NRTL" 'Jak kopiować'; then
@@ -4346,6 +4356,10 @@ case "$1" in
                         [ -n "${ER_HAND:-}" ] && printf -- '--- proposed config: /etc/x.conf ---\n  [template:profile__relacja-r1__daily]\n  -\tprune_schedule = 29 1 * * *\n  +\tprune_schedule = 31 1 * * *\n\n' || : ;;
                     esac ;;
     list-datasets)  echo '{"datasets":[{"name":"hdd"},{"name":"hdd/data"},{"name":"hdd/data/mail"},{"name":"hdd/iso"},{"name":"hdd/vm"}]}' ;;
+    relation-sources) printf 'hdd/data\tflat\n' ;;
+    set-datasets)   # X21: hdd/vm "lezy w celu" -- plan (bez --yes) odmawia, jak prawdziwy czasownik.
+                    case " $* " in *" --dataset=hdd/vm:"*) echo "FATAL: set-datasets: target 'hdd/backups' overlaps 'hdd/vm' (atrapa)"; exit 1 ;; esac
+                    echo ">>> atrapa: set-datasets" ;;
     add-source|remove-source)
                     # X21: hdd/vm "lezy w celu" -- plan (bez --yes) odmawia, jak prawdziwy czasownik.
                     if [ "$3" = hdd/vm ]; then echo "FATAL: add-source: target 'hdd/backups' overlaps 'hdd/vm' (atrapa)"; exit 1; fi
@@ -4391,79 +4405,41 @@ EROUT=$(ER_TREE='goto:hdd/iso,space,goto:hdd/data,space,enter' er_run "0${T}dane
 0${T}
 "); ERRC=$?
 ERB="$(cat "$ER/tree.log" 2>/dev/null)"
-if [ "$ERRC" -eq 0 ] && grep -qx 'add-source r1 hdd/iso --yes' "$ER/zb.log" && grep -qx 'remove-source r1 hdd/data --yes' "$ER/zb.log" \
+if [ "$ERRC" -eq 0 ] && grep -qx 'set-datasets r1 --dataset=hdd/iso:flat --yes' "$ER/zb.log" && ! grep -qE '^(add|remove)-source' "$ER/zb.log" \
    && grep -qF 'DOJDĄ' "$ER/wt.log" && grep -qF 'ODPADNĄ' "$ER/wt.log" && has "$ERB" 'Co kopiować z' && has "$ERB" '[ ] data' && has "$ERB" '[x] iso' \
    && ! has "$ERB" 'Wyjątki' && ! has "$ERB" 'Sposób'; then
-    ok "edit-relation: Datasety -- koszyk z obecnymi datasetami, kilka zmian, jeden plan DOJDA/ODPADNA, add-source + remove-source --yes; bez Sposob/Wyjatki"
+    ok "edit-relation: Datasety -- koszyk z configu (relation-sources), kilka zmian, jeden plan DOJDA/ODPADNA, JEDNO set-datasets --yes ze stanem docelowym; bez Sposob"
 else
     bad "edit-relation: Datasety (W4)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Co kopiować|DOJD|ODPAD' "$ER/wt.log" | cut -c1-250)" "$(tail -3 "$ER/err")"
 fi
-# WYJĄTKI JEDNAKOWO (właściciel 2026-10-25): drzewo daje korzeń z wyjątkami w każdym rodzaju
-# relacji. Migawki zdalne: "[-] część" = wymienione datasety (basket_expand). Okno zmiany:
-# obecne wyjątki wracają jako [-] (basket_collapse), nowy wyjątek = remove-source dziecka,
-# zdjęty = add-source dziecka.
-EXW="$(mktemp -d)"
-cat > "$EXW/ds.json" <<'JSON'
+# RELACJA = CONFIG (właściciel 2026-10-25): jedna reguła drzewa dla każdego rodzaju relacji --
+# [x] = DS:flat, [-] = DS:no + zaznaczone dzieci osobno, [ ] = nic. Pozycje z configu
+# (relation-sources) -> drzewo -> pozycje: dokładnie to samo; wyjątek pod [-] znika z pozycji.
+TE="$(mktemp -d)"
+cat > "$TE/ds.json" <<'JSON'
 {"datasets":[{"name":"hdd"},{"name":"hdd/vm-disks"},{"name":"hdd/vm-disks/a"},{"name":"hdd/vm-disks/b"},{"name":"hdd/vm-disks/b/c"},{"name":"hdd/vm-disks/vm-102"},{"name":"rpool/data"},{"name":"rpool/data/x"}]}
 JSON
-ex_fns=$(sed -n '/^basket_expand() {/,/^}/p; /^basket_collapse() {/,/^}/p' "$REPO/tui/basket-lib.sh")
-ex_win=$(sed -n '/^excl_pairs() {/,/^}/p; /^excl_delta() {/,/^}/p' "$REPO/tui/edit-relation.sh")
-got=$(PY="$PY" bash -c "$ex_fns
-B_ROOT=(hdd/vm-disks rpool/data); B_EXCL=(\$'hdd/vm-disks/vm-102\nhdd/vm-disks/b' '')
-basket_expand '$EXW/ds.json'
-basket_collapse '$EXW/ds.json' 'hdd/vm-disks,hdd/vm-disks/a,rpool/data' | tr '\037\t' '|:'
-basket_collapse '$EXW/ds.json' 'hdd/vm-disks,rpool/data' | tr '\037\t' '|:'" 2>&1 | tr '\n' ';')
-if [ "$got" = "hdd/vm-disks,hdd/vm-disks/a,rpool/data;B:hdd/vm-disks:hdd/vm-disks/b|hdd/vm-disks/vm-102;B:rpool/data:;B:hdd/vm-disks:;B:rpool/data:;" ]; then
-    ok "wyjątki: część -> lista datasetów (snaponly) i z powrotem korzeń z wyjątkami; korzeń z potomnymi zostaje korzeniem"
+printf 'hdd/vm-disks\tno\nhdd/vm-disks/a\tflat\nhdd/vm-disks/b\tflat\nrpool/data\tflat\n' > "$TE/ents.tsv"
+te_fn=$(sed -n '/^basket_entries() {/,/^}/p; /^basket_from_entries() {/,/^}/p' "$REPO/tui/basket-lib.sh")
+got=$(PY="$PY" bash -c "$te_fn
+B_ROOT=(); B_EXCL=()
+while IFS=\$'\t' read -r k r e; do B_ROOT+=(\"\$r\"); B_EXCL+=(\"\$(printf '%s' \"\$e\" | tr '\037' '\n')\"); done < <(basket_from_entries '$TE/ds.json' '$TE/ents.tsv')
+printf 'TREE:'; for i in \"\${!B_ROOT[@]}\"; do printf ' %s[%s]' \"\${B_ROOT[\$i]}\" \"\$(printf '%s' \"\${B_EXCL[\$i]}\" | tr '\n' ',')\"; done; echo
+printf 'BACK:'; basket_entries '$TE/ds.json' | tr '\t\n' ': '; echo
+B_EXCL[0]=\$'hdd/vm-disks/vm-102\nhdd/vm-disks/b'
+printf 'EXCL-B:'; basket_entries '$TE/ds.json' | tr '\t\n' ': '; echo" 2>&1 | tr '\n' '|')
+want="TREE: hdd/vm-disks[hdd/vm-disks/vm-102] rpool/data[]|BACK:hdd/vm-disks:no hdd/vm-disks/a:flat hdd/vm-disks/b:flat rpool/data:flat |EXCL-B:hdd/vm-disks:no hdd/vm-disks/a:flat rpool/data:flat |"
+if [ "$got" = "$want" ]; then
+    ok "drzewo <-> pozycje relacji: z configu do drzewa i z powrotem bez zmian; odznaczone dziecko pod [-] znika z pozycji"
 else
-    bad "wyjątki: basket_expand/basket_collapse" "$got"
+    bad "drzewo <-> pozycje relacji" "got:  $got" "want: $want"
 fi
-got=$(bash -c "$ex_win
-B_ROOT=(hdd/vm-disks rpool/data); B_EXCL=('hdd/vm-disks/b' '')
-OLD_EXCL=\"\$(excl_pairs)\"
-B_EXCL=(\$'hdd/vm-disks/vm-102' '')
-NEW_EXCL=\"\$(excl_pairs)\"; _kept=\$'hdd/vm-disks\nrpool/data'
-echo \"R=\$(excl_delta 13) A=\$(excl_delta 23)\"" 2>&1)
-if [ "$got" = "R=hdd/vm-disks/vm-102 A=hdd/vm-disks/b" ]; then
-    ok "okno zmiany: odznaczony vm-102 pod hdd/vm-disks = remove-source vm-102; ponownie zaznaczony b = add-source b"
+rm -rf "$TE"
+if ! grep -qE 'add-source|remove-source|needs_rerender|dataset_steps' "$REPO/tui/edit-relation.sh" \
+   && grep -q '^RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=0$' "$REPO/tui/edit-relation.sh"; then
+    ok "okno zmiany: bez wariantów -- wyjątki dla każdej relacji, zmiana datasetów to jedno set-datasets"
 else
-    bad "okno zmiany: zmiana wyjątków -> czasowniki" "$got"
-fi
-# Wyjątki w oknie zmiany (2026-10-25): tylko migawki zdalne, i tylko razem z przebudową
-# sekcji (edit-relation --profile=), bo sam remove-source dziecka sekcji kolektora nie zmienia.
-nr_fn=$(sed -n '/^needs_rerender() {/,/^}/p' "$REPO/tui/edit-relation.sh")
-got=$(bash -c "$nr_fn
-P_ADDED=''; P_REMOVED='hdd/ct/x'; P_EDIT=(); CUR_P=d7h24
-RMODE=snaponly; needs_rerender && echo SO-YES
-RMODE=backup; needs_rerender || echo BK-NO
-RMODE=snaponly; P_EDIT=(--profile=d30h24); needs_rerender || echo EDIT-NO
-P_EDIT=(); P_REMOVED=''; needs_rerender || echo NOCHANGE-NO" 2>&1 | tr '\n' ' ')
-if [ "$got" = "SO-YES BK-NO EDIT-NO NOCHANGE-NO " ] \
-   && grep -q '^\[ "\${RMODE:-}" = snaponly \] && \[ "\${CUR_P:--}" != - \] && BASKET_NO_EXC=0' "$REPO/tui/edit-relation.sh" \
-   && grep -q 'needs_rerender; then run1 "\$ZB" edit-relation "\$NAME" "--profile=\$CUR_P" --yes' "$REPO/tui/edit-relation.sh"; then
-    ok "okno zmiany: wyjątki tylko w migawkach zdalnych, a zmiana datasetów tam przebudowuje sekcje (bez dubla przy zmianie szablonu)"
-else
-    bad "okno zmiany: wyjątki i przebudowa sekcji" "$got" "$(grep -n 'BASKET_NO_EXC\|needs_rerender' "$REPO/tui/edit-relation.sh")"
-fi
-
-# Okno zmiany relacji mówi słowami jej rodzaju (właściciel 2026-10-25: "What to copy" przy
-# migawkach zdalnych): drzewo dostaje MODE z rekordu, a basket_step dla snaponly pyta o migawki.
-if grep -qE 'MODE="\$\{RMODE:-\}" NOCOPY="\$_bnc" basket_step' "$REPO/tui/edit-relation.sh" \
-   && grep -qF "Gdzie robić migawki na \$HOST?" "$REPO/tui/basket-lib.sh"; then
-    ok "edit-relation: drzewo Datasetów dostaje rodzaj relacji (snaponly -> 'Gdzie robić migawki', nie 'Co kopiować')"
-else
-    bad "edit-relation: słowa drzewa wg rodzaju relacji" "$(grep -n 'basket_step' "$REPO/tui/edit-relation.sh")"
-fi
-# Datasety: dziecko objęte nowo zaznaczonym rodzicem schodzi PRZED add-source rodzica (Metropolis
-# 2026-10-25: po add-source hdd/vm-disks remove-source jego dzieci wyłączył je spod rodzica i
-# migawki szły na sam kontener). Inne zdjęcia -- po dołożeniach, jak dotąd.
-ds_fn=$(sed -n '/^dataset_steps() {/,/^}/p' "$REPO/tui/edit-relation.sh")
-got=$(bash -c "$ds_fn
-P_ADDED='hdd/vm-disks rpool/data'; P_REMOVED='hdd/vm-disks/subvol-101-disk-0 hdd/other rpool/data/vm-106-disk-0 hdd/vm-disks-old'; dataset_steps" 2>&1 | tr '\n' ';')
-if [ "$got" = "remove hdd/vm-disks/subvol-101-disk-0;remove rpool/data/vm-106-disk-0;add hdd/vm-disks;add rpool/data;remove hdd/other;remove hdd/vm-disks-old;" ]; then
-    ok "edit-relation: Datasety -- dzieci nowego rodzica schodzą przed jego add-source; reszta po (hdd/vm-disks-old to nie dziecko hdd/vm-disks)"
-else
-    bad "edit-relation: kolejność kroków Datasetów" "$got"
+    bad "okno zmiany: zostały warianty" "$(grep -nE 'add-source|remove-source|needs_rerender|dataset_steps|BASKET_NO_EXC' "$REPO/tui/edit-relation.sh")"
 fi
 # X21 (wlasciciel 2026-10-14): zmiana datasetow sprawdzona PRZED WYKONAJ -- odmowa czasownika
 # (plan bez --yes) pokazana od razu, zadnego --yes, powrot do listy.
@@ -4471,7 +4447,7 @@ fi
 EROUT=$(ER_TREE='goto:hdd/vm,space,enter' er_run "0${T}dane
 0${T}
 "); ERRC=$?
-if grep -qx 'add-source r1 hdd/vm' "$ER/zb.log" && ! grep -q -- '--yes' <(grep -E '^(add|remove)-source' "$ER/zb.log")    && grep -qF 'Tej zmiany nie da się zrobić' "$ER/wt.log" && grep -qF "overlaps 'hdd/vm'" "$ER/wt.log" && ! grep -qF 'DOJDĄ' "$ER/wt.log"; then
+if grep -q '^set-datasets r1 .*--dataset=hdd/vm:flat' "$ER/zb.log" && ! grep -q -- '--yes' <(grep -E '^set-datasets' "$ER/zb.log")    && grep -qF 'Tej zmiany nie da się zrobić' "$ER/wt.log" && grep -qF "overlaps 'hdd/vm'" "$ER/wt.log" && ! grep -qF 'DOJDĄ' "$ER/wt.log"; then
     ok "edit-relation: X21 -- Datasety: odmowa czasownika pokazana PRZED WYKONAJ, nic nie wykonane"
 else
     bad "edit-relation: X21 Datasety sprawdzane przed WYKONAJ" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Tej zmiany|DOJD' "$ER/wt.log" | cut -c1-200)"

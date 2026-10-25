@@ -199,3 +199,57 @@ for r in roots:
                 ex.append(n)
     print("B\t%s\t%s" % (r, "\x1f".join(ex)))' "$1" "$2" | tr -d '\r'
 }
+
+# DRZEWO <-> POZYCJE RELACJI (projekt „relacja = config”, 2026-10-25). Jedna reguła dla każdego
+# rodzaju relacji: [x] = DS:flat (z dziećmi, także przyszłymi), [-] = DS:no (sam dataset; jego
+# zaznaczone dzieci to osobne pozycje, wg tej samej reguły), [ ] = nic.
+#
+# basket_entries <ds.json> -- B_ROOT/B_EXCL (korzenie i wyłączone poddrzewa) -> "DS<TAB>flat|no".
+basket_entries() {
+    local i
+    for i in "${!B_ROOT[@]}"; do
+        printf 'B\t%s\t%s\n' "${B_ROOT[$i]}" "$(printf '%s' "${B_EXCL[$i]}" | tr '\n' '\037')"
+    done | "$PY" -c '
+import sys, json
+names = [d.get("name", "") for d in (json.load(open(sys.argv[1], encoding="utf-8")).get("datasets") or [])]
+kids = {}
+for n in names:
+    if "/" in n: kids.setdefault(n.rsplit("/", 1)[0], []).append(n)
+under = lambda a, b: a.startswith(b + "/")
+out = []
+def emit(n, ex):
+    if not any(under(e, n) for e in ex):
+        out.append((n, "flat")); return
+    out.append((n, "no"))
+    for c in kids.get(n, []):
+        if c in ex: continue
+        emit(c, ex)
+for line in sys.stdin:
+    _, r, e = line.rstrip("\n").split("\t")
+    emit(r, [x for x in e.split("\x1f") if x])
+for n, rec in dict.fromkeys(out):
+    print("%s\t%s" % (n, rec))' "$1" | tr -d '\r'
+}
+
+# basket_from_entries <ds.json> <entries file> -- odwrotność: pozycje relacji ("DS<TAB>flat|no",
+# z relation-sources) -> "B<TAB>korzeń<TAB>wyjątki rozdzielone \037" (kształt tree-out.tsv).
+# Pokryte = pozycja albo potomek pozycji flat; wyjątek = najwyższy niepokryty potomek korzenia.
+basket_from_entries() {
+    "$PY" -c '
+import sys, json
+names = [d.get("name", "") for d in (json.load(open(sys.argv[1], encoding="utf-8")).get("datasets") or [])]
+ents = []
+for line in open(sys.argv[2], encoding="utf-8"):
+    p = line.rstrip("\r\n").split("\t")
+    if p and p[0]: ents.append((p[0], p[1] if len(p) > 1 else "flat"))
+under = lambda a, b: a.startswith(b + "/")
+lst = [e for e, _ in ents]
+flat = [e for e, r in ents if r == "flat"]
+covered = lambda n: n in lst or any(under(n, f) for f in flat)
+for r in [e for e in lst if not any(under(e, y) for y in lst if y != e)]:
+    ex = []
+    for n in names:
+        if under(n, r) and not covered(n) and not any(n == e or under(n, e) for e in ex):
+            ex.append(n)
+    print("B\t%s\t%s" % (r, "\x1f".join(ex)))' "$1" "$2" | tr -d '\r'
+}
