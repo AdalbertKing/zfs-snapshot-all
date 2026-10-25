@@ -14312,6 +14312,14 @@ cmd_monitor() {
 
     local worst_rank=0 worst=OK first=1 seen=0
     [ "$as_json" -eq 1 ] && printf '{"checked_epoch":%s,"monitors":[' "$(date +%s)"
+    # IN PARALLEL (2026-10-25, Metropolis pve2: 22 monitor lines, 8 of them over ssh to
+    # pve1, took 26 s one after another, and the GUI's refresh waits for this verb). Each
+    # check runs in the background (at most 8 at once) into its own file; the report is
+    # printed afterwards in the cron order, with the same fields as before.
+    local mtmp; mtmp=$(mktemp -d) || die "mktemp failed"
+    local mi=0
+    local -a M_ACCT=() M_SCHED=() M_LABEL=() M_DS=() M_PAT=() M_WARN=() M_CRIT=() M_REC=() \
+        M_EXCL=() M_ENGN=() M_ENGR=() M_PARSED=() M_GATE=()
 
     local acct blk line
     while IFS= read -r acct; do
@@ -14387,11 +14395,14 @@ cmd_monitor() {
                 fi
             fi
 
-            local rc=3 verdict=UNKNOWN outtxt=""
+            mi=$((mi + 1))
+            M_ACCT[$mi]="$acct"; M_SCHED[$mi]="$schedule"; M_LABEL[$mi]="$label"; M_DS[$mi]="$ds"
+            M_PAT[$mi]="$pat"; M_WARN[$mi]="$warn"; M_CRIT[$mi]="$crit"; M_REC[$mi]="$rec"
+            M_EXCL[$mi]="$excl"; M_ENGN[$mi]="$engine_named"; M_ENGR[$mi]="$engine_run"
+            M_PARSED[$mi]="$parsed"; M_GATE[$mi]="$is_gate"
             if [ "$parsed" = true ] && [ "$is_gate" = yes ]; then
-                outtxt=$(bash "$engine_run" age "$ds" "$label" --warn "$warn" --crit "$crit" 2>&1); rc=$?
-                verdict=$(monitor_verdict_word "$rc")
-                reason="$outtxt"
+                { bash "$engine_run" age "$ds" "$label" --warn "$warn" --crit "$crit" >"$mtmp/$mi.out" 2>&1
+                  echo $? >"$mtmp/$mi.rc"; } </dev/null &
             elif [ "$parsed" = true ]; then
                 local -a runargs=()
                 [ "$rec" = yes ] && runargs+=(-R)
@@ -14400,12 +14411,25 @@ cmd_monitor() {
                 for _x in ${excl//,/ }; do [ -n "$_x" ] && runargs+=(-x "$_x"); done
                 runargs+=(${sshargs[@]+"${sshargs[@]}"})
                 runargs+=("$ds" "$pat" "$warn" "$crit")
-                outtxt=$(bash "$CHECKSNAPAGE" "${runargs[@]}" 2>&1); rc=$?
-                verdict=$(monitor_verdict_word "$rc")
-                reason="$outtxt"
+                { bash "$CHECKSNAPAGE" "${runargs[@]}" >"$mtmp/$mi.out" 2>&1
+                  echo $? >"$mtmp/$mi.rc"; } </dev/null &
             else
-                outtxt="$reason"
+                printf '%s' "$reason" >"$mtmp/$mi.out"; echo 3 >"$mtmp/$mi.rc"
             fi
+            while [ "$(jobs -rp | wc -l)" -ge 8 ]; do wait -n 2>/dev/null || break; done
+        done < <(sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$blk")
+        rm -f "$blk"
+    done < <(cron_known_accounts)
+    wait
+
+    local i rc verdict reason acct schedule label ds pat warn crit rec excl engine_named engine_run parsed
+    for ((i = 1; i <= mi; i++)); do
+            acct="${M_ACCT[$i]}"; schedule="${M_SCHED[$i]}"; label="${M_LABEL[$i]}"; ds="${M_DS[$i]}"
+            pat="${M_PAT[$i]}"; warn="${M_WARN[$i]}"; crit="${M_CRIT[$i]}"; rec="${M_REC[$i]}"
+            excl="${M_EXCL[$i]}"; engine_named="${M_ENGN[$i]}"; engine_run="${M_ENGR[$i]}"; parsed="${M_PARSED[$i]}"
+            rc=$(cat "$mtmp/$i.rc" 2>/dev/null); [ -n "$rc" ] || rc=3
+            reason=$(cat "$mtmp/$i.out" 2>/dev/null)
+            if [ "$parsed" = true ]; then verdict=$(monitor_verdict_word "$rc"); else verdict=UNKNOWN; rc=3; fi
 
             local paused=false
             [ -n "$label" ] && client_paused "$label" && paused=true
@@ -14438,9 +14462,8 @@ cmd_monitor() {
                 printf '%-10s %-9s %-16s %s\n' "$acct" "$verdict" "${label:-(no label)}" "$ds"
                 [ -n "$reason" ] && printf '%s\n' "$reason" | sed 's/^/    /'
             fi
-        done < <(sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$blk")
-        rm -f "$blk"
-    done < <(cron_known_accounts)
+    done
+    rm -rf "$mtmp"
 
     # NOTHING WATCHING IS NOT HEALTH. Zero monitor lines is reported UNKNOWN,
     # not OK, and the exit status says so too. check-snap-age.sh's own header
