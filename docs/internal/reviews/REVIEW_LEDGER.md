@@ -116,4 +116,5 @@ with them, which is the failure REVIEW PROTOCOL V2 exists to remove.
 | REV-20261023-171 | CLOSED | - | 9f961c00dabbc17a0b0fd99ac0924f23a831b148 | 9f961c00dabbc17a0b0fd99ac0924f23a831b148 | responses/REV-20261023-171.md | - |
 | REV-20261023-172 | CLOSED | - | a18aa09b9e257371c63eb8ad61ae893ca24101c3 | a18aa09b9e257371c63eb8ad61ae893ca24101c3 | responses/REV-20261023-172.md | - |
 | REV-20261023-173 | CLOSED | - | cdd9041147280d49ecf0981b10ebcdf728833bd6 | cdd9041147280d49ecf0981b10ebcdf728833bd6 | responses/REV-20261023-173.md | - |
-| REV-20261024-174 | IMPLEMENTED | Reviewer | 5e744011bc4a03f7e31399b1de1446cc0768bb4d | - | responses/REV-20261024-174.md | verify the submitted implementation |
+| REV-20261024-174 | OPEN | Claude | 084aabef741e6865aa8a24ab9d87ca80011e153c | 084aabef741e6865aa8a24ab9d87ca80011e153c | responses/REV-20261024-174.md | implement and respond |
+| REV-20261025-175 | OPEN | Claude | - | - | - | implement and respond |
