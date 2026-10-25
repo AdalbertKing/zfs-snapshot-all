@@ -2478,6 +2478,11 @@ def top_bar(data, width, now, ascii_only, err_count):
     guards = guard_label(getattr(data, "guards", None) or guard_states()) + u"   "
     if width - len(left) - len(mid) - len(right) - len(guards) >= 2:
         right = guards + right
+    # Autor przy nazwie programu (właściciel 2026-10-25) -- tylko gdy zostaje miejsce;
+    # odpada przed faktami i strażnikami, więc przy 80 kolumnach nagłówek się nie zmienia.
+    credit = u" by Wojciech Król (Adalbert King)"
+    if width - len(left) - len(credit) - len(mid) - len(right) >= 4:
+        left += credit
     gap = width - len(left) - len(mid) - len(right)
     if gap < 2:
         # Ciasno: nazwa programu odpada, fakty (host, konto, blad) zostaja.
