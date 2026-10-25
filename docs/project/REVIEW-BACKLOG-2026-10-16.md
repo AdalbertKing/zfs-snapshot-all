@@ -135,6 +135,67 @@ niezwiązane odmowy fixture `repo_dir` i terminala; nie są dowodem przeciw temu
 zakresowi. Nie powtarzać PR #845 bez nowego kodu lub dowodu. Następny zakres
 pozostaje PR #469, po każdej odpowiedzi implementacyjnej do REV-174.
 
+**Rozstrzygnięcie recenzenta 2026-10-25 — PR #469 / K3.** Zakres
+`b4f1fe45cf35a73f761250c008bf6bd9561662c5..9a8886bdb4191d3e849f9d33f9f6be30eea7f2e5`
+(merge `851b79abd083632823e01efc7a68ff311bd9b8a3`) przejrzany bez nowego
+ustalenia. Rozrzut dotyczy CREATE nowych relacji, zachowuje odstępy szczebli i
+przeniesienie godziny, a pojedynczy jawny harmonogram oraz zainstalowana sekcja
+źródłowego prune pozostają źródłem prawdy. Dokładny head: stagger 33/33, cron
+168/168, `impact --verify` i `diff --check`; testy heada przeciw dokładnej
+bazie: stagger 31/33 i cron 165/168, z wyłącznie oczekiwanymi porażkami K3.
+CI 37537159284 jest zielone. Bieżące drzewo przechodzi stagger 41/41 i cron
+235/235, w tym późniejsze kontrole X27, idempotencji i kolizji minut. Nie
+powtarzać PR #469 bez nowego kodu lub dowodu. Następny zakres po każdej nowej
+odpowiedzi do REV-174: PR #470, edycja zainstalowanej relacji.
+
+**Rozstrzygnięcie recenzenta 2026-10-25 — PR #470, edycja zainstalowanej
+relacji.** Zakres
+`851b79abd083632823e01efc7a68ff311bd9b8a3..05ff13778f2d28d52c1230c852ffa73142c4db20`
+(merge `f648aa8ef5023497a41817db4ed49975e79a3ac3`) przejrzany bez nowego
+ustalenia. Jawne `edit-relation` regeneruje tylko relację wskazaną dokładnym
+tokenem `-L`, odmawia usunięcia jej wszystkich zadań, utraty cudzej relacji i
+zmiany bez wspólnej rodziny snapshotów, a przed zgodą pokazuje plan oraz
+porzucone rodziny. Instalacja korzysta z istniejącej transakcji aktywacji;
+stare sekcje prune tej relacji i osierocone generowane szablony są usuwane, a
+rekord profilu aktualizowany. Dokładny head: editrel 8/8, `impact --verify` i
+`diff --check`; te same testy przeciw dokładnej bazie dają 2/8, z sześcioma
+oczekiwanymi porażkami kontraktów edycji. CI heada 37673336383 jest zielone.
+Bieżący `main` zachowuje granicę (editrel 8/8, `impact --verify`). Lokalny pełny
+TUI miał niezwiązane odmowy fixture klawiatury terminala, więc nie służy jako
+dowód; pełnym dowodem dla heada pozostaje CI. Nie powtarzać PR #470 bez nowego
+kodu lub dowodu. Następny zakres po każdej nowej odpowiedzi do REV-174: PR
+#476, `add-source` i trzy następcze poprawki edycji relacji.
+
+**Rozstrzygnięcie recenzenta 2026-10-25 — PR #476 / REV-175.** Zakres
+`2a2f54d76acbb1b93f6f1313b51e8bdbc4af5c4e..c488c052225dad1e5c144673b4c0a3b17614427c`
+(merge `498b5fa9f1ef667f5b613a0e800717ab410f1f06`) ujawnił nowy P2 w
+`add-source`: po zmianie endpointu wrapper łączy stary `PEER_HOST` z portem
+nowego `ACTIVE_ENDPOINT`. Dla rekordu `lan.example` + `vpn.example:2222`
+produkcyjna funkcja przekazuje do SSH `lan.example:2222`; wspólny parser
+endpointu wskazuje `vpn.example:2222`. Bezpieczny stub odtwarza to na dokładnym
+headzie i bieżącym main. Pierwszy odczyt zdalny odmawia przed zmianą scope, więc
+nie potwierdzono utraty danych, lecz dodanie źródła po migracji hosta nie działa.
+REV-175 wymaga jednego spójnego tuple, zgodności starego kształtu rekordu oraz
+kontroli negatywnej niedostępnego endpointu. Dokładny head: addsource 7/7,
+`impact --verify`, `diff --check` i CI 37745914631; testy heada na bazie 0/8.
+Nie powtarzać PR #476 bez odpowiedzi implementacyjnej lub nowego dowodu.
+
+**Rozstrzygnięcie recenzenta 2026-10-25 — PR #477.** Zakres
+`498b5fa9f1ef667f5b613a0e800717ab410f1f06..9ce6a24b733a44378e429b870ad8bf4e4c3f53dd`
+(merge `43dd2ad02ef00d6fc697f78e1fab01a45f869ee8`) przejrzany bez
+nowego błędu. Del na F6 prowadzi przez `remove-replica NAME --ask`; kasowanie
+kopii jest opt-in i domyślnie wyłączone. Wybrany purge wykonuje się przed
+usunięciem sekcji repliki, a jego błąd zatrzymuje sekwencję z zachowanym
+rekordem i harmonogramem. Bez nośnika purge nie jest oferowany. Bezpieczne
+kontrole dialogu/dyspozytora 6/6 oraz `zfsbackup` 923/923 przechodzą; baza nie ma
+jeszcze dialogu. `impact --verify`, `diff --check` i CI 37747810221 są zielone.
+Pełny lokalny TUI ma sześć niezwiązanych odmów fixture klawiatury, lecz właściwa
+kontrola Del przechodzi. Nie dotknięto nośnika, ZFS, configu, crona ani hosta.
+To werdykt historycznego zakresu: późniejsza decyzja właściciela W12 usunęła
+`purge-replica-copy`, a bieżący `main` zawsze zostawia dane i kieruje czyszczenie
+do jawnego formatowania dysku. Nie przywracać tej opcji i nie powtarzać PR #477
+bez nowego kodu lub dowodu.
+
 Uwaga do terminologii: wpis 2026-10-06 w `ENGINE-FREEZE.md` (~819) nazywa zmianę „PRE-AUTHORISED by the owner”, choć
 dokument (~1016–1035) mówi, że autoryzacja zamrożonego pliku należy do recenzenta. Żaden z wpisów 2026-10-06/-08/-12
 nie ma znacznika `authorizes-frozen`.

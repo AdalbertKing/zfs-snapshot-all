@@ -2,7 +2,140 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-25 (PR #849 / REV-174 verification)
+## Latest final-audit batch — 2026-10-25 (PR #477 replica deletion)
+
+**No new finding was confirmed.** The exact audited range is
+`498b5fa9f1ef667f5b613a0e800717ab410f1f06..9ce6a24b733a44378e429b870ad8bf4e4c3f53dd`,
+merged as `43dd2ad02ef00d6fc697f78e1fab01a45f869ee8`. The F6/Del path
+delegates to the new dialog through `remove-replica NAME --ask`. Destruction is
+opt-in and unchecked by default. If selected, the dialog runs
+`purge-replica-copy` before removing the `[replica:]` section; a non-zero purge
+stops the sequence, so the durable record and schedule remain available for a
+retry. An absent medium offers no purge action and removes only the schedule.
+The existing purge verb still verifies medium identity and destroys only the
+per-source children, not the marker dataset.
+
+This is a historical verdict on the exact PR #477 delivery, not a request to
+restore its destructive option. The later owner decision W12 removed
+`purge-replica-copy`; current `main` always keeps replica data and directs an
+operator who wants an empty medium to the explicit disk-format flow.
+
+Independent exact-head evidence: a six-case stubbed dialog/dispatcher control
+passes (default keep, absent-medium keep, purge refusal, successful order and
+public `--ask` route); the exact base fails immediately because the dialog does
+not exist. `zfsbackup` passes 923/923, `impact --verify` and range `diff --check`
+pass, and exact-head CI run 37747810221 succeeded. The relevant Del assertion in
+the TUI suite passes; six unrelated terminal-keyboard fixture cases fail in this
+container and are not used as evidence. No live medium, ZFS dataset, config,
+crontab or host was touched.
+
+**Next reviewer action:** pick up a fresh `IMPLEMENTED | Reviewer` response for
+REV-174 or REV-175 first. Otherwise reconcile PR #480's destructive divergence
+policy with its existing reviews/closures before deciding whether any unreviewed
+surface remains; do not repeat PR #477 without new code or evidence.
+
+## Previous final-audit batch — 2026-10-25 (PR #476 / REV-175)
+
+**A new P2 finding was opened in the remote endpoint boundary of
+`add-source`.** The exact audited range is
+`2a2f54d76acbb1b93f6f1313b51e8bdbc4af5c4e..c488c052225dad1e5c144673b4c0a3b17614427c`,
+merged as `498b5fa9f1ef667f5b613a0e800717ab410f1f06`.
+
+The scope mutator itself passes its six shape controls and preserves unrelated
+entries. The operational wrapper, however, connects with `PEER_HOST` plus the
+port extracted from `ACTIVE_ENDPOINT`. After a supported endpoint move from
+`lan.example:22` to `vpn.example:2222`, the production function attempts
+`lan.example:2222`, not the verified `vpn.example:2222`. A safe stub reproduces
+the same tuple on the exact PR head and current main. It fails before any scope
+write, so data safety remains fail-closed, but `add-source` is unavailable after
+the host part of an endpoint migration.
+
+Exact-head evidence: addsource 7/7, `impact --verify`, range `diff --check`, and
+CI run 37745914631 pass. The head tests against the exact base yield 0/8 because
+the command and mutator do not exist there; neither test set covers endpoint
+migration. No network, cron, ZFS, scope, record, or live-host write was made.
+
+**Next reviewer action:** pick up any `IMPLEMENTED | Reviewer` response first.
+Claude now owns two separate findings: older REV-174 and new REV-175; do not
+combine their implementations. Otherwise continue the historical high-risk
+queue without repeating PR #476.
+
+## Previous final-audit batch — 2026-10-25 (PR #470 installed-relation edit)
+
+**No new finding was confirmed.** The exact audited range is
+`851b79abd083632823e01efc7a68ff311bd9b8a3..05ff13778f2d28d52c1230c852ffa73142c4db20`,
+merged as `f648aa8ef5023497a41817db4ed49975e79a3ac3`. `edit-relation`
+regenerates only the named installed relation through the existing activation
+transaction, requires an explicit edit boundary, previews and validates before
+install, refuses a proposal that removes the relation entirely or loses any
+other relation, and distinguishes exact `-L NAME` tokens (`r` does not cover
+`r2`). It also refuses a profile with no snapshot family in common, names
+dropped families before consent, removes obsolete relation-owned prune sections
+and orphaned generated templates, and records the installed profile choice.
+
+Independent exact-head evidence: editrel 8/8, `impact --verify`, and range
+`diff --check` pass. The head tests run against the exact base produce the
+discriminating 2/8 result: only the two refusal controls that predate the feature
+pass, while all six edit-specific contracts fail. Exact-head CI run 37673336383
+succeeded. Current `main` retains the boundary and passes editrel 8/8 plus
+`impact --verify`. The local full TUI run is not used as proof: its terminal
+keystroke fixture produced unrelated failures in this container; exact-head CI
+is the authoritative full-suite result. This review did not install cron, touch
+ZFS, connect to a peer, or edit a live relation.
+
+REV-20261024-174 remains `OPEN | Claude` and keeps priority when a newly
+published response appears. Otherwise the next independent scope is PR #476,
+the follow-up `add-source`/three-defect relation-edit batch: verify exact source
+scope, preservation of existing installed policy, and rollback/idempotence.
+
+## Previous final-audit batch — 2026-10-25 (PR #469 source-prune schedule spreading)
+
+**No new finding was confirmed.** The exact audited range is
+`b4f1fe45cf35a73f761250c008bf6bd9561662c5..9a8886bdb4191d3e849f9d33f9f6be30eea7f2e5`,
+merged as `851b79abd083632823e01efc7a68ff311bd9b8a3`. For a newly-created
+multi-cadence relationship, K3 writes one `prune_schedule_<tier>` per source
+retention tier from the relationship's third slot. Tier offsets and hour carry
+are retained. A single explicit schedule and an already-installed source-prune
+section remain authoritative, so this does not reconstruct existing policy.
+
+Independent exact-head evidence: stagger 33/33, cron 168/168,
+`impact --verify`, and range `diff --check` pass. Running the head tests against
+the exact base produces the discriminating failures: stagger 31/33 (tier
+spread and status-source parsing) and cron 165/168 (all three `[prune:]`
+tier-schedule cases). Exact-head CI run 37537159284 succeeded. Current `main`
+adds later X27/idempotence/collision controls and passes stagger 41/41, cron
+235/235, and `impact --verify`. The repository's bounded live evidence records
+distinct send/local-prune/source-prune times; this reviewer did not touch a
+live crontab, ZFS dataset, or host.
+
+REV-20261024-174 remains `OPEN | Claude` and keeps priority when a newly
+published response appears. Otherwise the next independent scope is PR #470,
+editing an installed relationship: preservation of unrelated policy,
+fail-closed preview/install, and rollback/idempotence boundaries.
+
+## Previous final-audit batch — 2026-10-25 (PR #849 round-2 publication boundary)
+
+**REV-20261024-174 remains CHANGES-REQUIRED and returns to Claude.** PR #849
+was merged as `9d2cbafbb0dbba9475aed63dde8303fc1dc07f88`, but the merge contains only
+the rejected round-1 implementation
+`084aabef741e6865aa8a24ab9d87ca80011e153c`. The round-2 commit later named in
+the edited PR description, `5e744011bc4a03f7e31399b1de1446cc0768bb4d`, is
+not an ancestor of `main`, is not part of the merged PR, and has no open
+implementation PR. Canonical `main` lacks `GEN_CRON_FOREIGN_REPORT` and its
+focused suite remains 12/12.
+
+The unattached round-2 SHA passes mirrorguard 15/15 and cron 237/237, but fails
+`impact --verify` because `PROJECT_STATUS.md` is stale for its production
+changes. It therefore has neither a valid publication boundary nor all
+required exact-head checks. The review header now records formal rejection of
+`084aabef741e6865aa8a24ab9d87ca80011e153c`; generated routing must read
+`OPEN | Claude` after publication.
+
+**Next reviewer action:** wait for a new Claude implementation PR containing
+round 2, an updated response implementation SHA, refreshed status, and
+exact-head CI. PR #469 remains queued after the response.
+
+## Previous final-audit batch — 2026-10-25 (PR #849 / REV-174 verification)
 
 **REV-20261024-174 remains CHANGES-REQUIRED.** Submitted PR #849 head
 `096c9433e07dbf4f74e54b7947b844571c62fcdb` (implementation
