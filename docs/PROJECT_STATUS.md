@@ -21,6 +21,27 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Wydanie 1.0 i wdrożenie (2026-10-25).** Repo wydań `AdalbertKing/zfsbackup`: tag `v1.0` i strona
+  wydania. Od 25.10 wszystkie 8 hostów (lab pve9, pve9b, pve10, pve11; Metropolis pve1 28.9, pve2 28.8; Dąbrowska
+  pve0 11.10, pve1 11.11) i ich konta mają `origin` = repo wydań.
+  - Scalenie PR-a w repo dev NIE wdraża. Hosty dostają zmianę dopiero po `release/publish.sh origin/main
+    <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
+  - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
+    `update-control` jako „not clean”.
+- **Metropolis: jeden kolektor pve2 (przejęcie 2026-10-25).** Wszystkie zadania pakietu są na koncie
+  `zfsbackup` hosta pve2, w configu `jobs.pve2.v4.conf`. W cronie pve1 nie ma zadań pakietu: migawki na jego dyskach robi i przycina pve2 przez SSH.
+  - `pve1`: migawki zdalne (snaponly) na 7 dyskach pve1 i labowym CT 990, h24 d7 w4 m6, bez zamrażania.
+    Rodzina `pve2_automated_*`: snaponly zawsze dokleja etykietę kolektora. pvesr przenosi je na pve2.
+  - `pve2-nextcloud` (107), `pve2-bim` (106): kopie pasywne z replik do `hdd/backups/pve2`, ta sama rodzina.
+  - `pve2`: lokalnie 103 i root pve2, d7 w4, z zamrażaniem.
+  - 101 nie ma kopii w `hdd/backups` (4,76 T przy 3,85 T wolnego); jego historia na pve2 to replika.
+  - Stare `automated_*` nie mają już właściciela i są wygaszane partiami, za zgodą właściciela: 26.10
+    godzinowe, 2.11 dobowe, 23.11 tygodniowe, maj 2027 miesięczne.
+  - Znalezione i naprawione przy przejęciu: #871 (linia monitora ponad limit 1000 B crona), #872 (add-source
+    dublował pierwsze migawki wszystkich dysków relacji snaponly).
+  - Znana luka: po połączeniu relacji lokalnej nowe szczeble nie dostają pierwszej migawki, więc monitor
+    pokazuje CRITICAL do pierwszego biegu. Obejście: jednorazowy bieg linii szczebla.
+
 - **REV-20261024-174: strażnik instalacji nie przepuszcza osłabionej ani obcej ochrony `-P` przy
   `prune_foreign` (runda 2, `fix/rev174-foreign-protections`).** Siódmy wyjątek w
   `assert_target_block_not_clobbered` (przepisanie najdrobniejszego szczebla na pusty wzorzec z
