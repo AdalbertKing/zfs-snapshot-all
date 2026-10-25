@@ -901,6 +901,10 @@ build_argv() {   # [install] -> ARGV[]
     if [ "$MODE" = local ]; then
         # Kopia lokalna = istniejący wsad local-backup: --source bez hosta, drzewo -R.
         ARGV=("$ZB" "--source=${B_ROOT[*]}" "--target=$TARGET" "--recursive=flat")
+    elif [ "$MODE" = snaponly ]; then
+        # Migawki zdalne: "[-] część" = wymienione datasety (basket_expand), nie -X -- jej
+        # przycinanie (delsnaps) -X nie zna, a czasownik odmawia --exclude-* (2026-10-25).
+        ARGV=("$ZB" "--source=$(hostport):$(basket_expand "$BASKET_DS_JSON")")
     else
         ARGV=("$ZB" "--source=$(hostport):${B_ROOT[*]}")
     fi
@@ -912,6 +916,7 @@ build_argv() {   # [install] -> ARGV[]
     [ -n "$RNAME" ] && ARGV+=("--name=$RNAME")
     [ "$RECURSION" = atomic ] && ARGV+=("--recursive=atomic")
     for i in "${!B_ROOT[@]}"; do
+        [ "$MODE" = snaponly ] && break       # wyjątki już są w liście (basket_expand)
         while IFS= read -r x; do
             [ -n "$x" ] || continue
             ARGV+=("--exclude-child=^$x${D}")

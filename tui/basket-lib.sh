@@ -152,3 +152,50 @@ if hide:
     json.dump(d, open(sys.argv[1], "w", encoding="utf-8"))
 PYEOF
 }
+
+# WYJĄTKI JEDNAKOWO W KAŻDYM RODZAJU RELACJI (właściciel 2026-10-25: "nie widzę przyczyny, dlaczego
+# dla konfiguracji z kopią i bez to zachowuje się i wygląda inaczej"). Drzewo zawsze daje korzeń
+# z wyjątkami: [x] = z potomnymi, także przyszłymi; [-] = tylko zaznaczone.
+#
+# basket_expand <ds.json> -- B_ROOT/B_EXCL -> lista po przecinku: korzeń bez wyjątków zostaje sobą,
+# korzeń z wyjątkami = on sam i każdy jego potomek spoza wyłączonych poddrzew. Tak relacja
+# migawek zdalnych dostaje "część" (zakres źródła wymienia datasety), bez -X, którego jej
+# przycinanie (delsnaps) nie zna.
+basket_expand() {
+    local i out=""
+    for i in "${!B_ROOT[@]}"; do
+        printf 'B\t%s\t%s\n' "${B_ROOT[$i]}" "$(printf '%s' "${B_EXCL[$i]}" | tr '\n' '\037')"
+    done | "$PY" -c '
+import sys, json
+names = [d.get("name", "") for d in (json.load(open(sys.argv[1], encoding="utf-8")).get("datasets") or [])]
+under = lambda a, b: a == b or a.startswith(b + "/")
+out = []
+for line in sys.stdin:
+    _, r, ex = line.rstrip("\n").split("\t")
+    ex = [x for x in ex.split("\x1f") if x]
+    if not ex:
+        out.append(r); continue
+    out += [n for n in names if under(n, r) and not any(under(n, x) for x in ex)]
+print(",".join(dict.fromkeys(out)))' "$1" | tr -d '\r'
+}
+
+# basket_collapse <ds.json> <lista po przecinku> -- odwrotność: z datasetów relacji (rekord,
+# "sources") korzenie i ich wyjątki do drzewa okna zmiany. Wpis pod innym wpisem listy znaczy
+# korzeń wymieniony z dziećmi; potomek korzenia spoza listy to wyjątek (najwyższy wyłączony).
+# Wypisuje "B<TAB>korzeń<TAB>wyjątki rozdzielone \037" -- ten sam kształt co tree-out.tsv.
+basket_collapse() {
+    "$PY" -c '
+import sys, json
+names = [d.get("name", "") for d in (json.load(open(sys.argv[1], encoding="utf-8")).get("datasets") or [])]
+lst = [x for x in sys.argv[2].split(",") if x and x != "-"]
+under = lambda a, b: a.startswith(b + "/")
+roots = [x for x in lst if not any(under(x, y) for y in lst if y != x)]
+for r in roots:
+    listed = set(x for x in lst if under(x, r))
+    ex = []
+    if listed:
+        for n in names:
+            if under(n, r) and n not in listed and not any(under(n, e) or n == e for e in ex):
+                ex.append(n)
+    print("B\t%s\t%s" % (r, "\x1f".join(ex)))' "$1" "$2" | tr -d '\r'
+}

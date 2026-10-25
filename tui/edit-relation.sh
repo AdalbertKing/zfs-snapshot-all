@@ -195,7 +195,7 @@ if [ "$STATE" != active ]; then
     exit 1
 fi
 # Koszyk (basket-lib.sh) w "Datasety": nagłówek okien, bez "Sposób" i bez "Wyjątków".
-RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=1
+RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=0
 title() { T 'Zmień relację %s -- %s' "$NAME" "$2"; }
 cur_words() {   # słowa o obecnym szablonie celu
     if [ "$CUR_P" = "$HNAME" ]; then echo "$(T 'własne ustawienia relacji (tabela szczebli)')"; else echo "${CUR_P:-$(T '<nie zapisany>')}"; fi
@@ -679,6 +679,20 @@ PYEOF
 # było wyjątkiem POD rodzicem (remove-source w drzewie rodzica = wyłącz to dziecko) i rodzic z
 # wyłączonymi dziećmi przestawał być rekurencyjny -- migawki szły na sam kontener, nie na dyski.
 # Wypisuje kroki "remove|add <dataset>" w kolejności wykonania.
+# "korzeń<TAB>wyjątek" na każdy wyjątek obecnego wyboru (B_ROOT/B_EXCL), posortowane.
+excl_pairs() {
+    local i x
+    for i in "${!B_ROOT[@]}"; do
+        while IFS= read -r x; do [ -n "$x" ] && printf '%s\t%s\n' "${B_ROOT[$i]}" "$x"; done <<<"${B_EXCL[$i]}"
+    done | sort
+}
+# excl_delta 13|23 -> wyjątki dodane (13) albo zdjęte (23) pod korzeniami, które zostają ($_kept).
+excl_delta() {
+    local r
+    comm -"$1" <(printf '%s\n' "$OLD_EXCL") <(printf '%s\n' "$NEW_EXCL") | grep . | while IFS=$'\t' read -r r x; do
+        printf '%s\n' "$_kept" | grep -qxF -- "$r" && printf '%s\n' "$x"
+    done
+}
 dataset_steps() {
     local n a covered
     for n in $P_REMOVED; do
@@ -898,8 +912,14 @@ while :; do
                || ! basket_tree_from_json "$TMPD/ds.json"; then
                 wt --title "$(T 'Lista datasetów niedostępna')" --msgbox "$(Tv 'list-datasets $SRCHOST nie odpowiedział:\n' '$SRCHOST' "$SRCHOST")$(tail -3 "$TMPD/ds.err")" 12 "$W"; continue
             fi
+            # Obecny wybór z wyjątkami (2026-10-25): datasety relacji -> korzenie i ich wyjątki,
+            # jak w kreatorze ([-] część). Zmiana wyjątku = remove-/add-source tego dziecka.
             B_ROOT=(); B_EXCL=()
-            for n in ${SRCS//,/ }; do [ "$n" != - ] && { B_ROOT+=("$n"); B_EXCL+=(""); }; done
+            while IFS=$'\t' read -r _k _r _e; do
+                [ "$_k" = B ] || continue
+                B_ROOT+=("$_r"); B_EXCL+=("$(printf '%s' "$_e" | tr '\037' '\n')")
+            done < <(basket_collapse "$TMPD/ds.json" "$SRCS")
+            OLD_EXCL="$(excl_pairs)"
             # X12: relacja lokalna widzi w drzewie własny cel -- kopie nie są źródłem (X21).
             BASKET_HIDE=""; [ "$PEER" = - ] && [ "${TGT:--}" != - ] && BASKET_HIDE="$TGT"
             OLD_ROOTS="$(printf '%s\n' "${B_ROOT[@]}" | sort)"
@@ -922,6 +942,13 @@ while :; do
                 NEW_ROOTS="$(printf '%s\n' "${B_ROOT[@]}" | sort)"
                 ADDED="$(comm -13 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
                 REMOVED="$(comm -23 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
+                # Wyjątki pod korzeniem, który zostaje: nowy wyjątek = remove-source dziecka,
+                # zdjęty wyjątek = add-source dziecka (czasowniki już tak działają w zakresie źródła).
+                NEW_EXCL="$(excl_pairs)"
+                _kept="$(comm -12 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
+                _xr="$(excl_delta 13)"; _xa="$(excl_delta 23)"
+                [ -n "$_xr" ] && REMOVED="$(printf '%s\n%s\n' "$REMOVED" "$_xr" | grep .)"
+                [ -n "$_xa" ] && ADDED="$(printf '%s\n%s\n' "$ADDED" "$_xa" | grep .)"
                 if [ -z "$ADDED$REMOVED" ]; then P_ADDED=""; P_REMOVED=""; continue 2; fi
                 # X21 (właściciel 2026-10-14): każda zmiana sprawdzona PRZED WYKONAJ -- czasownik
                 # bez --yes daje plan albo odmawia (np. dataset wewnątrz celu kopii); odmowa

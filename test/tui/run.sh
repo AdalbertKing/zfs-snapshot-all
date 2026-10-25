@@ -4398,6 +4398,43 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'add-source r1 hdd/iso --yes' "$ER/zb.log" && g
 else
     bad "edit-relation: Datasety (W4)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Co kopiować|DOJD|ODPAD' "$ER/wt.log" | cut -c1-250)" "$(tail -3 "$ER/err")"
 fi
+# WYJĄTKI JEDNAKOWO (właściciel 2026-10-25): drzewo daje korzeń z wyjątkami w każdym rodzaju
+# relacji. Migawki zdalne: "[-] część" = wymienione datasety (basket_expand). Okno zmiany:
+# obecne wyjątki wracają jako [-] (basket_collapse), nowy wyjątek = remove-source dziecka,
+# zdjęty = add-source dziecka.
+EXW="$(mktemp -d)"
+cat > "$EXW/ds.json" <<'JSON'
+{"datasets":[{"name":"hdd"},{"name":"hdd/vm-disks"},{"name":"hdd/vm-disks/a"},{"name":"hdd/vm-disks/b"},{"name":"hdd/vm-disks/b/c"},{"name":"hdd/vm-disks/vm-102"},{"name":"rpool/data"},{"name":"rpool/data/x"}]}
+JSON
+ex_fns=$(sed -n '/^basket_expand() {/,/^}/p; /^basket_collapse() {/,/^}/p' "$REPO/tui/basket-lib.sh")
+ex_win=$(sed -n '/^excl_pairs() {/,/^}/p; /^excl_delta() {/,/^}/p' "$REPO/tui/edit-relation.sh")
+got=$(PY="$PY" bash -c "$ex_fns
+B_ROOT=(hdd/vm-disks rpool/data); B_EXCL=(\$'hdd/vm-disks/vm-102\nhdd/vm-disks/b' '')
+basket_expand '$EXW/ds.json'
+basket_collapse '$EXW/ds.json' 'hdd/vm-disks,hdd/vm-disks/a,rpool/data' | tr '\037\t' '|:'
+basket_collapse '$EXW/ds.json' 'hdd/vm-disks,rpool/data' | tr '\037\t' '|:'" 2>&1 | tr '\n' ';')
+if [ "$got" = "hdd/vm-disks,hdd/vm-disks/a,rpool/data;B:hdd/vm-disks:hdd/vm-disks/b|hdd/vm-disks/vm-102;B:rpool/data:;B:hdd/vm-disks:;B:rpool/data:;" ]; then
+    ok "wyjątki: część -> lista datasetów (snaponly) i z powrotem korzeń z wyjątkami; korzeń z potomnymi zostaje korzeniem"
+else
+    bad "wyjątki: basket_expand/basket_collapse" "$got"
+fi
+got=$(bash -c "$ex_win
+B_ROOT=(hdd/vm-disks rpool/data); B_EXCL=('hdd/vm-disks/b' '')
+OLD_EXCL=\"\$(excl_pairs)\"
+B_EXCL=(\$'hdd/vm-disks/vm-102' '')
+NEW_EXCL=\"\$(excl_pairs)\"; _kept=\$'hdd/vm-disks\nrpool/data'
+echo \"R=\$(excl_delta 13) A=\$(excl_delta 23)\"" 2>&1)
+if [ "$got" = "R=hdd/vm-disks/vm-102 A=hdd/vm-disks/b" ]; then
+    ok "okno zmiany: odznaczony vm-102 pod hdd/vm-disks = remove-source vm-102; ponownie zaznaczony b = add-source b"
+else
+    bad "okno zmiany: zmiana wyjątków -> czasowniki" "$got"
+fi
+if grep -q 'BASKET_NO_EXC=0' "$REPO/tui/edit-relation.sh"; then
+    ok "okno zmiany: drzewo pozwala na wyjątki ([-] część), jak kreator"
+else
+    bad "okno zmiany: wyjątki zablokowane" "$(grep -n BASKET_NO_EXC "$REPO/tui/edit-relation.sh")"
+fi
+
 # Okno zmiany relacji mówi słowami jej rodzaju (właściciel 2026-10-25: "What to copy" przy
 # migawkach zdalnych): drzewo dostaje MODE z rekordu, a basket_step dla snaponly pyta o migawki.
 if grep -qE 'MODE="\$\{RMODE:-\}" NOCOPY="\$_bnc" basket_step' "$REPO/tui/edit-relation.sh" \
