@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 142622846d917c98 -->
+<!-- status-covers-digest: 4b98d7a79595c9ba -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,17 +21,16 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **REV-20261024-174: strażnik instalacji nie przepuszcza osłabionej ochrony `-P` przy `prune_foreign`
-  (`fix/rev174-foreign-protections`).** Siódmy wyjątek w `assert_target_block_not_clobbered` (przepisanie
-  najdrobniejszego szczebla na pusty wzorzec z ochronami cudzych rodzin) porównywał linie po zdjęciu
-  wszystkich `-P`, więc `vzdump:2 -> vzdump:0` albo usunięta ochrona przechodziły razem z przepisaniem.
-  Teraz każda ochrona `-P` z linii zainstalowanej musi zostać bez zmian, a nowe mogą mieć tylko kształt,
-  jaki generuje gen-cron (`:all`, `:2`), i nie mogą dotyczyć prefiksu już chronionego; inaczej zwykły
-  strażnik odmawia. Pełnego zestawu z gen-cron strażnik nie odtwarza (dodatkowa ochrona tylko zmniejsza
-  liczbę usunięć) -- opisane w odpowiedzi jako ryzyko do oceny recenzenta. Reproducer recenzenta:
-  na main „REPRODUCED”, po poprawce „NOT REPRODUCED”. `zfsbackup --section mirrorguard` 12/0 (4 nowe
-  przypadki, w tym kontrola pozytywna); na kodzie z main nowe przypadki odmowy padają.
-
+- **REV-20261024-174: strażnik instalacji nie przepuszcza osłabionej ani obcej ochrony `-P` przy
+  `prune_foreign` (runda 2, `fix/rev174-foreign-protections`).** Siódmy wyjątek w
+  `assert_target_block_not_clobbered` (przepisanie najdrobniejszego szczebla na pusty wzorzec z
+  ochronami cudzych rodzin) porównywał linie po zdjęciu wszystkich `-P`. Dlatego `vzdump:2 -> vzdump:0`,
+  usunięta ochrona albo niezwiązane `-P "manual:all"` przechodziły razem z przepisaniem.
+  - Każda ochrona `-P` z linii zainstalowanej musi zostać bez zmian.
+  - Dodane tokeny muszą należeć do dokładnego zestawu, który gen-cron zgłasza dla danego zakresu
+    przez `GEN_CRON_FOREIGN_REPORT`. Bez raportu strażnik odmawia.
+  - Reproducer recenzenta: na main „REPRODUCED”, po poprawce „NOT REPRODUCED”.
+  - Testy: `zfsbackup --section mirrorguard` 15/0, `cron` z FOR4a/FOR4b.
 
 - **Narzędzia wydania 1.0 (`feat/release-tooling`, projekt `docs/project/DESIGN-REPO-WYDAN-2026-10-24.md`,
   repo wydań `AdalbertKing/zfsbackup`).** `release/MANIFEST` wymienia pliki pakietu (skrypty w korzeniu,
@@ -86,6 +85,20 @@
   Testy: `zfsbackup` (rekord, odmowy, seed, sonda lustra, eksport/import, `family_newest`) i `tui` (okno,
   `--own-snapshots`, tekst planu). Dalej: usuwanie relacji sprząta jej migawki na źródle (C) i „przejmij
   migawki” w zmianie relacji (migracja z snapsend.sh).
+
+- **Polecenia CLI mówią po angielsku (`tr/cli-en`, decyzja właściciela: wyjście poleceń po angielsku).**
+  Po polsku zostało około 700 linii komunikatów, część pisana bez polskich liter („Join gotowy”, „PONOW DOKLADNIE”):
+  w `deploy.sh` (parowanie, join, zakres, szkice configu; żargon „wsad” to teraz „bundle”), w `zfs-restore.sh`
+  (plany, strategia, odzysk niszczący, `--plan`, `--from-copy`) i w `zfs-backup.sh` (pomoc, tabele statusu i
+  `show-config`, podglądy importu, `settings`, `edit-config`). Pytania `[t/N]` brzmią teraz `[y/N]` i nadal
+  przyjmują t/tak. Kolumna źródła w `settings` to `file / zfs-alert.conf / default` (było „plik”, „domyślne”).
+  GUI parsowało sześć z tych tekstów (znaczniki planu w `hand-edits.py`, `new-relation.sh`, `edit-relation.sh`,
+  `replica.sh` i znacznik podglądu importu w `zfs-tui.py`): szuka teraz angielskich, a atrapy w `test/tui`
+  drukują angielskie. Po polsku zostają: komentarze, opisy w `SETTINGS_REGISTRY` (klucze katalogu GUI dla F10; `settings` drukuje je też w CLI),
+  zamrożone silniki. Przykłady wyjścia w docs/pl i docs/en poprawione (status pauzy, „Package ready”). Suity na
+  pve9: `zfsbackup` 1026/0, `tui` 411/0, `localbackup` 171/0, `rux` 51/0, `moveclient` 41/0, `join` 102/0,
+  `joinmanifest` 53/0, `joinremote` 12/0, `draftscope` 70/0, `restore` 331/1. Ten jeden błąd w `restore` występuje
+  tak samo na main na pve9 („no config and no server.conf”: pve9 ma zainstalowane configi).
 
 - **GUI po angielsku -- ostatnie resztki (P6, `tr/p6-rest`).** Obchód wszystkich ekranów po angielsku na pve10
   (47 widoków, tylko klawisze bez skutków) i skaner tekstów bez polskich liter wskazały ostatnie polskie napisy.

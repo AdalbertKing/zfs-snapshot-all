@@ -53,7 +53,7 @@ for line in open(sys.argv[1], encoding="utf-8"):
     rows.append({"key": i, "label": lab, "on": src != "0", "value": (here if src == "0" else src), "unit": unit,
                  "ref": ("%s %s" % (here, unit)).strip(), "q": None, "family": fam or None})
 json.dump({"title": sys.argv[3], "head": [_(u"SZCZEBEL"), _(u"TUTAJ (cel)"), _(u"U ŹRÓDŁA")], "rows": rows,
-           "note": [_(u"Źródło sprząta te same migawki co cel, tylko trzyma ich inną liczbę."),
+           "note": [_(u"W źródle zostaje mniej migawek niż w celu kopii."),
                     _(u"Bez zmian = źródło jak cel. Kratka = szczebel u źródła w ogóle.")]},
           open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
 PYEOF

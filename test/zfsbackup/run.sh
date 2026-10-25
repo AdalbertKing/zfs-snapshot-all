@@ -1404,7 +1404,7 @@ prop_rc() {    # prop_rc <mode> <current cfg> <proposed cfg> -> exit status only
 # 1. Nothing installed yet: everything is new on both sides.
 prop_cfg "$PROP/new.conf" "1 * * * *"
 out=$(prop_run "$PROP/empty.cron" "$PROP/absent.conf" "$PROP/new.conf")
-if case "$out" in *"(nowy plik)"*) true ;; *) false ;; esac    && case "$out" in *"snapget.sh"*) true ;; *) false ;; esac; then
+if case "$out" in *"(new file)"*) true ;; *) false ;; esac    && case "$out" in *"snapget.sh"*) true ;; *) false ;; esac; then
     ok "proposal: a first client shows the new file and the cron lines it creates"
 else
     bad "proposal: a first client shows the new file and the cron lines it creates" "$out"
@@ -1415,7 +1415,7 @@ prop_cfg "$PROP/same-a.conf" "1 * * * *"
 prop_cfg "$PROP/same-b.conf" "1 * * * *"
 bash "$REPO/gen-cron.sh" -c "$PROP/same-a.conf" > "$PROP/installed.cron" 2>/dev/null
 out=$(prop_run "$PROP/installed.cron" "$PROP/same-a.conf" "$PROP/same-b.conf")
-if [ "$(printf '%s' "$out" | grep -c 'bez zmian')" = 2 ]; then
+if [ "$(printf '%s' "$out" | grep -c 'no change')" = 2 ]; then
     ok "proposal: an unchanged re-activation says 'no change' on both diffs"
 else
     bad "proposal: an unchanged re-activation says 'no change' on both diffs" "$out"
@@ -1428,8 +1428,8 @@ prop_cfg "$PROP/drift.conf" "1 * * * *"
 prop_cfg "$PROP/drift-installed.conf" "44 * * * *"
 bash "$REPO/gen-cron.sh" -c "$PROP/drift-installed.conf" > "$PROP/drifted.cron" 2>/dev/null
 out=$(prop_run "$PROP/drifted.cron" "$PROP/drift.conf" "$PROP/drift.conf")
-cron_part="${out#*crontabie}"
-if case "$cron_part" in *"-44 * * * *"*) true ;; *) false ;; esac    && case "$cron_part" in *"+1 * * * *"*) true ;; *) false ;; esac    && case "$cron_part" in *"bez zmian"*) false ;; *) true ;; esac; then
+cron_part="${out#*in the crontab}"
+if case "$cron_part" in *"-44 * * * *"*) true ;; *) false ;; esac    && case "$cron_part" in *"+1 * * * *"*) true ;; *) false ;; esac    && case "$cron_part" in *"no change"*) false ;; *) true ;; esac; then
     ok "proposal: drift between config and live crontab is shown, not hidden"
 else
     bad "proposal: drift between config and live crontab is shown, not hidden" "$out"
@@ -1441,8 +1441,8 @@ prop_cfg "$PROP/tmpl-a.conf" "1 * * * *"
 prop_cfg "$PROP/tmpl-b.conf" "*/5 * * * *"
 bash "$REPO/gen-cron.sh" -c "$PROP/tmpl-a.conf" > "$PROP/tmpl.cron" 2>/dev/null
 out=$(prop_run "$PROP/tmpl.cron" "$PROP/tmpl-a.conf" "$PROP/tmpl-b.conf")
-cron_part="${out#*crontabie}"
-if case "$cron_part" in *"*/5 * * * *"*) true ;; *) false ;; esac    && case "$cron_part" in *"bez zmian"*) false ;; *) true ;; esac; then
+cron_part="${out#*in the crontab}"
+if case "$cron_part" in *"*/5 * * * *"*) true ;; *) false ;; esac    && case "$cron_part" in *"no change"*) false ;; *) true ;; esac; then
     ok "proposal: a template-only edit still shows the changed cron lines"
 else
     bad "proposal: a template-only edit still shows the changed cron lines" "$out"
@@ -5678,9 +5678,9 @@ out="$(audit5)"; rc=$?
 md5_after="$(md5sum "$A5/jobs.conf" | awk '{print $1}')"
 # 1. names the missing source prune, counts it, and is read-only (no mutation)
 if [ "$rc" -eq 0 ] \
-        && printf '%s' "$out" | grep -qE 'bez ograniczonej retencji zrodla: +1' \
+        && printf '%s' "$out" | grep -qE 'without bounded source retention: +1' \
         && printf '%s' "$out" | grep -qF '[prune:zfsbackup@10.5.5.5:rpool/data]' \
-        && printf '%s' "$out" | grep -qi 'TYLKO-DO-ODCZYTU' \
+        && printf '%s' "$out" | grep -qi 'READ-ONLY' \
         && [ "$md5_before" = "$md5_after" ]; then
     ok "57 step5: audit names the missing source retention and does NOT touch the config"
 else
@@ -5700,8 +5700,8 @@ cat >> "$A5/jobs.conf" <<'EOF'
 EOF
 out="$(audit5)"; rc=$?
 if [ "$rc" -eq 0 ] \
-        && printf '%s' "$out" | grep -qE 'bez ograniczonej retencji zrodla: +1' \
-        && ! printf '%s' "$out" | grep -qi 'nic do dodania'; then
+        && printf '%s' "$out" | grep -qE 'without bounded source retention: +1' \
+        && ! printf '%s' "$out" | grep -qi 'nothing to add'; then
     ok "57 step5 (F3): a [prune:] header that renders no bounded delsnaps is NOT reported safe"
 else
     bad "57 step5 (F3): a [prune:] header that renders no bounded delsnaps is NOT reported safe" "rc=$rc out=$out"
@@ -5712,8 +5712,8 @@ fi
 printf '31 4 * * * e=$(mktemp); /x/delsnaps.sh -B -K /dev/null "zfsbackup@10.5.5.5:rpool/data" "automated_" -d30 2>"$e"\n' > "$A5_RENDER"
 out="$(audit5)"; rc=$?
 if [ "$rc" -eq 0 ] \
-        && printf '%s' "$out" | grep -qE 'bez ograniczonej retencji zrodla: +1' \
-        && ! printf '%s' "$out" | grep -qi 'nic do dodania'; then
+        && printf '%s' "$out" | grep -qE 'without bounded source retention: +1' \
+        && ! printf '%s' "$out" | grep -qi 'nothing to add'; then
     ok "57 step5 (F3res): a bookmark-only (delsnaps -B) job for the scope is NOT bounded"
 else
     bad "57 step5 (F3res): a bookmark-only (delsnaps -B) job for the scope is NOT bounded" "rc=$rc out=$out"
@@ -5723,8 +5723,8 @@ fi
 printf '30 * * * * e=$(mktemp); /x/delsnaps.sh -K /dev/null -G "zfsbackup@10.5.5.5:rpool/data" "manual_" -H24 2>"$e"\n' > "$A5_RENDER"
 out="$(audit5)"; rc=$?
 if [ "$rc" -eq 0 ] \
-        && printf '%s' "$out" | grep -qE 'bez ograniczonej retencji zrodla: +1' \
-        && ! printf '%s' "$out" | grep -qi 'nic do dodania'; then
+        && printf '%s' "$out" | grep -qE 'without bounded source retention: +1' \
+        && ! printf '%s' "$out" | grep -qi 'nothing to add'; then
     ok "57 step5 (F3res): a snapshot prune of an unrelated prefix is NOT bounded"
 else
     bad "57 step5 (F3res): a snapshot prune of an unrelated prefix is NOT bounded" "rc=$rc out=$out"
@@ -5733,7 +5733,7 @@ fi
 #    family with finite retention -> audit reports nothing to add (idempotent).
 printf '0 * * * * /x/snapget.sh -m "automated_hourly_" -A -L c1 "zfsbackup@10.5.5.5:rpool/data" tank/backups/c1/rpool/data\n30 * * * * e=$(mktemp); /x/delsnaps.sh -K /dev/null -G "zfsbackup@10.5.5.5:rpool/data" "automated_" -H24 -D7 2>"$e"\n' > "$A5_RENDER"
 out="$(audit5)"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qi 'nic do dodania'; then
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qi 'nothing to add'; then
     ok "57 step5: audit reports nothing to add once a managed-prefix bounded prune renders (idempotent)"
 else
     bad "57 step5: audit reports nothing to add once a managed-prefix bounded prune renders" "rc=$rc out=$out"
@@ -5874,9 +5874,9 @@ md5_before="$(md5sum "$A8/jobs.conf" | awk '{print $1}')"
 out="$(audit8)"; rc=$?
 md5_after="$(md5sum "$A8/jobs.conf" | awk '{print $1}')"
 if [ "$rc" -eq 0 ] \
-        && printf '%s' "$out" | grep -q 'pasywne (-e, poza wlasnoscia):      1' \
-        && printf '%s' "$out" | grep -q 'bez ograniczonej retencji zrodla:   0' \
-        && printf '%s' "$out" | grep -qi 'poza wlasnoscia retencji zrodla' \
+        && printf '%s' "$out" | grep -qE 'passive \(-e, not owned\): +1$' \
+        && printf '%s' "$out" | grep -qE 'without bounded source retention: +0$' \
+        && printf '%s' "$out" | grep -qi 'outside source-retention ownership' \
         && [ "$md5_before" = "$md5_after" ]; then
     ok "58 REV-108: a passive (-e) source is reported outside ownership, not missing (read-only)"
 else
@@ -5898,8 +5898,8 @@ fi
 write_a8 "-K /dev/null"
 out="$(audit8)"; rc=$?
 if [ "$rc" -eq 0 ] \
-        && printf '%s' "$out" | grep -q 'pasywne (-e, poza wlasnoscia):      0' \
-        && printf '%s' "$out" | grep -q 'bez ograniczonej retencji zrodla:   1' \
+        && printf '%s' "$out" | grep -qE 'passive \(-e, not owned\): +0$' \
+        && printf '%s' "$out" | grep -qE 'without bounded source retention: +1$' \
         && printf '%s' "$out" | grep -qF '[prune:zfsbackup@10.6.6.6:rpool/data]'; then
     ok "58 REV-108: the same relationship WITHOUT -e is managed and flagged missing (discriminator control)"
 else
@@ -8217,7 +8217,7 @@ fi
 # on a record with no pairing manifest reports the peer as unknown instead of
 # aborting the view (the loader dies inside the probe's substitution).
 out=$(CLIENTS_DIR="$FD/clients" RELATIONSHIPS_DIR="$FD/rel" bash "$ZFSBACKUP" status pve2 2>&1); rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^Klient: *pve2' && ! printf '%s' "$out" | grep -q '^FATAL:'; then
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^Client: *pve2' && ! printf '%s' "$out" | grep -q '^FATAL:'; then
     ok "fatal die: the status view's confined probe still reports a manifest-less record instead of dying"
 else
     bad "fatal die: the status view's confined probe still reports a manifest-less record instead of dying" "rc=$rc" "$out"
@@ -8753,7 +8753,7 @@ mg_sprune='41 * * * * /root/x/zfs-job.sh "h p prune (r-src-a)" --log=/root/cron.
 printf '#!/bin/bash\ncat "%s"\nexit 0\n' "$MG/target.cron" > "$MG/bin/crontab"; chmod +x "$MG/bin/crontab"
 mg_guard() {   # <proposal file> <MIRRORED_LANDINGS words> -> "rc" ; output in $MG/out
     PATH="$MG/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
-        "source '$ZFSBACKUP'; MIRRORED_LANDINGS=($2); gencron_as_target() { cat '$1'; }; assert_target_block_not_clobbered '$MG/new.conf'" > "$MG/out" 2>&1
+        "source '$ZFSBACKUP'; MIRRORED_LANDINGS=($2); gencron_as_target() { cat '$1'; [ -f '$1.report' ] && cat '$1.report' >> \"\$GEN_CRON_FOREIGN_REPORT\"; true; }; assert_target_block_not_clobbered '$MG/new.conf'" > "$MG/out" 2>&1
     echo "$?"
 }
 # the conversion: the pull gains -M, the target prune goes, the SOURCE prune stays
@@ -8816,6 +8816,7 @@ for _v in 'fg:"" -H24:-P "automated_daily:all" -P "replica_:2" ' 'cnt:"" -H12:-P
       echo "$mg_hp ${_pp}\"tank/a\" ${_tail}"
       echo '# END zfs-backup-managed'; } > "$MG/$_n.txt"
 done
+printf 'tank/a\t-P "automated_daily:all" -P "replica_:2" \n' > "$MG/fg.txt.report"
 got=$(mg_guard "$MG/fg.txt" "")
 if [ "$got" = 0 ] && grep -q 'foreign snapshots on this landing are now pruned with this tier' "$MG/out"; then
     ok "mirrorguard: U4 -- the finest tier gaining foreign protections (empty pattern, -P :all) is the same job -- installed, and named"
@@ -8840,6 +8841,7 @@ for _v in 'keep:-P "vzdump:2" -P "automated_daily:all" ' 'zero:-P "vzdump:0" -P 
       echo "$mg_hp ${_pp}\"tank/a\" \"\" -H24"
       echo '# END zfs-backup-managed'; } > "$MG/f174-$_n.txt"
 done
+printf 'tank/a\t-P "automated_daily:all" \n' > "$MG/f174-keep.txt.report"
 got=$(mg_guard "$MG/f174-keep.txt" "")
 if [ "$got" = 0 ] && grep -q 'foreign snapshots on this landing are now pruned with this tier' "$MG/out"; then
     ok "mirrorguard: REV-174 -- the U4 rewrite that KEEPS the existing -P \"vzdump:2\" and adds :all is still the same job (positive control)"
@@ -8854,9 +8856,33 @@ got=$(mg_guard "$MG/f174-gone.txt" "")
 [ "$got" != 0 ] && grep -q 'would be DELETED' "$MG/out" \
     && ok "mirrorguard: REV-174 -- ...the floor REMOVED during the rewrite is refused" \
     || bad "mirrorguard: REV-174 -- a removed floor rode along with the foreign rewrite" "rc=$got" "$(cat "$MG/out")"
+printf 'tank/a\t-P "automated_daily:all" \n' > "$MG/f174-other.txt.report"
 got=$(mg_guard "$MG/f174-other.txt" "")
-[ "$got" != 0 ] && ok "mirrorguard: REV-174 -- ...an added protection not in the generated shape (:all / :2) is refused" \
+[ "$got" != 0 ] && ok "mirrorguard: REV-174 -- ...an added protection gen-cron did not report (automated_daily:5) is refused" \
     || bad "mirrorguard: REV-174 -- a non-generated added protection was excused" "rc=$got" "$(cat "$MG/out")"
+# Round 2 (reviewer's counterexample): the SHAPE is not provenance. Kept floor, the
+# reported :all, and an UNRELATED token of a generated shape -- refused, for :all and :2.
+for _v in 'mall:-P "vzdump:2" -P "automated_daily:all" -P "manual:all" ' 'm2:-P "vzdump:2" -P "automated_daily:all" -P "manual_:2" '; do
+    _n="${_v%%:*}"; _pp="${_v#*:}"
+    { echo '# BEGIN zfs-backup-managed'
+      echo "$mg_hp ${_pp}\"tank/a\" \"\" -H24"
+      echo '# END zfs-backup-managed'; } > "$MG/f174-$_n.txt"
+    printf 'tank/a\t-P "automated_daily:all" \n' > "$MG/f174-$_n.txt.report"
+done
+got=$(mg_guard "$MG/f174-mall.txt" "")
+[ "$got" != 0 ] && grep -q 'would be DELETED' "$MG/out" \
+    && ok "mirrorguard: REV-174 -- ...an unrelated -P \"manual:all\" beside the reported set is refused (shape is not provenance)" \
+    || bad "mirrorguard: REV-174 -- an ungenerated :all token was excused" "rc=$got" "$(cat "$MG/out")"
+got=$(mg_guard "$MG/f174-m2.txt" "")
+[ "$got" != 0 ] && grep -q 'would be DELETED' "$MG/out" \
+    && ok "mirrorguard: REV-174 -- ...an unrelated -P \"manual_:2\" beside the reported set is refused" \
+    || bad "mirrorguard: REV-174 -- an ungenerated :2 token was excused" "rc=$got" "$(cat "$MG/out")"
+# No report at all (a gen-cron from before the report): nothing is provably generated,
+# so the exact U4 rewrite is refused -- fail-closed, never fail-open.
+rm -f "$MG/f174-keep.txt.report"
+got=$(mg_guard "$MG/f174-keep.txt" "")
+[ "$got" != 0 ] && ok "mirrorguard: REV-174 -- ...without gen-cron's report the rewrite is refused (fail closed)" \
+    || bad "mirrorguard: REV-174 -- the rewrite passed with no provenance at all" "rc=$got" "$(cat "$MG/out")"
 
 fi   # --- koniec sekcji mirrorguard ---
 
@@ -9206,7 +9232,7 @@ else
     bad "statusjson: the text list is unchanged by the new option" "$(cat "$WORK/sj.out")"
 fi
 sj_run alpha
-if grep -q '^Klient: *alpha' "$WORK/sj.out" && grep -q '^Stan: *active' "$WORK/sj.out"; then
+if grep -q '^Client: *alpha' "$WORK/sj.out" && grep -q '^State: *active' "$WORK/sj.out"; then
     ok "statusjson: the text detail view is unchanged by the new option"
 else
     bad "statusjson: the text detail view is unchanged by the new option" "$(cat "$WORK/sj.out")"
@@ -9408,8 +9434,8 @@ fi
 # THE TEXT FORM carries the same three sections and names the missing tier.
 sc_run alpha
 if grep -q '^\[dataset:tank/backup/alpha/vm-100\]' "$WORK/sc.out" \
-   && grep -q 'bez znacznika' "$WORK/sc.out" \
-   && grep -q 'template:missing_tier.*BRAK' "$WORK/sc.out" \
+   && grep -q 'no marker' "$WORK/sc.out" \
+   && grep -q 'template:missing_tier.*MISSING' "$WORK/sc.out" \
    && ! grep -q 'tank/other' "$WORK/sc.out"; then
     ok "showconfig: the text form shows the same set, marks the unmarked one and names the missing tier"
 else
@@ -10015,7 +10041,7 @@ else
     bad "monitorjson: zero monitor lines is UNKNOWN with rc 3, never OK" "rc=$mn_rc" "$(cat "$WORK/mn.out")"
 fi
 mn_run
-if grep -q "nikt tego nie pilnuje" "$WORK/mn.out"; then
+if grep -q "nobody is watching this" "$WORK/mn.out"; then
     ok "monitorjson: the text form says nobody is watching, rather than printing nothing"
 else
     bad "monitorjson: the text form says nobody is watching, rather than printing nothing" "$(cat "$WORK/mn.out")"
@@ -10475,7 +10501,7 @@ ex_run export-relation ksiegowosc
 if grep -q 'add-client ksiegowosc' "$WORK/ex.out" \
    && grep -q -- '--source-profile=d7h24-lite' "$WORK/ex.out" \
    && grep -q 'activate ksiegowosc' "$WORK/ex.out" \
-   && grep -q 'NIE odtwarza sie' "$WORK/ex.out"; then
+   && grep -q 'NOT restored from' "$WORK/ex.out"; then
     ok "exportrel: the text form prints the ready command and names what it cannot replay"
 else
     bad "exportrel: the text form prints the ready command and names what it cannot replay" "$(cat "$WORK/ex.out")"
@@ -10547,7 +10573,7 @@ im_np_calls="$(cat "$IM/calls.log")"; im_np_out="$(cat "$WORK/im.out")"
 PROFILE_ROOT="$IM/noprof" PROFILE_USER_ROOT="$IM/noprof" im_run "$IM/ksiegowosc.json" --yes; im_rc2=$?
 if [ "$im_rc" -eq 0 ] && printf '%s' "$im_np_calls" | grep -q '|--profile=import-ksiegowosc' \
    && ! printf '%s' "$im_np_calls" | grep -q '|--profile=d7h24' \
-   && printf '%s' "$im_np_out" | grep -q "szablonu 'd7h24' nie ma na tym hoscie" \
+   && printf '%s' "$im_np_out" | grep -q "template 'd7h24' is not on this host" \
    && [ "$im_rc2" -ne 0 ] && grep -q 'carries no relation block' "$WORK/im.err"; then
     ok "importrel: no profile file here -> add-client gets the helper built from the file's block; no block in the file -> a clear refusal"
 else
@@ -10556,7 +10582,7 @@ fi
 im_run "$IM/ksiegowosc.json"; im_rc=$?
 if [ "$im_rc" -eq 0 ] && grep -q 'zfs-backup.sh add-client ksiegowosc' "$WORK/im.out" \
         && grep -q 'zfs-backup.sh seed ksiegowosc --yes' "$WORK/im.out" && grep -q 'zfs-backup.sh activate ksiegowosc --yes' "$WORK/im.out" \
-        && grep -q 'nie zostalo zmienione' "$WORK/im.out" && [ ! -s "$IM/calls.log" ]; then
+        && grep -q 'Nothing was changed' "$WORK/im.out" && [ ! -s "$IM/calls.log" ]; then
     ok "importrel: without --yes the two commands are shown, and NOTHING is called"
 else
     bad "importrel: without --yes the two commands are shown, and NOTHING is called" "rc=$im_rc" "$(cat "$WORK/im.out" "$WORK/im.err" "$IM/calls.log")"
@@ -10575,16 +10601,16 @@ sed -e 's/"argv":\["--host=10.0.0.11"/"argv":["--host=192.168.28.98"/' \
     "$IM/ksiegowosc.json" > "$IM/stary.json"
 im_run "$IM/stary.json" --yes; im_rc=$?
 if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|--host=10.98.0.2|' "$IM/calls.log" \
-        && ! grep -q '192.168.28.98' "$IM/calls.log" && grep -q 'łączę się przez 10.98.0.2' "$WORK/im.out"; then
+        && ! grep -q '192.168.28.98' "$IM/calls.log" && grep -q 'connecting through 10.98.0.2' "$WORK/im.out"; then
     ok "importrel U62: an older export (argv = pairing address) connects through the ACTIVE_ENDPOINT it carries, and says so"
 else
-    bad "importrel U62: older export uses the active address" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(grep -i 'adres\|host' "$WORK/im.out" | head -5)"
+    bad "importrel U62: older export uses the active address" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(grep -i 'address\|host' "$WORK/im.out" | head -5)"
 fi
 # LANDING (owner 2026-10-21): an older file has no --landing; the import takes the label of
 # the pairing address from its declarations -- the directory the copies are in.
 sed -e 's/,"--landing=10.0.0.11"//' "$IM/ksiegowosc.json" > "$IM/bezland.json"
 im_run "$IM/bezland.json" --yes; im_rc=$?
-if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|.*|--landing=10.0.0.11' "$IM/calls.log" && grep -q 'katalog relacji z pliku' "$WORK/im.out"; then
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|.*|--landing=10.0.0.11' "$IM/calls.log" && grep -q "the relation's directory from the file" "$WORK/im.out"; then
     ok "importrel landing: a file without --landing lands under the pairing address's label from its declarations"
 else
     bad "importrel landing: old file" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(grep -i katalog "$WORK/im.out")"
@@ -10593,7 +10619,7 @@ fi
 # taken, and said. TWO: refused, both listed, nothing called.
 printf '%s\n' hdd/backups/ksiegowosc hdd/backups/ksiegowosc/przeniesione hdd/backups/ksiegowosc/przeniesione/rpool/data/vm-101 > "$IM/zfs1"
 IM_ZFS="$IM/zfs1" im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
-if [ "$im_rc" -eq 0 ] && grep -q '^add-client|.*|--landing=przeniesione' "$IM/calls.log" && grep -q 'ma wszystkie datasety relacji' "$WORK/im.out"; then
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|.*|--landing=przeniesione' "$IM/calls.log" && grep -q "holds all the relation's datasets" "$WORK/im.out"; then
     ok "importrel landing: expected directory missing, one directory holds all the datasets -> the copies go there, said"
 else
     bad "importrel landing: one candidate" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(tail -3 "$WORK/im.out")"
@@ -10750,7 +10776,7 @@ rm -f "$IM/calls.log.r"; IM_ROOT=fresh im_run "$IM/relblk.json"; im_p="$(cat "$W
 IM_ROOT=fresh im_run "$IM/relblk.json" --yes; im_rc=$?; im_r1="$(cat "$IM/calls.log.r" 2>/dev/null)"; rm -f "$IM/calls.log.r"
 im_run "$IM/relblk.json" --yes; im_r2="$(cat "$IM/calls.log.r" 2>/dev/null)"; im_c2="$(cat "$IM/calls.log")"; rm -f "$IM/calls.log.r"
 IM_ROOT=fresh im_run "$IM/nobw.json" --yes; im_r3="$(cat "$IM/calls.log.r" 2>/dev/null)"; rm -f "$IM/calls.log.r"
-if grep -q '"relation":{' "$IM/relblk.json" && [ "$im_rc" -eq 0 ] && printf '%s' "$im_p" | grep -q 'Potem: wlasne ustawienia relacji z pliku' && [ -z "$im_r0" ] \
+if grep -q '"relation":{' "$IM/relblk.json" && [ "$im_rc" -eq 0 ] && printf '%s' "$im_p" | grep -q "Then: the relation's own settings from the file" && [ -z "$im_r0" ] \
    && [ "$im_r1" = 'restore|ksiegowosc' ] && [ "$im_r2" = 'restore|ksiegowosc' ] && printf '%s' "$im_c2" | grep -q '^activate|' \
    && [ "$im_r3" = 'restore|ksiegowosc' ]; then
     ok "importrel: the file's [relation:] block is restored after the create (one-command and ordinary path); the preview says so and calls nothing"
@@ -10762,11 +10788,11 @@ fi
 # relation block and no --bandwidth takes that path; the sentence must stay whole.
 sed 's/,"--bandwidth=20M"//' "$IM/relblk.json" > "$IM/relblk1.json"
 IM_ROOT=fresh im_run "$IM/relblk1.json"; im_f2="$(cat "$WORK/im.out")"
-if printf '%s' "$im_f2" | grep -q 'ZRODLO NIE ZNA JUZ TEGO KOLEKTORA' && printf '%s' "$im_f2" | grep -q 'Potem: wlasne ustawienia' \
-   && [ "$(printf '%s\n' "$im_f2" | grep -A1 'zakres (dokladnie$' | tail -1)" = "  lista datasetow z pliku), seed, aktywacja." ]; then
+if printf '%s' "$im_f2" | grep -q 'THE SOURCE NO LONGER KNOWS THIS COLLECTOR' && printf '%s' "$im_f2" | grep -q "Then: the relation's own settings" \
+   && [ "$(printf '%s\n' "$im_f2" | grep -A1 'scope (exactly the$' | tail -1)" = "  dataset list from the file), seed, activation." ]; then
     ok "importrel F-2: the [relation:] note follows the one-command sentence, not in the middle of it"
 else
-    bad "importrel F-2: interleaved note" "$(printf '%s\n' "$im_f2" | grep -B1 -A3 'zakres (dokladnie')"
+    bad "importrel F-2: interleaved note" "$(printf '%s\n' "$im_f2" | grep -B1 -A3 'scope (exactly the')"
 fi
 rm -f "$IM/relblk1.json"
 # a name that exists here refuses BEFORE anything is called. This bare record
@@ -10788,7 +10814,7 @@ fi
 cp "$EX/clients/ksiegowosc.conf" "$IM/clients/ksiegowosc.conf"
 ex_run export-relation ksiegowosc --json; cp "$WORK/ex.out" "$IM/same.json"
 im_run "$IM/same.json" --yes; im_rc=$?
-if [ "$im_rc" -eq 0 ] && grep -q "Nic do zrobienia" "$WORK/im.out" && [ ! -s "$IM/calls.log" ]; then
+if [ "$im_rc" -eq 0 ] && grep -q "Nothing to do" "$WORK/im.out" && [ ! -s "$IM/calls.log" ]; then
     ok "importrel: the same relationship imported back onto its own host is a no-op success -- 'already here, identical', nothing called (owner, pve10 2026-09-23)"
 else
     bad "importrel: same relationship imported back is a no-op" "rc=$im_rc" "$(cat "$WORK/im.out" "$WORK/im.err" "$IM/calls.log")"
@@ -11067,7 +11093,7 @@ nc_run() {   # <args...> -> rc; stdout/err in $WORK/nc.out/.err; rux_entry's cal
 }
 rm -f "$NC/rux.argv" "$NC/rux.scope"
 nc_run "$NC/nowy.json"; nc_rc=$?
-if [ "$nc_rc" -eq 0 ] && grep -q "NOWY KOLEKTOR" "$WORK/nc.out" && grep -q "exclude = hdd/lab/x" "$WORK/nc.out" \
+if [ "$nc_rc" -eq 0 ] && grep -q "NEW COLLECTOR" "$WORK/nc.out" && grep -q "exclude = hdd/lab/x" "$WORK/nc.out" \
         && [ ! -f "$NC/rux.argv" ]; then
     ok "importrel: new collector -- plan shows the scope and calls nothing without --yes"
 else
@@ -11153,14 +11179,14 @@ lb_im_run() {   # <args...> with local-backup/add-client STUBBED to record argv
         cmd_import_relation "$@"' im "$ZFSBACKUP" "$@" ) >"$WORK/im.out" 2>"$WORK/im.err"
 }
 lb_im_run "$EX/migi.json"; lb_rc=$?
-if [ "$lb_rc" -eq 0 ] && grep -q 'RELACJA LOKALNA' "$WORK/im.out" && grep -q 'nie zostalo zmienione' "$WORK/im.out" && [ ! -s "$EX/lbcalls.log" ]; then
+if [ "$lb_rc" -eq 0 ] && grep -q 'LOCAL RELATION' "$WORK/im.out" && grep -q 'Nothing was changed' "$WORK/im.out" && [ ! -s "$EX/lbcalls.log" ]; then
     ok "importrel: a local relationship without --yes shows the local-backup command and calls nothing"
 else
     bad "importrel: local preview" "rc=$lb_rc" "$(cat "$WORK/im.out" "$WORK/im.err" "$EX/lbcalls.log")"
 fi
 lb_im_run "$EX/migi.json" --name=migi2 --yes; lb_rc=$?
 if [ "$lb_rc" -eq 0 ] && [ "$(cat "$EX/lbcalls.log")" = 'local-backup[1]|--name=migi2|--source=hdd/lab/a,hdd/lab/b|--target=|--recursive=flat|--profile=default|--local-user=zfsbackup|--install|--yes' ] \
-   && grep -q 'PUSTY z pliku' "$WORK/im.out"; then
+   && grep -q 'is EMPTY in the file' "$WORK/im.out"; then
     ok "importrel: a local relationship is reproduced by ONE local-backup call, --name=NEW applied, the file's blank target confirmed by import, no add-client/seed/activate"
 else
     bad "importrel: local reproduce" "rc=$lb_rc" "$(cat "$WORK/im.out" "$WORK/im.err" "$EX/lbcalls.log")"
@@ -11951,7 +11977,7 @@ fi
 # with `pattern`, and they differ by a trailing underscore. Printing whichever
 # was set would put a prefix under a column read as a pattern.
 if printf '%s' "$lj_txt" | grep -qE '^zfsbackup .*-> pve9 .*automated_hourly_ ' \
-   && printf '%s' "$lj_txt" | grep -qE '^zfsbackup .*porzadki .*automated_hourly '; then
+   && printf '%s' "$lj_txt" | grep -qE '^zfsbackup .*prune .*automated_hourly '; then
     ok "listjobs: a transfer row shows its prefix and a prune row shows its pattern"
 else
     bad "listjobs: transfer shows prefix, prune shows pattern" "$lj_txt"
@@ -12263,7 +12289,7 @@ fi
 ss_run hdd/dane --pattern=automated_hourly --pattern=automated_daily
 ss_txt="$(cat "$WORK/ss.out")"
 if printf '%s' "$ss_txt" | grep -qE '^automated_hourly +2 +3145728' \
-   && printf '%s' "$ss_txt" | grep -q '(pozostale)'; then
+   && printf '%s' "$ss_txt" | grep -q '(other)'; then
     ok "showscope: the text form shows the same families, and names the leftovers"
 else
     bad "showscope: the text form shows families and leftovers" "$ss_txt"
@@ -13282,9 +13308,9 @@ printf '[alerts]\nemail = a@b.pl\n' > "$ST/settings.ini"
 SP1=$(st_run); SP2=$(st_run set alerts.digest_time=06:30 monitor.interval=10m); SP3=$(st_run set alerts.digest_time=25:00)
 SP4=$(st_run set alerts.digest_time=06:30 monitor.interval=10m capacity.threshold=85 --yes)
 SP5=$(st_run set nosuch.key=1); SP6=$(st_run get alerts.digest_time)
-if printf '%s' "$SP1" | grep -qE 'alerts\.email +a@b\.pl +\(plik\)' && printf '%s' "$SP1" | grep -qE 'alerts\.digest_time +07:00 +\(domyślne\)' \
+if printf '%s' "$SP1" | grep -qE 'alerts\.email +a@b\.pl +\(file\)' && printf '%s' "$SP1" | grep -qE 'alerts\.digest_time +07:00 +\(default\)' \
    && printf '%s' "$SP2" | grep -q 'alerts.digest_time       07:00 -> 06:30' && printf '%s' "$SP2" | grep -q '^plan only' && ! printf '%s' "$SP2" | grep -q APPLY \
-   && printf '%s' "$SP3" | grep -q 'GG:MM' && printf '%s' "$SP5" | grep -q 'nieznany klucz' \
+   && printf '%s' "$SP3" | grep -q 'HH:MM' && printf '%s' "$SP5" | grep -q 'unknown key' \
    && printf '%s' "$SP4" | grep -q '^APPLY cron$' && printf '%s' "$SP4" | grep -q '^APPLY host /alert-digest.sh 30 6 \* \* \*$' \
    && ! printf '%s' "$SP4" | grep -q 'APPLY host /check-pool' && [ "$SP6" = "06:30" ] \
    && grep -q '^threshold = 85$' "$ST/settings.ini" && grep -q '^email = a@b.pl$' "$ST/settings.ini"; then
@@ -13496,7 +13522,7 @@ if [ "$rc" -eq 0 ] && printf '%s' "$RSOUT" | grep -q "1\. source    : /etc/zfs-s
 else
     bad "rmsrc: plan" "rc=$rc" "$RSOUT" "$(cat "$RS/err")"
 fi
-if ! rs_run r1 >/dev/null && grep -q 'uzycie: zfs-backup.sh remove-source' "$RS/err" \
+if ! rs_run r1 >/dev/null && grep -q 'usage: zfs-backup.sh remove-source' "$RS/err" \
    && ! rs_run r1 notadataset >/dev/null && grep -q "does not look like a dataset" "$RS/err" \
    && ! rs_run r1 'pool/a;rm -rf /' >/dev/null && grep -q "refusing to send it anywhere" "$RS/err" \
    && ! rs_run zz pool/a >/dev/null && grep -q "no relationship 'zz'" "$RS/err" \
@@ -13665,9 +13691,9 @@ rs_out=$(bash -c "source '$ZFSBACKUP'; cron_target_user() { echo root; }; cron_c
 rw_out=$(bash -c "source '$ZFSBACKUP'; default_cron_config() { echo '$RS/c.conf'; }; replica_restart_warning 'tank/b/x/sub tank/b/y'" 2>&1)
 if [ "$rs_rc" -eq 0 ] && printf '%s' "$rs_out" | grep -qF 'snapget.sh -m replica_ -i "tank/b/x" "disk/rep/restart-tmp"' && ! printf '%s' "$rs_out" | grep -qF -- ' -t ' \
    && printf '%s' "$rs_out" | grep -qF 'zfs rename -p disk/rep/restart-tmp/tank/b/x disk/rep/tank/b/x' \
-   && printf '%s' "$rs_out" | grep -qF 'zfs destroy -r disk/rep/tank/b/x   -- stara kopia, dopiero po udanym kroku 1' \
+   && printf '%s' "$rs_out" | grep -qF 'zfs destroy -r disk/rep/tank/b/x   -- the old copy, only after step 1 succeeded' \
    && printf '%s' "$rs_out" | grep -q '^plan only' \
-   && printf '%s' "$rw_out" | grep -qF "replika 'own'" && ! printf '%s' "$rw_out" | grep -qF "replika 'pas'"; then
+   && printf '%s' "$rw_out" | grep -qF "replica 'own'" && ! printf '%s' "$rw_out" | grep -qF "replica 'pas'"; then
     ok "runreplicas: replica-restart plan = the replica's own options onto a temporary base (no -t: the engine refuses -t with -R), old copy destroyed only after, then rename -p; delete-relation warns for a replica with its own snapshots, not a passive one"
 else
     bad "runreplicas: replica-restart / warning" "rc=$rs_rc" "$rs_out" "$rw_out"
@@ -13898,7 +13924,7 @@ sq() {   # <name> [INSTALLED_ENDPOINT] -> the Spojnosc text
     bash -c "source '$ZFSBACKUP'; INSTALLED_ENDPOINT='${2-e:22}'; crontab_for_target() { cat '$SQ/tab'; }; status_quiesce_from_cron '$1'" 2>&1
 }
 got=$(sq r)
-if [ "$got" = "quiesce auto,degrade (daily, monthly); bez: hourly" ]; then
+if [ "$got" = "quiesce auto,degrade (daily, monthly); without: hourly" ]; then
     ok "statusquiesce: the -q of each copy tier, in tier order, and the tiers without it -- prunes and other relationships ignored"
 else
     bad "statusquiesce: mixed tiers" "got: $got"
@@ -13911,15 +13937,15 @@ else
 fi
 sed -i 's/ -q auto,degrade//' "$SQ/tab"
 got=$(sq r)
-if [ "$got" = "crash-consistent (bez quiesce)" ]; then
+if [ "$got" = "crash-consistent (no quiesce)" ]; then
     ok "statusquiesce: ...no -q on any copy line is crash-consistent"
 else
     bad "statusquiesce: none" "got: $got"
 fi
 got=$(sq nosuch)
-case "$got" in "? (brak linii"*) ok "statusquiesce: ...a relationship with no job line says so, it does not claim crash-consistent" ;; *) bad "statusquiesce: no lines" "got: $got" ;; esac
+case "$got" in "? (no line"*) ok "statusquiesce: ...a relationship with no job line says so, it does not claim crash-consistent" ;; *) bad "statusquiesce: no lines" "got: $got" ;; esac
 got=$(sq r "")
-if [ "$got" = "(jeszcze nie aktywowany)" ]; then
+if [ "$got" = "(not activated yet)" ]; then
     ok "statusquiesce: ...a relationship never activated reads 'not activated', no crontab asked"
 else
     bad "statusquiesce: not activated" "got: $got"

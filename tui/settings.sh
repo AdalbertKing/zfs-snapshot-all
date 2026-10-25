@@ -114,8 +114,8 @@ while :; do
             [ -n "$prev" ] && items+=("#_$sec" " ")
             items+=("#$sec" "── $(SECT_PL "$sec") ──"); prev="$sec"
         fi
-        case "${SRC[$k]}" in domyślne) sw="$(T domyślne)" ;; *) sw="${SRC[$k]}" ;; esac
-        if [ -n "${NEW[$k]+x}" ]; then v="${NEW[$k]}  ($(T było) ${VAL[$k]})"; else v="${VAL[$k]}"; [ "${SRC[$k]}" = plik ] || v="$v  ($sw)"; fi
+        case "${SRC[$k]}" in default) sw="$(T domyślne)" ;; *) sw="${SRC[$k]}" ;; esac
+        if [ -n "${NEW[$k]+x}" ]; then v="${NEW[$k]}  ($(T było) ${VAL[$k]})"; else v="${VAL[$k]}"; [ "${SRC[$k]}" = file ] || v="$v  ($sw)"; fi
         # Wyrównanie po ZNAKACH: printf %-Ns liczy bajty, a "(domyślne)" ma polską literę.
         c1="${k#*.}"; while [ "${#c1}" -lt 16 ]; do c1="$c1 "; done
         c2="$(clip_label "$v" 26)"; while [ "${#c2}" -lt 26 ]; do c2="$c2 "; done

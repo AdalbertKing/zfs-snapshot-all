@@ -282,7 +282,7 @@ fi
 # (REV-106, "the split must not depend on keep_* template names", is moot: the
 # block names its sides explicitly, nothing is derived from a template name.)
 out="$(run --source=rpool/data --target=hdd/backups --config="$WORK/ind.conf")"
-printf '%s\n' "$out" | sed -n '/^--- kandydat CONFIG v4/,/^--- wygenerowany/p' | sed '1d;$d' > "$WORK/ind-cand.conf"
+printf '%s\n' "$out" | sed -n '/^--- candidate CONFIG v4/,/^--- generated/p' | sed '1d;$d' > "$WORK/ind-cand.conf"
 lb_render_retain() {  # <config> <scope> -> the -M value on that scope's monthly prune line
     env -u REPO_DIR -u NOTIFY_SCRIPT -u WARN_SCRIPT -u DIGEST_SCRIPT -u CRON_LOG -u DIGEST_SCHEDULE \
         bash "$GEN" -c "$1" 2>/dev/null | grep -oE "\"$2\" \"automated_monthly\" -M[0-9]+" | grep -oE 'M[0-9]+' | head -1
@@ -331,11 +331,11 @@ fi
 # written section would need a block, and copying the block shape here would be a
 # second author of it).
 out="$(run --name=inna --source=rpool/other --target=hdd/backups/other --profile=d7h24 --config="$WORK/existing-src.conf")"
-printf '%s\n' "$out" | sed -n '/^--- kandydat CONFIG v4/,/^--- wygenerowany/p' | sed '1d;$d' > "$WORK/existing.conf"
+printf '%s\n' "$out" | sed -n '/^--- candidate CONFIG v4/,/^--- generated/p' | sed '1d;$d' > "$WORK/existing.conf"
 cp "$WORK/existing.conf" "$WORK/existing.orig"
 a_before="$(sed -n '/^\[relation:inna\]/,$p' "$WORK/existing.conf")"
 out="$(run --source=rpool/data --target=hdd/store --config="$WORK/existing.conf")"; rc=$?
-a_after="$(printf '%s\n' "$out" | sed -n '/^--- kandydat CONFIG v4/,/^--- wygenerowany/p' | sed -n '/^\[relation:inna\]/,/^\[relation:lb\]/p' | sed '$d')"
+a_after="$(printf '%s\n' "$out" | sed -n '/^--- candidate CONFIG v4/,/^--- generated/p' | sed -n '/^\[relation:inna\]/,/^\[relation:lb\]/p' | sed '$d')"
 if [ "$rc" -eq 0 ] && [ -n "$a_before" ] && [ "$(printf '%s' "$a_before" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')" = "$(printf '%s' "$a_after" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')" ] \
         && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/data\]'; then
     ok "F2/additive: existing A is byte-unchanged and B is added"
@@ -407,7 +407,7 @@ out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="
 
 # ---- accepted: same-pool note vs cross-pool ----
 out="$(run --source=rpool/data --target=rpool/store --config="$WORK/sp.conf")"
-[ "$(printf '%s\n' "$out" | grep -c 'dziela pule')" -eq 1 ] \
+[ "$(printf '%s\n' "$out" | grep -c 'share pool')" -eq 1 ] \
     && ok "same-pool prints one factual note" || bad "same-pool prints one factual note" ""
 out="$(run --source=rpool/data --target=hdd/backups --config="$WORK/xp.conf")"
 printf '%s\n' "$out" | grep -q 'dziela pule' \
@@ -508,7 +508,7 @@ out="$(runi snapsend-fail "t" --install --yes --source=rpool/data --target=hdd/b
 { grep -q SEED "$WORK/order" 2>/dev/null && ! grep -q INSTALL "$WORK/order" 2>/dev/null && [ "$(wc -l < "$CFG")" -eq 2 ]; } \
     && ok "slice2: a FAILED seed installs no cron and leaves the config untouched" \
     || bad "slice2: a FAILED seed installs no cron and leaves the config untouched" "order=$(cat "$WORK/order" 2>/dev/null)"
-printf '%s' "$out" | grep -qi 'NIC nie zainstalowano' \
+printf '%s' "$out" | grep -qi 'NOTHING installed' \
     && ok "slice2: the failed-seed refusal says plainly that nothing was installed" \
     || bad "slice2: the failed-seed refusal says plainly that nothing was installed" "$(printf '%s' "$out" | tail -2)"
 
@@ -751,7 +751,7 @@ rdr=$(CLIENTS_DIR="$RD/clients" bash "$ZB" restore rdr --plan --config="$RD/c.co
 # naming the label. Silence is the defect.
 # NOTE: on Git Bash the fatal-die TERM does not reach the parent, so the remote case
 # only discriminates on Linux (CI) -- measured 2026-10-15.
-if printf '%s' "$rdl" | grep -qE 'Plan odtworzenia|^FATAL: restore:' && printf '%s' "$rdr" | grep -qF "'rdr' is not a relation label"; then
+if printf '%s' "$rdl" | grep -qE 'Restore plan|^FATAL: restore:' && printf '%s' "$rdr" | grep -qF "'rdr' is not a relation label"; then
     ok "restore dispatch: a local relationship, and one whose connection cannot be loaded, reach zfs-restore.sh -- no silent rc=1"
 else
     bad "restore dispatch: silent exit" "local: [$rdl]" "remote, no connection: [$rdr]"
@@ -793,12 +793,12 @@ svo=$( ( CLIENTS_DIR="$SV/clients"
          crontab() { printf '1 * * * * /x/zfs-job.sh "h snap" -- /x/snapsend.sh -m auto_ -L svl "rpool/a" ""\n21 * * * * /x/delsnaps.sh -L svl "rpool/a" auto_ -H24\n1 * * * * /x/snapsend.sh -L other "rpool/z"\n'; }
          cmd_status svl; echo "---"; cmd_status
          echo "--- unreadable:"; crontab() { echo "crontab: permission denied" >&2; return 1; }; cmd_status svl ) 2>&1 )
-if printf '%s' "$svo" | grep -qF "lokalna, tylko migawki" && printf '%s' "$svo" | grep -qF "Zrodla:            rpool/a, rpool/b" \
-   && printf '%s' "$svo" | grep -qF "Cron:              2 linii" \
-   && ! printf '%s' "$svo" | grep -qE "Blokada u peera|Endpoint docelowy|Cron dziala przez" \
-   && printf '%s' "$svo" | grep -qE "^svl +state=active +endpoint=\(lokalna\)" \
+if printf '%s' "$svo" | grep -qF "local, snapshots only" && printf '%s' "$svo" | grep -qF "Sources:           rpool/a, rpool/b" \
+   && printf '%s' "$svo" | grep -qF "Cron:              2 lines" \
+   && ! printf '%s' "$svo" | grep -qE "Peer lock|Target endpoint|Cron runs via" \
+   && printf '%s' "$svo" | grep -qE "^svl +state=active +endpoint=\(local\)" \
    && printf '%s' "${svo#*--- unreadable:}" | grep -qF "Cron:              ? (crontab" \
-   && ! printf '%s' "${svo#*--- unreadable:}" | grep -qF "BRAK linii"; then
+   && ! printf '%s' "${svo#*--- unreadable:}" | grep -qF "NO line"; then
     ok "status: a local relationship has its own view (type, sources, its cron lines; no peer, no endpoint; unreadable crontab = ?)"
 else
     bad "status of a local relationship" "$svo"
@@ -1526,7 +1526,7 @@ runp() {   # <INVENTORY or -> args... ; inventory stub, no server.conf
 
 # ---- the proposal happens at all, and reaches the plan ----------------------
 out="$(runp "-" --target=hdd/store --config="$WORK/k5a.conf")"
-{ printf '%s' "$out" | grep -q 'PROPOZYCJA z inwentarza' \
+{ printf '%s' "$out" | grep -q 'PROPOSAL from this host' \
   && printf '%s' "$out" | grep -q 'rpool/vmstore' \
   && printf '%s' "$out" | grep -q 'rpool/db'; } \
     && ok "krok5: an omitted --source is PROPOSED from the ZFS inventory and reaches the plan" \
@@ -1537,17 +1537,17 @@ out="$(runp "-" --target=hdd/store --config="$WORK/k5a.conf")"
 # zvol carries no data; the target cannot hold its own backup. A PARENT is NOT
 # on this list any more -- that question moved to the hierarchy cases below,
 # after it turned out to have the wrong answer here.
-for pair in "rpool|pula, nie zbior danych" \
-            "rpool/ROOT|system operacyjny" \
-            "rpool/ROOT/pve-1|system operacyjny" \
+for pair in "rpool|a pool, not a dataset" \
+            "rpool/ROOT|operating system" \
+            "rpool/ROOT/pve-1|operating system" \
             "rpool/swap|swap" \
-            "hdd/store|cel backupu"; do
+            "hdd/store|the backup target"; do
     ds="${pair%%|*}"; why="${pair##*|}"
-    if printf '%s' "$out" | grep -q "pominieto $ds -- $why"; then
+    if printf '%s' "$out" | grep -q "skipped $ds -- $why"; then
         ok "krok5: '$ds' is excluded from the proposal, and the reason is printed"
     else
         bad "krok5: '$ds' is excluded from the proposal, and the reason is printed" \
-            "$(printf '%s' "$out" | grep pominieto | head -8)"
+            "$(printf '%s' "$out" | grep skipped | head -8)"
     fi
     printf '%s' "$out" | grep -qE "^>>>   $ds\$" \
         && bad "krok5: '$ds' must not be proposed" "it appears in the candidate list"
@@ -1556,9 +1556,9 @@ done
 # ---- a dataset an installed section already covers is not proposed ----------
 printf '[defaults]\n\thost_label = t\n\n[dataset:rpool/db]\n\tuse_template = x\n' > "$WORK/k5cov.conf"
 out2="$(runp "-" --target=hdd/store --config="$WORK/k5cov.conf")"
-printf '%s' "$out2" | grep -q 'pominieto rpool/db -- juz objety' \
+printf '%s' "$out2" | grep -q 'skipped rpool/db -- already covered' \
     && ok "krok5: a dataset the installed config already covers is skipped, naming the section" \
-    || bad "krok5: a dataset the installed config already covers is skipped" "$(printf '%s' "$out2"|grep pominieto|head -5)"
+    || bad "krok5: a dataset the installed config already covers is skipped" "$(printf '%s' "$out2"|grep skipped|head -5)"
 
 # ---- "already covered" is EXACT identity, because a local job is FLAT -------
 # An installed [dataset:rpool/a] copies rpool/a's own blocks and nothing else.
@@ -1569,24 +1569,24 @@ printf '%s' "$out2" | grep -q 'pominieto rpool/db -- juz objety' \
 printf '[defaults]\n\thost_label = t\n\n[dataset:rpool/a]\n\tuse_template = x\n' > "$WORK/k5par.conf"
 outp="$(runp "rpool/a
 rpool/a/child" --target=hdd/store --config="$WORK/k5par.conf")"
-{ ! printf '%s' "$outp" | grep -q 'pominieto rpool/a/child -- juz objety'; } \
+{ ! printf '%s' "$outp" | grep -q 'skipped rpool/a/child -- already covered'; } \
     && ok "krok5/flat: a NEW CHILD under an installed flat parent is not called 'already covered'" \
-    || bad "krok5/flat: a new child under an installed flat parent is not 'already covered'" "$(printf '%s' "$outp"|grep pominieto|head -4)"
+    || bad "krok5/flat: a new child under an installed flat parent is not 'already covered'" "$(printf '%s' "$outp"|grep skipped|head -4)"
 printf '[defaults]\n\thost_label = t\n\n[dataset:rpool/a/child]\n\tuse_template = x\n' > "$WORK/k5chi.conf"
 outc2="$(runp "rpool/a
 rpool/a/child" --target=hdd/store --config="$WORK/k5chi.conf")"
-{ ! printf '%s' "$outc2" | grep -q 'pominieto rpool/a -- juz objety'; } \
+{ ! printf '%s' "$outc2" | grep -q 'skipped rpool/a -- already covered'; } \
     && ok "krok5/flat: a PARENT candidate is not called 'already covered' by an installed child" \
-    || bad "krok5/flat: a parent candidate is not 'already covered' by an installed child" "$(printf '%s' "$outc2"|grep pominieto|head -4)"
+    || bad "krok5/flat: a parent candidate is not 'already covered' by an installed child" "$(printf '%s' "$outc2"|grep skipped|head -4)"
 # CONTROL: a section that really IS recursive does cover its descendants, and
 # saying so must still work -- otherwise the two assertions above would pass
 # against a build that had simply dropped the covered check.
 printf '[defaults]\n\thost_label = t\n\n[dataset:rpool/a]\n\tuse_template = x\n\trecursive    = yes\n' > "$WORK/k5rec.conf"
 outr="$(runp "rpool/a
 rpool/a/child" --target=hdd/store --config="$WORK/k5rec.conf")"
-printf '%s' "$outr" | grep -q 'pominieto rpool/a/child -- juz objety rekurencyjna' \
+printf '%s' "$outr" | grep -q 'skipped rpool/a/child -- already covered by the recursive' \
     && ok "krok5/flat control: a RECURSIVE installed section does cover its descendants" \
-    || bad "krok5/flat control: a recursive installed section covers its descendants" "$(printf '%s' "$outr"|grep pominieto|head -4)"
+    || bad "krok5/flat control: a recursive installed section covers its descendants" "$(printf '%s' "$outr"|grep skipped|head -4)"
 
 # ---- THE HIERARCHY DISCRIMINATOR -------------------------------------------
 # The first cut of the proposal dropped any dataset that had a child and offered
@@ -1600,7 +1600,7 @@ outh="$(runp "rpool/a
 rpool/a/child
 rpool/db" --target=hdd/store --config="$WORK/k5h.conf")"
 # 1. the ambiguous subtree is refused, with the pair named
-{ printf '%s' "$outh" | grep -q 'poddrzewo dwuznaczne' \
+{ printf '%s' "$outh" | grep -q 'ambiguous subtree' \
   && printf '%s' "$outh" | grep -q 'rpool/a  ->  rpool/a/child'; } \
     && ok "krok5/hierarchia: a parent/child pair is refused as an ambiguous subtree, named" \
     || bad "krok5/hierarchia: a parent/child pair is refused as an ambiguous subtree" "$(printf '%s' "$outh"|head -10)"
@@ -1613,7 +1613,7 @@ rpool/db" --target=hdd/store --config="$WORK/k5h.conf")"
 # 3. the parent is NAMED -- it may not disappear without the operator being told,
 #    which is the whole finding, and the explanation must be actionable.
 { printf '%s' "$outh" | grep -q -- '--source=rpool/a$' \
-  && printf '%s' "$outh" | grep -q 'NIE pokrywaja'; } \
+  && printf '%s' "$outh" | grep -q 'so the children do NOT'; } \
     && ok "krok5/hierarchia: the parent is named with a copyable --source= and the reason why" \
     || bad "krok5/hierarchia: the parent is named with a copyable --source=" "$(printf '%s' "$outh"|head -10)"
 # 4. the REST of the host is still proposed -- one hierarchy says nothing about
@@ -1625,7 +1625,7 @@ printf '%s' "$outh" | grep -qE '^>>>   rpool/db$' \
 #    so the refusal keys on the PAIR and not on the name or on some other rule.
 outc="$(runp "rpool/a
 rpool/db" --target=hdd/store --config="$WORK/k5i.conf")"
-{ printf '%s' "$outc" | grep -q 'PROPOZYCJA z inwentarza' \
+{ printf '%s' "$outc" | grep -q 'PROPOSAL from this host' \
   && printf '%s' "$outc" | grep -qE '^>>>   rpool/a$'; } \
     && ok "krok5/hierarchia control: without the child, the same parent IS proposed" \
     || bad "krok5/hierarchia control: without the child, the same parent IS proposed" "$(printf '%s' "$outc"|head -6)"
@@ -1640,7 +1640,7 @@ rpool/swap" --target=hdd/store --config="$WORK/k5b.conf")"
 
 # ---- EXPLICIT-SOURCE-BEATS-DISCOVERY: a named source is never second-guessed -
 out4="$(runp "-" --source=rpool/db --target=hdd/store --config="$WORK/k5c.conf")"
-{ printf '%s' "$out4" | grep -qv 'PROPOZYCJA z inwentarza' \
+{ printf '%s' "$out4" | grep -qv 'PROPOSAL from this host' \
   && ! printf '%s' "$out4" | grep -q 'rpool/a/child'; } \
     && ok "krok5: an explicit --source is used as given -- no proposal is consulted" \
     || bad "krok5: an explicit --source is used as given" "$(printf '%s' "$out4"|head -6)"
@@ -1685,7 +1685,7 @@ K5C="$WORK/k5clients"; rm -rf "$K5C"; mkdir -p "$K5C"; CLIENTS_DIR="$K5C"
 
 # ---- first install, so there is something to repeat and to extend ----------
 out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/backups --config="$CFG" --install --yes)"
-{ printf '%s' "$out" | grep -q 'Backup lokalny AKTYWNY' && grep -qxF '[dataset:rpool/data]' "$CFG"; } \
+{ printf '%s' "$out" | grep -q 'Local backup ACTIVE' && grep -qxF '[dataset:rpool/data]' "$CFG"; } \
     && ok "krok5/blocker: the first install lands (precondition)" \
     || bad "krok5/blocker: the first install lands (precondition)" "$(printf '%s' "$out"|tail -4)"
 
@@ -1697,7 +1697,7 @@ out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/backups --config="$C
 seeds_after="$(wc -l < "$WORK/seed-calls" 2>/dev/null || echo 0)"
 writes_after="$(wc -l < "$WORK/crontab-writes" 2>/dev/null || echo 0)"
 cfg_after="$(md5sum < "$CFG")"
-{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'JUZ AKTYWNY'; } \
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'ALREADY ACTIVE'; } \
     && ok "krok5/blocker1: the identical successful command repeats with rc=0, not a FATAL overlap" \
     || bad "krok5/blocker1: the identical successful command repeats with rc=0" "rc=$rc $(printf '%s' "$out"|tail -3)"
 # A no-op that re-seeds or rewrites cron is not a no-op: it takes a fresh
@@ -1712,7 +1712,7 @@ cfg_after="$(md5sum < "$CFG")"
 cfg_before="$(md5sum < "$CFG")"
 out="$(runi snapsend-ok "" --name=lbx --source=rpool/data --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "already belong to another relationship" && printf '%s' "$out" | grep -q 'rpool/data (lb)' \
-  && ! printf '%s' "$out" | grep -q 'JUZ AKTYWNY' && [ "$(md5sum < "$CFG")" = "$cfg_before" ] && [ ! -e "$K5C/lbx.conf" ]; } \
+  && ! printf '%s' "$out" | grep -q 'ALREADY ACTIVE' && [ "$(md5sum < "$CFG")" = "$cfg_before" ] && [ ! -e "$K5C/lbx.conf" ]; } \
     && ok "krok5/blocker1: the same sources under another --name are refused by the owning relationship's name, nothing written" \
     || bad "krok5/blocker1: another --name over installed sources" "rc=$rc $(printf '%s' "$out"|tail -3)"
 
@@ -1871,7 +1871,7 @@ refused "a changed schedule is a different job, not a merged one" "$MON_A" \
 # ==============================================================================
 plan_config() {   # <extra args...> -> the candidate CONFIG, normalised
     run "$@" 2>&1 \
-        | sed -n '/--- kandydat CONFIG v4/,/--- wygenerowany blok crona/p' \
+        | sed -n '/--- candidate CONFIG v4/,/--- generated cron block/p' \
         | sed -E 's#/tmp/[A-Za-z0-9._]+#<TMP>#g'
 }
 
@@ -1971,10 +1971,10 @@ else
     bad "A': --target='' --recursive=flat snapshots AND prunes the subtree" "rc=$rc snapsend-R=$_snapR delsnaps-R=$_pruneR delsnaps-bez-R=$_pruneN
 $(printf '%s\n' "$out" | grep -E 'snapsend|delsnaps|FATAL' | head -5)"
 fi
-if printf '%s\n' "$out" | grep -q 'Retencja CELU:    (brak celu' && ! printf '%s\n' "$out" | grep -q 'Retencja CELU:    GFS'; then
+if printf '%s\n' "$out" | grep -q 'Target retention: (no target' && ! printf '%s\n' "$out" | grep -q 'Target retention: GFS'; then
     ok "A'/132-3: with no target the plan prints no target retention"
 else
-    bad "A'/132-3: with no target the plan prints no target retention" "$(printf '%s\n' "$out" | grep 'Retencja')"
+    bad "A'/132-3: with no target the plan prints no target retention" "$(printf '%s\n' "$out" | grep 'retention')"
 fi
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
         CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target=hdd/backups --profile=default --recursive=atomic --name=lb --config="$WORK/tgt-rec.conf" 2>&1 )"; rc=$?
@@ -2100,7 +2100,7 @@ cat > "$WORK/w7.conf" <<'EOF'
 	pair_label   = w7x
 EOF
 w7o="$(CLIENTS_DIR="$W7C" PROFILE_USER_ROOT="$W7P" run --source=rpool/data --target=hdd/backups --recursive=flat --profile=relacja-w7 --name=w7 --replace --config="$WORK/w7.conf")"
-w7cand=$(printf '%s\n' "$w7o" | sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p')
+w7cand=$(printf '%s\n' "$w7o" | sed -n '/^--- candidate CONFIG/,/^--- generated/p')
 w7x=$(printf '%s\n' "$w7cand" | sed -n '/^\[relation:w7x\]/,/^$/p')
 if [ "$(printf '%s' "$w7cand" | grep -c '^\[relation:w7\]')" = 1 ] && printf '%s' "$w7cand" | sed -n '/^\[relation:w7\]/,/^$/p' | grep -qF 'daily.retain = -D7' \
    && ! printf '%s' "$w7cand" | sed -n '/^\[relation:w7\]/,/^$/p' | grep -qF -- '-D30' && printf '%s' "$w7x" | grep -qF 'daily.retain = -D30' \
@@ -2115,7 +2115,7 @@ rm -rf "$W7P" "$W7C" "$WORK/w7.conf"
 # named relationship too -- its block has a source side only; the cron makes and prunes
 # snapshots in the source and sends nothing.
 smo=$(run --source=rpool/data --target= --recursive=flat --profile=default --name=lab-migawki --config="$WORK/smo.conf")
-smc=$(printf '%s\n' "$smo" | sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p')
+smc=$(printf '%s\n' "$smo" | sed -n '/^--- candidate CONFIG/,/^--- generated/p')
 if printf '%s' "$smc" | grep -qxF '[relation:lab-migawki]' && printf '%s' "$smc" | grep -q 'side         = source' \
    && ! printf '%s' "$smc" | grep -q 'side         = target' && ! printf '%s' "$smc" | grep -q '^\[template:' \
    && printf '%s\n' "$smo" | grep -q 'snapsend.sh -m "automated_hourly_" -R .*"rpool/data"$' \
@@ -2131,10 +2131,10 @@ rm -f "$WORK/smo.conf"
 X22C="$WORK/x22clients"; rm -rf "$X22C"; mkdir -p "$X22C"
 printf 'CLIENT_NAME=x22\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/data\nRECURSION=flat\nPROFILE=d7h24\nCRON_CONFIG=%s\n' "$WORK/x22.conf" > "$X22C/x22.conf"
 x22n=$(run --source=rpool/data --target=hdd/backups --recursive=flat --profile=d7h24 --name=x22 --config="$WORK/x22.conf")
-printf '%s\n' "$x22n" | sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p' | sed '1d;$d' > "$WORK/x22.conf"
+printf '%s\n' "$x22n" | sed -n '/^--- candidate CONFIG/,/^--- generated/p' | sed '1d;$d' > "$WORK/x22.conf"
 cp "$WORK/x22.conf" "$WORK/x22.before"
 x22o=$( ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" CLIENTS_DIR="$X22C"; cmd_edit_relation x22 --profile=d30h24 --source-profile= --plan ) 2>&1 )
-x22b=$(printf '%s\n' "$x22o" | sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p')
+x22b=$(printf '%s\n' "$x22o" | sed -n '/^--- candidate CONFIG/,/^--- generated/p')
 if grep -qxF '[relation:x22]' "$WORK/x22.before" && printf '%s' "$x22b" | grep -qxF '[relation:x22]' && [ "$(printf '%s' "$x22b" | grep -c '^\[relation:x22\]')" = 1 ] \
    && printf '%s' "$x22b" | grep -qF 'daily.retain = -D30' && ! printf '%s' "$x22b" | grep -q '^\[template:' \
    && [ "$(k21_flags "$x22o" hdd/backups/rpool/data)" = -D30 ] && cmp -s "$WORK/x22.conf" "$WORK/x22.before"; then
@@ -2153,7 +2153,7 @@ rm -rf "$X22C" "$WORK/x22.conf" "$WORK/x22.before"
 # where a local source still reads __lsrc_ and never the remote __src_.
 w12o="$(run --source=rpool/data --target=hdd/backups --profile=d7h24 --name=ns --config="$WORK/ns.conf")"
 if printf '%s' "$w12o" | grep -q 'profile__relacja-ns__lsrc_hourly snapshot' && ! printf '%s' "$w12o" | grep -q 'profile__relacja-ns__src_' \
-   && ! printf '%s' "$w12o" | sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p' | grep -q '^\[template:'; then
+   && ! printf '%s' "$w12o" | sed -n '/^--- candidate CONFIG/,/^--- generated/p' | grep -q '^\[template:'; then
     ok "local relationship: its source tiers are __lsrc_ in the cron (never the remote __src_), and the config holds no template section"
 else
     bad "local relationship: source template namespace" "$(printf '%s
@@ -2183,7 +2183,7 @@ fi
 #    first tier's (automated_hourly_).
 # default carries the [prune:] fragment (a source section to be absent), d7h24 is
 # a tiered flat profile (inline delsnaps lines to be absent).
-pv_cfg() { sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p' <<< "$1" | sed '1d;$d'; }
+pv_cfg() { sed -n '/^--- candidate CONFIG/,/^--- generated/p' <<< "$1" | sed '1d;$d'; }
 pv_o="$(run --source=rpool/data --target=hdd/backups --profile=default --passive --name=pv --config="$WORK/pv.conf")"; pv_rc=$?
 pv_c="$(pv_cfg "$pv_o")"
 pv_ds="$(printf '%s\n' "$pv_c" | awk '/^\[dataset:rpool\/data\]/{f=1;next} /^\[/{f=0} f')"

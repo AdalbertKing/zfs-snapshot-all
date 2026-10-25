@@ -214,10 +214,10 @@ restore_env
 #    have no local test in this project).
 # ---------------------------------------------------------------------------
 if grep -qE 'case "\$scope_rc" in' "$DEPLOY_SRC" \
-   && grep -qF 'Draft NIE powiodl sie' "$DEPLOY_SRC" \
-   && grep -qF 'Sesja edytora na $PEER_HOST zakonczyla sie niezerowo' "$DEPLOY_SRC" \
-   && grep -qF 'NIE przeszedl --commit-scope-check' "$DEPLOY_SRC" \
-   && grep -qF 'Zakres zredagowany zdalnie i zweryfikowany' "$DEPLOY_SRC"; then
+   && grep -qF 'The draft FAILED' "$DEPLOY_SRC" \
+   && grep -qF 'The editor session on $PEER_HOST exited non-zero' "$DEPLOY_SRC" \
+   && grep -qF 'did NOT pass --commit-scope-check' "$DEPLOY_SRC" \
+   && grep -qF 'Scope edited remotely and verified' "$DEPLOY_SRC"; then
     ok "do_pair: the final summary names a distinct recovery step for each of scope_rc 0/2/3/4"
 else
     bad "do_pair: the final summary names a distinct recovery step for each of scope_rc 0/2/3/4" \

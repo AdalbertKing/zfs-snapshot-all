@@ -407,7 +407,7 @@ harm_flow() {
             [ -n "$only_src" ] && hs=2 || hs=1; continue
         fi
         { echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione:')"; echo
-          sed -n '/^Relacja .* -- szczeble:/,/^plan only/p' "$TMPD/plan.txt" | grep -v '^plan only'
+          sed -n '/^Relation .* -- tiers:/,/^plan only/p' "$TMPD/plan.txt" | grep -v '^plan only'
           echo
           grep -E '^ +[-+][0-9*]' "$TMPD/plan.txt" | grep -v 'check-snap-age' | sed -E 's/profile__[^ ]*__//; s|/[^ ]*/zfs-job\.sh "([^"]*)".* (-[HDWMY][0-9]+) *$|\1  \2|; t; s|/[^ ]*/zfs-job\.sh "([^"]*)".*|\1|' | head -40
           echo
@@ -661,7 +661,7 @@ PYEOF
                 {
                     echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione:')"
                     echo
-                    grep "^Relacja '" "$TMPD/stplan.txt"
+                    grep "^Relation '" "$TMPD/stplan.txt"
                     echo
                     echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
                 } >"$TMPD/stplan2.txt"
@@ -703,7 +703,7 @@ save_all() {
         fi
         if [ "${#P_EDIT[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(T '%s. Szablon: %s -> %s' "$k" "$(cur_words)" "$P_EDIT_WORDS")"; sed -n '3,$p' "$TMPD/p_edit.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
         if [ "${#P_TIERS[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(T '%s. Harmonogram i retencja (tabela):' "$k")"; sed -n '3,$p' "$TMPD/p_tiers.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
-        if [ "${#P_TRANSFER[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(Tv '$k. Ustawienia silnika:' '$k' "$k")"; grep "^Relacja '" "$TMPD/p_transfer.txt" | sed 's/^/   /'; echo; fi
+        if [ "${#P_TRANSFER[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(Tv '$k. Ustawienia silnika:' '$k' "$k")"; grep "^Relation '" "$TMPD/p_transfer.txt" | sed 's/^/   /'; echo; fi
         echo "$(T 'Komendy:')"
         [ -n "$P_HOST" ] && echo "  $(shq "$ZB") activate $NAME --host=$P_HOST --skip-final-catchup --yes"
         for n in $P_ADDED; do echo "  $(shq "$ZB") add-source $NAME $n --yes"; done
@@ -1029,7 +1029,7 @@ name = sys.argv[2]
 print(_(u"PLAN -- nic jeszcze nie zostało zmienione:") + u"\n")
 show = False
 for l in lines:
-    if l.startswith("Edycja relacji:") or l.startswith("UWAGA:"):
+    if l.startswith(("Relation edit:", "WARNING:", "UWAGA:")):   # UWAGA: hand-edits.py w polskim oknie
         show = True
     if show:
         if not l.strip():
@@ -1044,7 +1044,7 @@ crontab = False
 gone = 0
 new = []
 for l in lines:
-    if "co sie zmieni w crontabie" in l:
+    if "what will change in the crontab" in l:
         crontab = True; continue
     if not crontab or not re.match(r"^\s+[-+]\S", l) or (" -L %s " % name) not in l:
         continue

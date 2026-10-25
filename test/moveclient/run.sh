@@ -203,8 +203,8 @@ check "proof: a copy whose snapshots cannot be read refuses" "1" "$rc"
 # ---------------------------------------------------------------------------
 zb() { bash "$ZB" move-to-client "$@" 2>&1; }
 
-case "$(zb)" in *"uzycie:"*) ok "cli: no arguments prints the usage" ;; *) bad "cli: no arguments prints the usage" ;; esac
-case "$(zb a)" in *"uzycie:"*) ok "cli: one relationship is not a move" ;; *) bad "cli: one relationship is not a move" ;; esac
+case "$(zb)" in *"usage:"*) ok "cli: no arguments prints the usage" ;; *) bad "cli: no arguments prints the usage" ;; esac
+case "$(zb a)" in *"usage:"*) ok "cli: one relationship is not a move" ;; *) bad "cli: one relationship is not a move" ;; esac
 case "$(zb a a)" in *"onto itself"*) ok "cli: a relationship onto itself is refused" ;; *) bad "cli: a relationship onto itself is refused" ;; esac
 case "$(zb a b c)" in *"Got a third"*) ok "cli: a third address is refused" ;; *) bad "cli: a third address is refused" ;; esac
 case "$(zb a b --nope)" in *"unknown option"*) ok "cli: an unknown option is refused" ;; *) bad "cli: an unknown option is refused" ;; esac
