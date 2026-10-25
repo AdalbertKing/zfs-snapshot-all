@@ -621,5 +621,7 @@
 "   Po zmianie relacja obejmuje:": "   After the change the relation covers:",
 "(z dziećmi, także przyszłymi)": "(with children, future ones too)",
 "(sam dataset; dzieci tylko wymienione)": "(the dataset itself; only the listed children)",
-"Nowa relacja '$RNAME': zakres wg drzewa": "New relation '$RNAME': scope as in the tree"
+"Nowa relacja '$RNAME': zakres wg drzewa": "New relation '$RNAME': scope as in the tree",
+"   DOJDĄ:    $n  (pierwsza migawka od razu)": "   ADDED:    $n  (first snapshot at once)",
+"   ODPADNĄ:  $n  (jego migawki ZOSTAJĄ, nikt ich nie przycina)": "   DROPPED:  $n  (its snapshots STAY, nothing prunes them)"
 }
