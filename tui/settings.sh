@@ -125,7 +125,7 @@ while :; do
     items+=("#_" " " mail "$(T 'Wyślij mail próbny (na obecny adres)')" zapisz "$(Tv 'Zapisz zmiany ($n) -- plan, WYKONAJ' '$n' "$n")")
     wt --title "$(T 'Ustawienia hosta')" --ok-button "$(T Wybierz)" --cancel-button "$(T Wyjdź)" --notags --default-item "$LAST" \
        --menu "$(T 'Wybierz pozycję, aby zmienić jej wartość. Nic nie zostanie zapisane, dopóki nie wybierzesz „Zapisz zmiany” i WYKONAJ. Nawias przy wartości mówi, skąd ona pochodzi, jeśli nie ma jej w pliku ustawień.')" \
-       "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 2)" "${items[@]}" \
+       "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 3)" "${items[@]}" \
        || { clear 2>/dev/null; wt_end "$(T 'Ustawienia: wyjście, nic nie zapisano')"; exit 1; }
     LAST="$WT_OUT"
     case "$WT_OUT" in

@@ -568,7 +568,7 @@ step_chain() {   # 0 = odpowiedź zapisana, 1 = wstecz
     facts="$(chain_facts)"
     geom
     wt --title "$(title 5 "$(T 'Migawki naszej rodziny już są na źródle')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
-       --menu "$(Tv 'Na $HOST są już migawki naszej rodziny:\n$facts\n\nKto je dziś robi? Najnowsza (sprzed godziny-dwóch) zwykle znaczy, że ktoś.\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.' '$HOST' "${HOST:-$(hostname)}" '$facts' "$facts")" "$H" "$W" 2 \
+       --menu "$(Tv 'Na $HOST są już migawki naszej rodziny:\n$facts\n\nKto je dziś robi? Najnowsza sprzed godziny-dwóch zwykle znaczy, że ktoś je robi.\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.' '$HOST' "${HOST:-$(hostname)}" '$facts' "$facts")" "$H" "$W" 2 \
        chain "$(T 'Tworzy je inny kolektor, lub inna relacja albo stary cron -- łańcuch, przyjmuję')" \
        own "$(T 'Nikt -- to resztki starej relacji, robię własne')" || return 1
     CHAIN_ANS="$WT_OUT"; CHAIN_FOR="${B_ROOT[*]}"
@@ -580,7 +580,7 @@ step_chain() {   # 0 = odpowiedź zapisana, 1 = wstecz
 rname_default() {
     if [ -n "$RNAME" ]; then echo "$RNAME"
     elif [ "$NOCOPY" -eq 1 ]; then echo "migawki-$(printf '%s' "${B_ROOT[0]:-zrodlo}" | tr '/' '-')"
-    elif [ "$MODE" = local ]; then echo "lokalna-$(printf '%s' "${B_ROOT[0]:-kopia}" | tr '/' '-')"
+    elif [ "$MODE" = local ]; then echo "$(T lokalna)-$(printf '%s' "${B_ROOT[0]:-kopia}" | tr '/' '-')"
     else echo "${HOSTNAME_R:-$HOST}"; fi
 }
 # RĘCZNIE (P4, właściciel 2026-10-09: relacja "z szablonu i ręcznie"): ta sama tabela co

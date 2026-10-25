@@ -3730,7 +3730,7 @@ def replica_disk_words(r):
     if r.get("prefix") == "-":
         if r.get("history") and r["history"] not in ("all",):
             return _(u"tylko najnowsza migawka kolektora (historia: tylko różnica -- pośrednie nie trafiają)")
-        return _(u"to samo co kolektor: wszystkie jego migawki, z pośrednimi")
+        return _(u"to samo co kolektor: wszystkie jego migawki, także pośrednie")
     n = replica_keep_n(r)
     f = (r.get("schedule") or "").split()
     span = u""
@@ -3922,7 +3922,7 @@ def odzysk_detail(row, copies=()):
             (_(u"Ścieżka"), path),
             (_(u"Kierunek"), row.get("dir") or "?"),
             group(None, _(u"Zgody")),
-            (_(u"Na źródło"), _(u"sprawdza okno Przywróć -- źródło musi wydać zgodę na dostęp (deploy.sh --allow-restore)")),
+            (_(u"Na źródło"), _(u"sprawdza to okno Przywróć -- źródło musi wydać zgodę na dostęp (deploy.sh --allow-restore)")),
             (_(u"Na bok"), _(u"tak -- do nowego datasetu obok, oryginał nietknięty")),
             (_(u"Przeglądanie"), _(u"tak: migawka tylko do odczytu, mc, potem odmontowanie")),
             (_(u"Uwaga"), _(u"odzysk może nadpisać albo dołożyć dane -- nic się nie zmieni, dopóki nie wybierzesz WYKONAJ"))]
@@ -3988,7 +3988,7 @@ HELP = [
     u"                 otwiera okna Przywróć -- dataset, cel, migawka, plan, WYKONAJ.",
     u"                 Tylko tutaj.",
     u"                 F7 przeglądaj kopię: migawka zamontowana tylko do odczytu, mc",
-    u"                 do skopiowania plików, po wyjściu odmontowanie (datasety plikowe).",
+    u"                 do skopiowania plików; po wyjściu odmontowuje (datasety plikowe).",
     u"  F10 Ustawienia ustawienia hosta (/etc/zfs-snapshot-all/settings.ini): alerty",
     u"                 (adres, tryb, godzina maila, mail 'wszystko OK'), próg pojemności,",
     u"                 strażnik, szablon nowej relacji, aktualizacja, język GUI; wysłanie",
@@ -3997,7 +3997,7 @@ HELP = [
     u"                 pojemności (pełna pula) i strażnik nagłego przyrostu danych;",
     u"                 włączasz je w F10.",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
-    u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
+    u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local = na tym hoście",
     "",
     u"  PANELE (każdy ekran): lista = wybór i stan; panel obok = fakty o",
     u"                 zaznaczonym wierszu, których nie widać na liście; na dole zakładki",

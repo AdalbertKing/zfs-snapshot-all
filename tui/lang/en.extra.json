@@ -611,5 +611,11 @@
 "Wybrana cała pula $r: replika kopiuje $n datasetów leżących bezpośrednio w niej, każdy z całą zawartością:\\n${list}\\nNowy dataset założony później bezpośrednio w $r trzeba dodać w zmianie repliki.\\nNowe datasety głębiej dojdą same.\\n": "Whole pool $r chosen: the replica copies the $n datasets directly in it, each with all its contents:\\n${list}\\nA dataset created later directly in $r must be added by changing the replica.\\nNew datasets deeper down join by themselves.\\n",
 "Każdy dysk tego hosta jest w puli albo zamontowany.\\nPodłącz inny dysk i wybierz to jeszcze raz.": "Every disk of this host is in a pool or mounted.\\nConnect another disk and choose this again.",
 "Nośnik wymienny jest podłączany tylko na czas kopii.": "The removable medium is connected only for the copy.",
-"nic (pasywnie)": "nothing (passive)"
+"nic (pasywnie)": "nothing (passive)",
+"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local = na tym hoście": "                 pve10<pve9 I pull, pve10<>pve9 both ways, local = on this host",
+"                 do skopiowania plików; po wyjściu odmontowuje (datasety plikowe).": "                 to copy files, unmounted on exit (file datasets).",
+"to samo co kolektor: wszystkie jego migawki, także pośrednie": "The same as the collector: all of its snapshots, including the intermediate ones",
+"sprawdza to okno Przywróć -- źródło musi wydać zgodę na dostęp (deploy.sh --allow-restore)": "the “Restore” window checks it -- the source must grant access (deploy.sh --allow-restore)",
+"Na $HOST są już migawki naszej rodziny:\\n$facts\\n\\nKto je dziś robi? Najnowsza sprzed godziny-dwóch zwykle znaczy, że ktoś je robi.\\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.": "There are already snapshots of our family on $HOST:\\n$facts\\n\\nWho is taking them today? The latest one (an hour or two old) usually\\nmeans someone is.\\nChain: this relation RECEIVES them and creates/deletes nothing there.\\nLeftovers: this relation makes its OWN; the old ones join its retention\\nand age out.",
+"lokalna": "local"
 }
