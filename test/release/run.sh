@@ -92,6 +92,18 @@ else
     bad "modes: the release index lost executable bits" "$(printf '%s\n' "$modes_bad" | head -5)" "executable among the four: $nx"
 fi
 
+# 5c. a host's own files in the checkout (jobs.<host>.conf, a backup of it, a cron dump) stay
+# ignored, so update-control's "is the checkout clean" check passes on a real host; a shipped
+# file is still tracked (control).
+touch "$REL/jobs.pve2.conf" "$REL/jobs.pve2.conf.bak" "$REL/cron.txt"
+dirty="$(git -C "$REL" status --porcelain --untracked-files=all)"
+if [ -z "$dirty" ] && git -C "$REL" ls-files --error-unmatch zfs-backup.sh .gitignore >/dev/null 2>&1; then
+    ok "gitignore: a host's own files stay untracked-and-ignored; shipped files and .gitignore are tracked"
+else
+    bad "gitignore: the checkout is not clean with host files in it" "$dirty"
+fi
+rm -f "$REL/jobs.pve2.conf" "$REL/jobs.pve2.conf.bak" "$REL/cron.txt"
+
 # 6. publishing the same revision again commits nothing; history only grows
 n1="$(git -C "$REL" rev-list --count HEAD)"
 out2="$(bash "$REPO/release/publish.sh" HEAD "$REL" 2>&1)"
