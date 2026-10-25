@@ -4429,10 +4429,12 @@ if [ "$got" = "R=hdd/vm-disks/vm-102 A=hdd/vm-disks/b" ]; then
 else
     bad "okno zmiany: zmiana wyjątków -> czasowniki" "$got"
 fi
-if grep -q 'BASKET_NO_EXC=0' "$REPO/tui/edit-relation.sh"; then
-    ok "okno zmiany: drzewo pozwala na wyjątki ([-] część), jak kreator"
+# Do czasu przebudowy sekcji po zmianie wyjątku okno zmiany wyjątków nie edytuje
+# (2026-10-25: sam remove-source dziecka nie zmieniał sekcji kolektora).
+if grep -q '^RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=1' "$REPO/tui/edit-relation.sh"; then
+    ok "okno zmiany: wyjątków nie edytuje, dopóki zmiana wyjątku nie przebudowuje sekcji kolektora"
 else
-    bad "okno zmiany: wyjątki zablokowane" "$(grep -n BASKET_NO_EXC "$REPO/tui/edit-relation.sh")"
+    bad "okno zmiany: edycja wyjątków włączona bez przebudowy sekcji" "$(grep -n BASKET_NO_EXC "$REPO/tui/edit-relation.sh")"
 fi
 
 # Okno zmiany relacji mówi słowami jej rodzaju (właściciel 2026-10-25: "What to copy" przy

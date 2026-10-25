@@ -195,7 +195,10 @@ if [ "$STATE" != active ]; then
     exit 1
 fi
 # Koszyk (basket-lib.sh) w "Datasety": nagłówek okien, bez "Sposób" i bez "Wyjątków".
-RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=0
+# Wyjątki w oknie zmiany -- wyłączone z powrotem (2026-10-25): remove-source dziecka pod
+# korzeniem zawęża zakres źródła, ale nie przebudowuje sekcji kolektora; wróci razem z
+# przebudową, sprawdzone na labie. Obecne wyjątki nadal widać ([-], basket_collapse).
+RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=1
 title() { T 'Zmień relację %s -- %s' "$NAME" "$2"; }
 cur_words() {   # słowa o obecnym szablonie celu
     if [ "$CUR_P" = "$HNAME" ]; then echo "$(T 'własne ustawienia relacji (tabela szczebli)')"; else echo "${CUR_P:-$(T '<nie zapisany>')}"; fi

@@ -10696,7 +10696,14 @@ resolve_mode_datasets() {
     # the #101 refusal below.
     [ "${PAIR_CONTROL_ONLY:-0}" -eq 1 ] && return 0
     if [ -n "${PEER_SAVED_MODE:-}" ]; then
-        [ -z "${PEER_SAVED_DATASETS:-}" ] || return 0
+        # A snaponly relationship's list was seeded from REQUESTED_DATASETS (the record's
+        # roots) by the loader, so a non-empty list does not mean "already resolved": its
+        # sections need the scope's recursion. Skipping here re-rendered every root as
+        # 'recursive = no' with no children (Metropolis pve2 -> pve1, 2026-10-25: a template
+        # change in the GUI stopped the snapshots of every VM disk). scope_root_is_ours
+        # below still keeps the resolution inside what this relationship requested.
+        [ -z "${PEER_SAVED_DATASETS:-}" ] \
+            || { [ "${RUX_MODE:-}" = snaponly ] && [ -n "${REQUESTED_DATASETS:-}" ]; } || return 0
     else
         [ -n "${PEER_SAVED_DATASETS:-}" ] || return 0
         local scope_rc; has_committed_scope; scope_rc=$?
