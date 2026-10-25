@@ -13259,7 +13259,7 @@ else
 fi
 DROUT=$(dr_run c)
 if printf '%s' "$DROUT" | grep -q "1\. collector : skipped -- the record already says 'removed'" \
-   && printf '%s' "$DROUT" | grep -q '2\. source    : on 10.0.0.9 (port 2222), as root over SSH: deploy.sh --leave=' \
+   && printf '%s' "$DROUT" | grep -q '2\. source    : on 10.0.0.9 (10.0.0.9:2222), as root over SSH: deploy.sh --leave=' \
    && printf '%s' "$DROUT" | grep -q '4\. copies    : KEPT on this host -- pass'; then
     ok "delrel: on a record that already says 'removed' the collector half is skipped -- the verb then means 'free the name'; a never-activated record (no MANAGED_DATASETS) is not a crash; the port comes from the recorded endpoint"
 else
@@ -13383,9 +13383,9 @@ dr_probe() {   # <rc of the root channel> <args...> -> plan + "CALLS=<n>"
       cmd_delete_relation "$@"; echo "CALLS=$n" ) 2>&1
 }
 DP_NO=$(dr_probe 255 c --check-source); DP_OK=$(dr_probe 0 c --check-source); DP_PLAIN=$(dr_probe 255 c)
-if printf '%s' "$DP_NO" | grep -q '2\. source    : NO root SSH to 10.0.0.9 (port 2222) from this host -- on 10.0.0.9, as root: cd .* && \./deploy.sh --leave=' \
+if printf '%s' "$DP_NO" | grep -q '2\. source    : NO root SSH to 10.0.0.9:2222 from this host -- on 10.0.0.9, as root: cd .* && \./deploy.sh --leave=' \
    && printf '%s' "$DP_NO" | grep -q 'CALLS=1' \
-   && printf '%s' "$DP_OK" | grep -q '2\. source    : on 10.0.0.9 (port 2222), as root over SSH: deploy.sh --leave=' \
+   && printf '%s' "$DP_OK" | grep -q '2\. source    : on 10.0.0.9 (10.0.0.9:2222), as root over SSH: deploy.sh --leave=' \
    && printf '%s' "$DP_PLAIN" | grep -q '2\. source    : on 10.0.0.9' && printf '%s' "$DP_PLAIN" | grep -q 'CALLS=0'; then
     ok "delrel: --check-source -- no root channel: the plan says so with the manual --leave; channel up: the usual line; without the flag: no connection at all (U16)"
 else
@@ -14183,6 +14183,68 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "add-source: unknown option '
 else
     bad "addsource: option parsing" "rc=$rc" "$out"
 fi
+
+# REV-20261025-175: add-source, remove-source and delete-relation reach the source at the
+# ACTIVE endpoint -- host and port of ONE record shape (management_host_port), never the
+# pairing host with the active port. The SSH wrapper is stubbed: the first EP_OK_CALLS
+# calls answer like the source would, the rest fail (unreachable). Every call's route is
+# recorded, and nothing local may change behind a failed remote step.
+ep_case() {   # <verb args...> ; env: EP_PEER EP_AE EP_SLOT_HOST EP_SLOT_PORT EP_OK_CALLS
+    local w; w=$(mktemp -d); touch "$w/client.conf" "$w/ssh"
+    ( source "$ZFSBACKUP" >/dev/null 2>&1
+      client_conf_path() { printf '%s\n' "$w/client.conf"; }
+      record_get() { printf '%s\n' backup; }
+      record_load() {
+          PEER_HOST="$EP_PEER"; STATE=active; RUX_MODE=backup
+          REQUESTED_DATASETS="pool/old pool/new"; MANAGED_DATASETS=""; CLIENT_TARGET=""
+          if [ -n "$EP_AE" ]; then ACTIVE_ENDPOINT="$EP_AE"; else unset ACTIVE_ENDPOINT; fi
+          ENDPOINT_VPN_HOST="${EP_SLOT_HOST:-}"; ENDPOINT_VPN_PORT="${EP_SLOT_PORT:-}"
+          [ -n "$ENDPOINT_VPN_HOST" ] || unset ENDPOINT_VPN_HOST
+      }
+      rux_root_ssh() {
+          printf '%s:%s\n' "$1" "$2" >> "$w/ssh"
+          [ "$(wc -l < "$w/ssh")" -le "${EP_OK_CALLS:-0}" ] || return 255
+          printf '%s\n' pool/new
+      }
+      cmd_activate_client() { echo activate >> "$w/local"; }
+      record_set() { echo record >> "$w/local"; }
+      remove_client() { echo remove >> "$w/local"; }
+      "$@" ) > "$w/out" 2>&1
+    local rc=$?
+    # rc | every route used (deduplicated) | number of calls | local steps | refusal marker
+    printf 'rc=%s routes=%s calls=%s local=%s%s\n' "$rc" "$(sort -u "$w/ssh" | tr '\n' ,)" \
+        "$(wc -l < "$w/ssh" | tr -d ' ')" "$(cat "$w/local" 2>/dev/null | tr '\n' ,)" \
+        "$(grep -q 'names no host' "$w/out" && echo ' NO-HOST')"
+    rm -rf "$w"
+}
+for v in "cmd_add_source rel pool/new --yes" "cmd_remove_source rel pool/new --yes" "cmd_delete_relation rel --check-source"; do
+    vn=${v%% *}
+    got=$(EP_PEER=lan.example EP_AE=vpn.example:2222 ep_case $v)
+    case "$got" in *"routes=vpn.example:2222, calls=1 local=") ok "rev175: $vn -- moved relationship (host AND port changed) is reached at the active endpoint, nothing local changed" ;;
+        *) bad "rev175: $vn moved host+port" "$got" ;; esac
+    got=$(EP_PEER=lan.example EP_AE=lan.example:2200 ep_case $v)
+    case "$got" in *"routes=lan.example:2200, calls=1 local=") ok "rev175: $vn -- same host, changed port" ;;
+        *) bad "rev175: $vn same host, port" "$got" ;; esac
+    got=$(EP_PEER=lan.example EP_AE=vpn EP_SLOT_HOST=vpn.example EP_SLOT_PORT=2022 ep_case $v)
+    case "$got" in *"routes=vpn.example:2022, calls=1 local=") ok "rev175: $vn -- legacy named slot resolves through ENDPOINT_VPN_HOST/PORT" ;;
+        *) bad "rev175: $vn legacy slot" "$got" ;; esac
+    got=$(EP_PEER=lan.example EP_AE= ep_case $v)
+    case "$got" in *"routes=lan.example:22, calls=1 local=") ok "rev175: $vn -- no active endpoint: the pairing host, port 22" ;;
+        *) bad "rev175: $vn default" "$got" ;; esac
+done
+# Both remote steps of add-source, not only the first: the probe answers, the scope edit
+# (call 2) fails -- both went to the active endpoint and nothing local ran.
+got=$(EP_OK_CALLS=1 EP_PEER=lan.example EP_AE=vpn.example:2222 ep_case cmd_add_source rel pool/new --yes)
+case "$got" in "rc=1 routes=vpn.example:2222, calls=2 local=") ok "rev175: add-source -- probe and scope edit both go to the active endpoint; step 2 failing changes nothing locally" ;;
+    *) bad "rev175: add-source both steps" "$got" ;; esac
+for v in "cmd_add_source rel pool/new --yes" "cmd_remove_source rel pool/new --yes"; do
+    got=$(EP_PEER=lan.example EP_AE=vpn ep_case $v)
+    case "$got" in "rc=1 routes= calls=0 local= NO-HOST") ok "rev175: ${v%% *} -- a legacy slot naming no host is refused before any SSH" ;;
+        *) bad "rev175: ${v%% *} unresolvable slot" "$got" ;; esac
+done
+got=$(EP_PEER=lan.example EP_AE=vpn ep_case cmd_delete_relation rel)
+case "$got" in *"routes= calls=0 local= NO-HOST") ok "rev175: delete-relation -- an endpoint naming no host skips the source's half (manual command in the plan), no SSH" ;;
+    *) bad "rev175: delete-relation unresolvable slot" "$got" ;; esac
 
 fi   # --- koniec sekcji addsource ---
 

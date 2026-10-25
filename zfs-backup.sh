@@ -1044,6 +1044,25 @@ active_endpoint_host_port() {
     esac
 }
 
+# REV-20261025-175: the management route of an installed relationship -- the
+# host AND port of its active endpoint, from one record shape. A record with no
+# ACTIVE_ENDPOINT (never activated) is reached at PEER_HOST, port 22. Splitting
+# the tuple by hand (PEER_HOST with the port of ACTIVE_ENDPOINT) sent a moved
+# relationship to the old host on the new port. Prints "host port"; rc 1 when a
+# legacy slot record names no host -- the caller refuses rather than guess.
+management_host_port() {
+    if [ -z "${ACTIVE_ENDPOINT:-}" ]; then
+        [ -n "${PEER_HOST:-}" ] || return 1
+        printf '%s %s' "$PEER_HOST" 22
+        return 0
+    fi
+    local h p
+    read -r h p <<< "$(active_endpoint_host_port 2>/dev/null)"
+    [ -n "$h" ] || return 1
+    case "$p" in ''|*[!0-9]*) p=22 ;; esac
+    printf '%s %s' "$h" "$p"
+}
+
 # Human display for the current endpoint: bare "host:port" for a new-shape
 # record (nothing extra to add), "slot (host:port)" for a legacy one where
 # the slot name is itself extra information. Reads ACTIVE_ENDPOINT/LOAD_HOST/
@@ -14873,8 +14892,9 @@ cmd_delete_relation() {
     # The label the SOURCE knows this collector by -- derived exactly as deploy.sh
     # --unpair derives the `--leave=` it prints (hostname -s, sanitised).
     local label; label=$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')
-    case "${ACTIVE_ENDPOINT:-}" in *:*) port="${ACTIVE_ENDPOINT##*:}" ;; esac
-    case "$port" in ''|*[!0-9]*) port=22 ;; esac
+    # REV-20261025-175: the source is reached at the ACTIVE endpoint (host and port of one
+    # record shape); PEER_HOST stays the pairing identity for the "others" check below.
+    local host=""; read -r host port <<< "$(management_host_port)" || true
 
     # U9 (2026-10-06): MANAGED_DATASETS is written by ACTIVATION. A relationship
     # that was SEEDED and never activated already has full copies on disk, and
@@ -14929,6 +14949,7 @@ cmd_delete_relation() {
     if [ "$keep_source" -eq 1 ]; then do_source=0; why_source="--keep-source"
     elif [ "${RUX_MODE:-}" = local ]; then do_source=0; why_source="a local relationship -- source and copy are on this host"
     elif [ -z "$peer" ]; then do_source=0; why_source="the record names no peer"
+    elif [ -z "$host" ]; then do_source=0; why_source="the active endpoint '${ACTIVE_ENDPOINT:-}' names no host -- on $peer, as root: deploy.sh --leave=$label"
     elif [ -n "$others" ]; then do_source=0; why_source="other relationships still use $peer: $others"
     fi
     [ "$keep_record" -eq 1 ] && do_record=0
@@ -14940,10 +14961,10 @@ cmd_delete_relation() {
     # --yes run would use. Read-only; the plan says so instead of the run failing half-way.
     local no_root=0
     if [ "$do_source" -eq 1 ] && [ "$check_source" -eq 1 ] && [ "$yes" -ne 1 ]; then
-        rux_root_ssh "$peer" "$port" true >/dev/null 2>&1 || no_root=1
+        rux_root_ssh "$host" "$port" true >/dev/null 2>&1 || no_root=1
     fi
-    if [ "$no_root" -eq 1 ]; then echo "  2. source    : NO root SSH to $peer (port $port) from this host -- on $peer, as root: cd $SOURCE_REPO_DIR && ./deploy.sh --leave=$label  (or run this with --keep-source)"
-    elif [ "$do_source" -eq 1 ]; then echo "  2. source    : on $peer (port $port), as root over SSH: deploy.sh --leave=$label  -- the account and its zfs grants there"
+    if [ "$no_root" -eq 1 ]; then echo "  2. source    : NO root SSH to $host:$port from this host -- on $peer, as root: cd $SOURCE_REPO_DIR && ./deploy.sh --leave=$label  (or run this with --keep-source)"
+    elif [ "$do_source" -eq 1 ]; then echo "  2. source    : on $peer ($host:$port), as root over SSH: deploy.sh --leave=$label  -- the account and its zfs grants there"
     else echo "  2. source    : skipped -- $why_source"; fi
     if [ "$do_record" -eq 1 ] && record_is_removed_name_live_as_source "$name"; then
         echo "  3. record    : archived as $(basename "$(client_conf_path "$name")").removed-<time> -- '$name' is also this host's live SOURCE identity (account zfsbackup-$name), which is not touched"
@@ -14978,10 +14999,10 @@ cmd_delete_relation() {
         # "free the name" -- and --leave on an absent label is an ERROR by design,
         # which made a clean removal report leftovers (measured on pve10, 2026-09-20).
         local present=0
-        rux_root_ssh "$peer" "$port" "[ -e '/etc/zfs-snapshot-all/peers/$label.conf' ] || id 'zfsbackup-$label' >/dev/null 2>&1" || present=$?
+        rux_root_ssh "$host" "$port" "[ -e '/etc/zfs-snapshot-all/peers/$label.conf' ] || id 'zfsbackup-$label' >/dev/null 2>&1" || present=$?
         if [ "$present" -eq 1 ]; then
             log "delete-relation: nothing of '$label' is left on $peer (no manifest, no account) -- the source's half was already done"
-        elif [ "$present" -eq 0 ] && rux_root_ssh "$peer" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --leave='$label'"; then :
+        elif [ "$present" -eq 0 ] && rux_root_ssh "$host" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --leave='$label'"; then :
         else
             rc=1; source_failed=1
             log "!!! delete-relation: the source's half did NOT complete. The collector's half is done. On $peer, as root:"
@@ -15252,13 +15273,13 @@ cmd_remove_source() {
     record_load client "$cpath"
     local peer="${PEER_HOST:-}" state="${STATE:-}" port=22
     local label; label=$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')
-    case "${ACTIVE_ENDPOINT:-}" in *:*) port="${ACTIVE_ENDPOINT##*:}" ;; esac
-    case "$port" in ''|*[!0-9]*) port=22 ;; esac
     [ -n "$peer" ] || die "remove-source: the record of '$name' names no peer host -- nothing to reach"
+    local host
+    read -r host port <<< "$(management_host_port)" && [ -n "$host" ] || die "remove-source: the active endpoint of '$name' ('${ACTIVE_ENDPOINT:-}') names no host -- nothing to reach. Nothing was changed."
     [ "$state" = removed ] && die "remove-source: '$name' is already removed -- there is no scope left to narrow"
 
     local sfile="/etc/zfs-snapshot-all/peers/$label.scope"
-    echo "remove-source '$ds' from '$name' (peer $peer, port $port):"
+    echo "remove-source '$ds' from '$name' (peer $peer, endpoint $host:$port):"
     echo "  1. source    : $sfile -- the dataset is taken out of the scope this relationship grants from"
     echo "  2. source    : deploy.sh --commit-scope=$label  -- revokes its zfs grant and narrows the freeze whitelist"
     if [ "${RUX_MODE:-}" = snaponly ]; then
@@ -15304,7 +15325,7 @@ cmd_remove_source() {
             if (already) print "ALREADY-EXCLUDED" > "/dev/stderr" }
     '
     local out rc
-    out=$(rux_root_ssh "$peer" "$port" "awk -v target=$(printf '%q' "$ds") $(printf '%q' "$awk_prog") $(printf '%q' "$sfile") > $(printf '%q' "$sfile").new 2>/tmp/rs-awk.err && grep -q ALREADY-EXCLUDED /tmp/rs-awk.err && echo ALREADY || mv $(printf '%q' "$sfile").new $(printf '%q' "$sfile")" 2>&1); rc=$?
+    out=$(rux_root_ssh "$host" "$port" "awk -v target=$(printf '%q' "$ds") $(printf '%q' "$awk_prog") $(printf '%q' "$sfile") > $(printf '%q' "$sfile").new 2>/tmp/rs-awk.err && grep -q ALREADY-EXCLUDED /tmp/rs-awk.err && echo ALREADY || mv $(printf '%q' "$sfile").new $(printf '%q' "$sfile")" 2>&1); rc=$?
     if [ "$rc" -ne 0 ]; then
         log "!!! remove-source: could not narrow the scope on $peer -- NOTHING was changed here either."
         log "!!!     $out"
@@ -15315,7 +15336,7 @@ cmd_remove_source() {
     esac
 
     log "remove-source: 2/3 committing the narrowed scope on $peer"
-    if ! rux_root_ssh "$peer" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --commit-scope='$label'"; then
+    if ! rux_root_ssh "$host" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --commit-scope='$label'"; then
         log "!!! remove-source: the source did NOT commit the narrowed scope. Its scope FILE is already narrowed, so re-running this same command retries the commit."
         log "!!!     on $peer, as root: cd $SOURCE_REPO_DIR && ./deploy.sh --commit-scope=$label"
         die "remove-source: stopped at 2/3 -- this host's config and cron were NOT touched, so the two sides can still be brought back together by one retry."
@@ -15487,12 +15508,12 @@ cmd_add_source() {
     record_load client "$cpath"
     local peer="${PEER_HOST:-}" state="${STATE:-}" port=22
     local label; label=$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')
-    case "${ACTIVE_ENDPOINT:-}" in *:*) port="${ACTIVE_ENDPOINT##*:}" ;; esac
-    case "$port" in ''|*[!0-9]*) port=22 ;; esac
     [ -n "$peer" ] || die "add-source: the record of '$name' names no peer host -- nothing to reach"
+    local host
+    read -r host port <<< "$(management_host_port)" && [ -n "$host" ] || die "add-source: the active endpoint of '$name' ('${ACTIVE_ENDPOINT:-}') names no host -- nothing to reach. Nothing was changed."
     [ "$state" = active ] || die "add-source: '$name' is in state '${state:-unknown}' -- only an installed (active) relationship takes one more dataset; a new relationship is created with its whole list"
     local sfile="/etc/zfs-snapshot-all/peers/$label.scope"
-    echo "add-source '$ds' to '$name' (peer $peer, port $port):"
+    echo "add-source '$ds' to '$name' (peer $peer, endpoint $host:$port):"
     echo "  1. source    : $sfile -- the dataset joins the scope this relationship grants from"
     echo "  2. source    : deploy.sh --commit-scope=$label  -- grants it to this relationship's account"
     echo "  3. collector : activate-client $name -- sections for the new dataset only; the installed policy of the rest stays"
@@ -15508,7 +15529,7 @@ cmd_add_source() {
 
     log "add-source: 1/4 widening the scope on $peer"
     local out rc
-    out=$(rux_root_ssh "$peer" "$port" "zfs list -H -o name $(printf '%q' "$ds")" 2>&1); rc=$?
+    out=$(rux_root_ssh "$host" "$port" "zfs list -H -o name $(printf '%q' "$ds")" 2>&1); rc=$?
     [ "$rc" -eq 0 ] || die "add-source: '$ds' is not a dataset on $peer ($out) -- nothing was changed"
     local awk_prog
     awk_prog='
@@ -15541,7 +15562,7 @@ cmd_add_source() {
       }
     '
     local q; q=$(printf '%q' "$sfile")
-    out=$(rux_root_ssh "$peer" "$port" "awk -v target=$(printf '%q' "$ds") $(printf '%q' "$awk_prog") $q > $q.new 2>/tmp/as-awk.err; r=\$?; cat /tmp/as-awk.err; if [ \$r -ne 0 ]; then rm -f $q.new; exit \$r; fi; if grep -q ALREADY-IN-SCOPE /tmp/as-awk.err; then rm -f $q.new; else mv $q.new $q; fi" 2>&1); rc=$?
+    out=$(rux_root_ssh "$host" "$port" "awk -v target=$(printf '%q' "$ds") $(printf '%q' "$awk_prog") $q > $q.new 2>/tmp/as-awk.err; r=\$?; cat /tmp/as-awk.err; if [ \$r -ne 0 ]; then rm -f $q.new; exit \$r; fi; if grep -q ALREADY-IN-SCOPE /tmp/as-awk.err; then rm -f $q.new; else mv $q.new $q; fi" 2>&1); rc=$?
     case "$out" in
         *EXCLUDED-ANCESTOR*) die "add-source: on $peer an ANCESTOR of '$ds' is excluded (${out##*EXCLUDED-ANCESTOR }) -- lifting it would bring in more than '$ds'. Nothing was changed; narrow by hand or add that ancestor instead." ;;
     esac
@@ -15557,7 +15578,7 @@ cmd_add_source() {
     esac
 
     log "add-source: 2/4 committing the widened scope on $peer"
-    if ! rux_root_ssh "$peer" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --commit-scope='$label'"; then
+    if ! rux_root_ssh "$host" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --commit-scope='$label'"; then
         log "!!! add-source: the source did NOT commit the widened scope. Its scope FILE is already widened, so re-running this same command retries the commit."
         log "!!!     on $peer, as root: cd $SOURCE_REPO_DIR && ./deploy.sh --commit-scope=$label"
         die "add-source: stopped at 2/4 -- this host's config and cron were NOT touched, so one retry brings the two sides together."
