@@ -621,5 +621,6 @@
 "   Po zmianie relacja obejmuje:": "   After the change the relation covers:",
 "(z dziećmi, także przyszłymi)": "(with children, future ones too)",
 "(sam dataset; dzieci tylko wymienione)": "(the dataset itself; only the listed children)",
-"Nowa relacja '$RNAME': zakres wg drzewa": "New relation '$RNAME': scope as in the tree"
+"Nowa relacja '$RNAME': zakres wg drzewa": "New relation '$RNAME': scope as in the tree",
+"   Relacja obejmie:": "   The relation will cover:"
 }
