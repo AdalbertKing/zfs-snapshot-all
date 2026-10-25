@@ -195,10 +195,12 @@ if [ "$STATE" != active ]; then
     exit 1
 fi
 # Koszyk (basket-lib.sh) w "Datasety": nagłówek okien, bez "Sposób" i bez "Wyjątków".
-# Wyjątki w oknie zmiany -- wyłączone z powrotem (2026-10-25): remove-source dziecka pod
-# korzeniem zawęża zakres źródła, ale nie przebudowuje sekcji kolektora; wróci razem z
-# przebudową, sprawdzone na labie. Obecne wyjątki nadal widać ([-], basket_collapse).
+# Wyjątki w oknie zmiany (2026-10-25): remove-/add-source dziecka pod korzeniem zmienia zakres
+# źródła, a sekcje kolektora przebudowuje dopiero edit-relation --profile= (rerender, który od
+# #879 czyta zakres źródła: korzeń zawężony = wymienione dzieci, pełny = -R). Na razie tylko
+# migawki zdalne -- dla nich ta przebudowa jest sprawdzona na labie (pve9 -> pve9b, hdd/ct).
 RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=1
+[ "${RMODE:-}" = snaponly ] && [ "${CUR_P:--}" != - ] && BASKET_NO_EXC=0
 title() { T 'Zmień relację %s -- %s' "$NAME" "$2"; }
 cur_words() {   # słowa o obecnym szablonie celu
     if [ "$CUR_P" = "$HNAME" ]; then echo "$(T 'własne ustawienia relacji (tabela szczebli)')"; else echo "${CUR_P:-$(T '<nie zapisany>')}"; fi
@@ -696,6 +698,11 @@ excl_delta() {
         printf '%s\n' "$_kept" | grep -qxF -- "$r" && printf '%s\n' "$x"
     done
 }
+# Migawki zdalne po zmianie datasetów: sekcje kolektora od nowa z zakresu źródła (patrz
+# BASKET_NO_EXC wyżej). Nie, gdy i tak idzie edit-relation (zmiana szablonu przebudowuje sama).
+needs_rerender() {
+    [ "${RMODE:-}" = snaponly ] && [ -n "$P_ADDED$P_REMOVED" ] && [ "${#P_EDIT[@]}" -eq 0 ] && [ "${CUR_P:--}" != - ]
+}
 dataset_steps() {
     local n a covered
     for n in $P_REMOVED; do
@@ -743,6 +750,7 @@ save_all() {
         echo "$(T 'Komendy:')"
         [ -n "$P_HOST" ] && echo "  $(shq "$ZB") activate $NAME --host=$P_HOST --skip-final-catchup --yes"
         dataset_steps | while read -r v n; do echo "  $(shq "$ZB") $v-source $NAME $n --yes"; done
+        needs_rerender && echo "  $(shq "$ZB") edit-relation $NAME --profile=$CUR_P --yes"
         [ "${#P_EDIT[@]}" -gt 0 ] && echo "  $(shq "$ZB") edit-relation $NAME $(for a in "${P_EDIT[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
         [ "${#P_TIERS[@]}" -gt 0 ] && echo "  $(shq "$ZB") set-tiers $NAME $(for a in "${P_TIERS[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
         [ "${#P_TRANSFER[@]}" -gt 0 ] && echo "  $(shq "$ZB") set-transfer $NAME $(for a in "${P_TRANSFER[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
@@ -771,6 +779,7 @@ save_all() {
             local v
             while read -r v n; do run1 "$ZB" "$v-source" "$NAME" "$n" --yes || { rc=$?; break; }; done < <(dataset_steps)
         fi
+        if [ "$rc" -eq 0 ] && needs_rerender; then run1 "$ZB" edit-relation "$NAME" "--profile=$CUR_P" --yes || rc=$?; fi
         if [ "$rc" -eq 0 ] && [ "${#P_EDIT[@]}" -gt 0 ]; then run1 "$ZB" edit-relation "$NAME" "${P_EDIT[@]}" --yes || rc=$?; [ "$rc" -eq 0 ] && : >"$TMPD/edit.done"; fi
         if [ "$rc" -eq 0 ] && [ "${#P_TIERS[@]}" -gt 0 ]; then run1 "$ZB" set-tiers "$NAME" "${P_TIERS[@]}" --yes || rc=$?; fi
         if [ "$rc" -eq 0 ] && [ "${#P_TRANSFER[@]}" -gt 0 ]; then run1 "$ZB" set-transfer "$NAME" "${P_TRANSFER[@]}" --yes || rc=$?; fi

@@ -14953,6 +14953,35 @@ else
     bad "snaponly: first snapshots, plain activation" "$got"
 fi
 
+# status "sources" of a snaponly relationship = its [snaponly:] sections (a narrowed root and its
+# enumerated children), not the requested roots -- the GUI change window rebuilds [-] from it
+# (owner 2026-10-25: an excluded child showed as still selected).
+SST="$WORK/sst"; rm -rf "$SST"; mkdir -p "$SST"
+cat > "$SST/c.conf" <<'CONF'
+[snaponly:acc@10.0.0.9:hdd/ct]
+	# managed-by: zfs-backup.sh client=r
+	recursive    = no
+[prune:acc@10.0.0.9:hdd/ct]
+	# managed-by: zfs-backup.sh client=r
+	recursive    = no
+[snaponly:acc@10.0.0.9:hdd/ct/a]
+	# managed-by: zfs-backup.sh client=r
+	recursive    = no
+[snaponly:acc@10.0.0.9:hdd/other]
+	# managed-by: zfs-backup.sh client=other
+[dataset:hdd/b]
+	# managed-by: zfs-backup.sh client=bk
+	src          = u@h:hdd/b
+CONF
+sst_fn=$(sed -n '/^status_sources_from_config() {/,/^}/p' "$ZFSBACKUP")
+got=$(bash -c "$sst_fn
+CRON_CONFIG='$SST/c.conf' status_sources_from_config r; echo; CRON_CONFIG='$SST/c.conf' status_sources_from_config bk" 2>&1 | tr '\n' ';')
+if [ "$got" = "acc@10.0.0.9:hdd/ct acc@10.0.0.9:hdd/ct/a;u@h:hdd/b" ]; then
+    ok "snaponly: status sources are the relation's [snaponly:] sections (root + enumerated child), not another's; a backup still reads src"
+else
+    bad "snaponly: status sources" "$got"
+fi
+
 fi   # --- koniec sekcji snaponly ---
 
 
