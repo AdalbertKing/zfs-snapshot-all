@@ -791,6 +791,7 @@
 "Nie zapisano.": "Not saved.",
 "Nikt -- to resztki starej relacji, robię własne": "Nobody -- leftovers of an old relation, make our own",
 "Nowa relacja": "New relation",
+"Nowa relacja '$RNAME': zakres wg drzewa": "New relation '$RNAME': scope as in the tree",
 "Nowa relacja '$RNAME': zakładam": "New relation '$RNAME': creating",
 "Nowa relacja -- kolektor $(hostname)": "New relation -- collector $(hostname)",
 "Nowa relacja -- krok %s z %s: %s": "New relation -- step %s of %s: %s",

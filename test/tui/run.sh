@@ -2304,6 +2304,7 @@ case "$1" in
     source-pruners) [ -n "${NR_PRUNERS:-}" ] && printf '%b' "$NR_PRUNERS"; exit 0 ;;
     save-profile)   echo "save-profile: ok (atrapa)" ;;
     delete-profile) echo "delete-profile: ok (atrapa)" ;;
+    set-datasets)   echo ">>> atrapa: set-datasets" ;;
     *)              echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
 EOF
@@ -2580,6 +2581,15 @@ if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=192.168.28.98:hdd/data,hdd/t
     ok "new-relation: koszyk -- miejsca w JEDNYM --source po przecinku, odznaczone dziecko jako --exclude-child=^nazwa\$ (zakotwiczone, bez ( | -- wzorzec jedzie nieocytowany do crona)"
 else
     bad "new-relation: koszyk, droga glowna" "rc=$NRRC" "$NROUT" "$(cat "$NR/err")" "$(cat "$NR/wt.log")"
+fi
+# RELACJA = CONFIG (2026-10-26): po założeniu z [-] kreator zapisuje zakres jak okno zmiany --
+# jedno set-datasets z pozycjami drzewa (hdd/data [-] bez mail, hdd/test-kreator [x]).
+NRSD="$(grep '^set-datasets ' "$NR/zb.log" 2>/dev/null)"
+if [ "$(printf '%s\n' "$NRSD" | grep -c .)" -eq 1 ] && has "$NRSD" "set-datasets pve9b --dataset=hdd/data:no " \
+   && has "$NRSD" " --dataset=hdd/test-kreator:flat " && ! has "$NRSD" "hdd/data/mail" && has "$NRSD" " --yes"; then
+    ok "new-relation: z [-] po założeniu jedno set-datasets z pozycjami drzewa (wyłączone dziecko poza listą)"
+else
+    bad "new-relation: set-datasets po założeniu z [-]" "$NRSD" "$(cat "$NR/zb.log")"
 fi
 NRTL="$(cat "$NR/tree.log" 2>/dev/null)"
 if ! grep -qF -- '--radiolist' <(grep -F 'Co kopiować z' "$NR/wt.log") && ! grep -qF 'Jak kopiować' "$NR/wt.log" && ! has "$NRTL" 'Jak kopiować'; then
