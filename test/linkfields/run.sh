@@ -441,7 +441,7 @@ bwr() {   # <manifest> <record> -> "<rate>|<note on stderr?>"
     local out err
     err=$(mktemp)
     out=$(bash "$t" 2>"$err")
-    printf '%s|%s' "$out" "$(grep -c 'zapis sprzed przeniesienia' "$err")"
+    printf '%s|%s' "$out" "$(grep -c 'a record from before the move' "$err")"
     rm -f "$t" "$err"
 }
 
