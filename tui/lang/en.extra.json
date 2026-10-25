@@ -610,5 +610,6 @@
 "ile sekund zadanie repliki czeka po podłączeniu dysku, zanim wystartuje": "seconds the replica job waits after a disk is connected before it starts",
 "Wybrana cała pula $r: replika kopiuje $n datasetów leżących bezpośrednio w niej, każdy z całą zawartością:\\n${list}\\nNowy dataset założony później bezpośrednio w $r trzeba dodać w zmianie repliki.\\nNowe datasety głębiej dojdą same.\\n": "Whole pool $r chosen: the replica copies the $n datasets directly in it, each with all its contents:\\n${list}\\nA dataset created later directly in $r must be added by changing the replica.\\nNew datasets deeper down join by themselves.\\n",
 "Każdy dysk tego hosta jest w puli albo zamontowany.\\nPodłącz inny dysk i wybierz to jeszcze raz.": "Every disk of this host is in a pool or mounted.\\nConnect another disk and choose this again.",
-"Nośnik wymienny jest podłączany tylko na czas kopii.": "The removable medium is connected only for the copy."
+"Nośnik wymienny jest podłączany tylko na czas kopii.": "The removable medium is connected only for the copy.",
+"nic (pasywnie)": "nothing (passive)"
 }

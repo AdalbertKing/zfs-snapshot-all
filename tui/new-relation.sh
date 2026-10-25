@@ -531,6 +531,9 @@ sync_from_chain() {   # -> 0, gdy lustro/backup/kopia lokalna i któryś korzeń
 }
 REC_PROFILE=passive-flat
 is_local_copy() { [ "$MODE" = local ] && [ "$NOCOPY" -eq 0 ]; }
+# Kopia lokalna, która przyjmuje cudze migawki (--passive): nic na źródle nie tworzy, więc nie
+# zamraża gości i nie ma retencji źródła (kampania 1.0, 2026-10-25).
+is_passive_copy() { is_local_copy && sync_from_chain && [ "$(chain_ans)" = chain ]; }
 # KTO ROBI TE MIGAWKI? (właściciel 2026-10-24, wariant A). Silnik nie odróżni żywego łańcucha
 # od resztek starej relacji -- zmierzone na pve10<>pve11: lustro założone od nowa na migawkach
 # swojej poprzedniczki wyszło PASYWNE i przestało robić migawki. Pyta więc kreator, a admin
@@ -925,7 +928,7 @@ build_argv() {   # [install] -> ARGV[]
     # "Nikt ich nie robi -- resztki": seed i linia lustra nie robią się pasywne.
     { [ "$MODE" = sync ] || [ "$MODE" = backup ]; } && sync_from_chain && [ "$(chain_ans)" = own ] && ARGV+=("--own-snapshots")
     # Kopia lokalna z cudzych migawek (replika pvesr): przyjmuje, niczego na źródle nie tworzy ani nie kasuje.
-    is_local_copy && sync_from_chain && [ "$(chain_ans)" = chain ] && ARGV+=("--passive")
+    is_passive_copy && ARGV+=("--passive")
     a="$(account_name)"; [ -n "$a" ] && ARGV+=("--local-user=$a")
     [ "$GRANT" -eq 1 ] && ARGV+=("--grant-remotely")
     [ "$GRANT" -eq 1 ] && [ "$FREEZE" -eq 1 ] && [ "$GQUIESCE" -eq 1 ] && ARGV+=("--grant-quiesce")
@@ -1027,7 +1030,7 @@ summary_text() {
     fi
     [ "$RAW" -eq 1 ] && echo "$(T 'Wysyłka zaszyfrowana (raw): kopia leży w celu zaszyfrowana, ten host nie potrzebuje klucza.')"
     if [ "$MODE" = local ]; then
-        [ "$FREEZE" -eq 1 ] && echo "$(T 'Zamrażanie: goście tego hosta, przed migawkami dobowymi i rzadszymi.')"
+        [ "$FREEZE" -eq 1 ] && ! is_passive_copy && echo "$(T 'Zamrażanie: goście tego hosta, przed migawkami dobowymi i rzadszymi.')"
         [ "$NOCOPY" -eq 1 ] && echo "$(T 'Po WYKONAJ czasownik pokaże zmiany w cronie i zapyta o potwierdzenie (t).')"
         echo
         echo "$(T 'Komenda (to samo wpisałbyś z palca):')"
@@ -1102,7 +1105,7 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
           if [ "$NOCOPY" -eq 1 ]; then echo "$(Tv 'Cel: brak (same migawki).  Szablon: $PROFILE.' '$PROFILE' "$PROFILE")"
           # Kampania 2026-10-22: migawki zdalne dostawały zdanie lustra ("ta sama ścieżka").
           elif [ "$MODE" = snaponly ]; then echo "$(Tv 'Bez kopii: migawki na $HOST, jego datasety.  Szablon: $PROFILE.' '$HOST' "$HOST" '$PROFILE' "$PROFILE")"
-          else echo "$(T 'Cel:') ${TARGET:-$(T '(lustro: ta sama ścieżka)')}.  $(Tv 'Trzyma tutaj: $PROFILE.  U źródła:' '$PROFILE' "$PROFILE") ${SRCPROF:-$(T 'jak tutaj')}."; fi
+          else echo "$(T 'Cel:') ${TARGET:-$(T '(lustro: ta sama ścieżka)')}.  $(Tv 'Trzyma tutaj: $PROFILE.  U źródła:' '$PROFILE' "$PROFILE") $(if is_passive_copy; then T 'nic (pasywnie)'; else printf '%s' "${SRCPROF:-$(T 'jak tutaj')}"; fi)."; fi
           if [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
           else echo "$(T 'Pomijane migawki: żadne (kopiowane wszystkie).')"; fi
           echo "$(T 'Konto:') $(a="$(account_name)"; echo "${a:-root}")."

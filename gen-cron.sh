@@ -2557,6 +2557,10 @@ build_dataset() {
             # file supplies has to survive exactly the same grammar as a value
             # written in the config.
             [ -n "$quiesce" ] || quiesce="$(settings_get quiesce "")"
+            # A passive scope (-e) creates no snapshot, so there is nothing for a freeze to
+            # make consistent: a freezing profile or the host default must not add -q there
+            # (2026-10-25: local-backup --passive with 'full' warned four times per render).
+            [ "$scope_passive" = yes ] && quiesce=""
             lint_quiesce "$quiesce" "[dataset:$ds_path] tier=$tier" "$direction"
             flags="$(maybe_add_quiesce "$flags" "$quiesce")"
             # MIRROR (-M, owner 2026-10-06: "synchro jako lustro"). The pull

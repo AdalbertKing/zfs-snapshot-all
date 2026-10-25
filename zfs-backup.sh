@@ -9337,7 +9337,11 @@ Taking over older jobs (a v4 config written by hand): remove their sections firs
     ladder="$(grep -oE 'retain *= *-[HDWMYhdwmy][0-9]+' "$PROFILE_TPL_FILE" 2>/dev/null | grep -oE '\-[HDWMYhdwmy][0-9]+' | tr '\n' ' ')"
     sladder="$ladder"
     [ -n "${SRC_PROFILE_TPL_FILE:-}" ] && sladder="$(grep -oE 'retain *= *-[HDWMYhdwmy][0-9]+' "$SRC_PROFILE_TPL_FILE" 2>/dev/null | grep -oE '\-[HDWMYhdwmy][0-9]+' | tr '\n' ' ')"
+    if [ "$lb_passive" -eq 1 ]; then
+        echo "  Source retention: none -- passive: the source's snapshots are made and pruned by someone else"
+    else
     echo "  Source retention: ${sladder:-(see profile)}$([ -n "${SRC_PROFILE_NAME:-}" ] && echo "from '$SRC_PROFILE_NAME' ")(on each source)"
+    fi
     # No target, no target retention -- REV-20260901-132 acceptance 3, which
     # the no-copy fix left printing a ladder for a store that does not exist.
     if [ "$no_copy" -eq 1 ]; then
