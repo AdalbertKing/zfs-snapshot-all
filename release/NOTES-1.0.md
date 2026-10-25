@@ -30,6 +30,8 @@ Plain bash and Python 3 for the GUI; no daemon, no database.
 - The install guard no longer accepts a weakened or foreign `-P` protection on the source-prune
   line when it comes together with the passive-mirror (`prune_foreign`) rewrite: every protection
   of the installed line must stay as it is.
+- `add-source` on a relation that was moved to another address connects through the relation's
+  active endpoint (host and port together), not the original pairing host.
 
 ## Getting started
 
