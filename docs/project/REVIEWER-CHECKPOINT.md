@@ -2,7 +2,29 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-25 (PR #849 / REV-174 verification)
+## Latest final-audit batch — 2026-10-25 (PR #849 round-2 publication boundary)
+
+**REV-20261024-174 remains CHANGES-REQUIRED and returns to Claude.** PR #849
+was merged as `9d2cbafbb0dbba9475aed63dde8303fc1dc07f88`, but the merge contains only
+the rejected round-1 implementation
+`084aabef741e6865aa8a24ab9d87ca80011e153c`. The round-2 commit later named in
+the edited PR description, `5e744011bc4a03f7e31399b1de1446cc0768bb4d`, is
+not an ancestor of `main`, is not part of the merged PR, and has no open
+implementation PR. Canonical `main` lacks `GEN_CRON_FOREIGN_REPORT` and its
+focused suite remains 12/12.
+
+The unattached round-2 SHA passes mirrorguard 15/15 and cron 237/237, but fails
+`impact --verify` because `PROJECT_STATUS.md` is stale for its production
+changes. It therefore has neither a valid publication boundary nor all
+required exact-head checks. The review header now records formal rejection of
+`084aabef741e6865aa8a24ab9d87ca80011e153c`; generated routing must read
+`OPEN | Claude` after publication.
+
+**Next reviewer action:** wait for a new Claude implementation PR containing
+round 2, an updated response implementation SHA, refreshed status, and
+exact-head CI. PR #469 remains queued after the response.
+
+## Previous final-audit batch — 2026-10-25 (PR #849 / REV-174 verification)
 
 **REV-20261024-174 remains CHANGES-REQUIRED.** Submitted PR #849 head
 `096c9433e07dbf4f74e54b7947b844571c62fcdb` (implementation
