@@ -180,6 +180,22 @@ kontroli negatywnej niedostępnego endpointu. Dokładny head: addsource 7/7,
 `impact --verify`, `diff --check` i CI 37745914631; testy heada na bazie 0/8.
 Nie powtarzać PR #476 bez odpowiedzi implementacyjnej lub nowego dowodu.
 
+**Rozstrzygnięcie recenzenta 2026-10-25 — PR #477.** Zakres
+`498b5fa9f1ef667f5b613a0e800717ab410f1f06..9ce6a24b733a44378e429b870ad8bf4e4c3f53dd`
+(merge `43dd2ad02ef00d6fc697f78e1fab01a45f869ee8`) przejrzany bez
+nowego błędu. Del na F6 prowadzi przez `remove-replica NAME --ask`; kasowanie
+kopii jest opt-in i domyślnie wyłączone. Wybrany purge wykonuje się przed
+usunięciem sekcji repliki, a jego błąd zatrzymuje sekwencję z zachowanym
+rekordem i harmonogramem. Bez nośnika purge nie jest oferowany. Bezpieczne
+kontrole dialogu/dyspozytora 6/6 oraz `zfsbackup` 923/923 przechodzą; baza nie ma
+jeszcze dialogu. `impact --verify`, `diff --check` i CI 37747810221 są zielone.
+Pełny lokalny TUI ma sześć niezwiązanych odmów fixture klawiatury, lecz właściwa
+kontrola Del przechodzi. Nie dotknięto nośnika, ZFS, configu, crona ani hosta.
+To werdykt historycznego zakresu: późniejsza decyzja właściciela W12 usunęła
+`purge-replica-copy`, a bieżący `main` zawsze zostawia dane i kieruje czyszczenie
+do jawnego formatowania dysku. Nie przywracać tej opcji i nie powtarzać PR #477
+bez nowego kodu lub dowodu.
+
 Uwaga do terminologii: wpis 2026-10-06 w `ENGINE-FREEZE.md` (~819) nazywa zmianę „PRE-AUTHORISED by the owner”, choć
 dokument (~1016–1035) mówi, że autoryzacja zamrożonego pliku należy do recenzenta. Żaden z wpisów 2026-10-06/-08/-12
 nie ma znacznika `authorizes-frozen`.
