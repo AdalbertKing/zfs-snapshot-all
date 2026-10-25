@@ -6554,7 +6554,10 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # re-renders each account's block from its own config. A WRITER, aimed like the others.
 # 17/23 since 2026-10-19 (campaign): import_restore_relblock -- import-relation writes the
 # file's [relation:] block back after the create. A WRITER, aimed like set-tiers.
-if [ "$writers" -eq 17 ] && [ "$resolvers" -eq 23 ]; then
+# 18/24 since 2026-10-26 (relation = its config): set-datasets -- what a relationship covers,
+# rewritten in its config for every kind. A WRITER, aimed like the others (cron_context_resolve
+# record, assert_cron_config_matches_installed, then atomic_replace_and_install).
+if [ "$writers" -eq 18 ] && [ "$resolvers" -eq 24 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
@@ -9238,6 +9241,130 @@ else
     bad "statusjson: the text detail view is unchanged by the new option" "$(cat "$WORK/sj.out")"
 fi
 
+
+
+# RELATION = ITS CONFIG (owner 2026-10-25): relation_sources reads what a relationship covers from
+# its sections, the same way for every kind -- pull (src), mirror (src), local copy and local
+# snapshots (header), remote snapshots ([snaponly:] header); prune sections are not coverage;
+# legacy exclusions (-X in flags, exclude_child_N) are reported.
+RS="$WORK/relsrc"; rm -rf "$RS"; mkdir -p "$RS"
+cat > "$RS/c.conf" <<'CONF'
+[dataset:hdd/backups/10.0.0.2/hdd/data]
+	relation     = bk
+	src          = acc@10.0.0.2:hdd/data
+	flags        = -K /k -X ^hdd/data/tmp$ -X ^hdd/data/tmp/
+	recursive    = flat
+	pair_label   = bk
+[prune:acc@10.0.0.2:hdd/data]
+	recursive    = yes
+	pair_label   = bk
+[dataset:hdd/lab]
+	src          = acc@10.0.0.3:hdd/lab
+	recursive    = flat
+	pair_label   = mir
+[dataset:hdd/vm/a]
+	side         = source
+	dst          = hdd/backups/x
+	exclude_child_1 = ^hdd/vm/a/scratch$
+	pair_label   = lc
+[prune:hdd/backups/x/hdd/vm/a]
+	pair_label   = lc
+[dataset:rpool/ROOT/pve-1]
+	side         = source
+	pair_label   = ls
+[snaponly:acc@10.0.0.9:hdd/vm-disks]
+	recursive    = flat
+	pair_label   = so
+[prune:acc@10.0.0.9:hdd/vm-disks]
+	recursive    = yes
+	pair_label   = so
+[snaponly:acc@10.0.0.9:rpool/ROOT/pve-1]
+	pair_label   = so
+[replica:usb1]
+	recursive    = yes
+CONF
+rs_fn=$(sed -n '/^relation_sources() {/,/^}/p' "$ZFSBACKUP")
+got=$(bash -c "$rs_fn
+for n in bk mir lc ls so none; do printf '%s=' \"\$n\"; relation_sources \"\$n\" '$RS/c.conf' | tr '\t\n' '|;'; echo; done" 2>&1 | tr '\n' ' ')
+want="bk=acc@10.0.0.2:hdd/data|flat|hdd/data/tmp; mir=acc@10.0.0.3:hdd/lab|flat|; lc=hdd/vm/a|no|hdd/vm/a/scratch; ls=rpool/ROOT/pve-1|no|; so=acc@10.0.0.9:hdd/vm-disks|flat|;acc@10.0.0.9:rpool/ROOT/pve-1|no|; none= "
+if [ "$got" = "$want" ]; then
+    ok "relation_sources: one reading for every kind (pull, mirror, local copy, local snapshots, remote snapshots); prune is not coverage; legacy -X/exclude_child reported"
+else
+    bad "relation_sources" "got:  $got" "want: $want"
+fi
+
+
+# SET-DATASETS -- the one writer (design: relation = its config). relation_rewrite_sections
+# rewrites the sections of ONE relationship to the target list, the same for every kind; other
+# relationships and foreign sections stay byte for byte; legacy exclusions are dropped; the
+# result reads back (relation_sources) as exactly the target and gen-cron accepts it.
+SD="$WORK/setds"; rm -rf "$SD"; mkdir -p "$SD"
+cat > "$SD/c.conf" <<'CONF'
+[template:hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+	monitor_warn   = 90m
+	monitor_crit   = 150m
+[dataset:hdd/backups/10.0.0.2/hdd/data]
+	# managed-by: zfs-backup.sh client=bk
+	use_template = hourly
+	src          = acc@10.0.0.2:hdd/data
+	flags        = -X ^hdd/data/tmp$
+	recursive    = flat
+	pair_label   = bk
+	notify       = bk-data
+[prune:acc@10.0.0.2:hdd/data]
+	# managed-by: zfs-backup.sh client=bk
+	use_template = hourly
+	side         = source
+	recursive    = yes
+	pair_label   = bk
+[dataset:hdd/vm/a]
+	# managed-by: zfs-backup.sh local-backup source=hdd/vm/a
+	use_template = hourly
+	exclude_child_1 = ^hdd/vm/a/scratch$
+	pair_label   = ls
+[snaponly:acc@10.0.0.9:hdd/vm-disks]
+	# managed-by: zfs-backup.sh client=so
+	use_template = hourly
+	recursive    = flat
+	pair_label   = so
+[dataset:tank/other]
+	use_template = hourly
+	pair_label   = somebody-else
+CONF
+sd_fn=$(sed -n '/^relation_sources() {/,/^}/p; /^relation_rewrite_sections() {/,/^}/p' "$ZFSBACKUP")
+printf 'hdd/data\tno\nhdd/data/db\tflat\nhdd/media\tflat\n' > "$SD/bk.tsv"
+printf 'hdd/vm/a\tflat\nhdd/vm/b\tno\n' > "$SD/ls.tsv"
+got=$(bash -c "$sd_fn
+relation_rewrite_sections '$SD/c.conf' bk '$SD/bk.tsv' > '$SD/c1.conf' || exit 9
+relation_rewrite_sections '$SD/c1.conf' ls '$SD/ls.tsv' > '$SD/c2.conf' || exit 9
+for n in bk ls so somebody-else; do printf '%s=' \"\$n\"; relation_sources \"\$n\" '$SD/c2.conf' | cut -f1,2 | tr '\t\n' ':;'; echo; done" 2>&1 | tr '\n' ' ')
+want="bk=acc@10.0.0.2:hdd/data:no;acc@10.0.0.2:hdd/data/db:flat;acc@10.0.0.2:hdd/media:flat; ls=hdd/vm/a:flat;hdd/vm/b:no; so=acc@10.0.0.9:hdd/vm-disks:flat; somebody-else=tank/other:no; "
+landing=$(grep -c '^\[dataset:hdd/backups/10.0.0.2/hdd/data/db\]' "$SD/c2.conf")
+prunes=$(grep -A6 '^\[prune:acc@10.0.0.2:hdd/media\]' "$SD/c2.conf" | grep -c 'recursive    = yes')
+legacy=$(grep -cE -- '-X |exclude_child_' "$SD/c2.conf")
+other=$(sed -n '/^\[dataset:tank\/other\]/,$p' "$SD/c.conf" | diff - <(sed -n '/^\[dataset:tank\/other\]/,$p' "$SD/c2.conf") >/dev/null && echo same || echo changed)
+if [ "$got" = "$want" ] && [ "$landing" = 1 ] && [ "$prunes" = 1 ] && [ "$legacy" = 0 ] && [ "$other" = same ]; then
+    ok "set-datasets: one rewrite for every kind -- target list reads back exactly, landing and prune follow each entry, legacy exclusions dropped, other sections untouched"
+else
+    bad "set-datasets: relation_rewrite_sections" "got:  $got" "want: $want" "landing=$landing prunes=$prunes legacy=$legacy other=$other"
+fi
+out=$(bash "$ZFSBACKUP" set-datasets 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'usage: zfs-backup.sh set-datasets NAME --dataset=DS:flat|no'; then
+    ok "set-datasets: without a target list it refuses with its usage, nothing read"
+else
+    bad "set-datasets: usage" "rc=$rc" "$out"
+fi
+out=$(bash "$ZFSBACKUP" set-datasets r --dataset=hdd/x:maybe 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "the recursion is flat"; then
+    ok "set-datasets: a recursion other than flat|no is refused before anything is read"
+else
+    bad "set-datasets: recursion word" "rc=$rc" "$out"
+fi
 
 fi   # --- koniec sekcji statusjson ---
 if want showconfig; then
@@ -14973,7 +15100,7 @@ cat > "$SST/c.conf" <<'CONF'
 	# managed-by: zfs-backup.sh client=bk
 	src          = u@h:hdd/b
 CONF
-sst_fn=$(sed -n '/^status_sources_from_config() {/,/^}/p' "$ZFSBACKUP")
+sst_fn=$(sed -n '/^relation_sources() {/,/^}/p; /^status_sources_from_config() {/,/^}/p' "$ZFSBACKUP")
 got=$(bash -c "$sst_fn
 CRON_CONFIG='$SST/c.conf' status_sources_from_config r; echo; CRON_CONFIG='$SST/c.conf' status_sources_from_config bk" 2>&1 | tr '\n' ';')
 if [ "$got" = "acc@10.0.0.9:hdd/ct acc@10.0.0.9:hdd/ct/a;u@h:hdd/b" ]; then
