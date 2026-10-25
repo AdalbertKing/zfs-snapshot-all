@@ -4434,6 +4434,17 @@ if [ "$got" = "$want" ]; then
 else
     bad "drzewo <-> pozycje relacji" "got:  $got" "want: $want"
 fi
+# Liść (dataset bez dzieci) zachowuje rekurencję z configu: okno otwarte i zamknięte bez zmian
+# nie robi z pozycji "no" pozycji "flat" (live pve11, migawki-a: "Save changes (1)" bez zmiany).
+printf 'hdd/vm-disks/a\tno\n' > "$TE/cur.tsv"
+got=$(PY="$PY" bash -c "$te_fn
+B_ROOT=(hdd/vm-disks/a); B_EXCL=('')
+basket_entries '$TE/ds.json' '$TE/cur.tsv' | tr '\t\n' ': '; echo; basket_entries '$TE/ds.json' | tr '\t\n' ': '" 2>&1 | tr '\n' '|')
+if [ "$got" = "hdd/vm-disks/a:no |hdd/vm-disks/a:flat " ]; then
+    ok "drzewo -> pozycje: liść zachowuje rekurencję z configu (bez fałszywej zmiany), bez configu [x] = flat"
+else
+    bad "drzewo -> pozycje: liść" "$got"
+fi
 rm -rf "$TE"
 if ! grep -qE 'add-source|remove-source|needs_rerender|dataset_steps' "$REPO/tui/edit-relation.sh" \
    && grep -q '^RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=0$' "$REPO/tui/edit-relation.sh"; then
