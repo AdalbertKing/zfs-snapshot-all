@@ -4283,14 +4283,40 @@ emit_monitor() {
         # ssh options (a remote scope only, REV-20261017-152): the section's
         # ssh_flags, already linted to the five options check-snap-age.sh accepts.
         local sflags=""; [ -n "${mssh:-}" ] && sflags="$mssh "
-        local cmd="$REPO_DIR/check-snap-age.sh ${flag}${lflag}${xflags}${sflags}\"$joined\" \"$pattern\" $warn $crit"
-        # The verdict is CAPTURED and handed to the notify script, not just
-        # appended to the log. check-snap-age.sh already prints the dataset, the
-        # pattern, the newest snapshot, its real age and both thresholds -- all
-        # of it was going to cron.log while the mail carried only the label from
-        # this config, which tells the reader nothing they can act on. It still
-        # reaches cron.log too; nothing is lost.
-        MONITOR_LINES+=("$schedule d=\$($cmd 2>&1); rc=\$?; [ -n \"\$d\" ] && echo \"\$d\" >>$CRON_LOG; [ \$rc -eq 1 ] && $WARN_SCRIPT \"$warntext\" \"\$d\" 2>>$CRON_LOG; [ \$rc -eq 2 ] && $NOTIFY_SCRIPT \"$notify\" \"\$d\" 2>>$CRON_LOG; [ \$rc -ge 3 ] && $NOTIFY_SCRIPT \"$broken\" \"\$d\" 2>>$CRON_LOG")
+        # One line per group, unless the dataset list makes it longer than cron
+        # takes (1000 bytes per command): then the list is split over as many lines
+        # as it needs, each with the same flags, thresholds and alerts. A remote
+        # group carries its ssh options on every line, so three datasets of a
+        # snaponly relationship already reached 1001 bytes (Metropolis pve2 ->
+        # pve1, 2026-10-25: add-source refused, config and cron restored).
+        local -a chunk=() lines_out=()
+        local t try line=""
+        monitor_line() {   # <comma list> -> the whole cron line in $REPLY
+            local c="$REPO_DIR/check-snap-age.sh ${flag}${lflag}${xflags}${sflags}\"$1\" \"$pattern\" $warn $crit"
+            # The verdict is CAPTURED and handed to the notify script, not just
+            # appended to the log. check-snap-age.sh already prints the dataset, the
+            # pattern, the newest snapshot, its real age and both thresholds -- all
+            # of it was going to cron.log while the mail carried only the label from
+            # this config, which tells the reader nothing they can act on. It still
+            # reaches cron.log too; nothing is lost.
+            REPLY="$schedule d=\$($c 2>&1); rc=\$?; [ -n \"\$d\" ] && echo \"\$d\" >>$CRON_LOG; [ \$rc -eq 1 ] && $WARN_SCRIPT \"$warntext\" \"\$d\" 2>>$CRON_LOG; [ \$rc -eq 2 ] && $NOTIFY_SCRIPT \"$notify\" \"\$d\" 2>>$CRON_LOG; [ \$rc -ge 3 ] && $NOTIFY_SCRIPT \"$broken\" \"\$d\" 2>>$CRON_LOG"
+        }
+        monitor_line "$joined"
+        if [ "${#REPLY}" -le 990 ] || [ "${#targets[@]}" -lt 2 ]; then
+            MONITOR_LINES+=("$REPLY")
+        else
+            for t in "${targets[@]}"; do
+                try="$(IFS=,; printf '%s' "${chunk[*]+${chunk[*]},}$t")"
+                monitor_line "$try"
+                if [ "${#REPLY}" -gt 990 ] && [ "${#chunk[@]}" -gt 0 ]; then
+                    monitor_line "$(IFS=,; printf '%s' "${chunk[*]}")"; MONITOR_LINES+=("$REPLY")
+                    chunk=("$t")
+                else
+                    chunk+=("$t")
+                fi
+            done
+            monitor_line "$(IFS=,; printf '%s' "${chunk[*]}")"; MONITOR_LINES+=("$REPLY")
+        fi
     done
 }
 

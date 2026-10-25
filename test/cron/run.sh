@@ -1409,6 +1409,30 @@ fo=$(for_run); frc=$?
 check "PLC7 control: the same section without passive freezes (-q on the snapget line)" "0:1" \
       "$frc:$(printf '%s\n' "$fo" | grep 'snapget\.sh' | grep -cE ' -q( |$)')"
 
+# MONITOR LINE UNDER CRON'S LIMIT (Metropolis pve2 -> pve1, 2026-10-25): one monitor group
+# lists every member dataset on ONE check-snap-age line; with long paths (or a remote
+# group's ssh options) the line passed cron's 1000-byte command limit and crontab(1)
+# refused the whole install. gen-cron splits such a group over as many lines as it needs.
+ms_conf() {   # <dataset name stem> -> $FOR/c.conf with six datasets in one monitor group
+    {
+        printf '[defaults]\n\thost_label = f\n[template:hourly]\n\tsend_schedule  = 1 * * * *\n'
+        printf '\tprefix         = automated_hourly_\n\tprune_schedule = 21 * * * *\n\tpattern        = automated_hourly\n'
+        printf '\tkeep           = 24\n\tmonitor_warn   = 90m\n\tmonitor_crit   = 150m\n'
+        for i in 1 2 3 4 5 6; do printf '[dataset:rpool/data/%s-%s]\n\tuse_template = hourly\n' "$1" "$i"; done
+    } > "$FOR/c.conf"
+}
+ms_conf "$(printf 'v%.0s' $(seq 150))"
+fo=$(for_run); frc=$?
+mon=$(printf '%s\n' "$fo" | grep 'check-snap-age\.sh')
+longest=$(printf '%s\n' "$mon" | awk '{ sub(/^([^ ]+ +){5}/, ""); if (length($0) > m) m = length($0) } END { print m + 0 }')
+covered=0; for i in 1 2 3 4 5 6; do printf '%s\n' "$mon" | grep -qE "rpool/data/v+-$i[\",]" && covered=$((covered + 1)); done
+check "MLS1 six long datasets: rc=0, split over more than one monitor line, each command <= 1000 bytes, all six covered" "0:1:1:6" \
+      "$frc:$([ "$(printf '%s\n' "$mon" | grep -c .)" -gt 1 ] && echo 1 || echo 0):$([ "$longest" -le 1000 ] && echo 1 || echo 0):$covered"
+ms_conf "vm"
+fo=$(for_run); frc=$?
+check "MLS2 control: short names keep ONE monitor line for the group" "0:1" \
+      "$frc:$(printf '%s\n' "$fo" | grep -c 'check-snap-age\.sh')"
+
 # DISKS BY GUID AND ON-INSERT PER REPLICA (P5, owner 2026-10-09). media_guids goes to
 # the gate's ATTACH only (--guids), never to detach (cron's 1000 bytes); on_insert =
 # yes on a scheduled replica adds a commented '#on-insert' copy of its line for
