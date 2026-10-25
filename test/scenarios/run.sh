@@ -184,7 +184,7 @@ EOF
     chmod +x "$TMPD/$n.sh"
 done
 
-SEND_LINE="$(grep 'snapsend.sh' "$TMPD/s1.cron" | head -1 | cron_cmd)"
+SEND_LINE="$(grep -E 'snap(send|get)[.]sh' "$TMPD/s1.cron" | head -1 | cron_cmd)"
 check "a send line was generated" "1" "$([ -n "$SEND_LINE" ] && echo 1 || echo 0)"
 
 # Run the emitted line VERBATIM -- mktemp wrapper, redirections, notify call.
@@ -315,7 +315,7 @@ EOF
 REPO_DIR="$REPO" NOTIFY_SCRIPT="$TMPD/notify-fail.sh" WARN_SCRIPT="$TMPD/notify-warn.sh" \
 DIGEST_SCRIPT="$TMPD/alert-digest.sh" CRON_LOG="$TMPD/cron.log" \
     "$GENCRON" -c "$TMPD/s3.conf" > "$TMPD/s3.cron" 2>/dev/null
-FAIL_LINE="$(grep 'snapsend.sh' "$TMPD/s3.cron" | head -1 | cron_cmd)"
+FAIL_LINE="$(grep -E 'snap(send|get)[.]sh' "$TMPD/s3.cron" | head -1 | cron_cmd)"
 : > "$TMPD/alerts.log"
 eval "$FAIL_LINE"
 check "the failing job raised exactly one alert" "1" \
