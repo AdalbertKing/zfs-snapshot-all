@@ -1087,10 +1087,8 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
     local rc
     while :; do
         geom
-        if [ "$MODE" = snaponly ] && any_excl; then
-            wt --title "$(T 'Wyjątki w drzewie')" --msgbox "$(T 'Migawki zdalne nie obsługują wyjątków w drzewie (odznaczonych dzieci).\nWybierz całe gałęzie albo pojedyncze datasety bez wyjątków.')" 9 "$W"
-            return 2
-        fi
+        # (2026-10-26) Wyjątki działają w każdym rodzaju relacji: migawki zdalne dostają listę
+        # (basket_expand), a po założeniu zakres zapisuje set-datasets -- dawna blokada odpadła.
         build_argv install
         summary_text >"$TMPD/summary.txt"
         yesno_text "$TMPD/summary.txt" "$(title 10 "$(T 'Podsumowanie')")" "$(T 'Pokaż plan')" "$(T Wstecz)" || return 1
