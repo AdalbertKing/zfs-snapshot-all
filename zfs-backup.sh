@@ -14164,31 +14164,60 @@ status_quiesce_from_cron() {   # <relationship name> -> one line
           }'
 }
 
-status_sources_from_config() {   # <client name> -> the src= of every section it owns
-    local name="$1" cfg="${CRON_CONFIG:-}" line cur="" out="" so=""
-    [ -n "$cfg" ] && [ -r "$cfg" ] || return 1
-    while IFS= read -r line; do
-        case "$line" in
-            "[dataset:"*) cur=""; so="" ;;
-            # A snaponly section names its scope in the header and has no src field: what
-            # it covers today (a narrowed root = the root and its enumerated children). Without
-            # this the GUI fell back to the requested roots and showed an excluded child as
-            # still selected (owner, 2026-10-25).
-            "[snaponly:"*) cur=""; so="${line#\[snaponly:}"; so="${so%]}" ;;
-            "["*) so="" ;;
-            *"managed-by: zfs-backup.sh client=$name")
-                if [ -n "$so" ]; then out="$out $so"; so=""; else cur="yes"; fi ;;
-            # The FIELD named src, not any line containing "src": K3's
-            # prune_schedule_<...src_hourly> fields are lines like that, and the
-            # first live run printed their schedules as sources.
-            [[:space:]]src[[:space:]]*=*|src[[:space:]]*=*)
-                [ "$cur" = yes ] || continue
-                out="$out ${line#*= }" ;;
-        esac
-    done < "$cfg"
-    out="${out# }"
+# RELATION = ITS CONFIG (owner 2026-10-25: "Relacja to config i to jest jedyne źródło prawdy,
+# pochodną są crony"). What a relationship covers is read from its sections and nowhere else,
+# the same way for every kind: the sections carrying `pair_label = NAME` that name a SOURCE --
+#   [snaponly:SRC]           remote snapshots only: the header is the source;
+#   [dataset:X] + src = SRC  a pull (backup, mirror): the src field is the source;
+#   [dataset:SRC] (no src)   a local copy or local snapshots: the header is the source.
+# [prune:...] sections are retention, not coverage, and are skipped. Recursion is the section's
+# own field (absent = no). Exclusions are not part of the new shape (a [-] root is listed child
+# by child); the legacy carriers -- `-X` in flags and exclude_child_N -- are still READ and
+# reported, so an old config can be shown and converted.
+# Prints one line per source: "SOURCE<TAB>RECURSION<TAB>EXCLUDED,..."; rc 1 = no config/none.
+relation_sources() {   # <name> [config]
+    local name="$1" cfg="${2:-${CRON_CONFIG:-}}" out
+    [ -n "$name" ] && [ -n "$cfg" ] && [ -r "$cfg" ] || return 1
+    out=$(awk -v N="$name" '
+        function val(s) { sub(/^[^=]*=[ \t]*/, "", s); sub(/[ \t]+$/, "", s); return s }
+        function addex(p) {
+            gsub(/["\047]/, "", p); sub(/^\^/, "", p); sub(/\$$/, "", p); sub(/\/$/, "", p)
+            if (p != "" && index("," ex ",", "," p ",") == 0) ex = (ex == "" ? p : ex "," p)
+        }
+        # Ownership: "managed-by: zfs-backup.sh client=NAME" (remote kinds; pair_label may be a
+        # renamed label), or pair_label = NAME on a section with no client= marker (local kinds).
+        function flush() {
+            if (src != "" && (mb == N || (mb == "" && pl == N)))
+                printf "%s\t%s\t%s\n", src, (rec == "" ? "no" : rec), ex
+            pl = ""; rec = ""; ex = ""; src = ""; kind = ""; mb = ""
+        }
+        /^\[/ {
+            flush()
+            hdr = substr($0, 2, length($0) - 2); kind = hdr; sub(/:.*/, "", kind)
+            if (kind == "snaponly" || kind == "dataset") src = substr(hdr, index(hdr, ":") + 1)
+            next
+        }
+        {
+            line = $0; sub(/^[ \t]+/, "", line)
+            if (line ~ /^# managed-by: zfs-backup\.sh client=/) { mb = line; sub(/.*client=/, "", mb); sub(/[ \t].*/, "", mb) }
+            else if (line ~ /^pair_label[ \t]*=/)                 pl = val(line)
+            else if (line ~ /^recursive[ \t]*=/)                  rec = val(line)
+            else if (line ~ /^src[ \t]*=/ && kind == "dataset")   src = val(line)
+            else if (line ~ /^exclude_child_[0-9]+[ \t]*=/)       addex(val(line))
+            else if (line ~ /^flags[ \t]*=/) {
+                n = split(val(line), t, /[ \t]+/)
+                for (i = 1; i < n; i++) if (t[i] == "-X") addex(t[i + 1])
+            }
+        }
+        END { flush() }' "$cfg")
     [ -n "$out" ] || return 1
-    printf '%s' "$out"
+    printf '%s\n' "$out"
+}
+
+status_sources_from_config() {   # <client name> -> the sources of every section it owns (relation_sources)
+    local out
+    out=$(relation_sources "$1") || return 1
+    printf '%s\n' "$out" | cut -f1 | paste -sd' ' -
 }
 
 status_last_result() {   # <local target prefix> -> "<time> <status> <duration>s" or nothing

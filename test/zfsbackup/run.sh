@@ -9239,6 +9239,57 @@ else
 fi
 
 
+
+# RELATION = ITS CONFIG (owner 2026-10-25): relation_sources reads what a relationship covers from
+# its sections, the same way for every kind -- pull (src), mirror (src), local copy and local
+# snapshots (header), remote snapshots ([snaponly:] header); prune sections are not coverage;
+# legacy exclusions (-X in flags, exclude_child_N) are reported.
+RS="$WORK/relsrc"; rm -rf "$RS"; mkdir -p "$RS"
+cat > "$RS/c.conf" <<'CONF'
+[dataset:hdd/backups/10.0.0.2/hdd/data]
+	relation     = bk
+	src          = acc@10.0.0.2:hdd/data
+	flags        = -K /k -X ^hdd/data/tmp$ -X ^hdd/data/tmp/
+	recursive    = flat
+	pair_label   = bk
+[prune:acc@10.0.0.2:hdd/data]
+	recursive    = yes
+	pair_label   = bk
+[dataset:hdd/lab]
+	src          = acc@10.0.0.3:hdd/lab
+	recursive    = flat
+	pair_label   = mir
+[dataset:hdd/vm/a]
+	side         = source
+	dst          = hdd/backups/x
+	exclude_child_1 = ^hdd/vm/a/scratch$
+	pair_label   = lc
+[prune:hdd/backups/x/hdd/vm/a]
+	pair_label   = lc
+[dataset:rpool/ROOT/pve-1]
+	side         = source
+	pair_label   = ls
+[snaponly:acc@10.0.0.9:hdd/vm-disks]
+	recursive    = flat
+	pair_label   = so
+[prune:acc@10.0.0.9:hdd/vm-disks]
+	recursive    = yes
+	pair_label   = so
+[snaponly:acc@10.0.0.9:rpool/ROOT/pve-1]
+	pair_label   = so
+[replica:usb1]
+	recursive    = yes
+CONF
+rs_fn=$(sed -n '/^relation_sources() {/,/^}/p' "$ZFSBACKUP")
+got=$(bash -c "$rs_fn
+for n in bk mir lc ls so none; do printf '%s=' \"\$n\"; relation_sources \"\$n\" '$RS/c.conf' | tr '\t\n' '|;'; echo; done" 2>&1 | tr '\n' ' ')
+want="bk=acc@10.0.0.2:hdd/data|flat|hdd/data/tmp; mir=acc@10.0.0.3:hdd/lab|flat|; lc=hdd/vm/a|no|hdd/vm/a/scratch; ls=rpool/ROOT/pve-1|no|; so=acc@10.0.0.9:hdd/vm-disks|flat|;acc@10.0.0.9:rpool/ROOT/pve-1|no|; none= "
+if [ "$got" = "$want" ]; then
+    ok "relation_sources: one reading for every kind (pull, mirror, local copy, local snapshots, remote snapshots); prune is not coverage; legacy -X/exclude_child reported"
+else
+    bad "relation_sources" "got:  $got" "want: $want"
+fi
+
 fi   # --- koniec sekcji statusjson ---
 if want showconfig; then
 # ============================================================================
