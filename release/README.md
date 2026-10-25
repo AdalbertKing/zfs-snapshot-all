@@ -11,6 +11,8 @@ Plain bash; no daemon, no database.
 - **Monitor and mail digest** when a copy stops arriving; **restore** from the GUI.
 - Proxmox-aware: VM/CT dataset naming, guest quiescing, delegated non-root accounts, local copies
   of pvesr replicas (`--passive`).
+- Existing snapshots on a source are never guessed at: the wizard asks whether someone else makes
+  them (adopt them, `--passive`) or they are leftovers (`--own-snapshots`).
 
 ## Quick start
 
@@ -29,7 +31,7 @@ checks the dependencies: ZFS, `cron`, `flock`, `mbuffer`, `ssh`, `awk`, `zstd` (
 `pigz` as an alternative), `python3` for the GUI and a mail transport for alerts.
 
 The GUI starts in English; `zfs-backup gui --lang=pl` (or `[gui] language = pl` in F10 Settings)
-switches it to Polish.
+switches it to Polish. Command output is always English.
 
 Installed hosts update themselves from this repository once an hour (`update-control.sh`); `zfs-backup
 --version` shows the release and the development revision it was built from (`RELEASE-OF`).
@@ -52,6 +54,6 @@ technical reference.
 | config examples | [docs/en/CONFIG-EXAMPLES.md](docs/en/CONFIG-EXAMPLES.md) | [docs/pl/PRZYKLADY-CONFIGU.md](docs/pl/PRZYKLADY-CONFIGU.md) |
 | shipped retention templates | [profiles/README.md](profiles/README.md) | |
 
-## License
+## Author and license
 
-MIT — see [LICENSE](LICENSE).
+Wojciech Król (Adalbert King). MIT — see [LICENSE](LICENSE).
