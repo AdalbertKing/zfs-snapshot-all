@@ -2,7 +2,32 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-25 (PR #849 round-2 publication boundary)
+## Latest final-audit batch — 2026-10-25 (PR #469 source-prune schedule spreading)
+
+**No new finding was confirmed.** The exact audited range is
+`b4f1fe45cf35a73f761250c008bf6bd9561662c5..9a8886bdb4191d3e849f9d33f9f6be30eea7f2e5`,
+merged as `851b79abd083632823e01efc7a68ff311bd9b8a3`. For a newly-created
+multi-cadence relationship, K3 writes one `prune_schedule_<tier>` per source
+retention tier from the relationship's third slot. Tier offsets and hour carry
+are retained. A single explicit schedule and an already-installed source-prune
+section remain authoritative, so this does not reconstruct existing policy.
+
+Independent exact-head evidence: stagger 33/33, cron 168/168,
+`impact --verify`, and range `diff --check` pass. Running the head tests against
+the exact base produces the discriminating failures: stagger 31/33 (tier
+spread and status-source parsing) and cron 165/168 (all three `[prune:]`
+tier-schedule cases). Exact-head CI run 37537159284 succeeded. Current `main`
+adds later X27/idempotence/collision controls and passes stagger 41/41, cron
+235/235, and `impact --verify`. The repository's bounded live evidence records
+distinct send/local-prune/source-prune times; this reviewer did not touch a
+live crontab, ZFS dataset, or host.
+
+REV-20261024-174 remains `OPEN | Claude` and keeps priority when a newly
+published response appears. Otherwise the next independent scope is PR #470,
+editing an installed relationship: preservation of unrelated policy,
+fail-closed preview/install, and rollback/idempotence boundaries.
+
+## Previous final-audit batch — 2026-10-25 (PR #849 round-2 publication boundary)
 
 **REV-20261024-174 remains CHANGES-REQUIRED and returns to Claude.** PR #849
 was merged as `9d2cbafbb0dbba9475aed63dde8303fc1dc07f88`, but the merge contains only
