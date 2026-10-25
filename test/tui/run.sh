@@ -4398,6 +4398,14 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'add-source r1 hdd/iso --yes' "$ER/zb.log" && g
 else
     bad "edit-relation: Datasety (W4)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Co kopiować|DOJD|ODPAD' "$ER/wt.log" | cut -c1-250)" "$(tail -3 "$ER/err")"
 fi
+# Okno zmiany relacji mówi słowami jej rodzaju (właściciel 2026-10-25: "What to copy" przy
+# migawkach zdalnych): drzewo dostaje MODE z rekordu, a basket_step dla snaponly pyta o migawki.
+if grep -qE 'MODE="\$\{RMODE:-\}" NOCOPY="\$_bnc" basket_step' "$REPO/tui/edit-relation.sh" \
+   && grep -qF "Gdzie robić migawki na \$HOST?" "$REPO/tui/basket-lib.sh"; then
+    ok "edit-relation: drzewo Datasetów dostaje rodzaj relacji (snaponly -> 'Gdzie robić migawki', nie 'Co kopiować')"
+else
+    bad "edit-relation: słowa drzewa wg rodzaju relacji" "$(grep -n 'basket_step' "$REPO/tui/edit-relation.sh")"
+fi
 # Datasety: dziecko objęte nowo zaznaczonym rodzicem schodzi PRZED add-source rodzica (Metropolis
 # 2026-10-25: po add-source hdd/vm-disks remove-source jego dzieci wyłączył je spod rodzica i
 # migawki szły na sam kontener). Inne zdjęcia -- po dołożeniach, jak dotąd.

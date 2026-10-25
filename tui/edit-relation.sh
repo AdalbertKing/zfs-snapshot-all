@@ -914,7 +914,11 @@ while :; do
                 B_ROOT=(${_nb[@]+"${_nb[@]}"}); B_EXCL=(${_ne[@]+"${_ne[@]}"})
             fi
             while :; do
-                basket_step || continue 2
+                # Słowa drzewa z rodzaju relacji (właściciel 2026-10-25: "Change relation pve1 --
+                # What to copy" przy migawkach zdalnych, a tu nie ma kopii): kreator przekazuje
+                # MODE/NOCOPY do basket_step, okno zmiany dotąd nie.
+                _bnc=0; [ "${RMODE:-}" = local ] && { [ -z "${TGT:-}" ] || [ "$TGT" = - ]; } && _bnc=1
+                MODE="${RMODE:-}" NOCOPY="$_bnc" basket_step || continue 2
                 NEW_ROOTS="$(printf '%s\n' "${B_ROOT[@]}" | sort)"
                 ADDED="$(comm -13 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
                 REMOVED="$(comm -23 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
