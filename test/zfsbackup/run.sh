@@ -13259,7 +13259,7 @@ else
 fi
 DROUT=$(dr_run c)
 if printf '%s' "$DROUT" | grep -q "1\. collector : skipped -- the record already says 'removed'" \
-   && printf '%s' "$DROUT" | grep -q '2\. source    : on 10.0.0.9 (port 2222), as root over SSH: deploy.sh --leave=' \
+   && printf '%s' "$DROUT" | grep -q '2\. source    : on 10.0.0.9 (10.0.0.9:2222), as root over SSH: deploy.sh --leave=' \
    && printf '%s' "$DROUT" | grep -q '4\. copies    : KEPT on this host -- pass'; then
     ok "delrel: on a record that already says 'removed' the collector half is skipped -- the verb then means 'free the name'; a never-activated record (no MANAGED_DATASETS) is not a crash; the port comes from the recorded endpoint"
 else
@@ -13383,9 +13383,9 @@ dr_probe() {   # <rc of the root channel> <args...> -> plan + "CALLS=<n>"
       cmd_delete_relation "$@"; echo "CALLS=$n" ) 2>&1
 }
 DP_NO=$(dr_probe 255 c --check-source); DP_OK=$(dr_probe 0 c --check-source); DP_PLAIN=$(dr_probe 255 c)
-if printf '%s' "$DP_NO" | grep -q '2\. source    : NO root SSH to 10.0.0.9 (port 2222) from this host -- on 10.0.0.9, as root: cd .* && \./deploy.sh --leave=' \
+if printf '%s' "$DP_NO" | grep -q '2\. source    : NO root SSH to 10.0.0.9:2222 from this host -- on 10.0.0.9, as root: cd .* && \./deploy.sh --leave=' \
    && printf '%s' "$DP_NO" | grep -q 'CALLS=1' \
-   && printf '%s' "$DP_OK" | grep -q '2\. source    : on 10.0.0.9 (port 2222), as root over SSH: deploy.sh --leave=' \
+   && printf '%s' "$DP_OK" | grep -q '2\. source    : on 10.0.0.9 (10.0.0.9:2222), as root over SSH: deploy.sh --leave=' \
    && printf '%s' "$DP_PLAIN" | grep -q '2\. source    : on 10.0.0.9' && printf '%s' "$DP_PLAIN" | grep -q 'CALLS=0'; then
     ok "delrel: --check-source -- no root channel: the plan says so with the manual --leave; channel up: the usual line; without the flag: no connection at all (U16)"
 else
