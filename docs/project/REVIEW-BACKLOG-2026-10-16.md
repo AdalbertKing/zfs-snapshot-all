@@ -148,6 +148,24 @@ CI 37537159284 jest zielone. Bieżące drzewo przechodzi stagger 41/41 i cron
 powtarzać PR #469 bez nowego kodu lub dowodu. Następny zakres po każdej nowej
 odpowiedzi do REV-174: PR #470, edycja zainstalowanej relacji.
 
+**Rozstrzygnięcie recenzenta 2026-10-25 — PR #470, edycja zainstalowanej
+relacji.** Zakres
+`851b79abd083632823e01efc7a68ff311bd9b8a3..05ff13778f2d28d52c1230c852ffa73142c4db20`
+(merge `f648aa8ef5023497a41817db4ed49975e79a3ac3`) przejrzany bez nowego
+ustalenia. Jawne `edit-relation` regeneruje tylko relację wskazaną dokładnym
+tokenem `-L`, odmawia usunięcia jej wszystkich zadań, utraty cudzej relacji i
+zmiany bez wspólnej rodziny snapshotów, a przed zgodą pokazuje plan oraz
+porzucone rodziny. Instalacja korzysta z istniejącej transakcji aktywacji;
+stare sekcje prune tej relacji i osierocone generowane szablony są usuwane, a
+rekord profilu aktualizowany. Dokładny head: editrel 8/8, `impact --verify` i
+`diff --check`; te same testy przeciw dokładnej bazie dają 2/8, z sześcioma
+oczekiwanymi porażkami kontraktów edycji. CI heada 37673336383 jest zielone.
+Bieżący `main` zachowuje granicę (editrel 8/8, `impact --verify`). Lokalny pełny
+TUI miał niezwiązane odmowy fixture klawiatury terminala, więc nie służy jako
+dowód; pełnym dowodem dla heada pozostaje CI. Nie powtarzać PR #470 bez nowego
+kodu lub dowodu. Następny zakres po każdej nowej odpowiedzi do REV-174: PR
+#476, `add-source` i trzy następcze poprawki edycji relacji.
+
 Uwaga do terminologii: wpis 2026-10-06 w `ENGINE-FREEZE.md` (~819) nazywa zmianę „PRE-AUTHORISED by the owner”, choć
 dokument (~1016–1035) mówi, że autoryzacja zamrożonego pliku należy do recenzenta. Żaden z wpisów 2026-10-06/-08/-12
 nie ma znacznika `authorizes-frozen`.
