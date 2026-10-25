@@ -4429,12 +4429,21 @@ if [ "$got" = "R=hdd/vm-disks/vm-102 A=hdd/vm-disks/b" ]; then
 else
     bad "okno zmiany: zmiana wyjątków -> czasowniki" "$got"
 fi
-# Do czasu przebudowy sekcji po zmianie wyjątku okno zmiany wyjątków nie edytuje
-# (2026-10-25: sam remove-source dziecka nie zmieniał sekcji kolektora).
-if grep -q '^RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=1' "$REPO/tui/edit-relation.sh"; then
-    ok "okno zmiany: wyjątków nie edytuje, dopóki zmiana wyjątku nie przebudowuje sekcji kolektora"
+# Wyjątki w oknie zmiany (2026-10-25): tylko migawki zdalne, i tylko razem z przebudową
+# sekcji (edit-relation --profile=), bo sam remove-source dziecka sekcji kolektora nie zmienia.
+nr_fn=$(sed -n '/^needs_rerender() {/,/^}/p' "$REPO/tui/edit-relation.sh")
+got=$(bash -c "$nr_fn
+P_ADDED=''; P_REMOVED='hdd/ct/x'; P_EDIT=(); CUR_P=d7h24
+RMODE=snaponly; needs_rerender && echo SO-YES
+RMODE=backup; needs_rerender || echo BK-NO
+RMODE=snaponly; P_EDIT=(--profile=d30h24); needs_rerender || echo EDIT-NO
+P_EDIT=(); P_REMOVED=''; needs_rerender || echo NOCHANGE-NO" 2>&1 | tr '\n' ' ')
+if [ "$got" = "SO-YES BK-NO EDIT-NO NOCHANGE-NO " ] \
+   && grep -q '^\[ "\${RMODE:-}" = snaponly \] && \[ "\${CUR_P:--}" != - \] && BASKET_NO_EXC=0' "$REPO/tui/edit-relation.sh" \
+   && grep -q 'needs_rerender; then run1 "\$ZB" edit-relation "\$NAME" "--profile=\$CUR_P" --yes' "$REPO/tui/edit-relation.sh"; then
+    ok "okno zmiany: wyjątki tylko w migawkach zdalnych, a zmiana datasetów tam przebudowuje sekcje (bez dubla przy zmianie szablonu)"
 else
-    bad "okno zmiany: edycja wyjątków włączona bez przebudowy sekcji" "$(grep -n BASKET_NO_EXC "$REPO/tui/edit-relation.sh")"
+    bad "okno zmiany: wyjątki i przebudowa sekcji" "$got" "$(grep -n 'BASKET_NO_EXC\|needs_rerender' "$REPO/tui/edit-relation.sh")"
 fi
 
 # Okno zmiany relacji mówi słowami jej rodzaju (właściciel 2026-10-25: "What to copy" przy

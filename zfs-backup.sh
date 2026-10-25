@@ -14165,12 +14165,19 @@ status_quiesce_from_cron() {   # <relationship name> -> one line
 }
 
 status_sources_from_config() {   # <client name> -> the src= of every section it owns
-    local name="$1" cfg="${CRON_CONFIG:-}" line cur="" out=""
+    local name="$1" cfg="${CRON_CONFIG:-}" line cur="" out="" so=""
     [ -n "$cfg" ] && [ -r "$cfg" ] || return 1
     while IFS= read -r line; do
         case "$line" in
-            "[dataset:"*) cur="" ;;
-            *"managed-by: zfs-backup.sh client=$name") cur="yes" ;;
+            "[dataset:"*) cur=""; so="" ;;
+            # A snaponly section names its scope in the header and has no src field: what
+            # it covers today (a narrowed root = the root and its enumerated children). Without
+            # this the GUI fell back to the requested roots and showed an excluded child as
+            # still selected (owner, 2026-10-25).
+            "[snaponly:"*) cur=""; so="${line#\[snaponly:}"; so="${so%]}" ;;
+            "["*) so="" ;;
+            *"managed-by: zfs-backup.sh client=$name")
+                if [ -n "$so" ]; then out="$out $so"; so=""; else cur="yes"; fi ;;
             # The FIELD named src, not any line containing "src": K3's
             # prune_schedule_<...src_hourly> fields are lines like that, and the
             # first live run printed their schedules as sources.
