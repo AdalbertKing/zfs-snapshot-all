@@ -71,6 +71,17 @@ left=$(grep -rIliE '192\.168\.(28|11)\.[0-9]|10\.98\.0\.[0-9]|metropolis' "$tmp"
 find "$dst" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
 cp -a "$tmp/." "$dst/"
 git -C "$dst" add -A
+# Modes come from the dev TREE, not from the filesystem: on a checkout that does not track
+# the executable bit (Windows, core.filemode=false) every script landed 100644, and cron
+# calls them directly (measured on the first 1.0 publish, 2026-10-25: zfs-backup.sh,
+# deploy.sh, gen-cron.sh 100644 in the release index).
+while IFS=$'\t' read -r mode path; do
+    case "$mode" in
+        100755) git -C "$dst" update-index --chmod=+x -- "$path" ;;
+        100644) git -C "$dst" update-index --chmod=-x -- "$path" ;;
+    esac
+done < <(git -C "$dev" ls-tree -r "$rev" | awk -F'\t' 'NR == FNR { want[$0] = 1; next }
+             ($2 in want) { split($1, a, " "); print a[1] "\t" $2 }' <(printf '%s\n' "$list") -)
 if git -C "$dst" diff --cached --quiet; then
     echo "publish: $dst already holds $rev's package -- no commit"
 else

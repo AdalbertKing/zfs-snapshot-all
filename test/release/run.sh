@@ -79,6 +79,19 @@ fi
 [ "$(cat "$REL/RELEASE-OF" 2>/dev/null)" = "$head_sha" ] && ok "RELEASE-OF names the full development SHA" \
     || bad "RELEASE-OF" "$(cat "$REL/RELEASE-OF" 2>/dev/null)" "want $head_sha"
 
+# 5b. file modes come from the dev tree (cron calls the scripts directly): every listed file
+#     carries the same mode in the release index as in HEAD -- not what the filesystem says
+modes_bad="$(git -C "$REPO" ls-tree -r HEAD | awk -F'\t' '{ split($1, a, " "); print a[1] "\t" $2 }' | sort > "$WORK/dev.modes"
+             git -C "$REL" ls-files -s | awk -F'\t' '{ split($1, a, " "); print a[1] "\t" $2 }' | sort > "$WORK/rel.modes"
+             join -t "$(printf '\t')" -1 2 -2 2 <(sort -t "$(printf '\t')" -k2 "$WORK/dev.modes") <(sort -t "$(printf '\t')" -k2 "$WORK/rel.modes") \
+                 | awk -F'\t' '$2 != $3 { print $1 " dev=" $2 " release=" $3 }')"
+nx="$(git -C "$REL" ls-files -s -- zfs-backup.sh deploy.sh gen-cron.sh zfs-job.sh | awk '$1 == "100755"' | wc -l | tr -d ' ')"
+if [ -z "$modes_bad" ] && [ "$nx" = 4 ]; then
+    ok "modes: every shipped file has its dev-tree mode (zfs-backup.sh, deploy.sh, gen-cron.sh, zfs-job.sh executable)"
+else
+    bad "modes: the release index lost executable bits" "$(printf '%s\n' "$modes_bad" | head -5)" "executable among the four: $nx"
+fi
+
 # 6. publishing the same revision again commits nothing; history only grows
 n1="$(git -C "$REL" rev-list --count HEAD)"
 out2="$(bash "$REPO/release/publish.sh" HEAD "$REL" 2>&1)"
