@@ -2,7 +2,39 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-25 (PR #476 / REV-175)
+## Latest final-audit batch — 2026-10-25 (PR #477 replica deletion)
+
+**No new finding was confirmed.** The exact audited range is
+`498b5fa9f1ef667f5b613a0e800717ab410f1f06..9ce6a24b733a44378e429b870ad8bf4e4c3f53dd`,
+merged as `43dd2ad02ef00d6fc697f78e1fab01a45f869ee8`. The F6/Del path
+delegates to the new dialog through `remove-replica NAME --ask`. Destruction is
+opt-in and unchecked by default. If selected, the dialog runs
+`purge-replica-copy` before removing the `[replica:]` section; a non-zero purge
+stops the sequence, so the durable record and schedule remain available for a
+retry. An absent medium offers no purge action and removes only the schedule.
+The existing purge verb still verifies medium identity and destroys only the
+per-source children, not the marker dataset.
+
+This is a historical verdict on the exact PR #477 delivery, not a request to
+restore its destructive option. The later owner decision W12 removed
+`purge-replica-copy`; current `main` always keeps replica data and directs an
+operator who wants an empty medium to the explicit disk-format flow.
+
+Independent exact-head evidence: a six-case stubbed dialog/dispatcher control
+passes (default keep, absent-medium keep, purge refusal, successful order and
+public `--ask` route); the exact base fails immediately because the dialog does
+not exist. `zfsbackup` passes 923/923, `impact --verify` and range `diff --check`
+pass, and exact-head CI run 37747810221 succeeded. The relevant Del assertion in
+the TUI suite passes; six unrelated terminal-keyboard fixture cases fail in this
+container and are not used as evidence. No live medium, ZFS dataset, config,
+crontab or host was touched.
+
+**Next reviewer action:** pick up a fresh `IMPLEMENTED | Reviewer` response for
+REV-174 or REV-175 first. Otherwise reconcile PR #480's destructive divergence
+policy with its existing reviews/closures before deciding whether any unreviewed
+surface remains; do not repeat PR #477 without new code or evidence.
+
+## Previous final-audit batch — 2026-10-25 (PR #476 / REV-175)
 
 **A new P2 finding was opened in the remote endpoint boundary of
 `add-source`.** The exact audited range is
