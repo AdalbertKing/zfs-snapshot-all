@@ -217,9 +217,14 @@ for n in names:
     if "/" in n: kids.setdefault(n.rsplit("/", 1)[0], []).append(n)
 under = lambda a, b: a.startswith(b + "/")
 out = []
+cur = {}
+if len(sys.argv) > 2:   # obecne pozycje: liść (bez dzieci) zachowuje swoją rekurencję
+    for line in open(sys.argv[2], encoding="utf-8"):
+        p = line.rstrip("\r\n").split("\t")
+        if len(p) > 1: cur[p[0]] = p[1]
 def emit(n, ex):
     if not any(under(e, n) for e in ex):
-        out.append((n, "flat")); return
+        out.append((n, cur.get(n, "flat") if not kids.get(n) else "flat")); return
     out.append((n, "no"))
     for c in kids.get(n, []):
         if c in ex: continue
@@ -228,7 +233,7 @@ for line in sys.stdin:
     _, r, e = line.rstrip("\n").split("\t")
     emit(r, [x for x in e.split("\x1f") if x])
 for n, rec in dict.fromkeys(out):
-    print("%s\t%s" % (n, rec))' "$1" | tr -d '\r'
+    print("%s\t%s" % (n, rec))' "$@" | tr -d '\r'
 }
 
 # basket_from_entries <ds.json> <entries file> -- odwrotność: pozycje relacji ("DS<TAB>flat|no",

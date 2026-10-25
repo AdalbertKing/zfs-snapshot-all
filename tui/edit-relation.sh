@@ -905,7 +905,8 @@ while :; do
                 # Słowa drzewa z rodzaju relacji: "Co kopiować" / "Gdzie robić migawki".
                 _bnc=0; [ "${RMODE:-}" = local ] && { [ -z "${TGT:-}" ] || [ "$TGT" = - ]; } && _bnc=1
                 MODE="${RMODE:-}" NOCOPY="$_bnc" basket_step || continue 2
-                NEW_ENT="$(basket_entries "$TMPD/ds.json" | sort)"
+                printf '%s\n' "$CUR_ENT" >"$TMPD/cur-ents.tsv"
+                NEW_ENT="$(basket_entries "$TMPD/ds.json" "$TMPD/cur-ents.tsv" | sort)"
                 if [ "$NEW_ENT" = "$CUR_ENT" ]; then P_ENT=""; P_ADDED=""; P_REMOVED=""; continue 2; fi
                 # Do pokazania na liście: co dochodzi, co odpada, co zmienia rekurencję.
                 P_ADDED="$(comm -13 <(printf '%s\n' "$CUR_ENT" | cut -f1) <(printf '%s\n' "$NEW_ENT" | cut -f1) | grep .)"
