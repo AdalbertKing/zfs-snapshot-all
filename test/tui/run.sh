@@ -4402,7 +4402,7 @@ fi
 # relacji. Migawki zdalne: "[-] część" = wymienione datasety (basket_expand). Okno zmiany:
 # obecne wyjątki wracają jako [-] (basket_collapse), nowy wyjątek = remove-source dziecka,
 # zdjęty = add-source dziecka.
-EXW="$WORK/exw"; rm -rf "$EXW"; mkdir -p "$EXW"
+EXW="$(mktemp -d)"
 cat > "$EXW/ds.json" <<'JSON'
 {"datasets":[{"name":"hdd"},{"name":"hdd/vm-disks"},{"name":"hdd/vm-disks/a"},{"name":"hdd/vm-disks/b"},{"name":"hdd/vm-disks/b/c"},{"name":"hdd/vm-disks/vm-102"},{"name":"rpool/data"},{"name":"rpool/data/x"}]}
 JSON
