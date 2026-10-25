@@ -2,7 +2,7 @@
 # edit-relation.sh NAZWA -- zmiana zainstalowanej relacji w oknach whiptail ('e' na F3).
 #
 # Pierwsze okno: CO zmienić (właściciel 2026-10-09, uwaga 5):
-#   1. Datasety -- co kopiować (drzewo z kratkami, X12)    (add-source / remove-source; W4)
+#   1. Datasety -- drzewo z kratkami (X12), zapis jednym set-datasets (relacja = config)
 #   2. Użyj szablonu -- gotowy szablon dla celu  (edit-relation --profile)
 #   3. Harmonogram i retencja kopii w celu i źródle -- tabela    (ukryty szablon relacji, edit-relation)
 #   4. Ustawienia silnika -- jak przesyłane są kopie (set-transfer; W16: historia,
@@ -74,7 +74,7 @@ except Exception:
 with open(tmpd + "/st.tsv", "w", encoding="utf-8", newline="\n") as f:
     f.write("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" % (st.get("state") or "-", st.get("profile") or "-", st.get("source_profile") or "-",
                                         st.get("peer_host") or "-",
-                                        # "konto@host:dataset" -> "dataset": add-/remove-source biorą sam dataset
+                                        # "konto@host:dataset" -> "dataset" (sam dataset do drzewa)
                                         ",".join(x.rsplit(":", 1)[-1] for x in (st.get("sources") or [])) or "-",
                                         "1" if (str(st.get("passive") or "") == "1" or st.get("mode") == "sync") else "0",
                                         st.get("client_target") or "-", st.get("mode") or "-", st.get("local_user") or "-"))
@@ -194,13 +194,9 @@ if [ "$STATE" != active ]; then
     wt --title "$(Tv 'Nie da się zmienić '\''$NAME'\''' '$NAME' "$NAME")" --msgbox "$(Tv 'Relacja '\''$NAME'\'' jest w stanie '\''${STATE}'\''.\nZmieniać można tylko relację zainstalowaną (active).' '$NAME' "$NAME" '${STATE}' "${STATE}")" 10 "$W"
     exit 1
 fi
-# Koszyk (basket-lib.sh) w "Datasety": nagłówek okien, bez "Sposób" i bez "Wyjątków".
-# Wyjątki w oknie zmiany (2026-10-25): remove-/add-source dziecka pod korzeniem zmienia zakres
-# źródła, a sekcje kolektora przebudowuje dopiero edit-relation --profile= (rerender, który od
-# #879 czyta zakres źródła: korzeń zawężony = wymienione dzieci, pełny = -R). Na razie tylko
-# migawki zdalne -- dla nich ta przebudowa jest sprawdzona na labie (pve9 -> pve9b, hdd/ct).
-RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=1
-[ "${RMODE:-}" = snaponly ] && [ "${CUR_P:--}" != - ] && BASKET_NO_EXC=0
+# Koszyk (basket-lib.sh) w "Datasety": nagłówek okien, bez "Sposób". Wyjątki jak w kreatorze,
+# w każdym rodzaju relacji: drzewo -> pozycje (basket_entries) -> jedno set-datasets.
+RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=0
 title() { T 'Zmień relację %s -- %s' "$NAME" "$2"; }
 cur_words() {   # słowa o obecnym szablonie celu
     if [ "$CUR_P" = "$HNAME" ]; then echo "$(T 'własne ustawienia relacji (tabela szczebli)')"; else echo "${CUR_P:-$(T '<nie zapisany>')}"; fi
@@ -679,49 +675,15 @@ PYEOF
 
 # WSTECZ = JEDEN KROK (właściciel, W5, 2026-10-11): z każdego okna po menu Wstecz wraca do
 # menu, nie wyrzuca z procedury. Wstecz w samym menu to krok z powrotem na F3.
-# Kolejność kroków Datasetów (Metropolis 2026-10-25): dziecko, które obejmie nowo zaznaczony
-# rodzic ("[x] z potomnymi, także przyszłymi"), schodzi PRZED add-source rodzica. Zdjęte po nim
-# było wyjątkiem POD rodzicem (remove-source w drzewie rodzica = wyłącz to dziecko) i rodzic z
-# wyłączonymi dziećmi przestawał być rekurencyjny -- migawki szły na sam kontener, nie na dyski.
-# Wypisuje kroki "remove|add <dataset>" w kolejności wykonania.
-# "korzeń<TAB>wyjątek" na każdy wyjątek obecnego wyboru (B_ROOT/B_EXCL), posortowane.
-excl_pairs() {
-    local i x
-    for i in "${!B_ROOT[@]}"; do
-        while IFS= read -r x; do [ -n "$x" ] && printf '%s\t%s\n' "${B_ROOT[$i]}" "$x"; done <<<"${B_EXCL[$i]}"
-    done | sort
-}
-# excl_delta 13|23 -> wyjątki dodane (13) albo zdjęte (23) pod korzeniami, które zostają ($_kept).
-excl_delta() {
-    local r
-    comm -"$1" <(printf '%s\n' "$OLD_EXCL") <(printf '%s\n' "$NEW_EXCL") | grep . | while IFS=$'\t' read -r r x; do
-        printf '%s\n' "$_kept" | grep -qxF -- "$r" && printf '%s\n' "$x"
-    done
-}
-# Migawki zdalne po zmianie datasetów: sekcje kolektora od nowa z zakresu źródła (patrz
-# BASKET_NO_EXC wyżej). Nie, gdy i tak idzie edit-relation (zmiana szablonu przebudowuje sama).
-needs_rerender() {
-    [ "${RMODE:-}" = snaponly ] && [ -n "$P_ADDED$P_REMOVED" ] && [ "${#P_EDIT[@]}" -eq 0 ] && [ "${CUR_P:--}" != - ]
-}
-dataset_steps() {
-    local n a covered
-    for n in $P_REMOVED; do
-        covered=0
-        for a in $P_ADDED; do case "$n" in "$a"/*) covered=1 ;; esac; done
-        [ "$covered" -eq 1 ] && echo "remove $n"
-    done
-    for n in $P_ADDED; do echo "add $n"; done
-    for n in $P_REMOVED; do
-        covered=0
-        for a in $P_ADDED; do case "$n" in "$a"/*) covered=1 ;; esac; done
-        [ "$covered" -eq 0 ] && echo "remove $n"
-    done
-}
-P_HOST=""; P_ADDED=""; P_REMOVED=""; P_EDIT=(); P_EDIT_WORDS=""; P_TIERS=(); P_RARGS=(); P_SARGS=(); P_TRANSFER=()
+# DATASETY = JEDNO WYWOŁANIE (projekt „relacja = config”, 2026-10-25): drzewo daje pozycje
+# relacji (basket_entries), a zmiana to `set-datasets NAZWA --dataset=DS:flat|no ...` -- to samo
+# dla każdego rodzaju relacji. P_ENT: pozycje docelowe ("DS<TAB>flat|no"), puste = bez zmiany.
+ds_args() { printf '%s\n' "$P_ENT" | awk -F'\t' 'NF { printf "--dataset=%s:%s\n", $1, $2 }'; }
+P_HOST=""; P_ENT=""; P_ADDED=""; P_REMOVED=""; P_EDIT=(); P_EDIT_WORDS=""; P_TIERS=(); P_RARGS=(); P_SARGS=(); P_TRANSFER=()
 pending_count() {
     local n=0
     [ -n "$P_HOST" ] && n=$((n + 1))
-    [ -n "$P_ADDED$P_REMOVED" ] && n=$((n + 1))
+    [ -n "$P_ENT" ] && n=$((n + 1))
     [ "${#P_EDIT[@]}" -gt 0 ] && n=$((n + 1))
     [ "${#P_TIERS[@]}" -gt 0 ] && n=$((n + 1))
     [ "${#P_TRANSFER[@]}" -gt 0 ] && n=$((n + 1))
@@ -736,12 +698,17 @@ save_all() {
         echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione. Po WYKONAJ, po kolei:')"
         echo
         [ -n "$P_HOST" ] && { k=$((k + 1)); echo "$(Tv '$k. Adres źródła: $P_HOST  (activate --host, sprawdzenie, że to ten sam host)' '$k' "$k" '$P_HOST' "$P_HOST")"; echo; }
-        if [ -n "$P_ADDED$P_REMOVED" ]; then
+        if [ -n "$P_ENT" ]; then
             k=$((k + 1)); echo "$(Tv '$k. Datasety:' '$k' "$k")"
             # Kampania wariantów 2026-10-22: dataset dodany z powrotem szedł PRZYROSTOWO od kopii, która
             # tu została -- "pierwsza pełna kopia" wprowadzała w błąd.
             for n in $P_ADDED; do echo "$(Tv '   DOJDĄ:    $n  (pierwsza kopia od razu; przyrostowo, gdy kopia już tu jest)' '$n' "$n")"; done
             for n in $P_REMOVED; do echo "$(Tv '   ODPADNĄ:  $n  (kopie na tym hoście ZOSTAJĄ)' '$n' "$n")"; done
+            echo "$(T '   Po zmianie relacja obejmuje:')"
+            printf '%s\n' "$P_ENT" | while IFS=$'\t' read -r n r; do
+                [ -n "$n" ] || continue
+                if [ "$r" = flat ]; then echo "     [x] $n  $(T '(z dziećmi, także przyszłymi)')"; else echo "     [-] $n  $(T '(sam dataset; dzieci tylko wymienione)')"; fi
+            done
             echo
         fi
         if [ "${#P_EDIT[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(T '%s. Szablon: %s -> %s' "$k" "$(cur_words)" "$P_EDIT_WORDS")"; sed -n '3,$p' "$TMPD/p_edit.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
@@ -749,8 +716,7 @@ save_all() {
         if [ "${#P_TRANSFER[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(Tv '$k. Ustawienia silnika:' '$k' "$k")"; grep "^Relation '" "$TMPD/p_transfer.txt" | sed 's/^/   /'; echo; fi
         echo "$(T 'Komendy:')"
         [ -n "$P_HOST" ] && echo "  $(shq "$ZB") activate $NAME --host=$P_HOST --skip-final-catchup --yes"
-        dataset_steps | while read -r v n; do echo "  $(shq "$ZB") $v-source $NAME $n --yes"; done
-        needs_rerender && echo "  $(shq "$ZB") edit-relation $NAME --profile=$CUR_P --yes"
+        [ -n "$P_ENT" ] && echo "  $(shq "$ZB") set-datasets $NAME $(ds_args | tr '\n' ' ')--yes"
         [ "${#P_EDIT[@]}" -gt 0 ] && echo "  $(shq "$ZB") edit-relation $NAME $(for a in "${P_EDIT[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
         [ "${#P_TIERS[@]}" -gt 0 ] && echo "  $(shq "$ZB") set-tiers $NAME $(for a in "${P_TIERS[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
         [ "${#P_TRANSFER[@]}" -gt 0 ] && echo "  $(shq "$ZB") set-transfer $NAME $(for a in "${P_TRANSFER[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
@@ -775,11 +741,10 @@ save_all() {
     apply_steps() {
         local rc=0 n
         if [ -n "$P_HOST" ]; then run1 "$ZB" activate "$NAME" "--host=$P_HOST" --skip-final-catchup --yes || rc=$?; fi
-        if [ "$rc" -eq 0 ]; then
-            local v
-            while read -r v n; do run1 "$ZB" "$v-source" "$NAME" "$n" --yes || { rc=$?; break; }; done < <(dataset_steps)
+        if [ "$rc" -eq 0 ] && [ -n "$P_ENT" ]; then
+            local -a _da=(); mapfile -t _da < <(ds_args)
+            run1 "$ZB" set-datasets "$NAME" "${_da[@]}" --yes || rc=$?
         fi
-        if [ "$rc" -eq 0 ] && needs_rerender; then run1 "$ZB" edit-relation "$NAME" "--profile=$CUR_P" --yes || rc=$?; fi
         if [ "$rc" -eq 0 ] && [ "${#P_EDIT[@]}" -gt 0 ]; then run1 "$ZB" edit-relation "$NAME" "${P_EDIT[@]}" --yes || rc=$?; [ "$rc" -eq 0 ] && : >"$TMPD/edit.done"; fi
         if [ "$rc" -eq 0 ] && [ "${#P_TIERS[@]}" -gt 0 ]; then run1 "$ZB" set-tiers "$NAME" "${P_TIERS[@]}" --yes || rc=$?; fi
         if [ "$rc" -eq 0 ] && [ "${#P_TRANSFER[@]}" -gt 0 ]; then run1 "$ZB" set-transfer "$NAME" "${P_TRANSFER[@]}" --yes || rc=$?; fi
@@ -821,7 +786,8 @@ while :; do
     _ds="$_ds: ${SRCS//,/, }"
     _ep="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); r=(d.get("relations") or [{}])[0]; e=r.get("active_endpoint") or ""; print(e[:-3] if e.endswith(":22") else e)' "$TMPD/st.json" 2>/dev/null | tr -d '\r')"
     _ep="${_ep:-$SRCHOST}"
-    _dsp=""; [ -n "$P_ADDED$P_REMOVED" ] && _dsp="  $_zm$(for n in $P_ADDED; do printf ' +%s' "$n"; done)$(for n in $P_REMOVED; do printf ' -%s' "$n"; done)"
+    _dsp=""; [ -n "$P_ENT" ] && [ -z "$P_ADDED$P_REMOVED" ] && _dsp="  $_zm ~[x]/[-]"
+    [ -n "$P_ADDED$P_REMOVED" ] && _dsp="  $_zm$(for n in $P_ADDED; do printf ' +%s' "$n"; done)$(for n in $P_REMOVED; do printf ' -%s' "$n"; done)"
     _sz="$(cur_words)"
     _pw="$(awk -F'\t' -v n="$CUR_P" '$1==n{print $2; exit}' "$TMPD/prof.tsv" 2>/dev/null | sed -e "s/^$CUR_P  *//" -e 's/  */ /g')"
     [ -n "$_pw" ] && _sz="$_sz -- $_pw"
@@ -916,71 +882,43 @@ while :; do
             continue ;;
         dane)
             # DATASETY = TO SAMO OKNO CO W KREATORZE (W4, właściciel 2026-10-11): koszyk
-            # z obecnymi datasetami relacji, dowolnie wiele dodań i usunięć, potem JEDEN
-            # plan różnic i WYKONAJ. Bez "Sposób" (to inna relacja) i bez "Wyjątków":
-            # add-source bierze cały dataset, wyjątków istniejącej relacji nie zmienia.
+            # z obecnymi datasetami relacji (z configu), dowolnie wiele zmian, potem JEDEN
+            # plan i WYKONAJ (set-datasets). Bez "Sposób" (to inna relacja).
             info "$(T Datasety)" "$(Tv 'Czytam datasety z $SRCHOST...' '$SRCHOST' "$SRCHOST")"
             if ! "$ZB" list-datasets ${LDS_ARGS[@]+"${LDS_ARGS[@]}"} --json --own-snapshots >"$TMPD/ds.json" 2>"$TMPD/ds.err" \
                || ! basket_tree_from_json "$TMPD/ds.json"; then
                 wt --title "$(T 'Lista datasetów niedostępna')" --msgbox "$(Tv 'list-datasets $SRCHOST nie odpowiedział:\n' '$SRCHOST' "$SRCHOST")$(tail -3 "$TMPD/ds.err")" 12 "$W"; continue
             fi
-            # Obecny wybór z wyjątkami (2026-10-25): datasety relacji -> korzenie i ich wyjątki,
-            # jak w kreatorze ([-] część). Zmiana wyjątku = remove-/add-source tego dziecka.
+            # Obecny wybór z CONFIGU (relation-sources): pozycje -> korzenie i wyjątki w drzewie.
+            # Czekająca zmiana (P_ENT) -- drzewo startuje od niej.
+            "$ZB" relation-sources "$NAME" >"$TMPD/ents.tsv" 2>"$TMPD/ents.err" || : >"$TMPD/ents.tsv"
+            CUR_ENT="$(sort "$TMPD/ents.tsv")"
+            [ -n "$P_ENT" ] && printf '%s\n' "$P_ENT" >"$TMPD/ents.tsv"
             B_ROOT=(); B_EXCL=()
             while IFS=$'\t' read -r _k _r _e; do
                 [ "$_k" = B ] || continue
                 B_ROOT+=("$_r"); B_EXCL+=("$(printf '%s' "$_e" | tr '\037' '\n')")
-            done < <(basket_collapse "$TMPD/ds.json" "$SRCS")
-            OLD_EXCL="$(excl_pairs)"
+            done < <(basket_from_entries "$TMPD/ds.json" "$TMPD/ents.tsv")
             # X12: relacja lokalna widzi w drzewie własny cel -- kopie nie są źródłem (X21).
             BASKET_HIDE=""; [ "$PEER" = - ] && [ "${TGT:--}" != - ] && BASKET_HIDE="$TGT"
-            OLD_ROOTS="$(printf '%s\n' "${B_ROOT[@]}" | sort)"
-            # Wcześniej wybrane zmiany (czekające na liście) -- koszyk startuje od nich.
-            for n in $P_ADDED; do B_ROOT+=("$n"); B_EXCL+=(""); done
-            if [ -n "$P_REMOVED" ]; then
-                _nb=(); _ne=()
-                for i in "${!B_ROOT[@]}"; do
-                    printf '%s\n' $P_REMOVED | grep -qxF -- "${B_ROOT[$i]}" && continue
-                    _nb+=("${B_ROOT[$i]}"); _ne+=("${B_EXCL[$i]}")
-                done
-                B_ROOT=(${_nb[@]+"${_nb[@]}"}); B_EXCL=(${_ne[@]+"${_ne[@]}"})
-            fi
             while :; do
-                # Słowa drzewa z rodzaju relacji (właściciel 2026-10-25: "Change relation pve1 --
-                # What to copy" przy migawkach zdalnych, a tu nie ma kopii): kreator przekazuje
-                # MODE/NOCOPY do basket_step, okno zmiany dotąd nie.
+                # Słowa drzewa z rodzaju relacji: "Co kopiować" / "Gdzie robić migawki".
                 _bnc=0; [ "${RMODE:-}" = local ] && { [ -z "${TGT:-}" ] || [ "$TGT" = - ]; } && _bnc=1
                 MODE="${RMODE:-}" NOCOPY="$_bnc" basket_step || continue 2
-                NEW_ROOTS="$(printf '%s\n' "${B_ROOT[@]}" | sort)"
-                ADDED="$(comm -13 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
-                REMOVED="$(comm -23 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
-                # Wyjątki pod korzeniem, który zostaje: nowy wyjątek = remove-source dziecka,
-                # zdjęty wyjątek = add-source dziecka (czasowniki już tak działają w zakresie źródła).
-                NEW_EXCL="$(excl_pairs)"
-                _kept="$(comm -12 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
-                _xr="$(excl_delta 13)"; _xa="$(excl_delta 23)"
-                [ -n "$_xr" ] && REMOVED="$(printf '%s\n%s\n' "$REMOVED" "$_xr" | grep .)"
-                [ -n "$_xa" ] && ADDED="$(printf '%s\n%s\n' "$ADDED" "$_xa" | grep .)"
-                if [ -z "$ADDED$REMOVED" ]; then P_ADDED=""; P_REMOVED=""; continue 2; fi
-                # X21 (właściciel 2026-10-14): każda zmiana sprawdzona PRZED WYKONAJ -- czasownik
-                # bez --yes daje plan albo odmawia (np. dataset wewnątrz celu kopii); odmowa
-                # wraca do listy, zamiast przyjść po WYKONAJ z "to, co wyżej się udało, zostało".
+                NEW_ENT="$(basket_entries "$TMPD/ds.json" | sort)"
+                if [ "$NEW_ENT" = "$CUR_ENT" ]; then P_ENT=""; P_ADDED=""; P_REMOVED=""; continue 2; fi
+                # Do pokazania na liście: co dochodzi, co odpada, co zmienia rekurencję.
+                P_ADDED="$(comm -13 <(printf '%s\n' "$CUR_ENT" | cut -f1) <(printf '%s\n' "$NEW_ENT" | cut -f1) | grep .)"
+                P_REMOVED="$(comm -23 <(printf '%s\n' "$CUR_ENT" | cut -f1) <(printf '%s\n' "$NEW_ENT" | cut -f1) | grep .)"
+                # X21: sprawdzone PRZED WYKONAJ -- plan czasownika (bez --yes) albo jego odmowa.
                 info "$(T Datasety)" "$(T 'Sprawdzam zmiany (plan czasownika, nic nie zmienia)...')"
-                : >"$TMPD/dswhy.txt"
-                for n in $ADDED; do
-                    "$ZB" add-source "$NAME" "$n" >"$TMPD/dschk.txt" 2>&1 \
-                        || T '%s -- nie dodam:\n  %s\n' "$n" "$(verb_refusal "$TMPD/dschk.txt")" >>"$TMPD/dswhy.txt"
-                done
-                for n in $REMOVED; do
-                    "$ZB" remove-source "$NAME" "$n" >"$TMPD/dschk.txt" 2>&1 \
-                        || T '%s -- nie usunę:\n  %s\n' "$n" "$(verb_refusal "$TMPD/dschk.txt")" >>"$TMPD/dswhy.txt"
-                done
-                if [ -s "$TMPD/dswhy.txt" ]; then
-                    wt --title "$(T 'Tej zmiany nie da się zrobić -- nic nie zmieniono')" --msgbox "$(fold -s -w $((W - 6)) "$TMPD/dswhy.txt")" "$(fit "$(fold -s -w $((W - 6)) "$TMPD/dswhy.txt" | grep -c '')")" "$W"
+                P_ENT="$NEW_ENT"
+                _da=(); mapfile -t _da < <(ds_args)
+                if ! "$ZB" set-datasets "$NAME" "${_da[@]}" >"$TMPD/dschk.txt" 2>&1; then
+                    P_ENT=""; P_ADDED=""; P_REMOVED=""
+                    wt --title "$(T 'Tej zmiany nie da się zrobić -- nic nie zmieniono')" --msgbox "$(verb_refusal "$TMPD/dschk.txt" | fold -s -w $((W - 6)))" 12 "$W"
                     continue
                 fi
-                # Na listę zmian -- wykona je "Zapisz zmiany", razem z resztą (jedno WYKONAJ).
-                P_ADDED="$ADDED"; P_REMOVED="$REMOVED"
                 continue 2
             done ;;
     esac

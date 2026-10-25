@@ -15682,6 +15682,18 @@ relation_rewrite_sections() {   # <config> <name> <entries file>
 #   3. the record's request follows (REQUESTED_DATASETS, the one-command RUX_SOURCE list);
 #   4. a dataset that was not covered before gets its first snapshot / copy now.
 # Without --yes: the plan, nothing changed.
+# relation-sources NAME -- what a relationship covers, from its config: "DATASET<TAB>flat|no"
+# per entry (the GUI's tree is built from it). Read-only.
+cmd_relation_sources() {
+    local name="${1:-}" cpath
+    [ -n "$name" ] && [ "${name#-}" = "$name" ] || die "usage: zfs-backup.sh relation-sources NAME"
+    cpath=$(client_conf_path "$name"); [ -r "$cpath" ] || die "relation-sources: no relationship '$name' on this host"
+    record_load client "$cpath"
+    cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
+    CRON_CONFIG="$CRON_CTX_FILE"
+    relation_sources "$name" | awk -F'	' '{ s = $1; sub(/^[^:]*:/, "", s); print s "	" ($2 == "no" ? "no" : "flat") }'
+}
+
 cmd_set_datasets() {
     local name="" yes=0 a ds rec e
     local -a ents=()
@@ -22376,6 +22388,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         remove-source)    shift; cmd_remove_source "$@" ;;
         add-source)       shift; cmd_add_source "$@" ;;
         set-datasets)     shift; cmd_set_datasets "$@" ;;
+        relation-sources) shift; cmd_relation_sources "$@" ;;
         gui)              shift; cmd_gui "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;

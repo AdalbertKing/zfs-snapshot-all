@@ -6557,7 +6557,9 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # 18/24 since 2026-10-26 (relation = its config): set-datasets -- what a relationship covers,
 # rewritten in its config for every kind. A WRITER, aimed like the others (cron_context_resolve
 # record, assert_cron_config_matches_installed, then atomic_replace_and_install).
-if [ "$writers" -eq 18 ] && [ "$resolvers" -eq 24 ]; then
+# 18/25 since 2026-10-26: relation-sources -- the GUI's read of what a relationship covers,
+# aimed at the relationship's own config like the others (a READER, no install).
+if [ "$writers" -eq 18 ] && [ "$resolvers" -eq 25 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
