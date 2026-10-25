@@ -14158,6 +14158,51 @@ else
     bad "addsource: option parsing" "rc=$rc" "$out"
 fi
 
+# REV-20261025-175: add-source, remove-source and delete-relation reach the source at the
+# ACTIVE endpoint -- host and port of ONE record shape (management_host_port), never the
+# pairing host with the active port. The SSH wrapper is stubbed to fail (unreachable): the
+# first call it gets is the route, and nothing local may change behind a failed first step.
+ep_case() {   # <verb args...> ; env: EP_PEER EP_AE EP_SLOT_HOST EP_SLOT_PORT
+    local w; w=$(mktemp -d); touch "$w/client.conf"
+    ( source "$ZFSBACKUP" >/dev/null 2>&1
+      client_conf_path() { printf '%s\n' "$w/client.conf"; }
+      record_get() { printf '%s\n' backup; }
+      record_load() {
+          PEER_HOST="$EP_PEER"; STATE=active; RUX_MODE=backup
+          REQUESTED_DATASETS="pool/old pool/new"; MANAGED_DATASETS=""; CLIENT_TARGET=""
+          if [ -n "$EP_AE" ]; then ACTIVE_ENDPOINT="$EP_AE"; else unset ACTIVE_ENDPOINT; fi
+          ENDPOINT_VPN_HOST="${EP_SLOT_HOST:-}"; ENDPOINT_VPN_PORT="${EP_SLOT_PORT:-}"
+          [ -n "$ENDPOINT_VPN_HOST" ] || unset ENDPOINT_VPN_HOST
+      }
+      rux_root_ssh() { printf '%s %s\n' "$1" "$2" >> "$w/ssh"; return 255; }
+      cmd_activate_client() { echo activate >> "$w/local"; }
+      record_set() { echo record >> "$w/local"; }
+      remove_client() { echo remove >> "$w/local"; }
+      "$@" ) > "$w/out" 2>&1
+    printf 'rc=%s ssh=%s local=%s\n' "$?" "$(head -1 "$w/ssh" 2>/dev/null | tr ' ' :)" "$(cat "$w/local" 2>/dev/null | tr '\n' ,)"
+    rm -rf "$w"
+}
+for v in "cmd_add_source rel pool/new --yes" "cmd_remove_source rel pool/new --yes" "cmd_delete_relation rel --check-source"; do
+    vn=${v%% *}
+    got=$(EP_PEER=lan.example EP_AE=vpn.example:2222 ep_case $v)
+    case "$got" in *"ssh=vpn.example:2222 local=") ok "rev175: $vn -- moved relationship (host AND port changed) is reached at the active endpoint, nothing local changed" ;;
+        *) bad "rev175: $vn moved host+port" "$got" ;; esac
+    got=$(EP_PEER=lan.example EP_AE=lan.example:2200 ep_case $v)
+    case "$got" in *"ssh=lan.example:2200 local=") ok "rev175: $vn -- same host, changed port" ;;
+        *) bad "rev175: $vn same host, port" "$got" ;; esac
+    got=$(EP_PEER=lan.example EP_AE=vpn EP_SLOT_HOST=vpn.example EP_SLOT_PORT=2022 ep_case $v)
+    case "$got" in *"ssh=vpn.example:2022 local=") ok "rev175: $vn -- legacy named slot resolves through ENDPOINT_VPN_HOST/PORT" ;;
+        *) bad "rev175: $vn legacy slot" "$got" ;; esac
+    got=$(EP_PEER=lan.example EP_AE= ep_case $v)
+    case "$got" in *"ssh=lan.example:22 local=") ok "rev175: $vn -- no active endpoint: the pairing host, port 22" ;;
+        *) bad "rev175: $vn default" "$got" ;; esac
+done
+for v in "cmd_add_source rel pool/new --yes" "cmd_remove_source rel pool/new --yes"; do
+    got=$(EP_PEER=lan.example EP_AE=vpn ep_case $v)
+    case "$got" in "rc=1 ssh= local=") ok "rev175: ${v%% *} -- a legacy slot naming no host is refused before any SSH" ;;
+        *) bad "rev175: ${v%% *} unresolvable slot" "$got" ;; esac
+done
+
 fi   # --- koniec sekcji addsource ---
 
 if want editconfig; then
