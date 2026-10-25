@@ -674,6 +674,25 @@ PYEOF
 
 # WSTECZ = JEDEN KROK (właściciel, W5, 2026-10-11): z każdego okna po menu Wstecz wraca do
 # menu, nie wyrzuca z procedury. Wstecz w samym menu to krok z powrotem na F3.
+# Kolejność kroków Datasetów (Metropolis 2026-10-25): dziecko, które obejmie nowo zaznaczony
+# rodzic ("[x] z potomnymi, także przyszłymi"), schodzi PRZED add-source rodzica. Zdjęte po nim
+# było wyjątkiem POD rodzicem (remove-source w drzewie rodzica = wyłącz to dziecko) i rodzic z
+# wyłączonymi dziećmi przestawał być rekurencyjny -- migawki szły na sam kontener, nie na dyski.
+# Wypisuje kroki "remove|add <dataset>" w kolejności wykonania.
+dataset_steps() {
+    local n a covered
+    for n in $P_REMOVED; do
+        covered=0
+        for a in $P_ADDED; do case "$n" in "$a"/*) covered=1 ;; esac; done
+        [ "$covered" -eq 1 ] && echo "remove $n"
+    done
+    for n in $P_ADDED; do echo "add $n"; done
+    for n in $P_REMOVED; do
+        covered=0
+        for a in $P_ADDED; do case "$n" in "$a"/*) covered=1 ;; esac; done
+        [ "$covered" -eq 0 ] && echo "remove $n"
+    done
+}
 P_HOST=""; P_ADDED=""; P_REMOVED=""; P_EDIT=(); P_EDIT_WORDS=""; P_TIERS=(); P_RARGS=(); P_SARGS=(); P_TRANSFER=()
 pending_count() {
     local n=0
@@ -706,8 +725,7 @@ save_all() {
         if [ "${#P_TRANSFER[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(Tv '$k. Ustawienia silnika:' '$k' "$k")"; grep "^Relation '" "$TMPD/p_transfer.txt" | sed 's/^/   /'; echo; fi
         echo "$(T 'Komendy:')"
         [ -n "$P_HOST" ] && echo "  $(shq "$ZB") activate $NAME --host=$P_HOST --skip-final-catchup --yes"
-        for n in $P_ADDED; do echo "  $(shq "$ZB") add-source $NAME $n --yes"; done
-        for n in $P_REMOVED; do echo "  $(shq "$ZB") remove-source $NAME $n --yes"; done
+        dataset_steps | while read -r v n; do echo "  $(shq "$ZB") $v-source $NAME $n --yes"; done
         [ "${#P_EDIT[@]}" -gt 0 ] && echo "  $(shq "$ZB") edit-relation $NAME $(for a in "${P_EDIT[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
         [ "${#P_TIERS[@]}" -gt 0 ] && echo "  $(shq "$ZB") set-tiers $NAME $(for a in "${P_TIERS[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
         [ "${#P_TRANSFER[@]}" -gt 0 ] && echo "  $(shq "$ZB") set-transfer $NAME $(for a in "${P_TRANSFER[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
@@ -732,8 +750,10 @@ save_all() {
     apply_steps() {
         local rc=0 n
         if [ -n "$P_HOST" ]; then run1 "$ZB" activate "$NAME" "--host=$P_HOST" --skip-final-catchup --yes || rc=$?; fi
-        if [ "$rc" -eq 0 ]; then for n in $P_ADDED; do run1 "$ZB" add-source "$NAME" "$n" --yes || { rc=$?; break; }; done; fi
-        if [ "$rc" -eq 0 ]; then for n in $P_REMOVED; do run1 "$ZB" remove-source "$NAME" "$n" --yes || { rc=$?; break; }; done; fi
+        if [ "$rc" -eq 0 ]; then
+            local v
+            while read -r v n; do run1 "$ZB" "$v-source" "$NAME" "$n" --yes || { rc=$?; break; }; done < <(dataset_steps)
+        fi
         if [ "$rc" -eq 0 ] && [ "${#P_EDIT[@]}" -gt 0 ]; then run1 "$ZB" edit-relation "$NAME" "${P_EDIT[@]}" --yes || rc=$?; [ "$rc" -eq 0 ] && : >"$TMPD/edit.done"; fi
         if [ "$rc" -eq 0 ] && [ "${#P_TIERS[@]}" -gt 0 ]; then run1 "$ZB" set-tiers "$NAME" "${P_TIERS[@]}" --yes || rc=$?; fi
         if [ "$rc" -eq 0 ] && [ "${#P_TRANSFER[@]}" -gt 0 ]; then run1 "$ZB" set-transfer "$NAME" "${P_TRANSFER[@]}" --yes || rc=$?; fi

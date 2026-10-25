@@ -4398,6 +4398,17 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'add-source r1 hdd/iso --yes' "$ER/zb.log" && g
 else
     bad "edit-relation: Datasety (W4)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Co kopiować|DOJD|ODPAD' "$ER/wt.log" | cut -c1-250)" "$(tail -3 "$ER/err")"
 fi
+# Datasety: dziecko objęte nowo zaznaczonym rodzicem schodzi PRZED add-source rodzica (Metropolis
+# 2026-10-25: po add-source hdd/vm-disks remove-source jego dzieci wyłączył je spod rodzica i
+# migawki szły na sam kontener). Inne zdjęcia -- po dołożeniach, jak dotąd.
+ds_fn=$(sed -n '/^dataset_steps() {/,/^}/p' "$REPO/tui/edit-relation.sh")
+got=$(bash -c "$ds_fn
+P_ADDED='hdd/vm-disks rpool/data'; P_REMOVED='hdd/vm-disks/subvol-101-disk-0 hdd/other rpool/data/vm-106-disk-0 hdd/vm-disks-old'; dataset_steps" 2>&1 | tr '\n' ';')
+if [ "$got" = "remove hdd/vm-disks/subvol-101-disk-0;remove rpool/data/vm-106-disk-0;add hdd/vm-disks;add rpool/data;remove hdd/other;remove hdd/vm-disks-old;" ]; then
+    ok "edit-relation: Datasety -- dzieci nowego rodzica schodzą przed jego add-source; reszta po (hdd/vm-disks-old to nie dziecko hdd/vm-disks)"
+else
+    bad "edit-relation: kolejność kroków Datasetów" "$got"
+fi
 # X21 (wlasciciel 2026-10-14): zmiana datasetow sprawdzona PRZED WYKONAJ -- odmowa czasownika
 # (plan bez --yes) pokazana od razu, zadnego --yes, powrot do listy.
 # X12: drzewo woli sie dwa razy (po odmowie wraca lista); druga linia ER_TREE brak = Esc.
