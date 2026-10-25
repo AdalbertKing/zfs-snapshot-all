@@ -135,6 +135,19 @@ niezwiązane odmowy fixture `repo_dir` i terminala; nie są dowodem przeciw temu
 zakresowi. Nie powtarzać PR #845 bez nowego kodu lub dowodu. Następny zakres
 pozostaje PR #469, po każdej odpowiedzi implementacyjnej do REV-174.
 
+**Rozstrzygnięcie recenzenta 2026-10-25 — PR #469 / K3.** Zakres
+`b4f1fe45cf35a73f761250c008bf6bd9561662c5..9a8886bdb4191d3e849f9d33f9f6be30eea7f2e5`
+(merge `851b79abd083632823e01efc7a68ff311bd9b8a3`) przejrzany bez nowego
+ustalenia. Rozrzut dotyczy CREATE nowych relacji, zachowuje odstępy szczebli i
+przeniesienie godziny, a pojedynczy jawny harmonogram oraz zainstalowana sekcja
+źródłowego prune pozostają źródłem prawdy. Dokładny head: stagger 33/33, cron
+168/168, `impact --verify` i `diff --check`; testy heada przeciw dokładnej
+bazie: stagger 31/33 i cron 165/168, z wyłącznie oczekiwanymi porażkami K3.
+CI 37537159284 jest zielone. Bieżące drzewo przechodzi stagger 41/41 i cron
+235/235, w tym późniejsze kontrole X27, idempotencji i kolizji minut. Nie
+powtarzać PR #469 bez nowego kodu lub dowodu. Następny zakres po każdej nowej
+odpowiedzi do REV-174: PR #470, edycja zainstalowanej relacji.
+
 Uwaga do terminologii: wpis 2026-10-06 w `ENGINE-FREEZE.md` (~819) nazywa zmianę „PRE-AUTHORISED by the owner”, choć
 dokument (~1016–1035) mówi, że autoryzacja zamrożonego pliku należy do recenzenta. Żaden z wpisów 2026-10-06/-08/-12
 nie ma znacznika `authorizes-frozen`.
