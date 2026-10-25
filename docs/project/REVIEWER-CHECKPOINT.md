@@ -2,7 +2,35 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-25 (PR #469 source-prune schedule spreading)
+## Latest final-audit batch — 2026-10-25 (PR #470 installed-relation edit)
+
+**No new finding was confirmed.** The exact audited range is
+`851b79abd083632823e01efc7a68ff311bd9b8a3..05ff13778f2d28d52c1230c852ffa73142c4db20`,
+merged as `f648aa8ef5023497a41817db4ed49975e79a3ac3`. `edit-relation`
+regenerates only the named installed relation through the existing activation
+transaction, requires an explicit edit boundary, previews and validates before
+install, refuses a proposal that removes the relation entirely or loses any
+other relation, and distinguishes exact `-L NAME` tokens (`r` does not cover
+`r2`). It also refuses a profile with no snapshot family in common, names
+dropped families before consent, removes obsolete relation-owned prune sections
+and orphaned generated templates, and records the installed profile choice.
+
+Independent exact-head evidence: editrel 8/8, `impact --verify`, and range
+`diff --check` pass. The head tests run against the exact base produce the
+discriminating 2/8 result: only the two refusal controls that predate the feature
+pass, while all six edit-specific contracts fail. Exact-head CI run 37673336383
+succeeded. Current `main` retains the boundary and passes editrel 8/8 plus
+`impact --verify`. The local full TUI run is not used as proof: its terminal
+keystroke fixture produced unrelated failures in this container; exact-head CI
+is the authoritative full-suite result. This review did not install cron, touch
+ZFS, connect to a peer, or edit a live relation.
+
+REV-20261024-174 remains `OPEN | Claude` and keeps priority when a newly
+published response appears. Otherwise the next independent scope is PR #476,
+the follow-up `add-source`/three-defect relation-edit batch: verify exact source
+scope, preservation of existing installed policy, and rollback/idempotence.
+
+## Previous final-audit batch — 2026-10-25 (PR #469 source-prune schedule spreading)
 
 **No new finding was confirmed.** The exact audited range is
 `b4f1fe45cf35a73f761250c008bf6bd9561662c5..9a8886bdb4191d3e849f9d33f9f6be30eea7f2e5`,
