@@ -14921,6 +14921,38 @@ if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -qx 'add-client|rr|--host=10.0
 else
     bad "snaponly import" "rc=$rc" "$out"
 fi
+# add-source on a snaponly relationship (Metropolis pve2 -> pve1, 2026-10-25): the
+# re-activation stamped the first snapshot of every tier on EVERY dataset again, once per
+# add-source. SNAPONLY_FIRST_ONLY=<dataset> limits snaponly_first_snapshots to the new one;
+# without it (a plain activate-client) every dataset still gets its first snapshots.
+AFS="$WORK/afs"; rm -rf "$AFS"; mkdir -p "$AFS"
+cat > "$AFS/tab" <<'TAB'
+# BEGIN zfs-backup-managed
+24 * * * * echo RAN-old # snapget.sh -s -m "c_automated_hourly_" -L rel "u@h:pool/old" ""
+34 1 * * * echo RAN-old-d # snapget.sh -s -m "c_automated_daily_" -L rel "u@h:pool/old" ""
+24 * * * * echo RAN-new # snapget.sh -s -m "c_automated_hourly_" -L rel "u@h:pool/new" ""
+34 1 * * * echo RAN-new-d # snapget.sh -s -m "c_automated_daily_" -L rel "u@h:pool/new" ""
+24 * * * * echo RAN-other # snapget.sh -s -m "c_automated_hourly_" -L other "u@h:pool/x" ""
+# END zfs-backup-managed
+TAB
+afs_fn=$(sed -n '/^snaponly_first_snapshots() {/,/^}/p' "$ZFSBACKUP")
+[ -n "$afs_fn" ] || bad "snaponly: could not lift snaponly_first_snapshots -- anchor changed"
+afs_run() { bash -c "crontab_for_target() { cat '$AFS/tab'; }; cron_target_user() { echo root; }
+log() { :; }; warn() { :; }; $afs_fn
+snaponly_first_snapshots rel" 2>&1 | grep -o 'RAN-[a-z-]*' | sort | tr '\n' ' '; }
+got=$(SNAPONLY_FIRST_ONLY=pool/new afs_run)
+if [ "$got" = "RAN-new RAN-new-d " ]; then
+    ok "snaponly: add-source's re-activation stamps the first snapshot of every tier on the NEW dataset only"
+else
+    bad "snaponly: first snapshots after add-source" "$got"
+fi
+got=$(afs_run)
+if [ "$got" = "RAN-new RAN-new-d RAN-old RAN-old-d " ]; then
+    ok "snaponly: control -- a plain activate-client still stamps every dataset of the relationship (and no other one)"
+else
+    bad "snaponly: first snapshots, plain activation" "$got"
+fi
+
 fi   # --- koniec sekcji snaponly ---
 
 

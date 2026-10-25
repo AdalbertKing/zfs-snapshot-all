@@ -12530,7 +12530,8 @@ snaponly_first_snapshots() {   # <name>
             *) failed=$((failed + 1)); warn "activate-client: first snapshot '$label' did not finish (rc=${rc:-?}) -- cron runs it again at its next tick" ;;
         esac
     done < <(printf '%s\n' "$tab" | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
-                 | grep -F -- " -L $name " | grep -F 'snapget.sh -s ')
+                 | grep -F -- " -L $name " | grep -F 'snapget.sh -s ' \
+                 | { if [ -n "${SNAPONLY_FIRST_ONLY:-}" ]; then grep -F -- ":$SNAPONLY_FIRST_ONLY\""; else cat; fi; })
     log "activate-client: first snapshot of each tier: $ok done, $failed not done"
 }
 
@@ -15643,7 +15644,11 @@ cmd_add_source() {
     seeded_before=$(relation_copy_sources "$name")
     # A child process: activation dies on any refusal, and its plan, dry-run
     # and guards are exactly the ones an ordinary re-activation shows.
-    if ! bash "$SCRIPT_DIR/zfs-backup.sh" activate-client "$name" --yes; then
+    # SNAPONLY_FIRST_ONLY: a snaponly re-activation takes the first snapshot of every tier
+    # for the NEW dataset only. Without it each add-source stamped every tier on every
+    # dataset of the relationship again (Metropolis pve2 -> pve1, 2026-10-25: seven
+    # add-sources left 5 monthly snapshots of the same evening on each disk, 93 removed).
+    if ! SNAPONLY_FIRST_ONLY="$ds" bash "$SCRIPT_DIR/zfs-backup.sh" activate-client "$name" --yes; then
         die "add-source: the source already grants '$ds', but the re-activation here stopped (see above) -- this host's config and cron are unchanged. Fix what it said and run: zfs-backup.sh activate-client $name"
     fi
 
