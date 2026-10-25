@@ -16,7 +16,7 @@
 # (np. zaimportowana pula z dysku USB), bez relacji i bez configu. Kroki: skąd (drzewo
 # wszystkich datasetów hosta; DATASET = wstępnie zaznaczony), dokąd (nazwa na tym hoście),
 # z kiedy (+ historia), sprawdź. Składa `restore --from-copy=.. --onto=.. [--at=..]
-# [--with-history] [--overwrite]`; podgląd i pytanie "Odtworzyc? [t/N]" robi samo polecenie.
+# [--with-history] [--overwrite]`; podgląd i pytanie "Restore? [y/N]" robi samo polecenie.
 #
 # Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka, ZFS_TREE =
 # program drzewa (jak w basket_step), ZFS_CONF_DIR (domyślnie /etc/zfs-snapshot-all), PYTHON.

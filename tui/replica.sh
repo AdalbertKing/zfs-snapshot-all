@@ -732,7 +732,7 @@ PYEOF
             grep -E '^(!!!|WARNING|>>> )' "$TMPD/plan.txt" | grep -iv 'plan' | sed 's/^/  /' | head -4
             echo
             echo "$(T 'Zadanie w cronie:')"
-            sed -n '/co sie zmieni w crontabie/,$p' "$TMPD/plan.txt" | grep -E "^\s+\+\S" | grep -F "replica" \
+            sed -n '/what will change in the crontab/,$p' "$TMPD/plan.txt" | grep -E "^\s+\+\S" | grep -F "replica" \
                 | sed -E 's/^\s+\+//' | awk -v oi="$(T 'po podłączeniu')" -v mon="$(T 'monitor: wiek kopii na nośniku')" '{w=($1=="#on-insert")?oi:$1" "$2" "$3" "$4" "$5; m=match($0,/zfs-job\.sh "[^"]*"/); l=m?substr($0,RSTART+12,RLENGTH-13):(/zfs-media-gate\.sh age|check-snap-age\.sh/?mon:"?"); print "  + " w "   " l}' | head -6
             if [ "$EDIT" -eq 1 ]; then
                 echo

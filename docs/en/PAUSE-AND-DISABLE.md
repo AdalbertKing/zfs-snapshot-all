@@ -138,12 +138,12 @@ alpha                 state=active             endpoint=10.0.0.1:22  PAUSED_LOCA
 ```
 
 ```text
-Klient:            alpha
-Stan:              active
-Pauza:             PAUSED_LOCAL od <date time> (powod: down until further notice)
-                   joby i reczne uruchomienia Z etykieta '-L alpha' sa pomijane;
-                   reczne uruchomienie BEZ etykiety NIE jest blokowane (pauza logiczna,
-                   nie granica bezpieczenstwa). Wznowienie: ./zfs-backup.sh resume-client alpha
+Client:            alpha
+State:             active
+Pause:             PAUSED_LOCAL since <date time> (reason: down until further notice)
+                   jobs and manual runs WITH the label '-L alpha' are skipped;
+                   a manual run WITHOUT the label is NOT blocked (a logical pause,
+                   not a security boundary). Resume: ./zfs-backup.sh resume-client alpha
 ```
 
 The state on the peer side, when you want to ask directly:

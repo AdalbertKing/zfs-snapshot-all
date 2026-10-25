@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75, E84 (2026-10-15, the E39 shape a third time), E90, E99 (2026-10-22, the E39 shape again, after `--refreeze`).*
+*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75, E84 (2026-10-15, the E39 shape a third time), E90, E99 (2026-10-22, the E39 shape again, after `--refreeze`), E104 (2026-10-25, commit and PR behind a printed rc=1).*
 
 ### R5 — Do not modify state something else is reading
 
@@ -1935,6 +1935,19 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E104 — committed and opened a PR behind a failed --verify (2026-10-25, R4)
+**2026-10-25, `tr/cli-en` (#853).**
+
+*Genesis.* One shell line ran `--refresh-status; git add; --verify > file; echo rc=$?;
+git commit ...; git push; POST pulls`. `--verify` printed rc=1 (STALE status digest), and
+the commit, the push and the PR followed anyway. CI would have failed the same gate; the
+next commit refreshed the digest and verified clean before anything merged.
+
+*Cause.* R4: the gate's result was printed, not tested. `;` after `echo rc=$?` chains the
+mutation behind a step whose failure only reaches the screen.
+
+*Rule.* R4, unchanged: the commit runs only inside `--verify && { commit; push; }`.
 
 ### E103 — the one-command relation form ran without --yes (2026-10-24, R14)
 **2026-10-24, rebuilding the lab relation `pve9` that E102 removed.**

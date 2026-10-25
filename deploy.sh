@@ -369,7 +369,7 @@ deploy_exit_cleanup() {
     local rc=$?
     rm -rf "${JOIN_WORKDIR:-}"
     if [ "$rc" -ne 0 ] && [ "${JOIN_RERUN_NEEDED:-0}" -eq 1 ]; then
-        printf '\nPONOW DOKLADNIE: %s\n' "$JOIN_RERUN_COMMAND" >&2
+        printf '\nRE-RUN EXACTLY: %s\n' "$JOIN_RERUN_COMMAND" >&2
     fi
     return "$rc"
 }
@@ -612,14 +612,14 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
     --rotate                generate a new key alongside the existing one
     --revoke-old             finish a rotation: remove the old key on both ends
     --join-remotely          opt-in (REV-20260802-033 U10): after producing
-                            the wsad, deliver it and run --join on the peer
+                            the bundle, deliver it and run --join on the peer
                             over the host key just pinned, using THIS
                             operator's own ssh access -- then, for a mode-
                             based pairing, open the scope editor there over
                             ssh -t. Finalize (--commit-scope, the grant)
                             never runs remotely, under any flag. Off by
                             default: the default path stays printing the
-                            wsad and the exact commands to run by hand.
+                            bundle and the exact commands to run by hand.
     --draft-config           after --join has run on the peer: list its
                             datasets and write a reviewed-by-hand .suggested
                             file (never installs anything)
@@ -628,7 +628,7 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                             the commands to run on the peer. Never touches
                             received data, and refuses while a cron line
                             still uses the pairing key.
-  --join=PACKAGE          consume a wsad produced by --pair on the OTHER host
+  --join=PACKAGE          consume a bundle produced by --pair on the OTHER host
                           (run on the second host, from its console). For a
                           delegated pull it completes the normal enrolment in
                           one guided run: account/key, ZFS discovery, scope
@@ -1007,13 +1007,13 @@ assert_package_members() {
 
     local size; size=$(wc -c < "$pkg" 2>/dev/null) || die "could not size $pkg"
     [ "$size" -le "$PKG_MAX_COMPRESSED" ] \
-        || die "$pkg is ${size} bytes, over the ${PKG_MAX_COMPRESSED}-byte limit for a wsad -- a real one is a couple of kilobytes. Refusing to decompress it."
+        || die "$pkg is ${size} bytes, over the ${PKG_MAX_COMPRESSED}-byte limit for a bundle -- a real one is a couple of kilobytes. Refusing to decompress it."
 
     local names
-    names=$(tar -tzf "$pkg" 2>/dev/null) || die "could not read $pkg -- not a valid wsad (expected a gzipped tar)"
+    names=$(tar -tzf "$pkg" 2>/dev/null) || die "could not read $pkg -- not a valid bundle (expected a gzipped tar)"
     local expected; expected=$(printf 'peer.conf\npubkey.pub\n')
     local got; got=$(printf '%s\n' "$names" | grep -v '^$' | sort)
-    [ "$got" = "$expected" ] || die "$pkg does not contain exactly the two expected members. Found: $(printf '%s' "$names" | tr '\n' ' ')-- a wsad is peer.conf + pubkey.pub and nothing else. Refusing to unpack it."
+    [ "$got" = "$expected" ] || die "$pkg does not contain exactly the two expected members. Found: $(printf '%s' "$names" | tr '\n' ' ')-- a bundle is peer.conf + pubkey.pub and nothing else. Refusing to unpack it."
 
     # Entry TYPES, before extraction rather than after. Checking `-f` on the
     # unpacked result was the earlier approach and it is too late by
@@ -1023,19 +1023,19 @@ assert_package_members() {
     # is the type -- '-' regular, 'l' symlink, 'h' hard link, 'd' directory,
     # 'p' FIFO, 'b'/'c' device.
     local listing; listing=$(tar -tzvf "$pkg" 2>/dev/null) \
-        || die "could not list $pkg -- not a valid wsad"
+        || die "could not list $pkg -- not a valid bundle"
     local line type sz
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         type="${line:0:1}"
         case "$type" in
             -) ;;
-            l) die "a wsad member is a symlink -- only regular files are accepted" ;;
-            h) die "a wsad member is a hard link -- only regular files are accepted" ;;
-            d) die "a wsad member is a directory -- only regular files are accepted" ;;
-            p) die "a wsad member is a FIFO -- only regular files are accepted" ;;
-            b|c) die "a wsad member is a device node -- only regular files are accepted" ;;
-            *) die "a wsad member has an unexpected archive entry type '$type' -- only regular files are accepted" ;;
+            l) die "a bundle member is a symlink -- only regular files are accepted" ;;
+            h) die "a bundle member is a hard link -- only regular files are accepted" ;;
+            d) die "a bundle member is a directory -- only regular files are accepted" ;;
+            p) die "a bundle member is a FIFO -- only regular files are accepted" ;;
+            b|c) die "a bundle member is a device node -- only regular files are accepted" ;;
+            *) die "a bundle member has an unexpected archive entry type '$type' -- only regular files are accepted" ;;
         esac
         # Declared size, so a decompression bomb is refused before it is
         # expanded rather than after.
@@ -1044,7 +1044,7 @@ assert_package_members() {
             ''|*[!0-9]*) die "cannot read a member's declared size from the archive listing -- refusing to extract something this script cannot describe" ;;
         esac
         [ "$sz" -le "$PKG_MAX_MEMBER" ] \
-            || die "a wsad member declares ${sz} bytes, over the ${PKG_MAX_MEMBER}-byte limit -- peer.conf and pubkey.pub are a few hundred bytes each"
+            || die "a bundle member declares ${sz} bytes, over the ${PKG_MAX_MEMBER}-byte limit -- peer.conf and pubkey.pub are a few hundred bytes each"
     done <<< "$listing"
 }
 
@@ -1059,7 +1059,7 @@ assert_package_members() {
 # the two commands can be compared by hand.
 prepare_package() {
     local pkg="$1"
-    [ -r "$pkg" ] || die "cannot read wsad package: $pkg"
+    [ -r "$pkg" ] || die "cannot read bundle: $pkg"
     JOIN_WORKDIR=$(mktemp -d) || die "mktemp -d failed"
     chmod 700 "$JOIN_WORKDIR"
     # GLOBAL, not local: the trap below runs at shell exit, by which time a
@@ -1075,10 +1075,10 @@ prepare_package() {
     PKG_SHA256=$(sha256sum "$copy" 2>/dev/null | cut -d' ' -f1)
     assert_package_members "$copy"
     tar --no-same-owner --no-same-permissions -C "$JOIN_WORKDIR" -xzf "$copy" \
-        || die "could not unpack $pkg -- not a valid wsad?"
+        || die "could not unpack $pkg -- not a valid bundle?"
     local f
     for f in peer.conf pubkey.pub; do
-        [ -L "$JOIN_WORKDIR/$f" ] && die "$f in the package is a symlink -- a wsad holds two regular files"
+        [ -L "$JOIN_WORKDIR/$f" ] && die "$f in the package is a symlink -- a bundle holds two regular files"
         [ -f "$JOIN_WORKDIR/$f" ] || die "$f did not unpack as a regular file -- refusing to read it"
     done
     parse_peer_conf "$JOIN_WORKDIR/peer.conf"
@@ -1119,7 +1119,7 @@ parse_peer_conf() {
             PEER_CONF_ROLE|PEER_CONF_DATASETS|PEER_CONF_TARGET|PEER_CONF_AS|\
             PEER_CONF_MODE|PEER_CONF_ACCOUNT|PEER_CONF_PORT|PEER_CONF_INITIATOR_LABEL|\
             PEER_CONF_REMOTE_JOIN|PEER_CONF_REQUESTED|PEER_CONF_INITIATOR_ID) ;;
-            *) die "peer.conf line $n has unknown key '$key' -- a wsad has a fixed set of keys and anything else means the package was not produced by --pair" ;;
+            *) die "peer.conf line $n has unknown key '$key' -- a bundle has a fixed set of keys and anything else means the package was not produced by --pair" ;;
         esac
         [ -z "${PC[$key]+x}" ] || die "peer.conf has '$key' twice (line $n) -- refusing to guess which one was meant"
         # One optional layer of double quotes, as --pair writes for DATASETS.
@@ -1140,7 +1140,7 @@ validate_peer_conf() {
     local k ds mode
     for k in PEER_CONF_ROLE PEER_CONF_ACCOUNT PEER_CONF_AS \
              PEER_CONF_INITIATOR_LABEL; do
-        [ -n "${PC[$k]:-}" ] || die "peer.conf is missing $k (or it is empty) -- not a valid wsad"
+        [ -n "${PC[$k]:-}" ] || die "peer.conf is missing $k (or it is empty) -- not a valid bundle"
     done
     case "${PC[PEER_CONF_ROLE]}" in
         pull|push) ;;
@@ -1195,7 +1195,7 @@ validate_peer_conf() {
     # requirement genuinely depends on mode, everything else below is
     # unchanged from before this slice.
     if [ -z "$mode" ]; then
-        [ -n "${PC[PEER_CONF_TARGET]:-}" ] || die "peer.conf is missing PEER_CONF_TARGET (or it is empty) -- not a valid wsad"
+        [ -n "${PC[PEER_CONF_TARGET]:-}" ] || die "peer.conf is missing PEER_CONF_TARGET (or it is empty) -- not a valid bundle"
     fi
     if [ -n "${PC[PEER_CONF_TARGET]:-}" ]; then
         pc_is_dataset "${PC[PEER_CONF_TARGET]}" \
@@ -4379,15 +4379,15 @@ guided_join_scope() {   # <label>
         local _want _had
         _want="${PEER_JOIN_DATASETS:-}${PEER_JOIN_REQUESTED:-}"
         if [ ! -r "$sfile.request" ]; then
-            echo "!!! Szkic zakresu $sfile pochodzi sprzed zapisywania prosby, wiec" >&2
-            echo "!!! NIE zostal sprawdzony wzgledem tego, o co kolektor prosi teraz." >&2
-            echo "!!! Porownaj ponizsza liste z linia 'Kolektor prosil o:' sam." >&2
+            echo "!!! The scope draft $sfile predates the saving of the request, so it" >&2
+            echo "!!! was NOT checked against what the collector asks for now." >&2
+            echo "!!! Compare the list below with the 'Collector asked for:' line yourself." >&2
         else
         _had="$(cat "$sfile.request" 2>/dev/null)"
         if [ "$_had" != "$_want" ]; then
-            echo "!!! Szkic zakresu $sfile powstal dla INNEJ prosby niz obecna." >&2
-            echo "!!!   szkic zbudowano dla: ${_had:-(nic -- caly majatek hosta)}" >&2
-            echo "!!!   kolektor prosi teraz o: ${_want:-(nic -- caly majatek hosta)}" >&2
+            echo "!!! The scope draft $sfile was made for a DIFFERENT request than the current one." >&2
+            echo "!!!   draft was built for:       ${_had:-(nothing -- the host's whole estate)}" >&2
+            echo "!!!   collector asks for now:    ${_want:-(nothing -- the host's whole estate)}" >&2
             die "refusing to offer a grant computed from a draft that predates the current request. Review it and re-draft: rm $sfile $sfile.request, then re-run this --join (or edit the draft by hand if its contents are still what you mean, and re-run --commit-scope=$label)."
         fi
         fi
@@ -4395,18 +4395,18 @@ guided_join_scope() {   # <label>
 
     while :; do
         echo
-        echo "Proponowany zakres backupu dla '$label':"
+        echo "Proposed backup scope for '$label':"
         echo "------------------------------------------------------------"
         awk '/^# ==========================================================/{exit} {print}' "$sfile"
         echo "------------------------------------------------------------"
         # 1. What the collector did NOT say. Without this line the proposal
         #    reads as a considered selection rather than "everything I have".
         if [ -z "${PEER_JOIN_DATASETS:-}${PEER_JOIN_REQUESTED:-}" ]; then
-            echo "!!! Kolektor NIE wskazal zadnego datasetu -- podal tylko cel"
-            echo "!!! (--target=${PEER_JOIN_TARGET:-?}). Ta propozycja to zatem"
-            echo "!!! CALY majatek tego hosta, nie wybor zrobiony dla Ciebie."
+            echo "!!! The collector named NO dataset -- it gave only a target"
+            echo "!!! (--target=${PEER_JOIN_TARGET:-?}). So this proposal is the"
+            echo "!!! WHOLE estate of this host, not a selection made for you."
         else
-            echo ">>> Kolektor prosil o: ${PEER_JOIN_DATASETS:-}${PEER_JOIN_REQUESTED:-}"
+            echo ">>> Collector asked for: ${PEER_JOIN_DATASETS:-}${PEER_JOIN_REQUESTED:-}"
         fi
         # 2. The magnitude, before the question. A measurement that failed is
         #    not a small scope -- it is no scope, and the join stops here
@@ -4418,13 +4418,13 @@ guided_join_scope() {   # <label>
         # accepts is what do_commit_scope must find when it grants. Re-reading
         # the pool between the two is the whole hole this closes.
         _js_set=$(join_scope_enumerate "$sfile")             || die "refusing to ask for consent: $_js_set"
-        echo ">>> Przyjecie nada kontu ${PEER_JOIN_ACCOUNT:-?} prawa"
+        echo ">>> Accepting will grant account ${PEER_JOIN_ACCOUNT:-?} the rights"
         echo ">>>   snapshot,destroy,mount,send,hold,release,bookmark"
-        echo ">>> na $_js_n dataset(ach), w tym $_js_g wolumen(ach) maszyn, lacznie $(join_human_bytes "$_js_b")."
+        echo ">>> on $_js_n dataset(s), including $_js_g VM volume(s), totalling $(join_human_bytes "$_js_b")."
         echo "------------------------------------------------------------"
         # 3. A consent reflex cannot give. Typing the count is trivial for
         #    anyone who read the line above, and impossible to do by habit.
-        read -rp "Wpisz liczbe datasetow ($_js_n) aby ZAAKCEPTOWAC, [e]dytuj, [n]przerwij: " choice \
+        read -rp "Type the dataset count ($_js_n) to ACCEPT, [e]dit, [n] abort: " choice \
             || die "join interrupted before scope acceptance"
         case "$choice" in
             "$_js_n")
@@ -6130,7 +6130,7 @@ do_pair() {
                 log "link cap for '$PEER_HOST': '${PEER_SAVED_BANDWIDTH:-<none>}' -> '${PEER_BANDWIDTH:-<none>}' in the manifest"
                 log "NOTE: relationships already ACTIVE against this peer keep running with the OLD cap until each is re-activated -- the value is materialised in their config sections and cron lines, and --pair does not rewrite those. Re-activate them (zfs-backup.sh activate <name>) to make the new cap take effect, and diff the crontab as usual."
             fi
-            log "peer '$PEER_HOST' already paired -- reusing the existing key/role/target/account-mode, refreshing the wsad"
+            log "peer '$PEER_HOST' already paired -- reusing the existing key/role/target/account-mode, refreshing the bundle"
             if [ -n "$requested_datasets" ] && [ "${PEER_SAVED_DATASETS:-}" != "$requested_datasets" ]; then
                 log "dataset list changed: '${PEER_SAVED_DATASETS:-}' -> '$requested_datasets'"
                 log "(additive only on the --join side -- nothing already granted is ever revoked automatically)"
@@ -6334,7 +6334,7 @@ EOF
     # 0 or 1, never anything else: this value is pasted into a remote command.
     local by_collector=0; [ "${JOIN_SCOPE_BY_COLLECTOR:-0}" = 1 ] && by_collector=1
     if [ "$PEER_JOIN_REMOTELY" -eq 1 ]; then
-        log "--join-remotely: delivering the wsad and running --join on $PEER_HOST over the pin just established..."
+        log "--join-remotely: delivering the bundle and running --join on $PEER_HOST over the pin just established..."
         # BOUNDED, and stdin CLOSED. `--join` asks for scope acceptance and
         # deliberately has no --yes; run from here it has no terminal, so the
         # question can never be answered. Measured on metropolis 2026-08-20:
@@ -6400,18 +6400,18 @@ EOF
     echo
     log "===================================================================="
     if [ "$remote_ok" -eq 1 ]; then
-        log "Wsad dostarczony i --join wykonany zdalnie na $PEER_HOST (--join-remotely)."
+        log "Package delivered and --join run remotely on $PEER_HOST (--join-remotely)."
         if [ -n "$PEER_MODE" ]; then
             case "$scope_rc" in
                 0)
-                    log "Zakres zredagowany zdalnie i zweryfikowany (--commit-scope-check OK, ssh -t)."
-                    log "Zostalo: uruchom TAM, lokalnie na $PEER_HOST:"
+                    log "Scope edited remotely and verified (--commit-scope-check OK, ssh -t)."
+                    log "Remaining: run THERE, locally on $PEER_HOST:"
                     log "  ssh root@$PEER_HOST"
                     log "  cd $REPO_DIR && ./deploy.sh --commit-scope=$my_label"
                     ;;
                 2)
-                    log "Draft NIE powiodl sie (patrz blad wyzej) -- zaden plik zakresu nie powstal."
-                    log "Join juz wykonany, NIE powtarzaj go. Recznie na $PEER_HOST:"
+                    log "The draft FAILED (see the error above) -- no scope file was created."
+                    log "The join is already done, do NOT repeat it. By hand on $PEER_HOST:"
                     log "  ssh root@$PEER_HOST"
                     log "  cd $REPO_DIR"
                     log "  ./deploy.sh --draft-scope=$my_label"
@@ -6419,58 +6419,58 @@ EOF
                     log "  ./deploy.sh --commit-scope-check=$my_label"
                     ;;
                 3)
-                    log "Sesja edytora na $PEER_HOST zakonczyla sie niezerowo -- zakres NIE jest gotowy."
-                    log "Plik mogl juz powstac (jesli draft sie udal): $remote_scope"
-                    log "Recznie na $PEER_HOST:"
+                    log "The editor session on $PEER_HOST exited non-zero -- the scope is NOT ready."
+                    log "The file may already exist (if the draft succeeded): $remote_scope"
+                    log "By hand on $PEER_HOST:"
                     log "  ssh root@$PEER_HOST"
                     log "  cd $REPO_DIR"
                     log "  \${EDITOR:-vi} $remote_scope"
                     log "  ./deploy.sh --commit-scope-check=$my_label"
                     ;;
                 4)
-                    log "Zakres zredagowany, ale NIE przeszedl --commit-scope-check (patrz blad wyzej)."
-                    log "Popraw recznie na $PEER_HOST:"
+                    log "The scope was edited but did NOT pass --commit-scope-check (see the error above)."
+                    log "Fix it by hand on $PEER_HOST:"
                     log "  ssh root@$PEER_HOST"
                     log "  cd $REPO_DIR"
                     log "  \${EDITOR:-vi} $remote_scope"
                     log "  ./deploy.sh --commit-scope-check=$my_label"
                     ;;
                 6)
-                    log "Zakres: zapisze i zatwierdzi go kolektor zaraz po tym kroku (--grant-remotely), dokladnie wg prosby. Na $PEER_HOST nie trzeba nic robic."
+                    log "Scope: the collector will write and commit it right after this step (--grant-remotely), exactly as requested. Nothing to do on $PEER_HOST."
                     ;;
                 5)
                     # P6. Not a failure -- a refusal to fake consent. The draft
                     # exists and is the whole point; what is missing is a human,
                     # and no exit code can supply one.
-                    log "Zakres ZOSTAL NASZKICOWANY na $PEER_HOST, ale NIE zredagowany -- ten przebieg nie ma terminala."
-                    log "Zakres to dokument zgody. Edytor otwarty przy nikim nie tworzy zgody, wiec go nie otwieramy."
-                    log "Nic nie zostalo przyznane. Dokoncz TAM, na $PEER_HOST:"
+                    log "The scope was DRAFTED on $PEER_HOST but NOT edited -- this run has no terminal."
+                    log "The scope is a consent document. An editor opened in front of nobody creates no consent, so we do not open it."
+                    log "Nothing was granted. Finish THERE, on $PEER_HOST:"
                     log "  ssh root@$PEER_HOST"
                     log "  cd $REPO_DIR"
-                    log "  \${EDITOR:-vi} $remote_scope   # zawez do tego, co naprawde oddajesz"
+                    log "  \${EDITOR:-vi} $remote_scope   # narrow it to what you really hand over"
                     log "  ./deploy.sh --commit-scope=$my_label"
                     ;;
                 *)
-                    log "Zostalo: uruchom TAM, lokalnie na $PEER_HOST:"
+                    log "Remaining: run THERE, locally on $PEER_HOST:"
                     log "  ssh root@$PEER_HOST"
                     log "  cd $REPO_DIR"
-                    log "  ./deploy.sh --draft-scope=$my_label   # jesli jeszcze nie istnieje"
+                    log "  ./deploy.sh --draft-scope=$my_label   # if it does not exist yet"
                     log "  \${EDITOR:-vi} $remote_scope"
                     log "  ./deploy.sh --commit-scope-check=$my_label"
                     ;;
             esac
-            log "(finalizacja/grant NIGDY nie jedzie zdalnie -- U10, warunek 1)"
+            log "(finalization/grant NEVER travels remotely -- U10, condition 1)"
         fi
     else
-        log "Wsad gotowy: $pkg"
-        log "Przenies go recznie na $PEER_HOST i uruchom tam z konsoli:"
+        log "Package ready: $pkg"
+        log "Move it to $PEER_HOST by hand and run it there from the console:"
         log "  scp $pkg root@$PEER_HOST:/root/"
         log "  ssh root@$PEER_HOST"
         log "  cd $REPO_DIR && ./deploy.sh --join=/root/$(basename "$pkg")"
     fi
     if [ "$PEER_ROTATE" -eq 1 ]; then
-        log "Po --join tam: zweryfikuj dry-runem z NOWYM kluczem ($active_keyfile -n),"
-        log "dopiero potem tutaj: --pair --peer=$PEER_HOST --revoke-old"
+        log "After --join there: verify with a dry run using the NEW key ($active_keyfile -n),"
+        log "only then here: --pair --peer=$PEER_HOST --revoke-old"
     fi
     log "===================================================================="
 }
@@ -7045,20 +7045,20 @@ EOF
 
     echo
     log "===================================================================="
-    log "Join zakonczony dla peera '$label' (konto: $account, rola: $PEER_CONF_ROLE)."
-    [ "$PEER_CONF_REMOTE_JOIN" = "yes" ] && log "Wpis utworzony ZDALNIE z kolektora '$label' (--join-remotely) -- zapisane w manifescie."
+    log "Join finished for peer '$label' (account: $account, role: $PEER_CONF_ROLE)."
+    [ "$PEER_CONF_REMOTE_JOIN" = "yes" ] && log "Entry created REMOTELY from collector '$label' (--join-remotely) -- recorded in the manifest."
     if [ "$PEER_CONF_AS" != "root" ] && [ "$PEER_CONF_ROLE" = "pull" ]; then
         [ -n "$PEER_CONF_MODE" ] \
-            && log "Tryb '$PEER_CONF_MODE' -- wybor datasetow odbywa sie teraz na tym hoście."
+            && log "Mode '$PEER_CONF_MODE' -- the choice of datasets is made now, on this host."
         guided_join_scope "$label"
     fi
     if [ "${JOIN_SCOPE_DEFERRED:-0}" = 1 ]; then
-        log "Join gotowy. Uprawnienia ZFS nada kolektor zaraz po tym kroku (--grant-remotely); cron pokaze i zainstaluje 'zfs-backup.sh activate' na kolektorze."
+        log "Join ready. The collector grants the ZFS permissions right after this step (--grant-remotely); cron will be shown and installed by 'zfs-backup.sh activate' on the collector."
     elif [ "$PEER_CONF_ROLE" = "push" ]; then
         # U22 (2026-10-20): przy push cron jest u ZRODLA, nie tutaj -- stary tekst odsylal do activate.
-        log "Join i uprawnienia sa gotowe. Cron jest u zrodla ('$label'): sekcja dst = w jego jobs.<host>.conf i gen-cron.sh --install (README, sekcja snapsend.sh)."
+        log "Join and permissions are ready. Cron lives at the source ('$label'): a dst = section in its jobs.<host>.conf and gen-cron.sh --install (README, snapsend.sh section)."
     else
-        log "Join i uprawnienia sa gotowe. Cron zostanie pokazany i zainstalowany przez 'zfs-backup.sh activate' na kolektorze."
+        log "Join and permissions are ready. Cron will be shown and installed by 'zfs-backup.sh activate' on the collector."
     fi
     log "===================================================================="
 }
@@ -7226,7 +7226,7 @@ unpair_report_residual_access() {
         $1 == "user" && $2 == u    { if (ds != "") print ds }' | sort -u) || return 0
     [ -n "$residual" ] || return 0
     warn "$user STILL has effective access to $dataset -- inherited from a grant on: $(printf '%s' "$residual" | tr '\n' ' ')"
-    warn "that grant predates this pairing and is not ours to remove; if isolation is the point, revoke it by hand: zfs unallow -u $user <ten dataset>"
+    warn "that grant predates this pairing and is not ours to remove; if isolation is the point, revoke it by hand: zfs unallow -u $user <this dataset>"
 }
 
 # do_unpair -- end the relationship on THIS side and print exactly what to run
@@ -7342,7 +7342,7 @@ do_unpair() {
     rm -f "/root/scripts/pairing/${label}.conf.suggested" \
           "/root/scripts/pairing/"*"-to-${PEER_HOST}.tgz" \
           "/root/scripts/pairing/"*"-to-${PEER_HOST}-rotate.tgz"
-    log "removed the manifest and any leftover wsad/draft for '$PEER_HOST'"
+    log "removed the manifest and any leftover package/draft for '$PEER_HOST'"
 
     local remote_user="${PEER_SAVED_ACCOUNT:-root}"
     # Sanitized the same way do_join sanitizes PEER_CONF_INITIATOR_LABEL --
@@ -7352,18 +7352,18 @@ do_unpair() {
     my_label=$(printf '%s' "$my_label" | tr -c 'A-Za-z0-9._-' '-')
     echo
     echo ">>> ===================================================================="
-    echo ">>> Strona lokalna posprzatana. Reszta jest na $PEER_HOST -- uruchom tam"
-    echo ">>> z konsoli (nie stad: to konto i te uprawnienia sa ich, nie nasze):"
+    echo ">>> Local side cleaned up. The rest is on $PEER_HOST -- run it there"
+    echo ">>> from the console (not from here: that account and those permissions are theirs, not ours):"
     echo ">>> ===================================================================="
     if [ "${PEER_SAVED_AS:-delegated}" != "delegated" ]; then
-        echo "  # konto to root (--as=root), wiec zostaje -- usun sam klucz:"
+        echo "  # the account is root (--as=root), so it stays -- remove only the key:"
         printf '  grep -vF %s ~/.ssh/authorized_keys > /tmp/ak.$$ && mv /tmp/ak.$$ ~/.ssh/authorized_keys\n' \
-            "'${PEER_CURRENT_PUBKEY:-<brak w manifescie>}'"
+            "'${PEER_CURRENT_PUBKEY:-<missing from the manifest>}'"
         if [ "$rotating" = "yes" ] && [ -n "${PEER_PREVIOUS_PUBKEY:-}" ]; then
             printf '  grep -vF %s ~/.ssh/authorized_keys > /tmp/ak.$$ && mv /tmp/ak.$$ ~/.ssh/authorized_keys\n' \
                 "'${PEER_PREVIOUS_PUBKEY}'"
         fi
-        echo "  # usun manifest stworzony tam przez --join"
+        echo "  # remove the manifest created there by --join"
         echo "  rm -f $(peer_manifest_path "$my_label")"
     elif [ "${PEER_SAVED_ROLE:-pull}" = pull ]; then
         # REV-20260804-039 F3: this used to print a manual "zfs unallow ...;
@@ -7383,18 +7383,18 @@ do_unpair() {
         # it as $PEER_CONF_TARGET/$PEER_CONF_INITIATOR_LABEL -- from here,
         # that is this relationship's own PEER_SAVED_TARGET/$my_label.
         local push_dest_root="${PEER_SAVED_TARGET:-<TARGET>}/$my_label"
-        echo "  # 1. cofnij delegacje ZFS na wlasnym celu odbioru (dataset ZOSTAJE)"
+        echo "  # 1. revoke the ZFS delegation on its own receive target (the dataset STAYS)"
         echo "  zfs unallow -u $remote_user $push_dest_root"
-        echo "  # 2. usun konto razem z jego authorized_keys"
+        echo "  # 2. remove the account together with its authorized_keys"
         echo "  userdel -r $remote_user"
-        echo "  # 3. usun manifest stworzony tam przez --join"
+        echo "  # 3. remove the manifest created there by --join"
         echo "  rm -f $(peer_manifest_path "$my_label")"
     fi
     echo ">>> ===================================================================="
-    echo ">>> Klucz hosta $PEER_HOST zostal w /root/.ssh/known_hosts -- to nasz"
-    echo ">>> zapis o tym, kim oni sa, nie uprawnienie dla nich. Jesli naprawde"
-    echo ">>> chcesz go usunac: ssh-keygen -f /root/.ssh/known_hosts -R $PEER_HOST"
-    echo ">>> (usunie WSZYSTKIE wpisy dla tego hosta, nie tylko przypiety tutaj)."
+    echo ">>> The key of host $PEER_HOST stays in /root/.ssh/known_hosts -- it is our"
+    echo ">>> record of who they are, not a permission for them. If you really"
+    echo ">>> want to remove it: ssh-keygen -f /root/.ssh/known_hosts -R $PEER_HOST"
+    echo ">>> (this removes ALL entries for that host, not only the one pinned here)."
     echo ">>> ===================================================================="
 }
 
@@ -7502,14 +7502,14 @@ draft_emit_uncovered() {
     { [ "${#DRAFT_UNCOVERED[@]}" -gt 0 ] || [ "$DRAFT_DEEPER" -gt 0 ]; } || return 0
     echo
     echo "# =========================================================="
-    echo "# NIE OBJETE TA RELACJA -- do informacji, NIE kopiuj nizej."
+    echo "# NOT COVERED BY THIS RELATION -- for information, do NOT copy below."
     echo "# =========================================================="
-    echo "# Ponizsze istnieja, ale nie sa czescia tego parowania."
+    echo "# The datasets below exist, but are not part of this pairing."
     echo "# $how_to_add"
     echo "#"
     local ds
     for ds in "${DRAFT_UNCOVERED[@]}"; do echo "#   $ds"; done
-    [ "$DRAFT_DEEPER" -gt 0 ] && echo "#   ... oraz $DRAFT_DEEPER glebszych (pominiete, to widok pierwszego poziomu)"
+    [ "$DRAFT_DEEPER" -gt 0 ] && echo "#   ... and $DRAFT_DEEPER deeper ones (omitted, this is a first-level view)"
     return 0
 }
 
@@ -7572,57 +7572,57 @@ do_draft_config() {
         [ -n "$granted" ] || granted="$list"
         draft_classify "$list" "$granted"
         {
-            echo "# Kandydaci z hosta '$PEER_HOST' (rola: pull), wygenerowane przez --draft-config."
-            echo "# NIC z tego nie jest gotowa sekcja INI ani nie jest zainstalowane."
-            echo "# gen-cron.sh v4 wymaga [dataset:<path>] z polem 'use_template ='"
-            echo "# odwolujacym sie do JUZ ISTNIEJACEGO [template:] w Twoim configu --"
-            echo "# ten generator ich nie zna i ich nie zgaduje. To pole jest"
-            echo "# OBOWIAZKOWE: bez niego gen-cron.sh konczy 'has no use_template'."
+            echo "# Candidates from host '$PEER_HOST' (role: pull), generated by --draft-config."
+            echo "# NONE of this is a ready INI section, and none of it is installed."
+            echo "# gen-cron.sh v4 requires [dataset:<path>] with a 'use_template =' field"
+            echo "# that refers to an ALREADY EXISTING [template:] in your config --"
+            echo "# this generator does not know them and does not guess. The field is"
+            echo "# REQUIRED: without it gen-cron.sh ends with 'has no use_template'."
             echo "#"
-            echo "# 'src' to LITERALNA nazwa na peerze (dokladnie to co widac w zfs"
-            echo "# list tam) -- lokalna sciezka ponizej musi konczyc sie tym samym"
-            echo "# ciagiem, gen-cron.sh sam wyliczy lokalny base."
+            echo "# 'src' is the LITERAL name on the peer (exactly what 'zfs list'"
+            echo "# shows there) -- the local path below must end with the same"
+            echo "# string, gen-cron.sh works out the local base itself."
             echo "#"
-            echo "# Bez '-K' zadanie probowaloby uwierzytelnic sie domyslnym kluczem"
-            echo "# SSH tego konta zamiast dedykowanego klucza tej relacji -- konto"
-            echo "# ${remote_user} na peerze zna WYLACZNIE ten klucz."
+            echo "# Without '-K' the job would try to authenticate with the default SSH"
+            echo "# key of this account instead of the dedicated key of this relation --"
+            echo "# the account ${remote_user} on the peer knows ONLY that key."
             echo "#"
-            echo "# '-k' to druga strona tego samego: przypiety klucz HOSTA peera,"
-            echo "# ten sprawdzony recznie przy --pair. Bez niego zadanie wraca do"
-            echo "# accept-new, czyli ufa temu, co odpowie przy pierwszym polaczeniu."
-            [ -n "$kh_flag" ] || echo "# UWAGA: brak pliku $job_knownhosts -- '-k' pominiete, patrz log."
+            echo "# '-k' is the other half of the same thing: the pinned HOST key of the"
+            echo "# peer, checked by hand during --pair. Without it the job falls back to"
+            echo "# accept-new, i.e. trusts whatever answers on the first connection."
+            [ -n "$kh_flag" ] || echo "# WARNING: file $job_knownhosts is missing -- '-k' omitted, see the log."
             if [ -n "$port_flag" ]; then
                 echo "#"
-                echo "# '-p ${job_port}': parowanie zrobiono na niestandardowym porcie."
-                echo "# Bez niego zadanie poszloby na 22 -- a przypiety klucz hosta jest"
-                echo "# zapisany jako '[host]:${job_port}', wiec i tak by go nie znalazlo."
+                echo "# '-p ${job_port}': the pairing was made on a non-standard port."
+                echo "# Without it the job would go to 22 -- and the pinned host key is"
+                echo "# recorded as '[host]:${job_port}', so it would not find it anyway."
             fi
             echo
             echo "# =========================================================="
-            echo "# OBJETE TA RELACJA (${#DRAFT_ROOTS[@]}) -- tylko te maja 'zfs allow'"
-            echo "# dla konta ${remote_user} na peerze. Reszta drzewa jest tam WIDOCZNA"
-            echo "# (zfs allow ogranicza operacje, nie 'zfs list'), ale nieuzywalna."
+            echo "# COVERED BY THIS RELATION (${#DRAFT_ROOTS[@]}) -- only these have 'zfs allow'"
+            echo "# for the account ${remote_user} on the peer. The rest of the tree is VISIBLE"
+            echo "# there (zfs allow restricts operations, not 'zfs list'), but unusable."
             echo "# =========================================================="
             local ds n
             while IFS=$'\t' read -r ds n; do
                 [ -n "$ds" ] || continue
                 echo
-                [ "$n" -gt 0 ] && echo "# ($ds ma $n datasetow potomnych -- 'zfs allow' dziedziczy"
-                [ "$n" -gt 0 ] && echo "#  na nie, wiec 'recursive' ponizej obejmie caly podzbior:"
-                [ "$n" -gt 0 ] && echo "#  'flat' = kazdy potomek osobnym zadaniem, 'atomic' = cale"
-                [ "$n" -gt 0 ] && echo "#  poddrzewo jednym strumieniem w jednym punkcie czasu.)"
+                [ "$n" -gt 0 ] && echo "# ($ds has $n descendant datasets -- 'zfs allow' is inherited"
+                [ "$n" -gt 0 ] && echo "#  by them, so 'recursive' below covers the whole subtree:"
+                [ "$n" -gt 0 ] && echo "#  'flat' = each descendant as a separate job, 'atomic' = the whole"
+                [ "$n" -gt 0 ] && echo "#  subtree in one stream at a single point in time.)"
                 echo "# [dataset:${PEER_SAVED_TARGET}/${label}/${ds}]"
                 echo "#   src          = ${remote_user}@${PEER_HOST}:${ds}"
                 [ "$n" -gt 0 ] && echo "#   recursive    = flat"
                 echo "#   flags        = -K ${job_keyfile}${kh_flag}${port_flag}"
-                echo "#   use_template = <WYBIERZ ISTNIEJACY [template:]>"
+                echo "#   use_template = <PICK AN EXISTING [template:]>"
             done < <(printf '%s\n' "${DRAFT_ROOTS[@]}")
             if [ "${#DRAFT_MISSING[@]}" -gt 0 ]; then
                 echo
-                echo "# UWAGA: zadeklarowane w parowaniu, ale NIE ISTNIEJA na $PEER_HOST:"
+                echo "# WARNING: declared in the pairing, but DO NOT EXIST on $PEER_HOST:"
                 for ds in "${DRAFT_MISSING[@]}"; do echo "#   $ds"; done
             fi
-            draft_emit_uncovered "Zeby dolozyc: --pair --peer=$PEER_HOST --peer-datasets=\"$granted <nowy>\", potem --join na peerze."
+            draft_emit_uncovered "To add: --pair --peer=$PEER_HOST --peer-datasets=\"$granted <new>\", then --join on the peer."
         } > "$out"
     else
         local my_label; my_label=$(hostname -s)
@@ -7632,56 +7632,56 @@ do_draft_config() {
         [ -n "$granted" ] || granted="$list"
         draft_classify "$list" "$granted"
         {
-            echo "# Kandydaci LOKALNE (rola: push do '$PEER_HOST'), wygenerowane przez --draft-config."
-            echo "# NIC z tego nie jest gotowa sekcja INI ani nie jest zainstalowane."
-            echo "# gen-cron.sh v4 wymaga [dataset:<path>] z polem 'use_template ='"
-            echo "# odwolujacym sie do JUZ ISTNIEJACEGO [template:] w Twoim configu --"
-            echo "# ten generator ich nie zna i ich nie zgaduje. To pole jest"
-            echo "# OBOWIAZKOWE: bez niego gen-cron.sh konczy 'has no use_template'."
+            echo "# LOCAL candidates (role: push to '$PEER_HOST'), generated by --draft-config."
+            echo "# NONE of this is a ready INI section, and none of it is installed."
+            echo "# gen-cron.sh v4 requires [dataset:<path>] with a 'use_template =' field"
+            echo "# that refers to an ALREADY EXISTING [template:] in your config --"
+            echo "# this generator does not know them and does not guess. The field is"
+            echo "# REQUIRED: without it gen-cron.sh ends with 'has no use_template'."
             echo "#"
-            echo "# Bez '-K' zadanie probowaloby uwierzytelnic sie domyslnym kluczem"
-            echo "# SSH tego konta zamiast dedykowanego klucza tej relacji -- konto"
-            echo "# ${remote_user} na peerze zna WYLACZNIE ten klucz."
+            echo "# Without '-K' the job would try to authenticate with the default SSH"
+            echo "# key of this account instead of the dedicated key of this relation --"
+            echo "# the account ${remote_user} on the peer knows ONLY that key."
             echo "#"
-            echo "# '-k' to druga strona tego samego: przypiety klucz HOSTA peera,"
-            echo "# ten sprawdzony recznie przy --pair. Bez niego zadanie wraca do"
-            echo "# accept-new, czyli ufa temu, co odpowie przy pierwszym polaczeniu."
-            [ -n "$kh_flag" ] || echo "# UWAGA: brak pliku $job_knownhosts -- '-k' pominiete, patrz log."
+            echo "# '-k' is the other half of the same thing: the pinned HOST key of the"
+            echo "# peer, checked by hand during --pair. Without it the job falls back to"
+            echo "# accept-new, i.e. trusts whatever answers on the first connection."
+            [ -n "$kh_flag" ] || echo "# WARNING: file $job_knownhosts is missing -- '-k' omitted, see the log."
             if [ -n "$port_flag" ]; then
                 echo "#"
-                echo "# '-p ${job_port}': parowanie zrobiono na niestandardowym porcie."
-                echo "# Bez niego zadanie poszloby na 22 -- a przypiety klucz hosta jest"
-                echo "# zapisany jako '[host]:${job_port}', wiec i tak by go nie znalazlo."
+                echo "# '-p ${job_port}': the pairing was made on a non-standard port."
+                echo "# Without it the job would go to 22 -- and the pinned host key is"
+                echo "# recorded as '[host]:${job_port}', so it would not find it anyway."
             fi
             echo
             echo "# =========================================================="
-            echo "# OBJETE TA RELACJA (${#DRAFT_ROOTS[@]}) -- te datasety zadeklarowano"
-            echo "# przy parowaniu. Strona odbiorcza jest delegowana na peerze na jednym"
-            echo "# korzeniu, wiec wypchniecie czegokolwiek innego tez by przeszlo --"
-            echo "# ale wtedy config przestaje odpowiadac temu, co mowi manifest."
+            echo "# COVERED BY THIS RELATION (${#DRAFT_ROOTS[@]}) -- these datasets were declared"
+            echo "# at pairing. The receiving side is delegated on the peer at a single"
+            echo "# root, so pushing anything else would also pass --"
+            echo "# but then the config stops matching what the manifest says."
             echo "# =========================================================="
             local ds n
             while IFS=$'\t' read -r ds n; do
                 [ -n "$ds" ] || continue
                 echo
-                [ "$n" -gt 0 ] && echo "# ($ds ma $n datasetow potomnych -- 'recursive' ponizej obejmie caly"
-                [ "$n" -gt 0 ] && echo "#  podzbior: 'flat' = kazdy potomek osobnym zadaniem, 'atomic' = cale"
-                [ "$n" -gt 0 ] && echo "#  poddrzewo jednym strumieniem w jednym punkcie czasu.)"
+                [ "$n" -gt 0 ] && echo "# ($ds has $n descendant datasets -- 'recursive' below covers the whole"
+                [ "$n" -gt 0 ] && echo "#  subtree: 'flat' = each descendant as a separate job, 'atomic' = the whole"
+                [ "$n" -gt 0 ] && echo "#  subtree in one stream at a single point in time.)"
                 echo "# [dataset:$ds]"
                 echo "#   dst          = ${remote_user}@${PEER_HOST}:${PEER_SAVED_TARGET}/${my_label}/${ds}"
                 [ "$n" -gt 0 ] && echo "#   recursive    = flat"
                 echo "#   flags        = -K ${job_keyfile}${kh_flag}${port_flag}"
-                echo "#   use_template = <WYBIERZ ISTNIEJACY [template:]>"
+                echo "#   use_template = <PICK AN EXISTING [template:]>"
             done < <(printf '%s\n' "${DRAFT_ROOTS[@]}")
             if [ "${#DRAFT_MISSING[@]}" -gt 0 ]; then
                 echo
-                echo "# UWAGA: zadeklarowane w parowaniu, ale NIE ISTNIEJA na tym hoscie:"
+                echo "# WARNING: declared in the pairing, but DO NOT EXIST on this host:"
                 for ds in "${DRAFT_MISSING[@]}"; do echo "#   $ds"; done
             fi
-            draft_emit_uncovered "Zeby dolozyc: --pair --peer=$PEER_HOST --peer-datasets=\"$granted <nowy>\" (i --join na peerze)."
+            draft_emit_uncovered "To add: --pair --peer=$PEER_HOST --peer-datasets=\"$granted <new>\" (and --join on the peer)."
         } > "$out"
     fi
-    log "draft napisany: $out -- przejrzyj recznie przed dotknieciem cron-configs"
+    log "draft written: $out -- review it by hand before touching cron-configs"
 }
 
 if [ "$PAIR_MODE" -eq 1 ]; then
