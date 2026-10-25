@@ -1140,7 +1140,16 @@ check "FOR2 ...the FINEST tier (hourly, listed second) loses its pattern and pro
 check "FOR3 ...the daily tier keeps its own line, pattern and count" "1" \
       "$(printf '%s\n' "$fo" | grep -c 'delsnaps.sh -L r1 "tank/b/rpool/vm" "automated_daily" -D7')"
 check "FOR4 ...and nothing else prunes there" "2" "$(printf '%s\n' "$fo" | grep -c 'delsnaps.sh')"
+# REV-20261024-174: with GEN_CRON_FOREIGN_REPORT gen-cron reports exactly the -P set it added,
+# keyed by the scope the line names -- the installer's guard compares against this, not shape.
+rm -f "$FOR/report"
+GEN_CRON_FOREIGN_REPORT="$FOR/report" REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$FOR/c.conf" >/dev/null 2>&1
+check "FOR4a GEN_CRON_FOREIGN_REPORT names the carrier's scope and exactly the protections it added" \
+      'tank/b/rpool/vm	-P "automated_daily:all" -P "replica_:2" ' "$(cat "$FOR/report" 2>/dev/null)"
 for_conf "" ""
+rm -f "$FOR/report"
+GEN_CRON_FOREIGN_REPORT="$FOR/report" REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$FOR/c.conf" >/dev/null 2>&1
+check "FOR4b ...and without prune_foreign it reports nothing" "" "$(cat "$FOR/report" 2>/dev/null)"
 fo=$(for_run)
 check "FOR5 control: without the field the hourly line keeps its pattern and carries no extra -P" "1" \
       "$(printf '%s\n' "$fo" | grep -c 'delsnaps.sh -L r1 "tank/b/rpool/vm" "automated_hourly" -H24')"

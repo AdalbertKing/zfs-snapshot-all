@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ad767cd6de9aa13c -->
+<!-- status-covers-digest: c4f33b4eddf12412 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,17 +21,16 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **REV-20261024-174: strażnik instalacji nie przepuszcza osłabionej ochrony `-P` przy `prune_foreign`
-  (`fix/rev174-foreign-protections`).** Siódmy wyjątek w `assert_target_block_not_clobbered` (przepisanie
-  najdrobniejszego szczebla na pusty wzorzec z ochronami cudzych rodzin) porównywał linie po zdjęciu
-  wszystkich `-P`, więc `vzdump:2 -> vzdump:0` albo usunięta ochrona przechodziły razem z przepisaniem.
-  Teraz każda ochrona `-P` z linii zainstalowanej musi zostać bez zmian, a nowe mogą mieć tylko kształt,
-  jaki generuje gen-cron (`:all`, `:2`), i nie mogą dotyczyć prefiksu już chronionego; inaczej zwykły
-  strażnik odmawia. Pełnego zestawu z gen-cron strażnik nie odtwarza (dodatkowa ochrona tylko zmniejsza
-  liczbę usunięć) -- opisane w odpowiedzi jako ryzyko do oceny recenzenta. Reproducer recenzenta:
-  na main „REPRODUCED”, po poprawce „NOT REPRODUCED”. `zfsbackup --section mirrorguard` 12/0 (4 nowe
-  przypadki, w tym kontrola pozytywna); na kodzie z main nowe przypadki odmowy padają.
-
+- **REV-20261024-174: strażnik instalacji nie przepuszcza osłabionej ani obcej ochrony `-P` przy
+  `prune_foreign` (runda 2, `fix/rev174-foreign-protections`).** Siódmy wyjątek w
+  `assert_target_block_not_clobbered` (przepisanie najdrobniejszego szczebla na pusty wzorzec z
+  ochronami cudzych rodzin) porównywał linie po zdjęciu wszystkich `-P`. Dlatego `vzdump:2 -> vzdump:0`,
+  usunięta ochrona albo niezwiązane `-P "manual:all"` przechodziły razem z przepisaniem.
+  - Każda ochrona `-P` z linii zainstalowanej musi zostać bez zmian.
+  - Dodane tokeny muszą należeć do dokładnego zestawu, który gen-cron zgłasza dla danego zakresu
+    przez `GEN_CRON_FOREIGN_REPORT`. Bez raportu strażnik odmawia.
+  - Reproducer recenzenta: na main „REPRODUCED”, po poprawce „NOT REPRODUCED”.
+  - Testy: `zfsbackup --section mirrorguard` 15/0, `cron` z FOR4a/FOR4b.
 
 - **Narzędzia wydania 1.0 (`feat/release-tooling`, projekt `docs/project/DESIGN-REPO-WYDAN-2026-10-24.md`,
   repo wydań `AdalbertKing/zfsbackup`).** `release/MANIFEST` wymienia pliki pakietu (skrypty w korzeniu,

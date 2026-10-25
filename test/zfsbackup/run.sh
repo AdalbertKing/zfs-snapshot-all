@@ -8753,7 +8753,7 @@ mg_sprune='41 * * * * /root/x/zfs-job.sh "h p prune (r-src-a)" --log=/root/cron.
 printf '#!/bin/bash\ncat "%s"\nexit 0\n' "$MG/target.cron" > "$MG/bin/crontab"; chmod +x "$MG/bin/crontab"
 mg_guard() {   # <proposal file> <MIRRORED_LANDINGS words> -> "rc" ; output in $MG/out
     PATH="$MG/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
-        "source '$ZFSBACKUP'; MIRRORED_LANDINGS=($2); gencron_as_target() { cat '$1'; }; assert_target_block_not_clobbered '$MG/new.conf'" > "$MG/out" 2>&1
+        "source '$ZFSBACKUP'; MIRRORED_LANDINGS=($2); gencron_as_target() { cat '$1'; [ -f '$1.report' ] && cat '$1.report' >> \"\$GEN_CRON_FOREIGN_REPORT\"; true; }; assert_target_block_not_clobbered '$MG/new.conf'" > "$MG/out" 2>&1
     echo "$?"
 }
 # the conversion: the pull gains -M, the target prune goes, the SOURCE prune stays
@@ -8816,6 +8816,7 @@ for _v in 'fg:"" -H24:-P "automated_daily:all" -P "replica_:2" ' 'cnt:"" -H12:-P
       echo "$mg_hp ${_pp}\"tank/a\" ${_tail}"
       echo '# END zfs-backup-managed'; } > "$MG/$_n.txt"
 done
+printf 'tank/a\t-P "automated_daily:all" -P "replica_:2" \n' > "$MG/fg.txt.report"
 got=$(mg_guard "$MG/fg.txt" "")
 if [ "$got" = 0 ] && grep -q 'foreign snapshots on this landing are now pruned with this tier' "$MG/out"; then
     ok "mirrorguard: U4 -- the finest tier gaining foreign protections (empty pattern, -P :all) is the same job -- installed, and named"
@@ -8840,6 +8841,7 @@ for _v in 'keep:-P "vzdump:2" -P "automated_daily:all" ' 'zero:-P "vzdump:0" -P 
       echo "$mg_hp ${_pp}\"tank/a\" \"\" -H24"
       echo '# END zfs-backup-managed'; } > "$MG/f174-$_n.txt"
 done
+printf 'tank/a\t-P "automated_daily:all" \n' > "$MG/f174-keep.txt.report"
 got=$(mg_guard "$MG/f174-keep.txt" "")
 if [ "$got" = 0 ] && grep -q 'foreign snapshots on this landing are now pruned with this tier' "$MG/out"; then
     ok "mirrorguard: REV-174 -- the U4 rewrite that KEEPS the existing -P \"vzdump:2\" and adds :all is still the same job (positive control)"
@@ -8854,9 +8856,33 @@ got=$(mg_guard "$MG/f174-gone.txt" "")
 [ "$got" != 0 ] && grep -q 'would be DELETED' "$MG/out" \
     && ok "mirrorguard: REV-174 -- ...the floor REMOVED during the rewrite is refused" \
     || bad "mirrorguard: REV-174 -- a removed floor rode along with the foreign rewrite" "rc=$got" "$(cat "$MG/out")"
+printf 'tank/a\t-P "automated_daily:all" \n' > "$MG/f174-other.txt.report"
 got=$(mg_guard "$MG/f174-other.txt" "")
-[ "$got" != 0 ] && ok "mirrorguard: REV-174 -- ...an added protection not in the generated shape (:all / :2) is refused" \
+[ "$got" != 0 ] && ok "mirrorguard: REV-174 -- ...an added protection gen-cron did not report (automated_daily:5) is refused" \
     || bad "mirrorguard: REV-174 -- a non-generated added protection was excused" "rc=$got" "$(cat "$MG/out")"
+# Round 2 (reviewer's counterexample): the SHAPE is not provenance. Kept floor, the
+# reported :all, and an UNRELATED token of a generated shape -- refused, for :all and :2.
+for _v in 'mall:-P "vzdump:2" -P "automated_daily:all" -P "manual:all" ' 'm2:-P "vzdump:2" -P "automated_daily:all" -P "manual_:2" '; do
+    _n="${_v%%:*}"; _pp="${_v#*:}"
+    { echo '# BEGIN zfs-backup-managed'
+      echo "$mg_hp ${_pp}\"tank/a\" \"\" -H24"
+      echo '# END zfs-backup-managed'; } > "$MG/f174-$_n.txt"
+    printf 'tank/a\t-P "automated_daily:all" \n' > "$MG/f174-$_n.txt.report"
+done
+got=$(mg_guard "$MG/f174-mall.txt" "")
+[ "$got" != 0 ] && grep -q 'would be DELETED' "$MG/out" \
+    && ok "mirrorguard: REV-174 -- ...an unrelated -P \"manual:all\" beside the reported set is refused (shape is not provenance)" \
+    || bad "mirrorguard: REV-174 -- an ungenerated :all token was excused" "rc=$got" "$(cat "$MG/out")"
+got=$(mg_guard "$MG/f174-m2.txt" "")
+[ "$got" != 0 ] && grep -q 'would be DELETED' "$MG/out" \
+    && ok "mirrorguard: REV-174 -- ...an unrelated -P \"manual_:2\" beside the reported set is refused" \
+    || bad "mirrorguard: REV-174 -- an ungenerated :2 token was excused" "rc=$got" "$(cat "$MG/out")"
+# No report at all (a gen-cron from before the report): nothing is provably generated,
+# so the exact U4 rewrite is refused -- fail-closed, never fail-open.
+rm -f "$MG/f174-keep.txt.report"
+got=$(mg_guard "$MG/f174-keep.txt" "")
+[ "$got" != 0 ] && ok "mirrorguard: REV-174 -- ...without gen-cron's report the rewrite is refused (fail closed)" \
+    || bad "mirrorguard: REV-174 -- the rewrite passed with no provenance at all" "rc=$got" "$(cat "$MG/out")"
 
 fi   # --- koniec sekcji mirrorguard ---
 

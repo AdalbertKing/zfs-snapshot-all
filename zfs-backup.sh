@@ -3608,10 +3608,28 @@ foreign_normalized_identity() {
 # rode along with the rewrite. The rewrite only ADDS protections, in the two shapes
 # gen-cron's apply_foreign_prune generates ("<other family>:all", "<replica prefix>:2");
 # every -P the installed line carries must still be there, count included.
-foreign_protections_kept() {   # <installed line> <proposed line> -> 0 when only generated -P were added
-    local old new tok
+#
+# Second round of the same finding: a token's SHAPE is not its provenance -- a proposal
+# keeping vzdump:2 but adding an unrelated -P "manual:all" passed. gen-cron now reports
+# the exact set it added per scope (GEN_CRON_FOREIGN_REPORT, written by apply_foreign_prune;
+# the guard sets it while rendering the proposal); an added token must be in that set for
+# the line's scope, and every reported token must be in the proposal. No report (an older
+# gen-cron) means an empty set: the rewrite is then refused, fail-closed.
+FOREIGN_REPORT_SETS=""
+delsnaps_scope_of() {   # <line> -> the scope argument of its delsnaps.sh command
+    printf '%s\n' "$1" | awk '{
+        at = index($0, "delsnaps.sh"); seg = substr($0, at)
+        cut = index(seg, " 2>"); if (cut > 0) seg = substr(seg, 1, cut - 1)
+        n = 0; while (match(seg, /"[^"]*"/)) { v[++n] = substr(seg, RSTART + 1, RLENGTH - 2); seg = substr(seg, RSTART + RLENGTH) }
+        if (n >= 2) print v[n - 1] }'
+}
+foreign_protections_kept() {   # <installed line> <proposed line> -> 0 when exactly the generated -P were added
+    local old new tok scope expected
     old=$(printf '%s\n' "$1" | grep -oE ' -P "[^"]*"' | sed -E 's/^ -P "(.*)"$/\1/')
     new=$(printf '%s\n' "$2" | grep -oE ' -P "[^"]*"' | sed -E 's/^ -P "(.*)"$/\1/')
+    scope=$(delsnaps_scope_of "$2")
+    expected=$(printf '%s\n' "$FOREIGN_REPORT_SETS" | awk -F'\t' -v s="$scope" '$1 == s { print $2 }' \
+               | grep -oE '\-P "[^"]*"' | sed -E 's/^-P "(.*)"$/\1/')
     while IFS= read -r tok; do
         [ -n "$tok" ] || continue
         printf '%s\n' "$new" | grep -qxF -- "$tok" || return 1        # removed, or its count changed
@@ -3621,8 +3639,13 @@ foreign_protections_kept() {   # <installed line> <proposed line> -> 0 when only
         printf '%s\n' "$old" | grep -qxF -- "$tok" && continue
         # a new token for a prefix the installed line already protects is a changed floor
         printf '%s\n' "$old" | awk -v p="${tok%:*}" '{ q = $0; sub(/:[^:]*$/, "", q) } q == p { found = 1 } END { exit !found }' && return 1
-        case "${tok##*:}" in all|2) ;; *) return 1 ;; esac
+        # ...and an added one must be what gen-cron reported adding for this scope
+        printf '%s\n' "$expected" | grep -qxF -- "$tok" || return 1
     done <<< "$new"
+    while IFS= read -r tok; do
+        [ -n "$tok" ] || continue
+        printf '%s\n' "$new" | grep -qxF -- "$tok" || return 1
+    done <<< "$expected"
     return 0
 }
 foreign_pattern_empty() {   # <line> -> 0 when its delsnaps pattern argument is ""
@@ -3857,7 +3880,12 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
     local current; current=$(managed_block_fingerprint < "$tcron"); rm -f "$tcron"
     [ -n "$current" ] || return 0
 
-    local proposed; proposed=$(gencron_as_target -c "$file" 2>/dev/null | managed_block_fingerprint)
+    # The proposal is rendered with gen-cron's foreign-protection report on (REV-20261024-174):
+    # the seventh exception compares the -P tokens it added against exactly this set.
+    local _frep; _frep=$(mktemp)
+    chown "$(cron_target_user)" "$_frep" 2>/dev/null || true
+    local proposed; proposed=$(GEN_CRON_FOREIGN_REPORT="$_frep" gencron_as_target -c "$file" 2>/dev/null | managed_block_fingerprint)
+    FOREIGN_REPORT_SETS=$(cat "$_frep" 2>/dev/null); rm -f "$_frep"
     [ -n "$proposed" ] || die "'$u' already runs a managed block and the block this run would install could not be rendered -- so whether the install would delete any of them is unknown. Refusing rather than guessing; nothing has been changed."
 
     local lost; lost=$(comm -23 <(printf '%s\n' "$current") <(printf '%s\n' "$proposed"))
@@ -6127,6 +6155,8 @@ gencron_as_target() {   # <args...>
         "CRON_LOG=$home/cron.log"
         "GEN_CRON_LOCKFILE=$home/.gen-cron.install.lock"
     )
+    # The foreign-protection report (REV-20261024-174) travels to the account's gen-cron.
+    [ -n "${GEN_CRON_FOREIGN_REPORT:-}" ] && envv+=("GEN_CRON_FOREIGN_REPORT=$GEN_CRON_FOREIGN_REPORT")
     if command -v runuser >/dev/null 2>&1; then
         runuser --user "$u" -- env "${envv[@]}" bash "$account_gencron" "$@"
     else
@@ -15678,10 +15708,10 @@ capacity.guard_target|85|int:40:98|-|do ilu % bezpiecznik czyści
 capacity.guard_min_keep|2|int:1:100|-|ile najnowszych migawek rodziny bezpiecznik zawsze zostawia
 growth.alert|off|enum:off,on|-|strażnik przyrostu (ransomware): alarm, gdy najnowszy przyrost jest wielokrotnie ponad normę i się nie kompresuje (tylko alarm, nic nie zatrzymuje)
 growth.factor|5|int:2:100|-|ile razy szybszy niż zwykle przyrost uznać za podejrzany
-growth.min_mib|1024|int:1:10485760|-|od ilu MiB przyrostu strażnik w ogóle reaguje
+growth.min_mib|1024|int:1:10485760|-|od ilu MiB przyrostu strażnik reaguje
 growth.max_ratio_pct|110|int:100:200|-|kompresja przyrostu (w %, 100 = żadna) do której przyrost uznać za niekompresowalny
 growth.days|7|int:2:60|-|z ilu dni strażnik liczy normę przyrostu
-replica.insert_wait|60|int:60:3600|-|ile sekund replika czeka po podłączeniu dysku, zanim go dotknie (odłączony w tym czasie = nic; mniej niż 60 się nie da)
+replica.insert_wait|60|int:60:3600|-|ile sekund zadanie repliki czeka po podłączeniu dysku, zanim wystartuje
 monitor.interval|15m|interval|cron|co ile strażnik sprawdza wiek kopii
 new_relation.template|default|profile|-|szablon proponowany nowej relacji
 update.time|:15|minute|host|minuta godzinnej aktualizacji (git pull)'

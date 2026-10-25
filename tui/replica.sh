@@ -128,7 +128,7 @@ pool_roots_to_children() {   # B_ROOT/B_EXCL -> SRC_ROOT/SRC_EXCL bez korzeni pu
             nr+=("$c"); ne+=("$e"); n=$((n + 1)); list="$list  $c\n"
         done
         [ "$n" -gt 0 ] || { POOL_EMPTY="$r"; return 1; }
-        POOL_NOTE="${POOL_NOTE}$(Tv 'Cała pula $r = $n datasetów bezpośrednio pod nią, każdy razem z tym, co pod nim:\n${list}\nDataset założony później BEZPOŚREDNIO pod pulą $r trzeba dopisać zmianą repliki\n(niżej -- pod tymi datasetami -- dojdzie sam).\n' '$r' "$r" '$n' "$n" '${list}' "$list")"
+        POOL_NOTE="${POOL_NOTE}$(Tv 'Wybrana cała pula $r: replika kopiuje $n datasetów leżących bezpośrednio w niej, każdy z całą zawartością:\n${list}\nNowy dataset założony później bezpośrednio w $r trzeba dodać w zmianie repliki.\nNowe datasety głębiej dojdą same.\n' '$r' "$r" '$n' "$n" '${list}' "$list")"
     done
     SRC_ROOT=(${nr[@]+"${nr[@]}"}); SRC_EXCL=(${ne[@]+"${ne[@]}"})
 }
@@ -162,7 +162,7 @@ prep_media() {   # <pula> <baza> -> PREP_DST, PREP_GUID ; 0 = sformatowany, 1 = 
         items+=("$id" "$(clip_label "$sz  $model  $serial  ($onit)" $((W - 12)))")
     done <"$TMPD/disks.tsv"
     if [ "${#items[@]}" -eq 0 ]; then
-        wt --title "$(T 'Brak wolnego dysku')" --msgbox "$(T 'Każdy dysk tego hosta jest w puli albo zamontowany.\nPodłącz dysk na nośnik i wybierz to jeszcze raz.')$( [ -s "$TMPD/disks.err" ] && printf '\n\n%s' "$(tail -2 "$TMPD/disks.err")")" 10 "$W"
+        wt --title "$(T 'Brak wolnego dysku')" --msgbox "$(T 'Każdy dysk tego hosta jest w puli albo zamontowany.\nPodłącz inny dysk i wybierz to jeszcze raz.')$( [ -s "$TMPD/disks.err" ] && printf '\n\n%s' "$(tail -2 "$TMPD/disks.err")")" 10 "$W"
         return 1
     fi
     geom
@@ -622,7 +622,7 @@ PYEOF
         def="$SCHED"; case "$SCHED" in auto|"0 22 * * *"|"0 22 * * 5"|"0 22 1 * *"|on-insert) ;; *) def=__other__ ;; esac
         [ "$MEDIA" = fixed ] && [ "$SCHED" = on-insert ] && def=auto
         wt --title "$(rtitle 6 "$(T 'kiedy kopiować?')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
-           --menu "$([ "$MEDIA" = removable ] && T 'Nośnik wymienny jest podłączany tylko na czas kopii; gdy jest odłączony,\nbieg po cichu nic nie robi.' || T 'Nośnik stały jest stale w maszynie: kopia idzie o tej porze.')$([ "$EDIT" -eq 1 ] && printf '%s' " $(T 'Teraz:') $([ "$SCHED" = on-insert ] && T 'tylko po podłączeniu' || echo "$SCHED")")" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || { step=4; continue; }
+           --menu "$([ "$MEDIA" = removable ] && T 'Nośnik wymienny jest podłączany tylko na czas kopii.' || T 'Nośnik stały jest stale w maszynie: kopia idzie o tej porze.')$([ "$EDIT" -eq 1 ] && printf '%s' " $(T 'Teraz:') $([ "$SCHED" = on-insert ] && T 'tylko po podłączeniu' || echo "$SCHED")")" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || { step=4; continue; }
         if [ "$WT_OUT" = __other__ ]; then
             wt --title "$(Tv 'Replika $NAME -- własny harmonogram' '$NAME' "$NAME")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
                --inputbox "$(T 'Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):')" 9 "$W" "$(case "$SCHED" in on-insert|auto) ;; *) echo "$SCHED" ;; esac)" || continue
