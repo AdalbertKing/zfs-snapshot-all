@@ -1244,6 +1244,23 @@ else
     bad "the last relationship's pairing was not purged (or the wrong one was)" "$(ls "$T/clients" "$T/peers" "$T/keys" | tr '\n' ' ')" "$out"
 fi
 
+# ONE NAME, TWO RELATIONSHIPS (lab campaign 2026-10-26, pve11): the removed COLLECTOR
+# record "pve9" and, on the same host, the live SOURCE enrollment for the collector pve9
+# (join manifest, scope, gate, account -- all named pve9). Purging the record must leave
+# the other relationship's families alone; before, the gate went and every job of the
+# collector pve9 answered PAIR_UNKNOWN.
+T="$WORK/twoname"; rm -rf "$T"; mkdir -p "$T/clients" "$T/peers" "$T/rel/pve9" "$T/keys" "$T/pairing" "$T/home"
+printf 'CLIENT_NAME=pve9\nPEER_HOST=10.0.0.9\nSTATE=active\nSTATE=removed\n' > "$T/clients/pve9.conf"
+printf 'PEER_JOIN_ROLE="pull"\nPEER_JOIN_ACCOUNT="zfsbackup-pve9"\nPEER_JOIN_GRANTED_DATASETS="hdd/vm"\n' > "$T/peers/pve9.conf"
+touch "$T/peers/pve9.scope" "$T/peers/pve9.scope.sha256"
+out=$(run_cr "$T" --purge=pve9 --yes); rc=$?
+if [ ! -e "$T/clients/pve9.conf" ] && [ -d "$T/rel/pve9" ] && [ -e "$T/peers/pve9.conf" ] && [ -e "$T/peers/pve9.scope" ] \
+   && printf '%s' "$out" | grep -q 'kept .*peers/pve9.conf'; then
+    ok "purging the collector record 'pve9' keeps the source-side enrollment of the same name (gate, manifest, scope) and says so"
+else
+    bad "a purge took the OTHER relationship of the same name" "rc=$rc" "$(ls -R "$T" | tr '\n' ' ')" "$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

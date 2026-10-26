@@ -362,6 +362,21 @@ _artefacts_raw() {
     # INSIDE a name, and `\ ` in this field can only ever be the separator.
     # Any OTHER backslash means the value is not what this code thinks it is, so
     # it is reported as suspect instead of being quietly half-decoded.
+    # ONE NAME, TWO RELATIONSHIPS (lab campaign 2026-10-26, pve11): a host that is the
+    # COLLECTOR of a relationship named "pve9" (clients/pve9.conf) can at the same time be
+    # the SOURCE of the collector pve9 -- its join manifest peers/pve9.conf, scope, gate
+    # relationships/pve9/ and account zfsbackup-pve9 carry the same name. Purging the
+    # collector record took the gate of the OTHER relationship, and every job pve9 ran
+    # here answered PAIR_UNKNOWN. When this id is a collector record and a source-side
+    # enrollment of the same name is alive, the source-side families are not this
+    # record's to clean: they stay, and the purge says so.
+    local src_keep=""
+    if [ -f "$CLIENTS_DIR/$id.conf" ] && [ -f "$PEER_STATE_DIR/$id.conf" ] \
+       && grep -q '^PEER_JOIN_' "$PEER_STATE_DIR/$id.conf" 2>/dev/null \
+       && [ -d "$REL_STATE_DIR/$id" ]; then
+        src_keep=1
+        echo "keep	$PEER_STATE_DIR/$id.conf (+ scope, gate, account: this host is also the SOURCE of the collector '$id')"
+    fi
     local d exists
     while IFS= read -r d; do
         [ -n "$d" ] || continue
@@ -383,19 +398,21 @@ _artefacts_raw() {
         printf 'data	%s
 ' "$d"
     done < <(grep -hE '^(RUX_TARGET|MANAGED_DATASETS|PEER_JOIN_GRANTED_DATASETS)=' \
-                 "$CLIENTS_DIR/$id.conf" "$PEER_STATE_DIR/$id.conf" 2>/dev/null \
+                 "$CLIENTS_DIR/$id.conf" ${src_keep:-"$PEER_STATE_DIR/$id.conf"} 2>/dev/null \
              | cut -d= -f2- | tr -d "'\"" | sed 's/\\ /\n/g' | tr ', \t' '\n\n\n')
     # An identity that IS an address other live relationships use: peers/<id>.conf is
     # then THEIR pairing manifest, not this record's join manifest. That was the first
     # purge that did the damage on pve10 -- a removed record named 192.168.28.99.
     local id_is_shared_addr=""
     id_is_shared_addr=$(addr_live_users "$id" "$id")
+    if [ -z "$src_keep" ]; then
     [ -z "$id_is_shared_addr" ] && [ -e "$PEER_STATE_DIR/$id.conf" ]    && echo "manifest	$PEER_STATE_DIR/$id.conf"
     [ -e "$PEER_STATE_DIR/$id.scope" ]   && echo "scope	$PEER_STATE_DIR/$id.scope"
     [ -e "$PEER_STATE_DIR/$id.scope.sha256" ] && echo "scope	$PEER_STATE_DIR/$id.scope.sha256"
     [ -e "$PEER_STATE_DIR/$id.scope.request" ] && echo "scope	$PEER_STATE_DIR/$id.scope.request"
     [ -d "$REL_STATE_DIR/$id" ]          && echo "gate	$REL_STATE_DIR/$id"
     id "zfsbackup-$id" >/dev/null 2>&1   && echo "account	zfsbackup-$id"
+    fi
     # The home directory is listed SEPARATELY from the account on purpose. UID
     # reuse means a directory named after a dead account can be owned by a live
     # one -- measured on pve2, where two such directories belonged to the
@@ -1142,6 +1159,8 @@ purge_one() {
                 elif [ -d "$path" ]; then
                     warn "  $path is NOT empty -- left in place, inspect it: $(ls -A "$path" | tr '\n' ' ')"; rc=1
                 fi ;;
+            keep)
+                log "  kept $path" ;;
             *)
                 if rm -f "$path"; then log "  removed $path"; else warn "  could not remove $path"; rc=1; fi ;;
         esac
