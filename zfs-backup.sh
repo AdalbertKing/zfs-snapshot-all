@@ -15177,6 +15177,11 @@ cmd_delete_relation() {
     if [ "$destroy" -eq 1 ]; then
         local d
         for d in $copies; do
+            # A copy under another copy of the list went with its parent's -r: gone is done,
+            # not a leftover (lab 2026-10-26: [-] parent + [x] children, false "LEFTOVERS").
+            if ! zfs list -H -o name -- "$d" >/dev/null 2>&1; then
+                log "delete-relation: 4/4 $d -- already gone (destroyed with its parent)"; continue
+            fi
             log "delete-relation: 4/4 zfs destroy -r $d"
             zfs destroy -r "$d" || { rc=1; log "!!! delete-relation: could not destroy $d"; continue; }
             # The empty shells above it (<target>/<peer>/<pool>...) were created for this
