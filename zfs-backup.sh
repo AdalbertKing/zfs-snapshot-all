@@ -14407,6 +14407,15 @@ cmd_monitor() {
     # check runs in the background (at most 8 at once) into its own file; the report is
     # printed afterwards in the cron order, with the same fields as before.
     local mtmp; mtmp=$(mktemp -d) || die "mktemp failed"
+    # ONE SSH CONNECTION PER HOST (owner 2026-10-26: return to the GUI took 16 s on pve9). The
+    # frozen check-snap-age opens a new ssh for every dataset of a line -- five remote datasets
+    # took 11 s. The reader hands it a shared master (ssh ControlMaster, through the -O options
+    # the engine already passes to ssh) in a private 0700 directory; the master lingers 60 s,
+    # so the next GUI refresh reuses it. The cron lines are untouched.
+    local mux=""
+    if [ -n "${HOME:-}" ] && mkdir -p -m 0700 "$HOME/.ssh/zb-mux" 2>/dev/null        && [ -O "$HOME/.ssh/zb-mux" ] && chmod 0700 "$HOME/.ssh/zb-mux" 2>/dev/null; then
+        mux="$HOME/.ssh/zb-mux"
+    fi
     local mi=0
     local -a M_ACCT=() M_SCHED=() M_LABEL=() M_DS=() M_PAT=() M_WARN=() M_CRIT=() M_REC=() \
         M_EXCL=() M_ENGN=() M_ENGR=() M_PARSED=() M_GATE=()
@@ -14500,6 +14509,7 @@ cmd_monitor() {
                 local _x
                 for _x in ${excl//,/ }; do [ -n "$_x" ] && runargs+=(-x "$_x"); done
                 runargs+=(${sshargs[@]+"${sshargs[@]}"})
+                [ -n "$mux" ] && [ "${#sshargs[@]}" -gt 0 ]                     && runargs+=(-O ControlMaster=auto -O "ControlPath=$mux/%C" -O ControlPersist=60)
                 runargs+=("$ds" "$pat" "$warn" "$crit")
                 { bash "$CHECKSNAPAGE" "${runargs[@]}" >"$mtmp/$mi.out" 2>&1
                   echo $? >"$mtmp/$mi.rc"; } </dev/null &
