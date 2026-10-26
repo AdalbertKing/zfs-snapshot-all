@@ -2677,7 +2677,7 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-${NRT}" NR_TREE='goto:hdd,space,goto:hdd/ct/subvol-301-disk-0,space,goto:hdd/ct,space,enter')
+${NRT}" NR_TREE='goto:hdd,space,goto:hdd/ct/subvol-301-disk-0,space,goto:hdd/ct,space,space,enter')
 NRTL="$(cat "$NR/tree.log" 2>/dev/null)"
 # Ekran: wyjatek hdd/ct (odznaczony) wchlonal wczesniejszy wyjatek 301 -- 'pominięte: 1', nie 2.
 if has "$NROUT" "CMD: --source=192.168.28.98:hdd --target=hdd/backups --profile=default --name=pve9b --exclude-child=^hdd/ct\$ --exclude-child=^hdd/ct/ --exclude-family" && [ "$(printf '%s' "$NROUT" | grep '^CMD: ' | grep -o 'exclude-child' | wc -l)" -eq 2 ] \
@@ -4068,8 +4068,9 @@ if [ "$TRBRC" -eq 0 ] && [ "$(tjq "$TRD/out.json" roots)" = '["hdd"]' ] && [ "$(
 else
     bad "tree: cel kopii pod nowym miejscem" "rc=$TRBRC" "$TRB" "$(cat "$TRD/out.json" 2>/dev/null)"
 fi
+# (2026-10-26: zaznaczony z dziecmi odznacza DRUGA Spacja -- pierwsza daje [-], obecne bez przyszlych.)
 # c) Enter bez zadnego miejsca odmawia (zostaje w oknie); bez Enter/Esc koniec to Wstecz (rc 1)
-TRC=$(trun "$TRD/a.json" 'space,enter'); TRCRC=$?
+TRC=$(trun "$TRD/a.json" 'space,space,enter'); TRCRC=$?
 if [ "$TRCRC" -eq 1 ] && [ "$(tjq "$TRD/out.json" action)" = '"back"' ] && has "$TRC" 'MSG: Zaznacz co najmniej jedno miejsce (Spacja).'; then
     ok "tree: zdjecie jedynego miejsca i Enter = odmowa 'Zaznacz co najmniej jedno miejsce', wynik action=back, rc=1"
 else
@@ -4406,7 +4407,7 @@ er_run() {   # <odpowiedzi> [klawisze tabel, linia na okno] -> stdout; dzienniki
 # X12: okno koszyka to drzewo (tui/tree.py); dawne "add hdd/iso, del 0, next" to Spacja na hdd/iso
 # (nowe miejsce), Spacja na hdd/data (obecne miejsce znika), Enter. Wstepne zaznaczenie hdd/data
 # dowodzi remove-source: Spacja na NIE zaznaczonym hdd/data zrobilaby z niego miejsce, nie usuniecie.
-EROUT=$(ER_TREE='goto:hdd/iso,space,goto:hdd/data,space,enter' er_run "0${T}dane
+EROUT=$(ER_TREE='goto:hdd/iso,space,goto:hdd/data,space,space,enter' er_run "0${T}dane
 0${T}wykonaj
 0${T}
 "); ERRC=$?
