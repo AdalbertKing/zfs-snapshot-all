@@ -17265,15 +17265,53 @@ jobs_block_lines_for() {   # <account> <scope> [label] -> matching engine lines,
 
 # The one-level lookup, in gen-cron's documented order: the section's own
 # tier-specific field, the section's plain field, the tier template, [defaults].
+# jobs_block_lines_for for list-jobs --json: the account's engine lines are read once into a
+# file (jobs_block_engine_lines), and each row's lines come out already JSON-escaped (the
+# json_escape rule: \ and ") and comma-joined -- one awk per row instead of crontab, sed,
+# grep, awk and a json_escape subshell per line. Same match as jobs_block_lines_for.
+jobs_block_engine_lines() {   # <account> <outfile> -> 0 (empty file when unreadable)
+    local blk
+    : > "$2"
+    blk=$(mktemp) || die "mktemp failed"
+    if cron_read "$1" "$blk" 2>/dev/null; then
+        sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$blk" \
+            | grep -E 'snapsend\.sh|snapget\.sh|delsnaps\.sh|check-snap-age\.sh' > "$2"
+    fi
+    rm -f "$blk"
+    return 0
+}
+jobs_lines_json() {   # <engine-lines file> <scope> [label] -> "l1","l2",...
+    awk -v s="$2" -v l="${3:-}" '
+        {
+            line = $0
+            if (line ~ ("(^|[\"[:space:],:])" s "([\"[:space:],]|$)")) hit = 1
+            else if (l != "" && line ~ ("[[:space:]]-L[[:space:]]+\"?" l "\"?([[:space:]]|$)")) hit = 1
+            else hit = 0
+            if (!hit || line == "") next
+            out = ""
+            for (i = 1; i <= length(line); i++) {
+                c = substr(line, i, 1)
+                if (c == "\\" || c == "\"") out = out "\\" c; else out = out c
+            }
+            printf "%s\"%s\"", (n++ ? "," : ""), out
+        }' "$1"
+}
+
 jobs_field() {   # <kind> <section> <tier> <field> -> value or empty
+    local _jf_out; jobs_field_v _jf_out "$@"; printf '%s' "$_jf_out"
+}
+# The same lookup into a variable (printf -v), no subshell: list-jobs asks ~15 fields per tier,
+# and a $(...) per field cost 14 s on pve2 (364 tiers, measured 2026-10-26).
+jobs_field_v() {   # <var> <kind> <section> <tier> <field>
+    local _jv_var="$1"; shift
     local k="$1" s="$2" t="$3" f="$4"
-    local v="${JOB_F["$k:$s|${f}_$t"]:-}"; [ -n "$v" ] && { printf '%s' "$v"; return 0; }
+    local v="${JOB_F["$k:$s|${f}_$t"]:-}"; [ -n "$v" ] && { printf -v "$_jv_var" '%s' "$v"; return 0; }
     # A relation block's tier is `profile__<rel>__<tier>`; its dataset section staggers
     # the schedule under the short name (`send_schedule_hourly`), and that is what cron runs.
-    case "$t" in *__*) v="${JOB_F["$k:$s|${f}_${t##*__}"]:-}"; [ -n "$v" ] && { printf '%s' "$v"; return 0; } ;; esac
-    v="${JOB_F["$k:$s|$f"]:-}";          [ -n "$v" ] && { printf '%s' "$v"; return 0; }
-    v="${JOB_F["template:$t|$f"]:-}";      [ -n "$v" ] && { printf '%s' "$v"; return 0; }
-    printf '%s' "${JOB_F["defaults:|$f"]:-}"
+    case "$t" in *__*) v="${JOB_F["$k:$s|${f}_${t##*__}"]:-}"; [ -n "$v" ] && { printf -v "$_jv_var" '%s' "$v"; return 0; } ;; esac
+    v="${JOB_F["$k:$s|$f"]:-}";          [ -n "$v" ] && { printf -v "$_jv_var" '%s' "$v"; return 0; }
+    v="${JOB_F["template:$t|$f"]:-}";      [ -n "$v" ] && { printf -v "$_jv_var" '%s' "$v"; return 0; }
+    printf -v "$_jv_var" '%s' "${JOB_F["defaults:|$f"]:-}"
 }
 
 # push / pull / local / snapshot, plus the peer when there is one. `dst` and
@@ -17294,6 +17332,22 @@ jobs_direction() {   # <dst> <src> -> "<direction>\001<peer>\001<other end>"
         dir=snapshot
     fi
     printf '%s\001%s\001%s' "$dir" "$peer" "$other"
+}
+jobs_direction_v() {   # <var> <dst> <src> -- jobs_direction without a subshell
+    local _jd_var="$1" dst="$2" src="$3" dir peer="" other=""
+    if [ -n "$src" ]; then
+        dir=pull; other="$src"
+        case "$src" in *:*) peer="${src%%:*}"; peer="${peer##*@}" ;; esac
+    elif [ -n "$dst" ]; then
+        other="$dst"
+        case "$dst" in
+            *:*) dir=push; peer="${dst%%:*}"; peer="${peer##*@}" ;;
+            *)   dir=local ;;
+        esac
+    else
+        dir=snapshot
+    fi
+    printf -v "$_jd_var" '%s\001%s\001%s' "$dir" "$peer" "$other"
 }
 
 
@@ -17405,6 +17459,12 @@ cmd_list_jobs() {
         done < "$dump"
         rm -f "$dump"
 
+        local acct_json="${acct//\\/\\\\}"; acct_json="${acct_json//\"/\\\"}"
+        local eng_lines=""
+        if [ "$as_json" -eq 1 ]; then
+            eng_lines=$(mktemp) || die "list-jobs: mktemp failed"
+            jobs_block_engine_lines "$acct" "$eng_lines"
+        fi
         local i=0 nsec=${#secs[@]}
         while [ "$i" -lt "$nsec" ]; do
             local sec="${secs[$i]}" sk="${kinds[$i]}"
@@ -17418,9 +17478,9 @@ cmd_list_jobs() {
                 [ -n "$tier" ] || continue
                 seen=$((seen + 1))
                 local dst src dirinfo dir peer other
-                dst=$(jobs_field "$sk" "$sec" "$tier" dst)
-                src=$(jobs_field "$sk" "$sec" "$tier" src)
-                dirinfo=$(jobs_direction "$dst" "$src")
+                jobs_field_v dst "$sk" "$sec" "$tier" dst
+                jobs_field_v src "$sk" "$sec" "$tier" src
+                jobs_direction_v dirinfo "$dst" "$src"
                 dir="${dirinfo%%$'\001'*}"
                 # A [prune:] section is HOUSEKEEPING, not a transfer: it carries
                 # neither dst nor src by construction, and reporting that as
@@ -17437,26 +17497,26 @@ cmd_list_jobs() {
                 [ "$sk" = snaponly ] && dir=snaponly
                 local sched
                 if [ "$sk" = prune ]; then
-                    sched=$(jobs_field "$sk" "$sec" "$tier" prune_schedule)
+                    jobs_field_v sched "$sk" "$sec" "$tier" prune_schedule
                 else
-                    sched=$(jobs_field "$sk" "$sec" "$tier" send_schedule)
+                    jobs_field_v sched "$sk" "$sec" "$tier" send_schedule
                 fi
                 local pattern prefix label rec qui gfs warn crit keep retain
-                pattern=$(jobs_field "$sk" "$sec" "$tier" pattern)
-                prefix=$(jobs_field  "$sk" "$sec" "$tier" prefix)
-                label=$(jobs_field   "$sk" "$sec" "$tier" pair_label)
-                rec=$(jobs_field     "$sk" "$sec" "$tier" recursive)
-                qui=$(jobs_field     "$sk" "$sec" "$tier" quiesce)
-                gfs=$(jobs_field     "$sk" "$sec" "$tier" gfs)
-                warn=$(jobs_field    "$sk" "$sec" "$tier" monitor_warn)
-                crit=$(jobs_field    "$sk" "$sec" "$tier" monitor_crit)
-                keep=$(jobs_field    "$sk" "$sec" "$tier" keep)
-                retain=$(jobs_field  "$sk" "$sec" "$tier" retain)
+                jobs_field_v pattern "$sk" "$sec" "$tier" pattern
+                jobs_field_v prefix "$sk" "$sec" "$tier" prefix
+                jobs_field_v label "$sk" "$sec" "$tier" pair_label
+                jobs_field_v rec "$sk" "$sec" "$tier" recursive
+                jobs_field_v qui "$sk" "$sec" "$tier" quiesce
+                jobs_field_v gfs "$sk" "$sec" "$tier" gfs
+                jobs_field_v warn "$sk" "$sec" "$tier" monitor_warn
+                jobs_field_v crit "$sk" "$sec" "$tier" monitor_crit
+                jobs_field_v keep "$sk" "$sec" "$tier" keep
+                jobs_field_v retain "$sk" "$sec" "$tier" retain
 
                 if [ "$as_json" -eq 1 ]; then
                     [ "$first" -eq 1 ] || printf ','
                     first=0
-                    printf '{"account":"%s"' "$(json_escape "$acct")"
+                    printf '{"account":"%s"' "$acct_json"
                     jsonw_field config       "$cfg"
                     jsonw_field section_kind "$sk"
                     jsonw_field scope        "$sec"
@@ -17479,13 +17539,7 @@ cmd_list_jobs() {
                     # WHAT WILL ACTUALLY RUN, verbatim. See jobs_block_lines_for:
                     # matched by scope, never attributed to this row alone.
                     printf ',"cron_lines":['
-                    local _cl _cfirst=1
-                    while IFS= read -r _cl; do
-                        [ -n "$_cl" ] || continue
-                        [ "$_cfirst" -eq 1 ] || printf ','
-                        _cfirst=0
-                        printf '"%s"' "$(json_escape "$_cl")"
-                    done < <(jobs_block_lines_for "$acct" "$sec" "$label")
+                    jobs_lines_json "$eng_lines" "$sec" "$label"
                     printf ']'
                     printf '}'
                 else
@@ -17509,6 +17563,7 @@ cmd_list_jobs() {
                 fi
             done
         done
+        [ -n "$eng_lines" ] && rm -f "$eng_lines"
     done < <(cron_known_accounts)
 
     if [ "$as_json" -eq 1 ]; then
@@ -19852,8 +19907,11 @@ jsonw_array() {   # <space-separated list> -> ["a","b"]
       printf ']' )
 }
 
-jsonw_field() {   # <json name> <value> -> ,"name":"value"
-    printf ',"%s":"%s"' "$1" "$(json_escape "$2")"
+jsonw_field() {   # <json name> <value> -> ,"name":"value"  (json_escape inline: no subshell)
+    local s="$2"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    printf ',"%s":"%s"' "$1" "$s"
 }
 
 # THE ENGINE'S OUTPUT IS NOT A PATH. json_escape covers the two characters a
