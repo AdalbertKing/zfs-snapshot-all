@@ -730,7 +730,7 @@ r1() {   # <strategy> <grant answer> <point> <src> [engine rc] -> "<rc>|<verdict
     : > "$RONE/ran"
     ( set -u
       log(){ shift; printf '%s\n' "$*" >&2; }
-      for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_scope_is_root restore_scope_root_repair restore_live_guard restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
+      for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_scope_is_root restore_scope_root_repair restore_live_guard restore_local_remount restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
       zfs(){ case "$*" in
                *"-t snapshot"*) [ "${NOSNAP:-0}" -eq 1 ] && return 0
                                 printf 'hdd/copy@automated_daily_2026-08-20_18-00-04\n'
@@ -866,7 +866,7 @@ r1local() {   # <strategy> [local newest snapshot] [base on the source] -> "<rc>
     : > "$RONE/ran"
     ( set -u
       log(){ shift; printf '%s\n' "$*" >&2; }
-      for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_scope_is_root restore_scope_root_repair restore_live_guard restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
+      for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_scope_is_root restore_scope_root_repair restore_live_guard restore_local_remount restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
       P=automated_daily_2026-08-23_18-00-01
       zfs(){ case "$*" in
                "rollback -r "*)       printf 'ROLLBACK %s\n' "$3" >> "$RONE/ran" ;;
@@ -907,7 +907,7 @@ case "$(argv_of "$r")" in "") ok "one: ...and neither a rollback nor the engine 
 r="$( : > "$RONE/ran"
       ( set -u
         log(){ shift; printf '%s\n' "$*" >&2; }
-        for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_scope_is_root restore_scope_root_repair restore_live_guard restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
+        for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_scope_is_root restore_scope_root_repair restore_live_guard restore_local_remount restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
         zfs(){ :; }
         restore_grant_ask(){ printf '%s' "$GOODG"; }
         RESTORE_ENGINE="$RONE/eng" RESTORE_STRATEGY=increment \
