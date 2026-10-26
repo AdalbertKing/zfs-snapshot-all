@@ -2670,6 +2670,21 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
             log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
             return $((RESTORE_ONE_CHANGED + 1))
         fi
+        # UNMOUNTED FOR THE RUN (owner 2026-10-26, pve2, urbackup): a mounted file system
+        # takes writes the moment it is rolled back (200 KB here, with the container
+        # stopped), and the engine then refuses the rewind -- "differs from the common
+        # snapshot ... resolve it by hand" -- with the dataset already rolled back. Every
+        # mounted file system of the recovery is unmounted before the rollback and
+        # mounted again after the engine (restore_local_remount).
+        RESTORE_LOCAL_UNMOUNTED=()
+        while IFS= read -r _lds; do
+            [ -n "$_lds" ] || continue
+            case "$(zfs get -H -o value mounted,type -- "$_lds" 2>/dev/null | paste -sd' ' -)" in
+                "yes filesystem")
+                    if zfs unmount -- "$_lds" 2>/dev/null; then RESTORE_LOCAL_UNMOUNTED+=("$_lds")
+                    else log 0 "restore:   $_lds could not be unmounted (busy?) -- it stays mounted, and a write on it can make the engine refuse"; fi ;;
+            esac
+        done <<<"$_llist"
         while IFS= read -r _lds; do
             [ -n "$_lds" ] || continue
             if ! zfs list -H -o name "${copy}${_lds#"$src"}" >/dev/null 2>&1; then
@@ -2717,7 +2732,10 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     # From here the engine may destroy: whatever happens next, this dataset
     # can no longer be reported as untouched.
     RESTORE_ONE_CHANGED=1
-    if bash "${RESTORE_ENGINE:?the engine path is not set}" "${RESTORE_ENGINE_ARGV[@]}"; then
+    local _erc=0
+    bash "${RESTORE_ENGINE:?the engine path is not set}" "${RESTORE_ENGINE_ARGV[@]}" || _erc=$?
+    restore_local_remount
+    if [ "$_erc" -eq 0 ]; then
         # "THE ENGINE EXITED 0" AND "THE MACHINE HOLDS THE DATA AGAIN" ARE NOT
         # THE SAME SENTENCE, and the lab has produced a run where the first was
         # true and the second was false: a zero-length increment sent to a
@@ -3626,6 +3644,17 @@ restore_boot_env() {   # <copy dataset> <point snapshot> <system dataset>
     log 0 "restore:   systemd-boot/proxmox-boot-tool:  in /etc/kernel/cmdline root=ZFS=$new, then: proxmox-boot-tool refresh"
     log 0 "restore:   reboot -- and $ds stays beside it as the way back."
     return 0
+}
+
+# What restore_one unmounted for a local rollback goes back up after the engine, whatever
+# the engine said -- a recovery must not leave a container's disk unmounted behind it.
+RESTORE_LOCAL_UNMOUNTED=()
+restore_local_remount() {
+    local d
+    for d in ${RESTORE_LOCAL_UNMOUNTED[@]+"${RESTORE_LOCAL_UNMOUNTED[@]}"}; do
+        zfs mount -- "$d" 2>/dev/null || log 0 "restore:   $d could not be mounted again -- mount it: zfs mount $d"
+    done
+    RESTORE_LOCAL_UNMOUNTED=()
 }
 
 restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
