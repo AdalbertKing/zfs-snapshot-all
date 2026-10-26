@@ -403,8 +403,8 @@ PYEOF
         menu=(); i=0
         while IFS=$'\t' read -r cr nm su sw; do
             [ -n "$cr" ] || continue
-            # "(najnowsza)" zaraz po dacie: na końcu ucinało go okno 100 kolumn.
-            lbl="$(date -d "@$cr" '+%Y-%m-%d %H:%M')$([ "$i" -eq 0 ] && printf '  %s' "$(T '(najnowsza)')")  $nm  $(Tv 'zajmuje $su, zmian $sw' '$su' "$su" '$sw' "$sw")"
+            # Rozmiary przed nazwą: przy oknie 100 kolumn ucina się najwyżej koniec nazwy.
+            lbl="$(date -d "@$cr" '+%Y-%m-%d %H:%M')  $(Tv 'zajmuje $su, zmian $sw' '$su' "$su" '$sw' "$sw")  $nm$([ "$i" -eq 0 ] && printf '  %s' "$(T '(najnowsza)')")"
             menu+=("p$i" "$(clip_label "$lbl" $((W - 12)))"); i=$((i + 1))
         done <"$TMPD/points.tsv"
         geom
