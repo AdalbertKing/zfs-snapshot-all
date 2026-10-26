@@ -17248,27 +17248,12 @@ jobs_block_worklines() {   # <account> -> how many ENGINE lines the installed bl
 # 2026-09-09: the window showed prune and monitor for lab-ct201 and not the
 # snapget line that does the work. gen-cron stamps every engine line with
 # `-L <label>`; that is the same key the monitor reader uses, not a new one.
-jobs_block_lines_for() {   # <account> <scope> [label] -> matching engine lines, one per line
-    local acct="$1" scope="$2" label="${3:-}" blk
-    blk=$(mktemp) || die "mktemp failed"
-    if ! cron_read "$acct" "$blk" 2>/dev/null; then rm -f "$blk"; return 0; fi
-    sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$blk"         | grep -E 'snapsend\.sh|snapget\.sh|delsnaps\.sh|check-snap-age\.sh'         | awk -v s="$scope" -v l="$label" '
-            {
-                line = $0
-                # delimiters around a dataset in a rendered line: quote, comma,
-                # space, colon (a remote host prefix) or end of line
-                if (line ~ ("(^|[\"[:space:],:])" s "([\"[:space:],]|$)")) { print line; next }
-                if (l != "" && line ~ ("[[:space:]]-L[[:space:]]+\"?" l "\"?([[:space:]]|$)")) print line
-            }'
-    rm -f "$blk"
-}
-
-# The one-level lookup, in gen-cron's documented order: the section's own
-# tier-specific field, the section's plain field, the tier template, [defaults].
-# jobs_block_lines_for for list-jobs --json: the account's engine lines are read once into a
-# file (jobs_block_engine_lines), and each row's lines come out already JSON-escaped (the
-# json_escape rule: \ and ") and comma-joined -- one awk per row instead of crontab, sed,
-# grep, awk and a json_escape subshell per line. Same match as jobs_block_lines_for.
+#
+# SPEED (owner 2026-10-26, pve2: return to the GUI looked like a hang): the account's engine
+# lines are read ONCE (jobs_block_engine_lines), and each row's matching lines come out of one
+# awk already JSON-escaped (the json_escape rule: \ and ") and comma-joined (jobs_lines_json)
+# -- before, every row read the crontab again through sed, grep and awk and escaped each line
+# in a subshell: list-jobs --json 12.4 s -> 1.2 s on pve2, output byte-identical.
 jobs_block_engine_lines() {   # <account> <outfile> -> 0 (empty file when unreadable)
     local blk
     : > "$2"
@@ -17297,10 +17282,9 @@ jobs_lines_json() {   # <engine-lines file> <scope> [label] -> "l1","l2",...
         }' "$1"
 }
 
-jobs_field() {   # <kind> <section> <tier> <field> -> value or empty
-    local _jf_out; jobs_field_v _jf_out "$@"; printf '%s' "$_jf_out"
-}
-# The same lookup into a variable (printf -v), no subshell: list-jobs asks ~15 fields per tier,
+# The one-level lookup, in gen-cron's documented order: the section's own
+# tier-specific field, the section's plain field, the tier template, [defaults].
+# Into a variable (printf -v), no subshell: list-jobs asks ~15 fields per tier,
 # and a $(...) per field cost 14 s on pve2 (364 tiers, measured 2026-10-26).
 jobs_field_v() {   # <var> <kind> <section> <tier> <field>
     local _jv_var="$1"; shift
@@ -17317,23 +17301,7 @@ jobs_field_v() {   # <var> <kind> <section> <tier> <field>
 # push / pull / local / snapshot, plus the peer when there is one. `dst` and
 # `src` are mutually exclusive by the generator's own refusal, so this reports
 # what it finds and never has to break a tie.
-jobs_direction() {   # <dst> <src> -> "<direction>\001<peer>\001<other end>"
-    local dst="$1" src="$2" dir peer="" other=""
-    if [ -n "$src" ]; then
-        dir=pull; other="$src"
-        case "$src" in *:*) peer="${src%%:*}"; peer="${peer##*@}" ;; esac
-    elif [ -n "$dst" ]; then
-        other="$dst"
-        case "$dst" in
-            *:*) dir=push; peer="${dst%%:*}"; peer="${peer##*@}" ;;
-            *)   dir=local ;;
-        esac
-    else
-        dir=snapshot
-    fi
-    printf '%s\001%s\001%s' "$dir" "$peer" "$other"
-}
-jobs_direction_v() {   # <var> <dst> <src> -- jobs_direction without a subshell
+jobs_direction_v() {   # <var> <dst> <src> -> "<direction><peer><other end>" in var
     local _jd_var="$1" dst="$2" src="$3" dir peer="" other=""
     if [ -n "$src" ]; then
         dir=pull; other="$src"
@@ -17536,7 +17504,7 @@ cmd_list_jobs() {
                     jsonw_field monitor_crit "$crit"
                     printf ',"recursive":%s' "$([ "$rec" = yes ] && echo true || echo false)"
                     printf ',"readable":true,"lines_in_block":%s' "$nlines"
-                    # WHAT WILL ACTUALLY RUN, verbatim. See jobs_block_lines_for:
+                    # WHAT WILL ACTUALLY RUN, verbatim. See jobs_lines_json:
                     # matched by scope, never attributed to this row alone.
                     printf ',"cron_lines":['
                     jobs_lines_json "$eng_lines" "$sec" "$label"
