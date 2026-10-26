@@ -253,7 +253,7 @@ src_prefill() {
     while IFS=$'\t' read -r n t p k m; do
         [ "$n" = "$PROFILE" ] || continue
         sv=$(awk -F'\t' -v s="$CUR_S" -v t="$t" '$1==s && $2==t {print $4; exit}' "$TMPD/prof.json.tiers")
-        v+=("${sv:-0}")
+        v+=("${sv:-off}")
     done <"$TMPD/prof.json.tiers"
     [ "${#v[@]}" -gt 0 ] && SRCKEEP="$PROFILE:${v[*]}"
 }
@@ -375,7 +375,7 @@ harm_flow() {
             PROFILE="$SAVE_P"; CUR_S="$SAVE_S"; return 0
         fi
         mapfile -t RARGS <"$TMPD/rargs.acc"; hs=2
-        SRCKEEP="@rel:$(awk -F'	' '$1=="@rel" {print $2}' "$TMPD/prof.json.tiers" | while read -r t; do v=$(awk -F'	' -v t="$t" '$1=="@rel-src" && $2==t {print $4; exit}' "$TMPD/prof.json.tiers"); printf '%s ' "${v:-0}"; done)"
+        SRCKEEP="@rel:$(awk -F'	' '$1=="@rel" {print $2}' "$TMPD/prof.json.tiers" | while read -r t; do v=$(awk -F'	' -v t="$t" '$1=="@rel-src" && $2==t {print $4; exit}' "$TMPD/prof.json.tiers"); printf '%s ' "${v:-off}"; done)"
     fi
     while :; do
         if [ "$hs" -eq 1 ]; then
@@ -388,7 +388,7 @@ harm_flow() {
             # dodany szczebel jest (z liczbą jak w celu), usunięty znika, liczby celu aktualne.
             rel_tiers
             hs=2; SRCKEEP=""
-            [ "$nsrc" -gt 0 ] && SRCKEEP="@rel:$(awk -F'\t' '$1=="@rel" {print $2}' "$TMPD/prof.json.tiers" | while read -r t; do v=$(awk -F'\t' -v t="$t" '$1=="@rel-src" && $2==t {print $4; exit}' "$TMPD/prof.json.tiers"); printf '%s ' "${v:-0}"; done)"
+            [ "$nsrc" -gt 0 ] && SRCKEEP="@rel:$(awk -F'\t' '$1=="@rel" {print $2}' "$TMPD/prof.json.tiers" | while read -r t; do v=$(awk -F'\t' -v t="$t" '$1=="@rel-src" && $2==t {print $4; exit}' "$TMPD/prof.json.tiers"); printf '%s ' "${v:-off}"; done)"
         fi
         printf '%s\n' ${P_SARGS[@]+"${P_SARGS[@]}"} | grep . >"$TMPD/srcargs"
         if [ -n "$only_src" ]; then

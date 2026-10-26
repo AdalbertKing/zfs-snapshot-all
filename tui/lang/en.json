@@ -421,6 +421,7 @@
 "--reason=z TUI %s": "--reason=from TUI %s",
 "-> tutaj": "-> here",
 "... jeszcze %d": "... %d more",
+"0 = po skopiowaniu nic z tego szczebla u źródła (baza kopii to inne szczeble).": "0 = nothing of this tier kept at the source after the copy (the copy base comes from the other tiers).",
 "0 B -- nic się nie zmieniło": "0 B -- nothing changed",
 "1 relacja": "1 relation",
 "1. Na $HOST, jako root:": "1. On $HOST, as root:",
