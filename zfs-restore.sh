@@ -2533,6 +2533,15 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     # and two lists of refusals is how a pre-flight comes to pass a dataset the
     # real run then refuses. See restore_run_scope for why the whole scope is
     # asked before any of it is touched.
+    # LIVE DATASETS (restore_live_guard): the running system and a running guest's disk are
+    # refused here, with the other refusals -- the pre-flight and the real pass alike.
+    local _lg
+    restore_live_guard "$src"; _lg=$?
+    if [ "$_lg" -ne 0 ]; then
+        [ "$_lg" -eq 3 ] && RESTORE_ONE_VERDICT="$RESTORE_ONE_VERDICT -- from $point"
+        log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
+        return 1
+    fi
     if [ "${RESTORE_PREFLIGHT_ONLY:-0}" = 1 ]; then
         RESTORE_ONE_VERDICT="restorable by '$mode' from $point"
         return 0
@@ -3695,22 +3704,15 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     # And EVERY bad dataset is named, not the first. An operator who has to fix
     # them one round trip at a time stops trusting the tool.
     local -a unfit=() fitlist=() bootenv=()
-    local _pf_rc _pf_i _pf_g _pf_v
+    local _pf_rc _pf_i
     for (( _pf_i=0; _pf_i<n; _pf_i++ )); do
         RESTORE_ONE_VERDICT=""
         RESTORE_PREFLIGHT_ONLY=1 restore_one_isolated "${RESTORE_SCOPE_COPY[$_pf_i]}" "${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}"; _pf_rc=$?
         if [ "$_pf_rc" -eq 0 ]; then
-            _pf_v="${RESTORE_ONE_VERDICT:-}"
-            restore_live_guard "${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}"; _pf_g=$?
-            if [ "$_pf_g" -eq 3 ] && [ "$RESTORE_AS_BOOT_ENV" = 1 ]; then
-                bootenv+=("${RESTORE_SCOPE_COPY[$_pf_i]}|${_pf_v##* from }|${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}")
-                continue
-            fi
-            if [ "$_pf_g" -ne 0 ]; then
-                unfit+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}   ${RESTORE_ONE_VERDICT}")
-                continue
-            fi
-            fitlist+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}|${_pf_v}")
+            fitlist+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}|${RESTORE_ONE_VERDICT:-}")
+        elif [ "$RESTORE_AS_BOOT_ENV" = 1 ] && case "${RESTORE_ONE_VERDICT:-}" in "the RUNNING SYSTEM of"*) true ;; *) false ;; esac; then
+            # the mounted root, asked for as a boot environment (restore_live_guard, restore_one)
+            bootenv+=("${RESTORE_SCOPE_COPY[$_pf_i]}|${RESTORE_ONE_VERDICT##* from }|${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}")
         else
             unfit+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}   ${RESTORE_ONE_VERDICT:-no reason recorded}")
         fi
