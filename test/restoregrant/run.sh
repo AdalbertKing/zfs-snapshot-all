@@ -1120,7 +1120,7 @@ mkdir -p "$PSTATE/puller"; printf 'PAUSED_BY_GRANT="lab1"\n' > "$PSTATE/puller/p
 out="$(dr --deny-restore=lab1)"; rc=$?
 check "nofacts: no record and no manifest -> rc 1, nothing revoked, pause kept" "1|0|lab1" \
     "$rc|$(grep -c '^unallow ' "$ZFS_TRACE")|$(pw_tag puller)"
-if has "remove the delegation by hand" "$out" && ! has "run the same command again" "$out"; then
+if has "remove the delegation manually" "$out" && ! has "run the same command again" "$out"; then
     ok "nofacts: ...names the manual way, not a retry that cannot work"
 else bad "nofacts: ...names the manual way, not a retry that cannot work" "$out"; fi
 mv "$PEERS/lab1.conf.away" "$PEERS/lab1.conf"
