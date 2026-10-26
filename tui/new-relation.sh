@@ -114,7 +114,7 @@ step_host() {
 
 Z jednym hostem jest tylko jedna relacja, za to z dowolną liczbą datasetów.
 Dataset do istniejącej relacji dodaje się w jej zmianie,' '$h' "$h" '$rel' "$rel")
-$(T 'pozycja „Datasety” (zfs-backup.sh add-source).\n\nWskaż host, z którym nie ma jeszcze relacji.')" 14 "$W"
+$(T 'pozycja „Datasety”.\n\nWskaż host, z którym nie ma jeszcze relacji.')" 14 "$W"
             continue
         fi
         [ "$h" = "$HOST" ] || { B_ROOT=(); B_EXCL=(); B_CLOSED=""; }
@@ -904,7 +904,7 @@ build_argv() {   # [install] -> ARGV[]
     elif [ "$MODE" = snaponly ]; then
         # Migawki zdalne: "[-] część" = wymienione datasety (basket_expand), nie -X -- jej
         # przycinanie (delsnaps) -X nie zna, a czasownik odmawia --exclude-* (2026-10-25).
-        ARGV=("$ZB" "--source=$(hostport):$(basket_expand "$BASKET_DS_JSON")")
+        ARGV=("$ZB" "--source=$(hostport):$(basket_entries "$BASKET_DS_JSON" | cut -f1 | paste -sd, -)")
     else
         ARGV=("$ZB" "--source=$(hostport):${B_ROOT[*]}")
     fi
@@ -1004,7 +1004,8 @@ summary_text() {
     fi
     echo "$(Tv 'Sposób:  $(mode_words).   Nazwa: $RNAME.   Konto: ${a:-root}.' '$(mode_words)' "$(mode_words)" '$RNAME' "$RNAME" '${a:-root}' "${a:-root}")"
     echo "$(T 'Szablon:') $( [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ] && echo "$(Tv 'Ręcznie -- $PROFILE' '$PROFILE' "$PROFILE")" || echo "$PROFILE")$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" '$1==n{print "  (" $3 "; " $2 "; " $4 ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "$(Tv '; u źródła: $SRCPROF' '$SRCPROF' "$SRCPROF")")"
-    if [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
+    if [ "$MODE" = snaponly ] || [ "$NOCOPY" -eq 1 ]; then :    # bez kopii: prefiksy nie dotyczą
+    elif [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
     else echo "$(T 'Pomijane migawki: żadne (kopiowane wszystkie).')"; fi
     [ "$RECURSION" = atomic ] && echo "$(T 'U ŹRÓDŁA migawek nie sprząta nikt (tak działa atomowo) -- trzeba samemu.')"
     if sync_from_chain; then
@@ -1049,7 +1050,7 @@ summary_text() {
         echo
         echo "$(T 'Komenda (to samo wpisałbyś z palca):')"
         cmd_oneline; echo
-        any_excl && echo "(^nazwa${D:-\$} $(T '= dokładnie ten dataset, nie łapie np. ...disk-01)')"
+        case " ${ARGV[*]} " in *" --exclude-child="*) echo "(^nazwa${D:-\$} $(T '= dokładnie ten dataset, nie łapie np. ...disk-01)')" ;; esac
         return 0
     fi
     if [ "$FREEZE" -eq 1 ]; then
@@ -1060,7 +1061,7 @@ summary_text() {
     echo
     echo "$(T 'Komenda (to samo wpisałbyś z palca):')"
     cmd_oneline; echo
-    any_excl && echo "(^nazwa${D:-\$} $(T '= dokładnie ten dataset, nie łapie np. ...disk-01)')"
+    case " ${ARGV[*]} " in *" --exclude-child="*) echo "(^nazwa${D:-\$} $(T '= dokładnie ten dataset, nie łapie np. ...disk-01)')" ;; esac
     return 0
 }
 # INNY KOLEKTOR JUŻ PRZYCINA TE DATASETY (uwaga 4, 2026-10-08). Aktywacja odmawia,
@@ -1118,7 +1119,8 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
           # Kampania 2026-10-22: migawki zdalne dostawały zdanie lustra ("ta sama ścieżka").
           elif [ "$MODE" = snaponly ]; then echo "$(Tv 'Bez kopii: migawki na $HOST, jego datasety.  Szablon: $PROFILE.' '$HOST' "$HOST" '$PROFILE' "$PROFILE")"
           else echo "$(T 'Cel:') ${TARGET:-$(T '(lustro: ta sama ścieżka)')}.  $(Tv 'Trzyma tutaj: $PROFILE.  U źródła:' '$PROFILE' "$PROFILE") $(if is_passive_copy; then T 'nic (pasywnie)'; else printf '%s' "${SRCPROF:-$(T 'jak tutaj')}"; fi)."; fi
-          if [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
+          if [ "$MODE" = snaponly ] || [ "$NOCOPY" -eq 1 ]; then :
+          elif [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
           else echo "$(T 'Pomijane migawki: żadne (kopiowane wszystkie).')"; fi
           echo "$(T 'Konto:') $(a="$(account_name)"; echo "${a:-root}")."
           echo
@@ -1136,7 +1138,9 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
         # JEDNA REGUŁA DRZEWA TAKŻE PRZY TWORZENIU (relacja = config, 2026-10-26): przy jakimkolwiek
         # [-] zakres zapisany od razu jako pozycje relacji -- to samo set-datasets co w oknie zmiany,
         # w każdym rodzaju relacji. Seed powyżej szanował wyjątki, więc nic zbędnego nie przyszło.
-        if [ "$RC_RUN" -eq 0 ] && any_excl; then
+        # Migawki zdalne zakłada się już z pozycjami drzewa (basket_entries w --source), więc
+        # drugi krok nic by nie zmienił -- tylko kosztował ~30 s (kampania 2026-10-26).
+        if [ "$RC_RUN" -eq 0 ] && [ "$MODE" != snaponly ] && any_excl; then
             _da=(); mapfile -t _da < <(basket_entries "$BASKET_DS_JSON" | awk -F'\t' 'NF { printf "--dataset=%s:%s\n", $1, $2 }')
             : >"$TMPD/run2.log"
             run_progress "$(Tv 'Nowa relacja '\''$RNAME'\'': zakres wg drzewa' '$RNAME' "$RNAME")" "$TMPD/run2.log" "$ZB" set-datasets "$RNAME" "${_da[@]}" --yes || RC_RUN=$?
@@ -1211,7 +1215,10 @@ field_value() {   # <pole> -> wartość na karcie ("" = jeszcze nie ustawione)
                 *) echo "$(T 'backup -- ten host pobiera ze źródła')" ;;
             esac ;;
         host)   [ -n "$HOST" ] && [ "$DIAG_OK_FOR" = "$(hostport)" ] && echo "$(Tv '$(hostport) (${HOSTNAME_R:-?}) -- SSH, ZFS, pakiet: OK' '$(hostport)' "$(hostport)" '${HOSTNAME_R:-?}' "${HOSTNAME_R:-?}")" ;;
-        ds)     [ "${#B_ROOT[@]}" -gt 0 ] && echo "${#B_ROOT[@]}: $(printf '%s, ' "${B_ROOT[@]}" | sed 's/, $//')" ;;
+        # [-] widać już w podsumowaniu (kampania 2026-10-26): korzeń z wyjątkiem albo zamknięty.
+        ds)     [ "${#B_ROOT[@]}" -gt 0 ] && echo "${#B_ROOT[@]}: $(for _i in "${!B_ROOT[@]}"; do _m=""
+                    { [ -n "${B_EXCL[$_i]}" ] || printf '%s\n' "${B_CLOSED:-}" | grep -qxF -- "${B_ROOT[$_i]}"; } && _m=" [-]"
+                    printf '%s%s, ' "${B_ROOT[$_i]}" "$_m"; done | sed 's/, $//')" ;;
         target) [ -n "$TARGET" ] && { [ "$MODE" = local ] && echo "$TARGET  -> $TARGET/…" || echo "$TARGET  -> $TARGET/$HOST/…"; } ;;
         profile)
             [ -n "$PROFILE" ] || return 0
@@ -1228,7 +1235,7 @@ field_value() {   # <pole> -> wartość na karcie ("" = jeszcze nie ustawione)
         extra)
             # Kampania wariantów 2026-10-22: raw jest domyślne od kroku datasetów (raw_default), a karta
             # nieodwiedzonych Dodatkowych go nie wymieniała -- nie było widać, że kopia pójdzie zaszyfrowana.
-            case "$VIS" in *" extra "*) ;; *) [ "$MODE" = local ] && echo "$(T 'pomijane:') $(printf '%s' "$EXFAM" | tr ',' '\n' | grep -c .) $(T 'prefiksy')" || echo "$(T 'prawa stąd, zgoda na zamrażanie')$([ "$RAW" -eq 1 ] && echo ", $(T 'zaszyfrowane')"), $(T 'pomijane:') $(printf '%s' "$EXFAM" | tr ',' '\n' | grep -c .) $(T 'prefiksy')"; return ;; esac
+            case "$VIS" in *" extra "*) ;; *) [ "$MODE" = local ] && echo "$(T 'pomijane:') $(printf '%s' "$EXFAM" | tr ',' '\n' | grep -c .) $(T 'prefiksy')" || echo "$(T 'prawa stąd, zgoda na zamrażanie')$([ "$RAW" -eq 1 ] && echo ", $(T 'zaszyfrowane')")$([ "$MODE" = snaponly ] || echo ", $(T 'pomijane:') $(printf '%s' "$EXFAM" | tr ',' '\n' | grep -c .) $(T 'prefiksy')")"; return ;; esac
             a=""
             [ "$MODE" != local ] && [ "$GRANT" -eq 1 ] && a="$(T 'prawa stąd')"
             [ "$GQUIESCE" -eq 1 ] && [ "$GRANT" -eq 1 ] && a="${a:+$a, }$(T 'zgoda na zamrażanie')"

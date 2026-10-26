@@ -15746,9 +15746,15 @@ cmd_set_datasets() {
     echo "  the relationship's sections are rewritten from it; gen-cron validates; the cron is installed"
     if [ "$yes" -ne 1 ]; then echo "plan only. Re-run with --yes to do it. Nothing was changed."; return 0; fi
 
+    # Added = not covered before: neither listed nor under a [x] (flat) entry. A child that a
+    # recursive parent already snapshotted/copied needs no first run of its own (2026-10-26:
+    # the wizard's [-] after create ran every child's first snapshots a second time).
     local -a added=()
+    local _cov
     for ds in "${want[@]}"; do
-        printf '%s\n' "$cur" | cut -f1 | sed 's/^[^:]*://' | grep -qxF -- "$ds" || added+=("$ds")
+        _cov=$(printf '%s\n' "$cur" | awk -F'\t' -v d="$ds" '{ s = $1; sub(/^[^:]*:/, "", s)
+                   if (s == d || ($2 == "flat" && index(d, s "/") == 1)) { print 1; exit } }')
+        [ -n "$_cov" ] || added+=("$ds")
     done
 
     if [ "$remote" -eq 1 ]; then
@@ -21832,10 +21838,19 @@ include_children = yes
         want="$RUX_EXACT_SCOPE"
         want_headers=$(printf '%s\n' "$want" | awk '/^\[dataset:/{print}')
     else
-        while IFS= read -r _rq; do
-            want+=$(printf '[dataset:%s]\ninclude_parent = yes\ninclude_children = yes\n' "$_rq")
+        # A listed dataset with another listed dataset under it is [-] (the tree rule,
+        # 2026-10-26): itself and the listed children, not its other or future ones.
+        # Before, it was granted with its children and the first snapshots at
+        # creation went -R over it -- a child left out of the list got them too
+        # (lab pve9 -> pve11: vm-102 unticked, two snapshots on it).
+        local -a _rqs=(); local _o _ch
+        while IFS= read -r _rq; do [ -n "$_rq" ] && _rqs+=("$_rq"); done < <(dataset_list_split "$requested")
+        for _rq in ${_rqs[@]+"${_rqs[@]}"}; do
+            _ch=yes
+            for _o in "${_rqs[@]}"; do case "$_o" in "$_rq"/*) _ch=no; break ;; esac; done
+            want+=$(printf '[dataset:%s]\ninclude_parent = yes\ninclude_children = %s\n' "$_rq" "$_ch")
             want+=$'\n'
-        done < <(dataset_list_split "$requested")
+        done
         want="${want%$'\n'}"
         # --exclude-child is a regex over dataset NAMES; the scope grammar takes
         # exact paths. Resolve one against the other on the source, so the grant
