@@ -588,7 +588,7 @@ głębokości:
   `-F`) wymusza pełne ponowne wysłanie wszystkiego, bo `zfs send -R -I` rozstrzyga pełne-kontra-
   przyrostowe per dziecko z historii *źródła*, a nie z tego, co przetrwało na celu. Silniki nie
   trzymają bookmarka przy `-r`, więc prune źródła, które postarza ostatnią wspólną migawkę, kończy
-  relację aż do destrukcyjnego ponownego zasiewu.
+  relację aż do destrukcyjnej ponownej pełnej kopii.
 - **`-R`**: zgodne z syncoid/sanoid. Najpierw rozwija drzewo do płaskiej listy, potem każdy dataset
   przechodzi niezależnie zwykłą ścieżką pojedynczego datasetu. Dziecko, które zawodzi lub koliduje,
   dotyka tylko siebie, a każde trzyma własny bookmark.
