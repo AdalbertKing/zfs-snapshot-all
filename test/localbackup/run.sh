@@ -905,6 +905,18 @@ if [ "$r5off" = no ] && [ "$r5h" = -h24 ] && [ "$r5d" = -d7 ] \
 else
     bad "set-tiers: source off / method" "off=[$r5off] hourly=$r5h daily=$r5d" "$o5" "$(printf '%s' "$r5cron" | grep -E 'daily' | head -4)"
 fi
+# 0 AT THE SOURCE (owner 2026-10-26, A-TASSA): keep none of a tier there after the copy --
+# allowed on the source only, and never on every source tier (no common base left).
+st_conf; o9=$(st_run --src-tier=daily --keep=0 --yes); r9s=$(st_f relation:sl daily.source_retain); r9cron=$(bash "$REPO/gen-cron.sh" -c "$ST/c.conf" 2>&1)
+st_conf; o10=$(st_run --tier=daily --keep=0 --yes); r10=$?
+st_conf; o11=$(st_run --src-tier=daily --keep=0 --src-tier=hourly --keep=0 --yes); r11=$?
+if [ "$r9s" = -D0 ] && printf '%s' "$r9cron" | grep -q -- '-D0' \
+   && [ "$r10" -ne 0 ] && printf '%s' "$o10" | grep -q 'only at the source' \
+   && [ "$r11" -ne 0 ] && printf '%s' "$o11" | grep -q 'every tier would keep 0 at the source'; then
+    ok "set-tiers: 0 at the source writes daily.source_retain = -D0 (rendered -D0); 0 on the target and 0 on every source tier are refused"
+else
+    bad "set-tiers: 0 at the source" "src=[$r9s] rc10=$r10 rc11=$r11" "$o9" "$o10" "$o11" "$(printf '%s' "$r9cron" | grep -E 'daily' | head -3)"
+fi
 st_conf
 awk '/^\[dataset:rpool\/a\]/{print; print "\tprune_schedule_hourly = 26 * * * *"; next} {print}' "$ST/c.conf" > "$ST/c2" && mv "$ST/c2" "$ST/c.conf"
 o6=$(st_run --src-tier=hourly --prune-schedule='27 * * * *' --yes)
