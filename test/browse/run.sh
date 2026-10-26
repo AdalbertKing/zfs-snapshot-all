@@ -61,7 +61,7 @@ case "$*" in
     "list -H -o name -t filesystem,volume") awk '{ print $1 }' "$D/datasets" ;;
     "list -H -o name,type -r -- "*) awk -v x="$last" '$1 == x { printf "%s\t%s\n", $1, $2 }' "$D/datasets" ;;
     "list -H -t snapshot -o name -d 1 -- "*) echo "$last@s1" ;;
-    "list -H -p -t snapshot -o name,creation -s creation -d 1 -- "*) printf '%s@s1\t100\n' "$last" ;;
+    "list -H -p -t snapshot -o name,creation,used,written -s creation -d 1 -- "*) printf '%s@s1\t100\n' "$last" ;;
     "get -H -o value snapdev "*) [ -e "$D/fail_get" ] && exit 1; cat "$SV" ;;
     "get -H -o source snapdev "*) [ -e "$D/fail_get" ] && exit 1; cat "$SS" ;;
     "set snapdev=visible "*)
