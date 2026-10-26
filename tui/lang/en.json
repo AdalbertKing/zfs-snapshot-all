@@ -1861,6 +1861,7 @@
 "zfs create nie wyszedł": "zfs create failed",
 "zfs-backup.sh activate %s   (wznawialne; dokończy cykl)": "zfs-backup.sh activate %s   (resumable; will finish the cycle)",
 "zfs-backup.sh pause-client %s [--reason=TEKST]": "zfs-backup.sh pause-client %s [--reason=TEXT]",
+"zfs-snapshot-all: wczytuję dane hosta (status, zadania, monitory)…": "zfs-snapshot-all: loading the host's data (status, jobs, monitors)…",
 "zfsbackup  -- konto delegowane (utworzone, jeśli go nie ma)": "zfsbackup  -- delegated account (created if missing)",
 "zgoda na zamrażanie": "freeze consent",
 "zmiana": "change",

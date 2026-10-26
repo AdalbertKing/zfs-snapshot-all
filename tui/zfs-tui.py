@@ -6088,6 +6088,11 @@ def main(argv):
              "datasets_local": a.datasets_local, "datasets_remote": a.datasets_remote, "check_source": a.check_source,
              "host_ip": a.host_ip}
     ch = Chars(want_ascii(a))
+    # START BEZ PUSTEGO EKRANU (kampania 2026-10-26, pve9: ~20 s czarnego terminala): pierwszy
+    # odczyt danych biegnie przed curses -- terminal mówi, co się dzieje.
+    if not a.render_once and sys.stdout.isatty():
+        sys.stdout.write(_(u"zfs-snapshot-all: wczytuję dane hosta (status, zadania, monitory)…") + "\n")
+        sys.stdout.flush()
     ui = UI(repo, files, ch, a.now, a.exec_log)
     if a.render_once:
         ui.screen = a.screen
