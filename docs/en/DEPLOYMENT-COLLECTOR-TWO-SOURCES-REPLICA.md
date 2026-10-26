@@ -210,7 +210,7 @@ Optionally, **not by default**, a trigger when a disk is connected:
 
 ## 6. Scenario A: what lands in the config
 
-The tool writes the relation — you do not write it by hand. One `[relation:NAME]`
+The tool writes the relation — you do not write it manually. One `[relation:NAME]`
 block carries the whole policy of the relation (tiers, retention and the minutes of
 each side), and the relation's sections only point to it through
 `relation = NAME` and say which side they are on (`side`). This is what a relation
@@ -291,7 +291,7 @@ A job line looks like this:
 
 The envelope (`ZFS-JOB BEGIN/END`, stderr capture, notification) lives in
 `zfs-job.sh`, and **the engine command stays visible** after `--`. You can copy the
-line and run it by hand — it behaves exactly as it does under cron. The reason is
+line and run it manually — it behaves exactly as it does under cron. The reason is
 hard: cron accepts a command of up to **1000 bytes**.
 
 ## 8. Scenario A: medium rotation, timings and statistics

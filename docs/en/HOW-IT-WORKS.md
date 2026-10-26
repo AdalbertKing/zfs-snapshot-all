@@ -126,5 +126,5 @@ in `/etc/zfs-snapshot-all`, not under `/root`.
 4. `zfs list -t snapshot <dataset>` — do the snapshots really exist.
 
 **Before every crontab installation: a backup and a diff.** The risk lies in editing the
-config or the crontab by hand, outside the tool. Installation through `zfs-backup.sh`
+config or the crontab manually, outside the tool. Installation through `zfs-backup.sh`
 refuses when the config would generate a block that deletes running jobs.

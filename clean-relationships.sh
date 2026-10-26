@@ -884,7 +884,7 @@ report_orphaned_data() {
     [ -d "$TOMBSTONE_DIR" ] || return 0
     local f ds line name shown=0
     if ! command -v "$ZFS_BIN" >/dev/null 2>&1; then
-        log "tombstones exist in $TOMBSTONE_DIR but zfs is not available -- cannot check whether that data is still here. The records are still in $TOMBSTONE_DIR; read them by hand."
+        log "tombstones exist in $TOMBSTONE_DIR but zfs is not available -- cannot check whether that data is still here. The records are still in $TOMBSTONE_DIR; read them manually."
         return 0
     fi
     # Live campaign, pve10 2026-10-22: a tombstone outlives the NAME, not the data's
@@ -1039,7 +1039,7 @@ write_tombstone() {   # <id> <data lines...>  -> 0 written or nothing to record
         local d
         for d in "$@"; do echo "DATA=$d"; done
         echo "#"
-        echo "# If that data is no longer wanted, destroy it deliberately and by hand:"
+        echo "# If that data is no longer wanted, destroy it deliberately and manually:"
         for d in "$@"; do echo "#   zfs destroy -r $d"; done
         echo "# Then delete this file. While it exists, the audit reports that data as"
         echo "# orphaned, which is the whole point of it existing."
@@ -1115,7 +1115,7 @@ purge_one() {
             esac
         fi
     elif id "zfsbackup-$id" >/dev/null 2>&1; then
-        warn "  account zfsbackup-$id exists but its join manifest does not: --leave cannot run. This is the stranded case -- the account is removed below by hand, which is the only route left."
+        warn "  account zfsbackup-$id exists but its join manifest does not: --leave cannot run. This is the stranded case -- the account is removed below manually, which is the only route left."
     fi
 
     # 2. Whatever the tools left, by exact path. Re-read AFTER --leave: the

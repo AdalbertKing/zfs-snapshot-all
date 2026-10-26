@@ -14,7 +14,7 @@ own `-h`; here you will find **why** a command exists and **when** to use it.
 |---|---|
 | `zfs-backup.sh` | **operator verbs**: relation lifecycle, control, restore. This is what a human touches |
 | `deploy.sh` | **the machinery**: dependencies, delegated account, pairing, consents. Run on the host it concerns |
-| `snapsend.sh` / `snapget.sh` | **transfer engines**: push and pull. Called by cron (snapsend also by restore in place), not by hand. A push relation in 1.0 is a CLI mode for an existing fleet (the GUI does not create it) -- recipe in the README, snapsend.sh section |
+| `snapsend.sh` / `snapget.sh` | **transfer engines**: push and pull. Called by cron (snapsend also by restore in place), not manually. A push relation in 1.0 is a CLI mode for an existing fleet (the GUI does not create it) -- recipe in the README, snapsend.sh section |
 | `delsnaps.sh` | **retention engine**: the only one that prunes snapshots according to retention. Data can still be overwritten by `-f` in the transfer engines and by `restore --overwrite` (restore onto an existing dataset, `zfs-restore.sh`) |
 | `check-snap-age.sh` | **monitor**: whether the backup has gone stale |
 | `gen-cron.sh` | turns a config into a block in the crontab |
@@ -194,7 +194,7 @@ deploy.sh --unpair                     # end the relation on this side
 
 ## 7. Engines: called by cron
 
-They are not run by hand in normal work. Full flag lists: `-h`.
+They are not run manually in normal work. Full flag lists: `-h`.
 
 ```bash
 snapsend.sh [opcje] DATASETS [BAZA_CELU]      # push

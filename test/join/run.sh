@@ -547,7 +547,7 @@ cs_good_manifest | sed 's/PEER_JOIN_ROLE="pull"/PEER_JOIN_ROLE="push"/' > "$CS/p
 cs_expect_reject "commit-scope/push role refused" pushrole "a scope commit only grants the PULL side"
 
 cs_good_manifest > "$CS/peers/noscope.conf"
-cs_expect_reject "commit-scope/missing scope file" noscope "create it by hand first"
+cs_expect_reject "commit-scope/missing scope file" noscope "create it manually first"
 
 cs_good_manifest > "$CS/peers/badscope.conf"
 printf '[dataset:tank/a]\nunknown_key = yes\n' > "$CS/peers/badscope.scope"

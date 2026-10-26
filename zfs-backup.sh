@@ -313,7 +313,7 @@ Usage:
                                     --join-remotely:   (DEFAULT) create the delegated account
                                                        on the source over your root-ssh channel
                                                        instead of printing a package to carry
-                                                       there by hand. --manual-join opts out.
+                                                       there manually. --manual-join opts out.
                                     --grant-remotely:  ALSO commit the scope on the source, so
                                                        the whole enrolment is ONE command
                                                        instead of stopping for
@@ -413,7 +413,7 @@ front end never edits the config file:
                                     the crontab together. --removable (the default)
                                     brackets the run in zpool import/export, so a
                                     disk in a safe is a quiet skip, never an alert.
-                                    Prepare the medium once, by hand, before the
+                                    Prepare the medium once, manually, before the
                                     first run: zpool create POOL <device> and
                                     zfs create POOL/BASE. That dataset is what tells
                                     the gate the RIGHT disk is in the slot.
@@ -478,7 +478,7 @@ Explicit two-host lifecycle (the one-command --source= forms above wrap this):
                                     activate-client first renders the sections, like
                                     --profile. Both are create-time: a later
                                     re-activation never re-reads them, so a source
-                                    retention edited by hand afterwards is not written
+                                    retention edited manually afterwards is not written
                                     away. Omitted, --profile applies to both sides.
                                     --bandwidth caps the LINK, not this one relationship: it is
                                     written into the pairing with that host and applies to every
@@ -763,7 +763,7 @@ Inspection / teardown:
                                     one confirmation (--yes: no question). The
                                     previous config stays as <config>.edit-<time>.
                                     A [dataset:] section of a relationship added or
-                                    removed by hand is followed on the source (scope
+                                    removed manually is followed on the source (scope
                                     and grant, like add-source/remove-source), in the
                                     record, and with a first copy; the section stays
                                     as written. Also: /usr/local/bin/zfs-backup.
@@ -1112,7 +1112,7 @@ check_inherited_grants() {
     if [ -n "$ancestors" ]; then
         warn "account $account has wider inherited access from:$ancestors -- '$ds' is NOT isolated to this relation"
     fi
-    [ "$found_exact" -eq 1 ] || warn "no explicit grant exactly on '$ds' -- check by hand (zfs allow $ds on $host)"
+    [ "$found_exact" -eq 1 ] || warn "no explicit grant exactly on '$ds' -- check manually (zfs allow $ds on $host)"
 }
 
 # REV-20260811-102 step 3 (owner "Q4"): before a collector-scheduled REMOTE source
@@ -3154,7 +3154,7 @@ ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profil
                 if [ "$existing_norm" != "$wanted_norm" ]; then
                     die "[template:$t] already exists in $file with different effective policy than the template this new relationship needs. Refusing to silently reuse a conflicting template or silently overwrite the installed one.
 $(diff <(printf '%s\n' "$existing_norm") <(printf '%s\n' "$wanted_norm"))
-Resolve by hand: give the new relationship's profile a different template identity, or reconcile the two definitions deliberately, then retry -- not as a side effect of activation."
+Resolve manually: give the new relationship's profile a different template identity, or reconcile the two definitions deliberately, then retry -- not as a side effect of activation."
                 fi
             fi
             continue
@@ -3285,7 +3285,7 @@ Resolve by hand: give the new relationship's profile a different template identi
                 local _have _hr _kr
                 _have="$(section_field "$file" "[excluded:$prefix]" keep)"
                 _have="$(printf '%s' "$_have" | tr -d '[:space:]')"
-                _hr="$(floor_rank "$_have")" || die "[excluded:$prefix] in $file carries keep='$_have', which is neither a count nor 'all'. An unreadable floor cannot be compared with the profile's ($keep) and must not be guessed at -- gen-cron would refuse this file on the next render anyway. Fix that section by hand and re-run. No floor was written and nothing was installed."
+                _hr="$(floor_rank "$_have")" || die "[excluded:$prefix] in $file carries keep='$_have', which is neither a count nor 'all'. An unreadable floor cannot be compared with the profile's ($keep) and must not be guessed at -- gen-cron would refuse this file on the next render anyway. Fix that section manually and re-run. No floor was written and nothing was installed."
                 _kr="$(floor_rank "$keep")" || die "profile '$PROFILE_ACTIVE' declares [excluded:$prefix] keep='$keep', which is neither a count nor 'all'"
                 # PROVENANCE DECIDES WHICH RULE APPLIES (REV F5).
                 local _owner
@@ -3358,7 +3358,7 @@ Resolve by hand: give the new relationship's profile a different template identi
             fi
         done
         [ -n "$_diff" ] && warn "$file fences these families MORE WEAKLY than profile '$PROFILE_ACTIVE' declares:$_diff -- the INSTALLED value stays in force for every relationship in this file, including the new one. The profile's number is not being applied here (that would change the prune command of relationships already running). Reconcile them deliberately if the profile is the one you meant."
-        [ -n "$missing" ] && warn "$file has no [excluded:] floor for:$missing -- the new relationship inherits the CONFIG-wide protection policy exactly as installed, and it is NOT being repaired here (that would change the prune command of every relationship already in this file). If those floors are wanted, add them by hand, deliberately, in one edit that you can see affects everything."
+        [ -n "$missing" ] && warn "$file has no [excluded:] floor for:$missing -- the new relationship inherits the CONFIG-wide protection policy exactly as installed, and it is NOT being repaired here (that would change the prune command of every relationship already in this file). If those floors are wanted, add them manually, deliberately, in one edit that you can see affects everything."
     fi
     # Explicit: without it this function's exit status would be whatever the
     # last conditional happened to evaluate to -- the fail-open shape REV-084
@@ -4093,7 +4093,7 @@ assert_cron_config_matches_installed() {
     existing=$(normalize_cron_source "$raw")
     want=$(normalize_cron_source "$file")
     [ "$existing" = "$want" ] && return 0
-    die "the crontab's managed block was generated from '$raw' (resolved: $existing), not '$file' (resolved: $want) -- installing from a different file would DELETE every job '$raw' describes. Re-run with the matching --config=, or merge the two files by hand first (see the real incident this check exists for: project memory, 2026-07-30)."
+    die "the crontab's managed block was generated from '$raw' (resolved: $existing), not '$file' (resolved: $want) -- installing from a different file would DELETE every job '$raw' describes. Re-run with the matching --config=, or merge the two files manually first (see the real incident this check exists for: project memory, 2026-07-30)."
 }
 
 # REV-20260730-003 F4/F6, hardened per REV-20260730-004 F7: atomically swaps
@@ -4247,7 +4247,7 @@ Per requested dataset (<- the relationship that owns it, or its overlapping pare
 $detail
 
 Two high-level relationships covering the same datasets would send and prune the same snapshots under different policy. Nothing has been changed -- no config, no crontab.
-If the overlap is intended, express it in native CONFIG v4 by hand; the high-level path deliberately will not."
+If the overlap is intended, express it in native CONFIG v4 manually; the high-level path deliberately will not."
 }
 
 # warn_remote_collector_scope <path>... -- a WARNING, never a refusal (owner
@@ -4771,7 +4771,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     for ds in ${keep_ds[@]+"${keep_ds[@]}"}; do
         localpath=$(client_local_path "$ds")
         update_section_field "$workfile" "[dataset:$localpath]" src "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" \
-            || die "[dataset:$localpath] in $workfile has no 'src' field to refresh -- refusing to leave the relationship pointing at an unknown endpoint. Fix or remove that section by hand and re-run."
+            || die "[dataset:$localpath] in $workfile has no 'src' field to refresh -- refusing to leave the relationship pointing at an unknown endpoint. Fix or remove that section manually and re-run."
         # The recorded exclusions ride along, exactly as on the create path a
         # few lines down. Refreshing `flags` from $LOAD_FLAGS alone rewrote the
         # transport options AND silently dropped every -X the relationship was
@@ -4807,22 +4807,22 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         fi
         [ -n "$(sync_mirror_flag "$ds")" ] && MIRRORED_LANDINGS+=("$localpath")
         update_section_field "$workfile" "[dataset:$localpath]" flags "$LOAD_FLAGS${_pick}$(sync_mirror_flag "$ds")" \
-            || die "[dataset:$localpath] in $workfile has no 'flags' field to refresh -- refusing to leave the relationship carrying stale transport flags. Fix or remove that section by hand and re-run."
+            || die "[dataset:$localpath] in $workfile has no 'flags' field to refresh -- refusing to leave the relationship carrying stale transport flags. Fix or remove that section manually and re-run."
         # A mirrored landing's own ladder, if it has one, stops pruning (its
         # tiers stay for their monitors), as on the create path.
         if [ -n "$(sync_mirror_flag "$ds")" ] && grep -qxF "[prune:$localpath]" "$workfile"; then
             set_or_remove_section_field "$workfile" "[prune:$localpath]" prune no \
-                || die "[prune:$localpath] in $workfile could not be marked 'prune = no' for the mirror -- refusing to install a mirrored pull next to a target ladder that still prunes. Fix or remove that section by hand and re-run."
+                || die "[prune:$localpath] in $workfile could not be marked 'prune = no' for the mirror -- refusing to install a mirrored pull next to a target ladder that still prunes. Fix or remove that section manually and re-run."
         fi
         # U4: a backup landing prunes foreign snapshots like its own. Derived
         # from the relationship's MODE, so a re-activation gives an installed
         # backup the field the create path writes.
         if [ "$sync_mode" -eq 0 ]; then
             set_or_remove_section_field "$workfile" "[dataset:$localpath]" prune_foreign yes \
-                || die "[dataset:$localpath] in $workfile could not take 'prune_foreign = yes'. Fix or remove that section by hand and re-run."
+                || die "[dataset:$localpath] in $workfile could not take 'prune_foreign = yes'. Fix or remove that section manually and re-run."
             if grep -qxF "[prune:$localpath]" "$workfile"; then
                 set_or_remove_section_field "$workfile" "[prune:$localpath]" prune_foreign yes \
-                    || die "[prune:$localpath] in $workfile could not take 'prune_foreign = yes'. Fix or remove that section by hand and re-run."
+                    || die "[prune:$localpath] in $workfile could not take 'prune_foreign = yes'. Fix or remove that section manually and re-run."
             fi
         fi
         # The link cap is refreshed the same way and for the same reason -- it
@@ -4832,7 +4832,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         # stale 'bandwidth' behind would keep throttling a relationship the
         # operator had just uncapped, silently and for good.
         set_or_remove_section_field "$workfile" "[dataset:$localpath]" bandwidth "${LOAD_BANDWIDTH:-}" \
-            || die "[dataset:$localpath] in $workfile could not be updated with the relationship's bandwidth setting -- refusing to leave the link cap out of step with the client record. Fix or remove that section by hand and re-run."
+            || die "[dataset:$localpath] in $workfile could not be updated with the relationship's bandwidth setting -- refusing to leave the link cap out of step with the client record. Fix or remove that section manually and re-run."
     done
 
     # One minute for this relationship, chosen once here and written into every
@@ -5364,7 +5364,7 @@ sync_narrow_legacy_grants() {   # <user> <this client> <landing>...
             case "$landings" in *" $a "*) continue ;; esac
             [ "$(sync_parent_grant_of "$user" "$a")" = "$full" ] || continue
             if grep -qxF -e "[dataset:$a]" -e "[prune:$a]" "${CLIENTS_DIR%/*}"/*.conf 2>/dev/null; then
-                warn "activate: '$user' holds the full receive set on $a and a config section names it -- left alone (not provably this relationship's). To revoke by hand: zfs unallow -u $user $ZFS_PERMS_LOCAL_RECEIVE $a"
+                warn "activate: '$user' holds the full receive set on $a and a config section names it -- left alone (not provably this relationship's). To revoke manually: zfs unallow -u $user $ZFS_PERMS_LOCAL_RECEIVE $a"
                 continue
             fi
             local block="" regrant="" rec
@@ -5385,7 +5385,7 @@ sync_narrow_legacy_grants() {   # <user> <this client> <landing>...
                 done
             done
             if [ -n "$block" ]; then
-                warn "activate: '$user' holds the full receive set on $a, and backup relationship(s)$block of the same account land under it -- left alone. To revoke by hand once those have their own base grant: zfs unallow -u $user $ZFS_PERMS_LOCAL_RECEIVE $a"
+                warn "activate: '$user' holds the full receive set on $a, and backup relationship(s)$block of the same account land under it -- left alone. To revoke manually once those have their own base grant: zfs unallow -u $user $ZFS_PERMS_LOCAL_RECEIVE $a"
                 continue
             fi
             local r
@@ -6471,12 +6471,12 @@ atomic_replace_and_install() {
     if ! gencron_as_target -c "$realfile" --install; then
         warn "gen-cron.sh --install failed after updating $realfile -- restoring both the config file and the crontab to their exact prior state"
         if [ -n "$backup" ]; then
-            mv -f "$backup" "$realfile" || warn "CRITICAL: could not restore $realfile from $backup -- fix by hand"
+            mv -f "$backup" "$realfile" || warn "CRITICAL: could not restore $realfile from $backup -- fix manually"
         else
             rm -f "$realfile"
         fi
         if [ -s "$crontab_backup" ]; then
-            _restore_target_crontab "$crontab_backup" || warn "CRITICAL: could not restore the crontab from $crontab_backup either -- restore by hand as $(cron_target_user): crontab $crontab_backup"
+            _restore_target_crontab "$crontab_backup" || warn "CRITICAL: could not restore the crontab from $crontab_backup either -- restore manually as $(cron_target_user): crontab $crontab_backup"
         fi
         rm -f "$crontab_backup"
         die "gen-cron.sh --install failed -- see above; $realfile and the crontab have been restored to their prior state"
@@ -7822,7 +7822,7 @@ cmd_prepare_media() {
     echo "guid=$(zpool get -H -o value guid "$pool" 2>/dev/null)"
     # The window shows the key once; it is the only copy that can leave this host.
     [ "$enc" -eq 1 ] && echo "key=$(cat "$keyfile" 2>/dev/null)" && echo "keyfile=$keyfile"
-    zpool export "$pool" || die "prepare-media: the medium is ready, but zpool export $pool failed -- export it by hand before unplugging"
+    zpool export "$pool" || die "prepare-media: the medium is ready, but zpool export $pool failed -- export it manually before unplugging"
     log "prepare-media: medium ready -- pool '$pool', marker $pool/$base$([ "$enc" -eq 1 ] && echo " ENCRYPTED (key $keyfile)"), failmode=continue, compression=zstd, exported. Use it as --dst=$pool/$base."
 }
 
@@ -7912,7 +7912,7 @@ cmd_remove_media_trigger() {
     done
     [ -f "$rules" ] || { log "no media trigger installed at $rules -- nothing to remove."; return 0; }
     grep -q 'Managed by zfs-backup.sh install-media-trigger' "$rules" \
-        || die "remove-media-trigger: $rules exists but was not written by this tool. Refusing to delete somebody else's udev rule -- look at it and remove it by hand if it is yours."
+        || die "remove-media-trigger: $rules exists but was not written by this tool. Refusing to delete somebody else's udev rule -- look at it and remove it manually if it is yours."
     if [ "$do_install" -ne 1 ]; then
         echo ">>> to be removed: $rules"
         echo "This is a plan only -- nothing was removed."
@@ -8451,7 +8451,7 @@ cmd_replica_restart() {
     # Not when a new copy stayed in it (its old one could not be destroyed, or the move
     # failed): the warning above has just told the operator where it is.
     if [ "$kept_new" -eq 0 ] && zfs list -H "$tbase" >/dev/null 2>&1; then
-        zfs destroy -r "$tbase" || warn "replica-restart: the empty temporary base $tbase could not be removed -- remove it by hand: zfs destroy -r $tbase"
+        zfs destroy -r "$tbase" || warn "replica-restart: the empty temporary base $tbase could not be removed -- remove it manually: zfs destroy -r $tbase"
     fi
     if [ "$media" = removable ]; then
         bash "$gate" detach "$pool" "$name" --engine-rc "$rc" || :
@@ -8980,8 +8980,8 @@ cmd_local_backup() {
     if [ -n "$conflict" ]; then
         rm -f "$cand"
         die "local-backup: a job for these sources / target '$target' would overlap coverage already in $config:$conflict
-Nothing has been changed. Two jobs covering the same datasets would send and prune the same snapshots under different policy. If the overlap is intended, express it in native CONFIG v4 by hand; the high-level path deliberately will not.
-Taking over older jobs (a v4 config written by hand): remove their sections first -- zfs-backup.sh edit-config${local_user:+ --account=$local_user} -- then run this again."
+Nothing has been changed. Two jobs covering the same datasets would send and prune the same snapshots under different policy. If the overlap is intended, express it in native CONFIG v4 manually; the high-level path deliberately will not.
+Taking over older jobs (a v4 config written manually): remove their sections first -- zfs-backup.sh edit-config${local_user:+ --account=$local_user} -- then run this again."
     fi
 
     # IDEMPOTENT RERUN. Every requested root is already installed against this
@@ -9590,7 +9590,7 @@ Taking over older jobs (a v4 config written by hand): remove their sections firs
     local installed_block
     installed_block="$(crontab_for_target 2>/dev/null | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p')"
     printf '%s' "$installed_block" | grep -qF -- "$target" \
-        || die "the install reported success, but the read-back did not find '$target' in the installed block -- check the crontab by hand before you consider the backup working"
+        || die "the install reported success, but the read-back did not find '$target' in the installed block -- check the crontab manually before you consider the backup working"
 
     if [ -n "$lb_name" ]; then
         local _lbc _lbm="" _lbr
@@ -13096,7 +13096,7 @@ cmd_activate_client() {
         if [ -n "$EDIT_DROPPED_FAMILIES" ]; then
             echo "WARNING:             families are no longer created or pruned: $EDIT_DROPPED_FAMILIES"
             echo "                     their existing snapshots STAY on the target and source -- remove them"
-            echo "                     by hand if not needed."
+            echo "                     manually if not needed."
         fi
         echo
     fi
@@ -15071,7 +15071,7 @@ cmd_delete_relation() {
             # 'hdd/archive already exists and shares no common snapshot' -- the host's
             # OWN dataset -- and this plan then offered it as a copy to destroy.
             mirror_unproven=$(printf '%s\n' "$_derived" | tr '\n' ' '); mirror_unproven="${mirror_unproven% }"
-            [ "$destroy" -eq 0 ] || die "delete-relation: '$name' is a mirror that never finished its seed: its paths ($mirror_unproven) carry the same names as on the source and may be this host's own datasets -- not destroying them. Check them and remove by hand if they are copies (zfs destroy -r). Nothing was changed."
+            [ "$destroy" -eq 0 ] || die "delete-relation: '$name' is a mirror that never finished its seed: its paths ($mirror_unproven) carry the same names as on the source and may be this host's own datasets -- not destroying them. Check them and remove manually if they are copies (zfs destroy -r). Nothing was changed."
         elif [ -n "$_derived" ]; then
             copies=$(printf '%s\n' "$_derived" | tr '\n' ' '); copies="${copies% }"
             copies_from="the pairing -- seeded, never activated, so the record lists none"
@@ -15122,7 +15122,7 @@ cmd_delete_relation() {
         local d; for d in $copies; do echo "                   $d"; done
         [ -n "$copies" ] || echo "                   (the record lists none)"
     elif [ -n "$mirror_unproven" ]; then
-        echo "  4. copies    : NOT offered -- a mirror whose seed never finished: $mirror_unproven may be this host's own datasets (same names as on the source); check and remove by hand if they are copies"
+        echo "  4. copies    : NOT offered -- a mirror whose seed never finished: $mirror_unproven may be this host's own datasets (same names as on the source); check and remove manually if they are copies"
     else
         echo "  4. copies    : KEPT on this host${copies:+ ($copies)} -- pass --destroy-copies to destroy them too"
     fi
@@ -15606,7 +15606,7 @@ cmd_remove_source() {
             chmod 0600 "$cpath" 2>/dev/null || :
         else
             rm -f "${cpath}.new"
-            warn "remove-source: could not take '$ds' out of the record of '$name' ($cpath) -- remove it from REQUESTED_DATASETS and '$landing' from MANAGED_DATASETS by hand"
+            warn "remove-source: could not take '$ds' out of the record of '$name' ($cpath) -- remove it from REQUESTED_DATASETS and '$landing' from MANAGED_DATASETS manually"
         fi
     else
         log "remove-source: no installed config for '$name' on this host -- nothing to drop here"
@@ -15942,7 +15942,7 @@ cmd_add_source() {
     local q; q=$(printf '%q' "$sfile")
     out=$(rux_root_ssh "$host" "$port" "awk -v target=$(printf '%q' "$ds") $(printf '%q' "$awk_prog") $q > $q.new 2>/tmp/as-awk.err; r=\$?; cat /tmp/as-awk.err; if [ \$r -ne 0 ]; then rm -f $q.new; exit \$r; fi; if grep -q ALREADY-IN-SCOPE /tmp/as-awk.err; then rm -f $q.new; else mv $q.new $q; fi" 2>&1); rc=$?
     case "$out" in
-        *EXCLUDED-ANCESTOR*) die "add-source: on $peer an ANCESTOR of '$ds' is excluded (${out##*EXCLUDED-ANCESTOR }) -- lifting it would bring in more than '$ds'. Nothing was changed; narrow by hand or add that ancestor instead." ;;
+        *EXCLUDED-ANCESTOR*) die "add-source: on $peer an ANCESTOR of '$ds' is excluded (${out##*EXCLUDED-ANCESTOR }) -- lifting it would bring in more than '$ds'. Nothing was changed; narrow manually or add that ancestor instead." ;;
     esac
     if [ "$rc" -ne 0 ]; then
         log "!!! add-source: could not widen the scope on $peer -- NOTHING was changed here either."
@@ -16495,7 +16495,7 @@ record_note_dataset() {   # <name> <add|drop> <source dataset> <landing> -- REQU
           [ -n "${REQUESTED_DATASETS:-}" ] && write_client_field REQUESTED_DATASETS "$req"
           write_client_field MANAGED_DATASETS "$man"; } > "${cpath}.new" \
             && mv -f "${cpath}.new" "$cpath" && chmod 0600 "$cpath"
-    ) || warn "edit-config: the record of '$name' could not follow '$ds' ($op) -- fix MANAGED_DATASETS in $(client_conf_path "$name") by hand"
+    ) || warn "edit-config: the record of '$name' could not follow '$ds' ($op) -- fix MANAGED_DATASETS in $(client_conf_path "$name") manually"
 }
 
 edit_config_ask() {   # <question> <default y|n> -> 0 yes, 1 no
@@ -18299,7 +18299,7 @@ import_relation_undo_record() {   # <name>
             if awk -v a="$alias" '$1 != a' "$dst" > "$tmp" && cat "$tmp" > "$dst"; then
                 log "import-relation: removed the host-key alias line '$alias' from $dst"
             else
-                warn "import-relation: could not remove the alias line '$alias' from $dst -- harmless (a lookup entry for a name that no longer exists), remove it by hand"
+                warn "import-relation: could not remove the alias line '$alias' from $dst -- harmless (a lookup entry for a name that no longer exists), remove it manually"
             fi
             rm -f "$tmp"
         fi
@@ -20540,7 +20540,7 @@ remove_managed_sections() {   # <file> <client name> <target-path>...
                 owned=1
             else
                 rm -f "$tmp"
-                die "$file has a [dataset:]/[prune:] section at a path client '$name' manages, but its first line is not '$marker' and this path was never previously recorded as managed by '$name' -- this looks hand-written, not something activate-client generated. Resolve the naming collision by hand (rename or remove the hand-written section) before re-running."
+                die "$file has a [dataset:]/[prune:] section at a path client '$name' manages, but its first line is not '$marker' and this path was never previously recorded as managed by '$name' -- this looks hand-written, not something activate-client generated. Resolve the naming collision manually (rename or remove the hand-written section) before re-running."
             fi
         fi
         section_buf+=("$line")
@@ -20929,10 +20929,10 @@ then run this again."
     # there. If it still fails, everything goes back and nothing is paused.
     if ! mv -f "$to_tmp" "$to_rec" || ! mv -f "$from_tmp" "$from_rec"; then
         warn "move-to-client: the config and crontab installed, but the ownership records could not be put in place. Rolling BOTH back so nothing is left claiming what it does not own."
-        cp -p "$cfg_bak" "$cronfile"      || warn "CRITICAL: could not restore $cronfile from $cfg_bak -- fix by hand"
-        cp -p "$rec_to_bak" "$to_rec"     || warn "CRITICAL: could not restore $to_rec -- fix by hand"
-        cp -p "$rec_from_bak" "$from_rec" || warn "CRITICAL: could not restore $from_rec -- fix by hand"
-        [ -s "$cron_bak" ] && { _restore_target_crontab "$cron_bak" || warn "CRITICAL: could not restore the crontab from $cron_bak -- restore by hand as $(cron_target_user): crontab $cron_bak"; }
+        cp -p "$cfg_bak" "$cronfile"      || warn "CRITICAL: could not restore $cronfile from $cfg_bak -- fix manually"
+        cp -p "$rec_to_bak" "$to_rec"     || warn "CRITICAL: could not restore $to_rec -- fix manually"
+        cp -p "$rec_from_bak" "$from_rec" || warn "CRITICAL: could not restore $from_rec -- fix manually"
+        [ -s "$cron_bak" ] && { _restore_target_crontab "$cron_bak" || warn "CRITICAL: could not restore the crontab from $cron_bak -- restore manually as $(cron_target_user): crontab $cron_bak"; }
         _mv_cleanup; rm -f "$cfg_bak" "$rec_to_bak" "$rec_from_bak" "$cron_bak"
         die "move-to-client: NOTHING was moved. '$from' has NOT been paused and still owns its sections."
     fi
@@ -20946,7 +20946,7 @@ then run this again."
     if cmd_pause_client "$from" --reason="moved to '$to' on $(date -Is)" >/dev/null 2>&1; then
         echo ">>> '$from' PAUSED -- its record and its manifest are untouched, and resume-client brings it back."
     else
-        warn "the move is installed, but '$from' could NOT be paused. Its schedule still points at the old machine and will now find its sections gone. Pause it by hand: zfs-backup.sh pause-client $from"
+        warn "the move is installed, but '$from' could NOT be paused. Its schedule still points at the old machine and will now find its sections gone. Pause it manually: zfs-backup.sh pause-client $from"
     fi
 
     echo
@@ -21220,7 +21220,7 @@ cmd_remove_client() {
         if config_has_job_sections "$workfile"; then
             if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
                 rm -f "$workfile"
-                die "gen-cron.sh rejected the config after removing '$name' -- $CRON_CONFIG was NOT touched. Investigate by hand before retrying."
+                die "gen-cron.sh rejected the config after removing '$name' -- $CRON_CONFIG was NOT touched. Investigate manually before retrying."
             fi
             atomic_replace_and_install "$CRON_CONFIG" "$workfile"
         else
@@ -21245,7 +21245,7 @@ cmd_remove_client() {
             log "no managed sections remain after removing '$name' -- asking the cron writer to remove the zfs-backup-managed block entirely, then updating $CRON_CONFIG"
             if ! cron_block_remove "$(cron_target_user)" zfs-backup-managed; then
                 rm -f "$workfile"
-                die "could not remove the zfs-backup-managed cron block for $(cron_target_user): ${CRON_ERR:-unknown error} -- $CRON_CONFIG was NOT touched and the client record was NOT updated. Investigate by hand before retrying; re-running remove-client is safe once this is resolved."
+                die "could not remove the zfs-backup-managed cron block for $(cron_target_user): ${CRON_ERR:-unknown error} -- $CRON_CONFIG was NOT touched and the client record was NOT updated. Investigate manually before retrying; re-running remove-client is safe once this is resolved."
             fi
             chmod 0644 "$workfile" 2>/dev/null || :
             if ! mv -f "$workfile" "$CRON_CONFIG"; then
@@ -21314,7 +21314,7 @@ cmd_remove_client() {
     if client_paused "$name"; then
         rm -f "$(pause_marker_path "$name")" \
             && log "cleared this client's PAUSED_LOCAL marker" \
-            || warn "could not remove $(pause_marker_path "$name") -- remove it by hand, or the next client named '$name' will report (and clear) it at add-client"
+            || warn "could not remove $(pause_marker_path "$name") -- remove it manually, or the next client named '$name' will report (and clear) it at add-client"
     fi
     rmdir "$RELATIONSHIPS_DIR/$name" 2>/dev/null || :
 
@@ -21497,7 +21497,7 @@ rux_check_conflict() {
         || die "rux: a relationship for '$host' already exists ('$CLIENT_NAME') but was not created through this unified entry point -- use the expert lifecycle commands (status/seed/activate/remove-client) to inspect or resolve it. Nothing was changed."
     local want_source="$host:$dataset"
     if [ "$RUX_SOURCE" != "$want_source" ] || [ "${RUX_TARGET:-}" != "$target" ] || [ "${RUX_MODE:-}" != "$mode" ]; then
-        die "rux: the existing relationship '$CLIENT_NAME' already requests source='$RUX_SOURCE' target='${RUX_TARGET:-}' mode='${RUX_MODE:-backup}', which conflicts with this request (source='$want_source' target='$target' mode='${mode:-backup}'). Refusing to silently mutate or adopt it -- resolve by hand (status/remove-client), or re-run with the ORIGINAL request to resume it."
+        die "rux: the existing relationship '$CLIENT_NAME' already requests source='$RUX_SOURCE' target='${RUX_TARGET:-}' mode='${RUX_MODE:-backup}', which conflicts with this request (source='$want_source' target='$target' mode='${mode:-backup}'). Refusing to silently mutate or adopt it -- resolve manually (status/remove-client), or re-run with the ORIGINAL request to resume it."
     fi
 }
 
@@ -21606,7 +21606,7 @@ rux_remote_plan() {
     # else's snapshot family, prefixlessly") does not imply it.
     if profile_prunes_prefixlessly "$profile"; then
         local _lp; if [ "$mode" = sync ]; then _lp="$dataset"; else _lp="${target:-<target>}"; fi
-        echo "  Warning:                       profile '$profile' prunes WITHOUT A PREFIX -- the ladder covers EVERY snapshot on '$_lp', including the replication base. A snapshot taken there by hand can win a bucket, push out the base and stop the relation until a human decides (a fact, not a ban)"
+        echo "  Warning:                       profile '$profile' prunes WITHOUT A PREFIX -- the ladder covers EVERY snapshot on '$_lp', including the replication base. A snapshot taken there manually can win a bucket, push out the base and stop the relation until a human decides (a fact, not a ban)"
     fi
     echo "  current lifecycle position:    $state"
     # snaponly has no seed: there is nothing to copy (verify-endpoint, then activate).
@@ -21874,7 +21874,7 @@ include_children = yes
         rux_root_ssh "$host" "$port" "cd '$extend_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'$aq" 2>&1 | tail -4             || die "--grant-remotely: deploy.sh --commit-scope='$COLLECTOR_LABEL' FAILED on $host (see above). The scope file was extended; finish or inspect locally there."
         local ext_mfile; ext_mfile=$(peer_manifest_path "$COLLECTOR_LABEL")
         rux_root_ssh "$host" "$port" "printf 'GRANTED_REMOTELY_BY=%q
-' '$ext_stamp (extension$aq_note)' >> '$ext_mfile'"             || warn "--grant-remotely: the extension is committed but the audit line could not be appended to $ext_mfile on $host -- add it by hand"
+' '$ext_stamp (extension$aq_note)' >> '$ext_mfile'"             || warn "--grant-remotely: the extension is committed but the audit line could not be appended to $ext_mfile on $host -- add it manually"
         log "--grant-remotely: extension committed on $host as '$COLLECTOR_LABEL', audit recorded"
         return 0
     fi
@@ -21992,7 +21992,7 @@ An operator prepared that file, and this flag is not permission to overwrite the
 
     local mfile; mfile=$(peer_manifest_path "$COLLECTOR_LABEL")
     rux_root_ssh "$host" "$port" "printf 'GRANTED_REMOTELY_BY=%q\n' '$stamp$aq_note' >> '$mfile'" \
-        || warn "--grant-remotely: the grant is committed but the audit line could not be appended to $mfile on $host -- add it by hand"
+        || warn "--grant-remotely: the grant is committed but the audit line could not be appended to $mfile on $host -- add it manually"
     log "--grant-remotely: committed on $host as '$COLLECTOR_LABEL', audit recorded"
 }
 
