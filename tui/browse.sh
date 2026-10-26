@@ -392,12 +392,19 @@ PYEOF
         TYP="$(awk -F'\t' -v d="$DS" '$1 == d { print $2; exit }' "$TMPD/cand.tsv")"
         [ -n "$DS" ] && [ -n "$TYP" ] || exit 0
         step=2 ;;
-    2)  zfs list -H -p -t snapshot -o name,creation -s creation -d 1 -- "$DS" 2>/dev/null \
-            | tr -d '\r' | awk -F'\t' '{ n = $1; sub(/^[^@]*@/, "", n); print $2 "\t" n }' | tac | head -n 50 >"$TMPD/points.tsv"
+    # Rozmiar migawki (właściciel 2026-10-26): "zajmuje" = used (tyle zwolni jej usunięcie),
+    # "zmian" = written (tyle zmieniło się od poprzedniej migawki).
+    2)  zfs list -H -p -t snapshot -o name,creation,used,written -s creation -d 1 -- "$DS" 2>/dev/null \
+            | tr -d '\r' | awk -F'\t' '
+                function h(b,  u, i) { split("B K M G T P", u, " "); i = 1
+                    while (b >= 1024 && i < 6) { b /= 1024; i++ }
+                    return (i == 1 ? sprintf("%d%s", b, u[i]) : sprintf("%.1f%s", b, u[i])) }
+                { n = $1; sub(/^[^@]*@/, "", n); print $2 "\t" n "\t" h($3) "\t" h($4) }' | tac | head -n 50 >"$TMPD/points.tsv"
         menu=(); i=0
-        while IFS=$'\t' read -r cr nm; do
+        while IFS=$'\t' read -r cr nm su sw; do
             [ -n "$cr" ] || continue
-            lbl="$(date -d "@$cr" '+%Y-%m-%d %H:%M')  $nm"; [ "$i" -eq 0 ] && lbl="$lbl  $(T '(najnowsza)')"
+            # Rozmiary przed nazwą: przy oknie 100 kolumn ucina się najwyżej koniec nazwy.
+            lbl="$(date -d "@$cr" '+%Y-%m-%d %H:%M')  $(Tv 'zajmuje $su, zmian $sw' '$su' "$su" '$sw' "$sw")  $nm$([ "$i" -eq 0 ] && printf '  %s' "$(T '(najnowsza)')")"
             menu+=("p$i" "$(clip_label "$lbl" $((W - 12)))"); i=$((i + 1))
         done <"$TMPD/points.tsv"
         geom

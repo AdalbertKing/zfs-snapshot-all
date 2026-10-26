@@ -1846,6 +1846,7 @@
 "zadanie konta %s -- uruchomić je może też root": "%s account task -- root can also run it",
 "zadaniem o najkrótszym odstępie (np. godzinowym), bez pytania; F8 pauza/wznów;": "with the job that runs most often (e.g. hourly), without asking; F8 pause/resume;",
 "zadań": "jobs",
+"zajmuje $su, zmian $sw": "uses $su, changed $sw",
 "zajęte": "taken",
 "zakładana": "being created",
 "zamraża: ": "freezes: ",
