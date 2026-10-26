@@ -628,5 +628,6 @@
 "Trwa wykonywanie, proszę czekać.\\n\\nKomunikaty poleceń idą do dziennika:\\n  %s\\n\\nCtrl-C przerywa.": "Running, please wait.\\n\\nCommand messages go to the log:\\n  %s\\n\\nCtrl-C stops it.",
 " [x] kopiowane z potomnymi, także przyszłymi   [-] tylko obecne albo część   [ ] nie": " [x] copied with children, future ones too   [-] current ones only, or part   [ ] no",
 " [x] z migawkami, razem z tym, co pod nim POWSTANIE   [-] tylko obecne albo część   [ ] bez": " [x] with snapshots, together with what will APPEAR under it   [-] current ones only, or part   [ ] without",
-"Wczytuję aktualne dane hosta… %d s": "Loading the host's current data… %d s"
+"Wczytuję aktualne dane hosta… %d s": "Loading the host's current data… %d s",
+"pozycja „Datasety”.\\n\\nWskaż host, z którym nie ma jeszcze relacji.": "item “Datasets”.\\n\\nPoint to a host that has no relation yet."
 }

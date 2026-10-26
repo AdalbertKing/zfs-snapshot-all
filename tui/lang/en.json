@@ -1667,6 +1667,7 @@
 "porządki %s": "prune %s",
 "powód": "reason",
 "pozycja „Datasety” (zfs-backup.sh add-source).\\n\\nWskaż host, z którym nie ma jeszcze relacji.": "item “Datasets” (zfs-backup.sh add-source).\\n\\nPoint to a host that has no relation yet.",
+"pozycja „Datasety”.\\n\\nWskaż host, z którym nie ma jeszcze relacji.": "item “Datasets”.\\n\\nPoint to a host that has no relation yet.",
 "prawa stąd": "rights from here",
 "prawa stąd, zgoda na zamrażanie": "rights from here, freeze consent",
 "prawa stąd, zgoda na zamrażanie$([ ": "rights from here, freeze consent$([ ",
