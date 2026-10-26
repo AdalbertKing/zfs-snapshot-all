@@ -105,6 +105,8 @@
 "   źródło: %s": "   source: %s",
 "  $n: $f migawek automated_*": "  $n: $f automated_* snapshots",
 "  $n: $f migawek automated_*, najnowsza $when ($ago temu)": "  $n: $f automated_* snapshots, newest $when ($ago ago)",
+"  $n: migawki automated_*: $f": "  $n: automated_* snapshots: $f",
+"  $n: migawki automated_*: $f, najnowsza $when ($ago temu)": "  $n: automated_* snapshots: $f, newest $when ($ago ago)",
 "  %-11s źródło trzyma %s, szablon da %s": "  %-11s source keeps %s, template gives %s",
 "  %-11s źródło trzyma %s, szablon nie ma tego szczebla": "  %-11s source keeps %s, template has no such tier",
 "  %s: %s %s (bez zmian)": "  %s: %s %s (unchanged)",

@@ -92,7 +92,7 @@ a odruchem się jej nie klepnie.
 Wpisz liczbe datasetow (3) aby ZAAKCEPTOWAC, [e]dytuj, [n]przerwij:
 ```
 
-Krok trzeci — **to samo polecenie co w kroku pierwszym**. Kończy zasiew,
+Krok trzeci — **to samo polecenie co w kroku pierwszym**. Kończy pierwszą pełną kopię,
 weryfikuje punkt końcowy i instaluje crona:
 
 ```
@@ -115,7 +115,7 @@ Co robi:
    `deploy.sh --commit-scope` (ślad `GRANTED_REMOTELY_BY` w manifeście źródła).
    Bez tej flagi przepływ jest dwudotykowy: polecenie zatrzymuje się z instrukcją,
    co wykonać na źródle, a jego ponowienie wznawia;
-3. robi zasiew (pierwszy pełny transfer) i weryfikuje granty oraz punkt końcowy;
+3. robi pierwszą pełną kopię (pełny transfer) i weryfikuje granty oraz punkt końcowy;
 4. pokazuje podgląd zmian crontaba i instaluje blok zarządzany do crontaba konta
    z sekcji 2. Jeśli w crontabie tego konta jest już blok zarządzany, narzędzie
    bierze config wskazany w jego linii `# Source:`, a sekcje nowej relacji

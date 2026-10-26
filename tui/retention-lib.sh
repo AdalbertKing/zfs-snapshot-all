@@ -126,7 +126,9 @@ for r in json.load(open(sys.argv[1], encoding="utf-8"))["rows"]:
             *)        args+=(--tier="${tn[$i]}" "--keep=${sk[$i]}") ;;
         esac
     done
-    [ "$own" -eq 1 ] && name="$PROFILE-src"
+    # Szablon źródła ukrytej relacji (relacja-NAZWA) też jest ukryty -- kampania 2026-10-26:
+    # relacja-pve11-src stał na liście szablonów kreatora jak zwykły szablon.
+    [ "$own" -eq 1 ] && { name="$PROFILE-src"; args+=(--hidden); }
     info "${SRC_TITLE:-$(T 'Retencja źródła')}" "$(Tv 'Zapisuję szablon źródła $name...' '$name' "$name")"
     out=$("$ZB" save-profile "${args[@]}" --as="$name" --description="$(Tv 'Retencja ŹRÓDŁA na bazie $PROFILE (pochodny, z kreatora)' '$PROFILE' "$PROFILE")" 2>&1) \
         || { wt --title "$(T 'Szablon źródła odrzucony')" --msgbox "$(printf '%s' "$out" | tail -6)" 14 "$W"; return 1; }

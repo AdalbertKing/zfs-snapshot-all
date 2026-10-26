@@ -556,9 +556,9 @@ chain_facts() {   # -> wiersze "  dataset: N migawek automated_*, najnowsza ... 
                 if [ "$ago" -lt 120 ]; then ago="$ago min"
                 elif [ "$ago" -lt 2880 ]; then ago="$((ago / 60)) $(T 'godz.')"
                 else ago="$((ago / 1440)) $(T dni)"; fi
-                echo "$(Tv '  $n: $f migawek automated_*, najnowsza $when ($ago temu)' '$n' "$n" '$f' "$f" '$when' "$(date -d "@$e" '+%Y-%m-%d %H:%M')" '$ago' "$ago")"
+                echo "$(Tv '  $n: migawki automated_*: $f, najnowsza $when ($ago temu)' '$n' "$n" '$f' "$f" '$when' "$(date -d "@$e" '+%Y-%m-%d %H:%M')" '$ago' "$ago")"
             else
-                echo "$(Tv '  $n: $f migawek automated_*' '$n' "$n" '$f' "$f")"
+                echo "$(Tv '  $n: migawki automated_*: $f' '$n' "$n" '$f' "$f")"
             fi
         done <"$TMPD/own.tsv" 2>/dev/null
     done
@@ -1046,7 +1046,6 @@ summary_text() {
     [ "$RAW" -eq 1 ] && echo "$(T 'Wysyłka zaszyfrowana (raw): kopia leży w celu zaszyfrowana, ten host nie potrzebuje klucza.')"
     if [ "$MODE" = local ]; then
         [ "$FREEZE" -eq 1 ] && ! is_passive_copy && echo "$(T 'Zamrażanie: goście tego hosta, przed migawkami dobowymi i rzadszymi.')"
-        [ "$NOCOPY" -eq 1 ] && echo "$(T 'Po WYKONAJ czasownik pokaże zmiany w cronie i zapyta o potwierdzenie (t).')"
         echo
         echo "$(T 'Komenda (to samo wpisałbyś z palca):')"
         cmd_oneline; echo
