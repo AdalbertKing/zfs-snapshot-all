@@ -1138,7 +1138,9 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
         # JEDNA REGUŁA DRZEWA TAKŻE PRZY TWORZENIU (relacja = config, 2026-10-26): przy jakimkolwiek
         # [-] zakres zapisany od razu jako pozycje relacji -- to samo set-datasets co w oknie zmiany,
         # w każdym rodzaju relacji. Seed powyżej szanował wyjątki, więc nic zbędnego nie przyszło.
-        if [ "$RC_RUN" -eq 0 ] && any_excl; then
+        # Migawki zdalne zakłada się już z pozycjami drzewa (basket_entries w --source), więc
+        # drugi krok nic by nie zmienił -- tylko kosztował ~30 s (kampania 2026-10-26).
+        if [ "$RC_RUN" -eq 0 ] && [ "$MODE" != snaponly ] && any_excl; then
             _da=(); mapfile -t _da < <(basket_entries "$BASKET_DS_JSON" | awk -F'\t' 'NF { printf "--dataset=%s:%s\n", $1, $2 }')
             : >"$TMPD/run2.log"
             run_progress "$(Tv 'Nowa relacja '\''$RNAME'\'': zakres wg drzewa' '$RNAME' "$RNAME")" "$TMPD/run2.log" "$ZB" set-datasets "$RNAME" "${_da[@]}" --yes || RC_RUN=$?
