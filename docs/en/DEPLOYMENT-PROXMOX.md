@@ -55,7 +55,7 @@ On **both** hosts:
 - network connectivity collector → source (port 22 or your own).
 
 The required packages (`zfs`, `mbuffer`, `zstd`) are **installed by `deploy.sh`
-itself** — you do not have to do it by hand.
+itself** — you do not have to do it manually.
 
 Clone the repository onto both hosts, to the same location:
 
@@ -64,7 +64,7 @@ git clone https://github.com/AdalbertKing/zfs-snapshot-all.git /root/zfs-snapsho
 ```
 
 > **Never copy scripts to the hosts with `scp`/`pscp`.** Updates arrive through
-> `git pull --ff-only` every hour. A file replaced by hand will dirty the tree
+> `git pull --ff-only` every hour. A file replaced manually will dirty the tree
 > and **permanently block automatic updates** on that host — silently, with no
 > alert.
 
@@ -117,7 +117,7 @@ relation parameters.
 
 Copy the `.tgz` file to `pve-prod` any way you like (`scp` from your
 workstation, a USB stick, anything). This is the only moment when you move
-something by hand.
+something manually.
 
 ### Step 4 — accept the pairing on the source `pve-prod`
 
@@ -229,7 +229,7 @@ granted, what revoked), not a discovery along the way.
 
 Running it again after editing the file **also revokes** whatever the new scope
 no longer covers — but only within the bounds of this relation. A grant made by
-someone else, or by hand, is invisible to this command and stays untouched.
+someone else, or manually, is invisible to this command and stays untouched.
 
 ### Step 8 — the first copy (back on `pve-backup`)
 
@@ -288,7 +288,7 @@ hosts with no name collisions.
 
 ## 4a. How to read a generated cron line
 
-Nobody writes these lines by hand — `gen-cron.sh` generates them from the
+Nobody writes these lines manually — `gen-cron.sh` generates them from the
 configuration file. But you usually open them once every half year, during an
 outage, so here is a breakdown of one example (shortened; the minute in the
 first field is **only an example** here — every relation gets its own, see
@@ -318,7 +318,7 @@ rpool/backups/192.168.1.20/rpool/data/vm-100-disk-0
 ```
 
 which is exactly what chapter 4 describes. If you typed the full target path
-here by hand, the copy would land one level too deep, and every run would do a
+here manually, the copy would land one level too deep, and every run would do a
 full transfer from scratch.
 
 The monitor line for the same dataset looks like this:

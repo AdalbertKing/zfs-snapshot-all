@@ -42,7 +42,7 @@ Polish. Command output is English in both cases.
 ## Upgrading an existing installation
 
 Hosts installed from the development repository keep updating from it until they are switched to
-this one. Configurations written by hand (CONFIG v4) keep working; taking them over into relations
+this one. Configurations written manually (CONFIG v4) keep working; taking them over into relations
 is a documented, step-by-step operation (`zfs-backup edit-config`, then the wizard).
 
 ## Known limitations

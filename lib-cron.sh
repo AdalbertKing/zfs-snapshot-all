@@ -396,7 +396,7 @@ cron_markers_valid() {   # <file>  -> 0 ok, 1 malformed
                 name=${ln#'# BEGIN '}; name=${name%% *}
                 cron_block_name_valid "$name" || continue   # not one of ours
                 if [ -n "$open" ]; then
-                    CRON_ERR="line $n: '# BEGIN $name' opens while '$open' is still open -- managed blocks may not nest or overlap, and replacing the outer one would delete the inner. Repair the crontab by hand; nothing has been changed"
+                    CRON_ERR="line $n: '# BEGIN $name' opens while '$open' is still open -- managed blocks may not nest or overlap, and replacing the outer one would delete the inner. Repair the crontab manually; nothing has been changed"
                     return 1
                 fi
                 case " $seen " in
@@ -415,7 +415,7 @@ cron_markers_valid() {   # <file>  -> 0 ok, 1 malformed
                     return 1
                 fi
                 if [ "$open" != "$name" ]; then
-                    CRON_ERR="line $n: '# END $name' closes while '$open' is open -- interleaved markers. Repair by hand; nothing has been changed"
+                    CRON_ERR="line $n: '# END $name' closes while '$open' is open -- interleaved markers. Repair manually; nothing has been changed"
                     return 1
                 fi
                 open=""

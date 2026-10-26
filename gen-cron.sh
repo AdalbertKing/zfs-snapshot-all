@@ -4625,7 +4625,7 @@ install_crontab() {
                 echo "lines calling snapsend.sh/delsnaps.sh/check-snap-age.sh (listed below)."
                 echo "Appending blindly would run these jobs twice on overlapping schedules --"
                 echo "this is exactly what happened on pve1.11 (192.168.11.11) previously."
-                echo "Remove or migrate the old lines by hand first, then re-run --install."
+                echo "Remove or migrate the old lines manually first, then re-run --install."
                 echo "--- conflicting existing lines ---"
                 printf '%s
 ' "$conflicts"
@@ -5383,7 +5383,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
     echo "gen-cron.sh: managed block removed from ${_me}'s crontab" >&2
     echo "gen-cron.sh: the config and the datasets are untouched. This removed the SCHEDULE, not the backups." >&2
     [ -n "$CONFIG" ] && [ -f "$CONFIG" ] && \
-        echo "gen-cron.sh:   config still at $CONFIG -- delete it by hand if this deployment is really finished" >&2
+        echo "gen-cron.sh:   config still at $CONFIG -- delete it manually if this deployment is really finished" >&2
     exit 0
 fi
 

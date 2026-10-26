@@ -6911,7 +6911,7 @@
    "k": "u585",
    "pl_code": " list-profiles: błąd źródła -- wpisz nazwę szablonu ręcznie (%s)",
    "pl": " list-profiles: błąd źródła -- wpisz nazwę szablonu ręcznie (%s)",
-   "en": " list-profiles: source error -- type the template name by hand (%s)",
+   "en": " list-profiles: source error -- type the template name manually (%s)",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -6944,7 +6944,7 @@
    "k": "u588",
    "pl_code": " brak szablonów (list-profiles nic nie zwrócił) -- wpisz nazwę ręcznie w polu",
    "pl": " brak szablonów (list-profiles nic nie zwrócił) -- wpisz nazwę ręcznie w polu",
-   "en": " no templates (list-profiles returned nothing) -- type the name by hand in the field",
+   "en": " no templates (list-profiles returned nothing) -- type the name manually in the field",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -6977,7 +6977,7 @@
    "k": "u591",
    "pl_code": "[ wpisz ścieżkę ręcznie ]",
    "pl": "[ wpisz ścieżkę ręcznie ]",
-   "en": "[ type the path by hand ]",
+   "en": "[ type the path manually ]",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -7861,7 +7861,7 @@
    "k": "u671",
    "pl_code": "stary zapis $f (sprzed poprawki kluczy) -- nie wiadomo, którego datasetu dotyczy; nic nie zmieniam. Sprawdź snapdev datasetów o tej nazwie (zfs get -r snapdev), przywróć ręcznie i usuń ten plik.",
    "pl": "stary zapis $f (sprzed poprawki kluczy) -- nie wiadomo, którego datasetu dotyczy; nic nie zmieniam. Sprawdź snapdev datasetów o tej nazwie (zfs get -r snapdev), przywróć ręcznie i usuń ten plik.",
-   "en": "old record $f (from before the key fix) -- unknown which dataset it concerns; changing nothing. Check snapdev of datasets with that name (zfs get -r snapdev), restore by hand and delete this file.",
+   "en": "old record $f (from before the key fix) -- unknown which dataset it concerns; changing nothing. Check snapdev of datasets with that name (zfs get -r snapdev), restore manually and delete this file.",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -7894,7 +7894,7 @@
    "k": "u674",
    "pl_code": "zapis $BROOT/orig2.$k należy do '$d', nie do $ds -- nic nie zmieniam (sprawdź ręcznie)",
    "pl": "zapis $BROOT/orig2.$k należy do '$d', nie do $ds -- nic nie zmieniam (sprawdź ręcznie)",
-   "en": "record $BROOT/orig2.$k belongs to '$d', not to $ds -- changing nothing (check by hand)",
+   "en": "record $BROOT/orig2.$k belongs to '$d', not to $ds -- changing nothing (check manually)",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -7905,7 +7905,7 @@
    "k": "u675",
    "pl_code": "zapis $BROOT/orig2.$k: wartość '$v' -- nic nie zmieniam (sprawdź ręcznie)",
    "pl": "zapis $BROOT/orig2.$k: wartość '$v' -- nic nie zmieniam (sprawdź ręcznie)",
-   "en": "record $BROOT/orig2.$k: value '$v' -- changing nothing (check by hand)",
+   "en": "record $BROOT/orig2.$k: value '$v' -- changing nothing (check manually)",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -7916,7 +7916,7 @@
    "k": "u676",
    "pl_code": "zapis $BROOT/orig2.$k: źródło '$s' -- nic nie zmieniam (sprawdź ręcznie)",
    "pl": "zapis $BROOT/orig2.$k: źródło '$s' -- nic nie zmieniam (sprawdź ręcznie)",
-   "en": "record $BROOT/orig2.$k: source '$s' -- changing nothing (check by hand)",
+   "en": "record $BROOT/orig2.$k: source '$s' -- changing nothing (check manually)",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -8469,7 +8469,7 @@
    "k": "u726",
    "pl_code": "Źródło ($PEER): brak dostępu roota z tego hosta -- tam zostaje konto relacji. Posprzątaj ręcznie, na $PEER jako root: $LEAVE_CMD",
    "pl": "Źródło ($PEER): brak dostępu roota z tego hosta -- tam zostaje konto relacji. Posprzątaj ręcznie, na $PEER jako root: $LEAVE_CMD",
-   "en": "Source ($PEER): no root access from this host -- the relation account stays there. Clean up by hand, on $PEER as root: $LEAVE_CMD",
+   "en": "Source ($PEER): no root access from this host -- the relation account stays there. Clean up manually, on $PEER as root: $LEAVE_CMD",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -10331,7 +10331,7 @@
    "k": "u885",
    "pl_code": "Ręcznie…  tabela szczebli: sposób, szczeble, liczby, zamrażanie",
    "pl": "Ręcznie…  tabela szczebli: sposób, szczeble, liczby, zamrażanie",
-   "en": "By hand…  tier table: method, tiers, numbers, freezing",
+   "en": "Set manually…  tier table: method, tiers, numbers, freezing",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -11259,7 +11259,7 @@
    "k": "u969",
    "pl_code": "$(title 6 'Ręcznie')",
    "pl": "$(title 6 'Ręcznie')",
-   "en": "$(title 6 'By hand')",
+   "en": "$(title 6 'Set manually')",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -11314,7 +11314,7 @@
    "k": "u974",
    "pl_code": " 2>/dev/null)).\\nWpisz nazwę szablonu ręcznie (domyślny: default).",
    "pl": " 2>/dev/null)).\\nWpisz nazwę szablonu ręcznie (domyślny: default).",
-   "en": " 2>/dev/null)).\\nEnter the template name by hand (default: default).",
+   "en": " 2>/dev/null)).\\nEnter the template name manually (default: default).",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -11325,7 +11325,7 @@
    "k": "u975",
    "pl_code": "Ręcznie…",
    "pl": "Ręcznie…",
-   "en": "By hand…",
+   "en": "Set manually…",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -11435,7 +11435,7 @@
    "k": "u985",
    "pl_code": "${lead}Gotowy szablon albo \\\"Ręcznie\\\" (tabela szczebli). [zamraża] = przed migawkami dobowymi i rzadszymi goście są zamrażani (zgoda w Zaawansowanych podsumowania).$([ ",
    "pl": "${lead}Gotowy szablon albo \\\"Ręcznie\\\" (tabela szczebli). [zamraża] = przed migawkami dobowymi i rzadszymi goście są zamrażani (zgoda w Zaawansowanych podsumowania).$([ ",
-   "en": "${lead}A ready template or \\\"By hand\\\" (tier table). [freezes] = guests are frozen before daily and sparser snapshots (consent in the Advanced part of the summary).$([ ",
+   "en": "${lead}A ready template or \\\"Set manually\\\" (tier table). [freezes] = guests are frozen before daily and sparser snapshots (consent in the Advanced part of the summary).$([ ",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -12033,7 +12033,7 @@
    "k": "u1039",
    "pl_code": "Komenda (to samo wpisałbyś z palca):",
    "pl": "Komenda (to samo wpisałbyś z palca):",
-   "en": "Command (the same you would type by hand):",
+   "en": "Command (the same you would type manually):",
    "origin": "owner-ok",
    "unclear": false,
    "where": [

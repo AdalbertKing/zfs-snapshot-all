@@ -619,7 +619,7 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                             ssh -t. Finalize (--commit-scope, the grant)
                             never runs remotely, under any flag. Off by
                             default: the default path stays printing the
-                            bundle and the exact commands to run by hand.
+                            bundle and the exact commands to run manually.
     --draft-config           after --join has run on the peer: list its
                             datasets and write a reviewed-by-hand .suggested
                             file (never installs anything)
@@ -639,7 +639,7 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                           section (non-system datasets one level below each
                           pool) plus the complete inventory, commented, to
                           edit from. Refuses if the file already exists --
-                          edit or remove it by hand first. Run this BEFORE
+                          edit or remove it manually first. Run this BEFORE
                           --commit-scope; discovery happens here, on the
                           source, never guessed by the collector operator.
   --draft-scope-check=LABEL
@@ -648,12 +648,12 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
   --commit-scope=LABEL    grant a pull peer's account exactly what
                           /etc/zfs-snapshot-all/peers/LABEL.scope selects
                           (LABEL is the initiator label --join printed).
-                          Edit that file by hand first -- see lib-scope.sh's
+                          Edit that file manually first -- see lib-scope.sh's
                           header for the grammar. Re-running after an edit
                           re-grants the new set AND revokes what THIS
                           relationship granted before but the new set no
                           longer selects (bounded by the manifest -- a grant
-                          from another relationship or by hand is never
+                          from another relationship or manually is never
                           touched, and a dataset with an in-flight transfer
                           hold is left granted until the next commit).
     --allow-quiesce       also let that peer FREEZE guests whose disks live
@@ -701,7 +701,7 @@ untouched cron would hand pvesr foreign snapshots to contend with:
                           --fullcron placeholder exactly as saved, and
                           un-comments any paused managed block. Refuses a
                           --fullcron placeholder that looks hand-edited
-                          (resolve it by hand instead of silently discarding
+                          (resolve it manually instead of silently discarding
                           it); a paused block instead keeps any line added
                           during the window that doesn't look like its own.
 
@@ -1331,7 +1331,7 @@ if [ "\$ec" -ne 0 ]; then
     exit 3
 fi
 if ! ./deploy.sh --commit-scope-check=$label; then
-    echo "scope at \$SCOPE failed --commit-scope-check after editing (see error above) -- fix it by hand before committing" >&2
+    echo "scope at \$SCOPE failed --commit-scope-check after editing (see error above) -- fix it manually before committing" >&2
     exit 4
 fi
 echo "scope for '$label' is valid and ready for local --commit-scope=$label"
@@ -1424,7 +1424,7 @@ do_draft_scope_check() {
     [ -n "${PEER_JOIN_ACCOUNT:-}" ] || die "internal: manifest for '$label' has no account recorded"
     sfile=$(peer_scope_path "$label")
     if [ -e "$sfile" ]; then
-        die "$sfile already exists -- refusing to overwrite it (an operator may be mid-edit). Edit it directly, or remove it by hand first if you really want a fresh draft."
+        die "$sfile already exists -- refusing to overwrite it (an operator may be mid-edit). Edit it directly, or remove it manually first if you really want a fresh draft."
     fi
     DRAFT_SCOPE_SFILE="$sfile"
     DRAFT_SCOPE_ACCOUNT="$PEER_JOIN_ACCOUNT"
@@ -1518,7 +1518,7 @@ do_draft_scope() {
         done
     fi
     [ "${#active[@]}" -gt 0 ] \
-        || die "every dataset found is a pool root or a known system dataset (${DRAFT_SCOPE_SYSTEM_NAMES}) -- nothing to activate by default. Edit $sfile's inventory section by hand once it exists, or check this host's pool layout."
+        || die "every dataset found is a pool root or a known system dataset (${DRAFT_SCOPE_SYSTEM_NAMES}) -- nothing to activate by default. Edit $sfile's inventory section manually once it exists, or check this host's pool layout."
 
     local tmp; tmp=$(mktemp) || die "mktemp failed"
     {
@@ -1671,7 +1671,7 @@ do_commit_scope_check() {
     [ -n "${PEER_JOIN_ACCOUNT:-}" ] || die "internal: manifest for '$label' has no account recorded"
     sfile=$(peer_scope_path "$label")
     [ -r "$sfile" ] \
-        || die "no scope file for '$label' at $sfile -- create it by hand first (see lib-scope.sh's header for the grammar), then re-run --commit-scope"
+        || die "no scope file for '$label' at $sfile -- create it manually first (see lib-scope.sh's header for the grammar), then re-run --commit-scope"
     scope_read "$sfile" || die "scope file $sfile: $SCOPE_ERR"
     COMMIT_SCOPE_MPATH="$mpath"
     COMMIT_SCOPE_SFILE="$sfile"
@@ -1904,7 +1904,7 @@ install_quiesce_grant() {
 
         [ -n "$restored" ] && warn "rolled back to the previous grant, restored:$restored"
         [ -n "$removed" ]  && warn "rolled back, removed what this run created:$removed"
-        [ -n "$lost" ]     && warn "COULD NOT RESTORE:$lost -- this host is left holding content from a FAILED run. Put it right by hand before anything relies on the grant."
+        [ -n "$lost" ]     && warn "COULD NOT RESTORE:$lost -- this host is left holding content from a FAILED run. Put it right manually before anything relies on the grant."
         # A rule file that does not parse breaks sudo for every user on the host,
         # root included, so the state the rollback left behind is checked rather
         # than assumed.
@@ -2127,7 +2127,7 @@ quiesce_update_failed() {   # <account> <label> -- exits nonzero, writing nothin
     if revoke_quiesce_grant "$account"; then
         warn "So the freeze permission was taken away entirely. Restore it with: deploy.sh --commit-scope=$label --allow-quiesce"
     else
-        warn "AND it could not be taken away either. Do it by hand NOW: deploy.sh --revoke-quiesce=$account"
+        warn "AND it could not be taken away either. Do it manually NOW: deploy.sh --revoke-quiesce=$account"
     fi
     die "commit-scope did NOT complete for '$label': nothing durable was written (no new scope hash, no new PEER_JOIN_GRANTED_DATASETS), so the previous record still describes what is granted and re-running this same command retries safely."
 }
@@ -2196,7 +2196,7 @@ revoke_quiesce_grant() {
         return 0
     fi
     if [ "$removed" -eq 0 ]; then
-        warn "the quiesce grant for '$account' is still in place -- remove the files named above by hand"
+        warn "the quiesce grant for '$account' is still in place -- remove the files named above manually"
         return 1
     fi
 
@@ -2213,7 +2213,7 @@ revoke_quiesce_grant() {
     if [ -x /usr/local/sbin/zfs-quiesce-helper ]; then
         log "/usr/local/sbin/zfs-quiesce-helper stays: it is SHARED by every peer on this host, and removing it would break the others. Without a whitelist and a sudoers rule it refuses '$account' anyway."
         if [ -d /etc/zfs-quiesce-allow ] && quiesce_allow_dir_empty /etc/zfs-quiesce-allow; then
-            log "no account on this host has a quiesce grant any more -- remove the helper by hand if you want it gone: rm -f /usr/local/sbin/zfs-quiesce-helper"
+            log "no account on this host has a quiesce grant any more -- remove the helper manually if you want it gone: rm -f /usr/local/sbin/zfs-quiesce-helper"
         fi
     fi
     # One half removed, the other stuck: the helper already refuses this account
@@ -2349,7 +2349,7 @@ GRANT_DATASETS_FILE="$UPDATE_STATE_DIR/grant-datasets"
 # do_* function below calls this before touching $PREV_REV_FILE/$UPDATE_HOLD_FILE.
 ensure_update_state_dir() {
     if [ -L "$UPDATE_STATE_DIR" ]; then
-        warn "$UPDATE_STATE_DIR is a symlink -- refusing to follow it. Remove it by hand and re-run: ls -la $UPDATE_STATE_DIR"
+        warn "$UPDATE_STATE_DIR is a symlink -- refusing to follow it. Remove it manually and re-run: ls -la $UPDATE_STATE_DIR"
         return 1
     fi
     if [ -e "$UPDATE_STATE_DIR" ] && [ ! -d "$UPDATE_STATE_DIR" ]; then
@@ -2401,12 +2401,12 @@ explain_pull_failure() {   # <repo dir> [account]
     if [ -n "$dirty" ]; then
         warn "  LOCAL MODIFICATIONS -- --ff-only refuses to overwrite them:"
         printf '%s\n' "$dirty" | while IFS= read -r l; do warn "    $l"; done
-        die "resolve those by hand (git -C $dir status), then re-run"
+        die "resolve those manually (git -C $dir status), then re-run"
     fi
     if [ -n "$ahead" ]; then
         warn "  the checkout HAS COMMITS origin/main does not -- this one really is diverged:"
         printf '%s\n' "$ahead" | while IFS= read -r l; do warn "    $l"; done
-        die "resolve by hand (git -C $dir log origin/main..HEAD), then re-run"
+        die "resolve manually (git -C $dir log origin/main..HEAD), then re-run"
     fi
     warn "  the checkout is clean and has nothing of its own, so this is NOT a divergence."
     warn "  That leaves the fetch itself: network, DNS or GitHub. Check with:"
@@ -2417,7 +2417,7 @@ explain_pull_failure() {   # <repo dir> [account]
 write_state_file() {
     local dst="$1" content="$2" tmp
     if [ -L "$dst" ]; then
-        warn "$dst is a symlink -- refusing to write through it. Remove it by hand: ls -la $dst"
+        warn "$dst is a symlink -- refusing to write through it. Remove it manually: ls -la $dst"
         return 1
     fi
     tmp=$(mktemp "$UPDATE_STATE_DIR/.tmp.XXXXXX" 2>/dev/null) || { warn "mktemp in $UPDATE_STATE_DIR failed"; return 1; }
@@ -2435,7 +2435,7 @@ write_state_file() {
 read_state_file() {
     local src="$1"
     if [ -L "$src" ]; then
-        warn "$src is a symlink -- refusing to read through it. Remove it by hand: ls -la $src"
+        warn "$src is a symlink -- refusing to read through it. Remove it manually: ls -la $src"
         return 1
     fi
     [ -f "$src" ] || return 1
@@ -2450,7 +2450,7 @@ read_state_file() {
 remove_state_file() {
     local dst="$1"
     if [ -L "$dst" ]; then
-        warn "$dst is a symlink, not the state file this script wrote -- refusing to remove it automatically. Inspect and remove by hand: ls -la $dst"
+        warn "$dst is a symlink, not the state file this script wrote -- refusing to remove it automatically. Inspect and remove manually: ls -la $dst"
         return 1
     fi
     [ -e "$dst" ] || return 0
@@ -2469,7 +2469,7 @@ emergency_disable() {
     fi
     warn "could not write the update hold at $UPDATE_HOLD_FILE -- attempting an emergency circuit breaker instead"
     if crontab -l 2>/dev/null | grep -vF "$REPO_DIR/deploy.sh --self-update" | crontab - 2>/dev/null; then
-        warn "removed the hourly cron line invoking $REPO_DIR/deploy.sh --self-update as a last-resort circuit breaker -- re-add it by hand once $UPDATE_STATE_DIR is fixed"
+        warn "removed the hourly cron line invoking $REPO_DIR/deploy.sh --self-update as a last-resort circuit breaker -- re-add it manually once $UPDATE_STATE_DIR is fixed"
         return 0
     fi
     warn "CRITICAL: could not write a hold, could not remove the cron line -- $UPDATE_STATE_DIR needs immediate manual attention or this host will keep retrying hourly"
@@ -2528,7 +2528,7 @@ apply_repo_to_host() {   # <what> <revision-8> -> 0 applied/skipped, 1 not appli
         if printf '%s\n' "$cron_before" > "$pre" 2>/dev/null; then
             warn "the root crontab CHANGED while applying $rev ($what). The pre-image is saved at $pre -- restore with: crontab $pre"
         else
-            warn "the root crontab CHANGED while applying $rev ($what) AND the pre-image could not be saved to $pre -- compare against a backup by hand before trusting this host's schedule"
+            warn "the root crontab CHANGED while applying $rev ($what) AND the pre-image could not be saved to $pre -- compare against a backup manually before trusting this host's schedule"
         fi
     fi
     if [ "$rc" -ne 0 ]; then
@@ -2544,7 +2544,7 @@ do_self_update() {
     ensure_update_state_dir || { warn "refusing to update: $UPDATE_STATE_DIR is not safe to use as update-control state"; return 1; }
 
     if [ -L "$UPDATE_HOLD_FILE" ]; then
-        warn "$UPDATE_HOLD_FILE is a symlink -- treating update-control state as tampered with, refusing to update. Resolve by hand: ls -la $UPDATE_HOLD_FILE"
+        warn "$UPDATE_HOLD_FILE is a symlink -- treating update-control state as tampered with, refusing to update. Resolve manually: ls -la $UPDATE_HOLD_FILE"
         return 1
     fi
     if [ -e "$UPDATE_HOLD_FILE" ]; then
@@ -2552,7 +2552,7 @@ do_self_update() {
         return 0
     fi
     if [ -L "$PREV_REV_FILE" ]; then
-        warn "$PREV_REV_FILE is a symlink -- treating update-control state as tampered with, refusing to update. Resolve by hand: ls -la $PREV_REV_FILE"
+        warn "$PREV_REV_FILE is a symlink -- treating update-control state as tampered with, refusing to update. Resolve manually: ls -la $PREV_REV_FILE"
         return 1
     fi
 
@@ -2579,7 +2579,7 @@ do_self_update() {
     fi
 
     if [ -n "$dirty" ]; then
-        warn "$REPO_DIR is not clean -- refusing to update to $(printf '%.8s' "$target"). Running a mix of reviewed and unreviewed local code as root is exactly what this check exists to prevent. Resolve by hand: git -C $REPO_DIR status"
+        warn "$REPO_DIR is not clean -- refusing to update to $(printf '%.8s' "$target"). Running a mix of reviewed and unreviewed local code as root is exactly what this check exists to prevent. Resolve manually: git -C $REPO_DIR status"
         return 1
     fi
 
@@ -2622,11 +2622,11 @@ do_rollback() {
     [ -d "$REPO_DIR/.git" ] || die "no git checkout at $REPO_DIR"
     ensure_update_state_dir || die "$UPDATE_STATE_DIR is not safe to use as update-control state -- see above"
     local target
-    target=$(read_state_file "$PREV_REV_FILE") || die "no previous revision recorded at $PREV_REV_FILE (or it is not a plain file) -- nothing to roll back to. Pick a revision by hand: git -C $REPO_DIR log --oneline"
+    target=$(read_state_file "$PREV_REV_FILE") || die "no previous revision recorded at $PREV_REV_FILE (or it is not a plain file) -- nothing to roll back to. Pick a revision manually: git -C $REPO_DIR log --oneline"
     [ -n "$target" ] || die "$PREV_REV_FILE is empty -- nothing to roll back to"
     local from
     from=$(git -C "$REPO_DIR" rev-parse HEAD) || die "cannot resolve current HEAD in $REPO_DIR"
-    git -C "$REPO_DIR" cat-file -e "${target}^{commit}" 2>/dev/null         || die "recorded revision $target is not in $REPO_DIR -- resolve by hand"
+    git -C "$REPO_DIR" cat-file -e "${target}^{commit}" 2>/dev/null         || die "recorded revision $target is not in $REPO_DIR -- resolve manually"
 
     # F2: the hold is written BEFORE the reset, not after. If the reset then
     # fails partway, the host must come up HELD -- not silently retry the same
@@ -2638,7 +2638,7 @@ do_rollback() {
     if ! git -C "$REPO_DIR" reset --hard "$target" >/dev/null 2>&1; then
         emergency_disable "rollback to $(printf '%.8s' "$target") FAILED at $(date '+%Y-%m-%d %H:%M:%S') -- checkout may be inconsistent, held for manual investigation" \
             || warn "emergency circuit breaker also failed after a failed reset -- $UPDATE_STATE_DIR needs manual attention immediately"
-        die "git reset --hard $target failed -- automatic updates remain HELD, investigate $REPO_DIR by hand"
+        die "git reset --hard $target failed -- automatic updates remain HELD, investigate $REPO_DIR manually"
     fi
 
     write_state_file "$UPDATE_HOLD_FILE"         "rolled back from $(printf '%.8s' "$from") to $(printf '%.8s' "$target") on $(date '+%Y-%m-%d %H:%M:%S')"         || warn "rollback succeeded but could not refresh the hold message at $UPDATE_HOLD_FILE (the hold from before the reset is still in place)"
@@ -2657,7 +2657,7 @@ do_rollback() {
 do_resume_updates() {
     ensure_update_state_dir || die "$UPDATE_STATE_DIR is not safe to use as update-control state -- see above"
     if [ -L "$UPDATE_HOLD_FILE" ]; then
-        die "$UPDATE_HOLD_FILE is a symlink -- refusing to touch it. Resolve by hand: ls -la $UPDATE_HOLD_FILE"
+        die "$UPDATE_HOLD_FILE is a symlink -- refusing to touch it. Resolve manually: ls -la $UPDATE_HOLD_FILE"
     fi
 
     local had_hold=0 hold_content=""
@@ -2679,7 +2679,7 @@ do_resume_updates() {
     if [ "$rc" -ne 0 ] && [ "$had_hold" -eq 1 ]; then
         warn "the explicit update after --resume-updates failed -- restoring the hold rather than leaving automatic updates enabled"
         emergency_disable "restored after a failed --resume-updates on $(date '+%Y-%m-%d %H:%M:%S') -- previous hold was: $hold_content" \
-            || warn "emergency circuit breaker also failed after a failed resume -- automatic updates may retry hourly. Investigate $UPDATE_STATE_DIR by hand."
+            || warn "emergency circuit breaker also failed after a failed resume -- automatic updates may retry hourly. Investigate $UPDATE_STATE_DIR manually."
     fi
     return "$rc"
 }
@@ -3203,7 +3203,7 @@ do_deny_restore() {
             fi
         done
     else
-        warn "neither the revocation record nor the pairing manifest for '$label' says which account and datasets were delegated, so nothing could be revoked here. See 'zfs allow' on the relationship's datasets, remove the delegation by hand (zfs unallow -u <account> ...), then resume what this grant paused: bash $_DEPLOY_DIR/zfs-backup.sh resume-writers $label"
+        warn "neither the revocation record nor the pairing manifest for '$label' says which account and datasets were delegated, so nothing could be revoked here. See 'zfs allow' on the relationship's datasets, remove the delegation manually (zfs unallow -u <account> ...), then resume what this grant paused: bash $_DEPLOY_DIR/zfs-backup.sh resume-writers $label"
         _rd_open=1
         _rd_nofacts=1
     fi
@@ -3226,7 +3226,7 @@ do_deny_restore() {
     fi
     log "restore grant for '$label' TAKEN BACK (it permitted: ${had:-<unreadable>})"
     log "  the collector for '$label' can no longer write onto this machine."
-    rm -f "$rpath" || warn "could not remove the revocation record $rpath -- it is finished; remove it by hand"
+    rm -f "$rpath" || warn "could not remove the revocation record $rpath -- it is finished; remove it manually"
     restore_grant_resume_writers "$label"
     return 0
 }
@@ -3651,7 +3651,7 @@ do_pause_one() {   # <user>  -> 0 paused, 1 already paused or failed
     }
     printf '%s\n' "$placeholder_text" > "$placeholder"
     if ! cron_write "$user" "$placeholder"; then
-        warn "$user: $CRON_ERR -- rolling back the just-saved pause state; nothing is marked paused. If the crontab now holds partial content from the failed write, check it by hand"
+        warn "$user: $CRON_ERR -- rolling back the just-saved pause state; nothing is marked paused. If the crontab now holds partial content from the failed write, check it manually"
         rm -f "$state" "$ph_state" "$cur" "$placeholder"; cron_lock_release "$user"; return 1
     fi
     rm -f "$cur" "$placeholder"
@@ -3694,7 +3694,7 @@ do_pause_blocks_one() {   # <user>
         warn "$user: $CRON_ERR"; rm -f "$cur"; cron_lock_release "$user"; return 1
     fi
     if ! cron_markers_valid "$cur"; then
-        warn "$user: crontab markers are malformed ($CRON_ERR) -- refusing to pause, resolve by hand"
+        warn "$user: crontab markers are malformed ($CRON_ERR) -- refusing to pause, resolve manually"
         rm -f "$cur"; cron_lock_release "$user"; return 1
     fi
     local names; names=$(pause_known_names "$(cron_block_names_present "$cur")")
@@ -3786,11 +3786,11 @@ do_resume_one() {   # <user>  -> 0 resumed, 1 nothing to resume or failed
         warn "$user: $CRON_ERR"; rm -f "$cur"; cron_lock_release "$user"; return 1
     fi
     if [ ! -e "$ph_state" ] || ! cmp -s "$cur" "$ph_state"; then
-        warn "$user: the current crontab is not byte-for-byte the exact placeholder --pause wrote -- refusing to overwrite what may be a manual edit made during the maintenance window. The saved pre-pause state is still at $state; compare by hand, then either restore it yourself or remove it once you are sure it is no longer needed."
+        warn "$user: the current crontab is not byte-for-byte the exact placeholder --pause wrote -- refusing to overwrite what may be a manual edit made during the maintenance window. The saved pre-pause state is still at $state; compare manually, then either restore it yourself or remove it once you are sure it is no longer needed."
         rm -f "$cur"; cron_lock_release "$user"; return 1
     fi
     if ! cron_markers_valid "$state"; then
-        warn "$user: saved pre-pause crontab at $state fails marker validation ($CRON_ERR) -- refusing to restore a broken layout, resolve by hand"
+        warn "$user: saved pre-pause crontab at $state fails marker validation ($CRON_ERR) -- refusing to restore a broken layout, resolve manually"
         rm -f "$cur"; cron_lock_release "$user"; return 1
     fi
     if ! cron_write "$user" "$state"; then
@@ -3830,7 +3830,7 @@ do_resume_blocks_one() {   # <user>
         warn "$user: $CRON_ERR"; rm -f "$cur"; cron_lock_release "$user"; return 1
     fi
     if ! cron_markers_valid "$cur"; then
-        warn "$user: crontab markers are malformed ($CRON_ERR) -- refusing to resume, resolve by hand"
+        warn "$user: crontab markers are malformed ($CRON_ERR) -- refusing to resume, resolve manually"
         rm -f "$cur"; cron_lock_release "$user"; return 1
     fi
     local names; names=$(pause_known_names "$(cron_block_names_present "$cur")")
@@ -4068,7 +4068,7 @@ do_commit_scope() {
         local live_uid; live_uid=$(id -u "$account")
         if [ -n "${PEER_JOIN_ACCOUNT_UID:-}" ]; then
             [ "$live_uid" = "$PEER_JOIN_ACCOUNT_UID" ] \
-                || die "refusing to grant: account '$account' is uid $live_uid, but the manifest for '$label' recorded uid $PEER_JOIN_ACCOUNT_UID at join time -- name/uid drift (account recreated under the same name?) is a collision signal, not something to grant through. Resolve by hand: confirm which uid actually owns this relationship, fix the manifest, then retry."
+                || die "refusing to grant: account '$account' is uid $live_uid, but the manifest for '$label' recorded uid $PEER_JOIN_ACCOUNT_UID at join time -- name/uid drift (account recreated under the same name?) is a collision signal, not something to grant through. Resolve manually: confirm which uid actually owns this relationship, fix the manifest, then retry."
         else
             # Legacy manifest (joined before this field existed) -- capture
             # now, while the account is confirmed live, rather than leaving
@@ -4178,7 +4178,7 @@ do_commit_scope() {
         if zfs unallow -u "$account" "$perms" -- "$ds" 2>/dev/null; then
             log "revoke-on-narrow: revoked ($perms) on $ds from $account -- no longer in scope for '$label'"
         else
-            warn "revoke-on-narrow: could not revoke $account's grant on $ds -- left as-is, resolve by hand"
+            warn "revoke-on-narrow: could not revoke $account's grant on $ds -- left as-is, resolve manually"
             still_granted+=("$ds")
         fi
     done
@@ -4388,7 +4388,7 @@ guided_join_scope() {   # <label>
             echo "!!! The scope draft $sfile was made for a DIFFERENT request than the current one." >&2
             echo "!!!   draft was built for:       ${_had:-(nothing -- the host's whole estate)}" >&2
             echo "!!!   collector asks for now:    ${_want:-(nothing -- the host's whole estate)}" >&2
-            die "refusing to offer a grant computed from a draft that predates the current request. Review it and re-draft: rm $sfile $sfile.request, then re-run this --join (or edit the draft by hand if its contents are still what you mean, and re-run --commit-scope=$label)."
+            die "refusing to offer a grant computed from a draft that predates the current request. Review it and re-draft: rm $sfile $sfile.request, then re-run this --join (or edit the draft manually if its contents are still what you mean, and re-run --commit-scope=$label)."
         fi
         fi
     fi
@@ -4492,16 +4492,16 @@ new_account_drop_inherited_grants() {   # <account just created> <its home path>
     warn "new account $account INHERITED zfs delegations of a removed account with the same uid ($uid) on:$found -- revoking them; a new account starts with no rights"
     for ds in $found; do
         zfs unallow -u "$account" "$ds" 2>/dev/null \
-            || new_account_abort "$account" "$uid" "could not revoke the inherited delegation of $account on $ds -- revoke it by hand: zfs unallow -u $uid $ds"
+            || new_account_abort "$account" "$uid" "could not revoke the inherited delegation of $account on $ds -- revoke it manually: zfs unallow -u $uid $ds"
     done
     log "revoked inherited delegations of $account on:$found"
 }
 new_account_abort() {   # <account> <uid> <reason> -- never returns; reads NEW_ACCOUNT_HOME
-    local kept=" Its home ${NEW_ACCOUNT_HOME:-(path unknown)} is left in place -- a rollback never deletes a directory it cannot prove it created. Look at it; if it holds only what useradd copied from /etc/skel, remove it by hand (rm -r ${NEW_ACCOUNT_HOME:-<home>})."
+    local kept=" Its home ${NEW_ACCOUNT_HOME:-(path unknown)} is left in place -- a rollback never deletes a directory it cannot prove it created. Look at it; if it holds only what useradd copied from /etc/skel, remove it manually (rm -r ${NEW_ACCOUNT_HOME:-<home>})."
     if userdel "$1" >/dev/null 2>&1; then
         die "new account $1 (uid $2): $3 -- the account was removed again.$kept Fix it and re-run."
     fi
-    die "new account $1 (uid $2): $3 -- and removing the account failed too: run 'userdel $1' by hand BEFORE re-running (a re-run would take the existing account as already checked).$kept"
+    die "new account $1 (uid $2): $3 -- and removing the account failed too: run 'userdel $1' manually BEFORE re-running (a re-run would take the existing account as already checked).$kept"
 }
 
 # REV-20261021-164: during --leave a dataset is "gone" only on ZFS's own word for it
@@ -4556,7 +4556,7 @@ do_leave() {
             local live_uid; live_uid=$(id -u "$account")
             if [ -n "${PEER_JOIN_ACCOUNT_UID:-}" ]; then
                 [ "$live_uid" = "$PEER_JOIN_ACCOUNT_UID" ] \
-                    || die "refusing --leave='$label': account '$account' is uid $live_uid, but the manifest recorded uid $PEER_JOIN_ACCOUNT_UID at join/commit time -- name/uid drift (account recreated under the same name?) is a collision signal, not something to tear down through. Resolve by hand: confirm which uid actually owns this relationship, fix the manifest, then retry. Nothing has been changed."
+                    || die "refusing --leave='$label': account '$account' is uid $live_uid, but the manifest recorded uid $PEER_JOIN_ACCOUNT_UID at join/commit time -- name/uid drift (account recreated under the same name?) is a collision signal, not something to tear down through. Resolve manually: confirm which uid actually owns this relationship, fix the manifest, then retry. Nothing has been changed."
                 uid="$live_uid"
             else
                 # Legacy manifest (joined before this field existed) and the
@@ -4569,7 +4569,7 @@ do_leave() {
             uid="$PEER_JOIN_ACCOUNT_UID"
             warn "account '$account' already gone -- using the manifest-recorded uid $uid (never a guess) to find and revoke its grant"
         else
-            die "refusing --leave='$label': account '$account' is already gone AND no uid was ever recorded for it (a legacy relationship joined before this field existed, never committed since). There is no durable identifier left to safely find its grant among possibly several numeric/unknown principals on these datasets -- guessing was REV-20260804-039 F3's own first, wrong attempt at this. Resolve by hand: 'zfs allow <dataset>' on each of: ${PEER_JOIN_GRANTED_DATASETS:-<none recorded>} -- identify which numeric uid is actually this relationship's (system logs, /var/log/auth.log around when the account was removed, etc.), then 'zfs unallow -u <that uid> <dataset>' yourself before removing $mpath by hand. Nothing has been changed."
+            die "refusing --leave='$label': account '$account' is already gone AND no uid was ever recorded for it (a legacy relationship joined before this field existed, never committed since). There is no durable identifier left to safely find its grant among possibly several numeric/unknown principals on these datasets -- guessing was REV-20260804-039 F3's own first, wrong attempt at this. Resolve manually: 'zfs allow <dataset>' on each of: ${PEER_JOIN_GRANTED_DATASETS:-<none recorded>} -- identify which numeric uid is actually this relationship's (system logs, /var/log/auth.log around when the account was removed, etc.), then 'zfs unallow -u <that uid> <dataset>' yourself before removing $mpath manually. Nothing has been changed."
         fi
 
         local -a datasets=(${PEER_JOIN_GRANTED_DATASETS:-})
@@ -4603,7 +4603,7 @@ do_leave() {
             if zfs unallow -u "$uid" "$perms" -- "$ds" 2>/dev/null; then
                 log "leave: revoked ($perms) on $ds from uid $uid ($account)"
             else
-                warn "leave: could not revoke uid $uid's grant on $ds -- check by hand: zfs allow $ds"
+                warn "leave: could not revoke uid $uid's grant on $ds -- check manually: zfs allow $ds"
             fi
         done
 
@@ -4627,7 +4627,7 @@ do_leave() {
                 && residual+=("$ds")
         done
         if [ "${#residual[@]}" -gt 0 ]; then
-            die "refusing to proceed: ${residual[*]} still show a grant for uid $uid or account '$account' after the revoke attempt above -- resolve by hand ('zfs allow <dataset>' to see exactly what, 'zfs unallow -u $uid <dataset>' to remove it), then re-run --leave='$label'. Account (if it still exists) and key left in place."
+            die "refusing to proceed: ${residual[*]} still show a grant for uid $uid or account '$account' after the revoke attempt above -- resolve manually ('zfs allow <dataset>' to see exactly what, 'zfs unallow -u $uid <dataset>' to remove it), then re-run --leave='$label'. Account (if it still exists) and key left in place."
         fi
 
         if id "$account" >/dev/null 2>&1; then
@@ -4639,7 +4639,7 @@ do_leave() {
                 || warn "leave: '$account' still has processes after the wait ($(pgrep -u "$account" 2>/dev/null | tr '\n' ' ')) -- userdel will say what holds it"
             userdel -r "$account" 2>&1 \
                 || { sleep 2; leave_end_account_processes "$account"; userdel -r "$account" 2>&1; } \
-                || die "userdel -r $account failed -- its ZFS grants are already revoked and verified gone; resolve the account removal by hand, then re-run --leave='$label' to finish cleaning up state"
+                || die "userdel -r $account failed -- its ZFS grants are already revoked and verified gone; resolve the account removal manually, then re-run --leave='$label' to finish cleaning up state"
             log "leave: removed account '$account' (uid $uid) and its home directory"
         else
             log "leave: account '$account' (uid $uid) already gone; its orphaned grant is now cleared"
@@ -4680,7 +4680,7 @@ do_leave() {
         if rmdir "$gdir" 2>/dev/null; then
             log "leave: removed the pair-gate state directory $gdir"
         else
-            warn "leave: $gdir is not empty, so it was left in place -- it still holds state for '$label' (a disable marker, most likely). Look at it and remove it by hand: ls -la $gdir"
+            warn "leave: $gdir is not empty, so it was left in place -- it still holds state for '$label' (a disable marker, most likely). Look at it and remove it manually: ls -la $gdir"
         fi
     fi
     log "leave: '$label' fully torn down on this host. Nothing done on the collector -- see --unpair there."
@@ -5238,12 +5238,12 @@ else
                 if ensure_update_state_dir && mv -n "$_old" "$_new" 2>/dev/null; then
                     log "migrated $_old -> $_new (REV-20260729-004 F1: update-control state is no longer inside the group-writable alert dir)"
                 else
-                    warn "could not migrate $_old to $_new -- check by hand, a rollback point or hold may be stranded"
+                    warn "could not migrate $_old to $_new -- check manually, a rollback point or hold may be stranded"
                 fi
             fi
         done
     fi
-    ensure_update_state_dir         && log "update-control state dir $UPDATE_STATE_DIR ($(stat -c '%a %U:%G' "$UPDATE_STATE_DIR" 2>/dev/null))"         || warn "  could not prepare $UPDATE_STATE_DIR as a safe, root-private directory -- --self-update/--rollback/--resume-updates will all refuse to run until this is fixed by hand"
+    ensure_update_state_dir         && log "update-control state dir $UPDATE_STATE_DIR ($(stat -c '%a %U:%G' "$UPDATE_STATE_DIR" 2>/dev/null))"         || warn "  could not prepare $UPDATE_STATE_DIR as a safe, root-private directory -- --self-update/--rollback/--resume-updates will all refuse to run until this is fixed manually"
 fi
 
 ALERT_CONF="/etc/zfs-alert.conf"
@@ -5416,7 +5416,7 @@ fi
 if [ "$CHECK_ONLY" -eq 0 ] && command -v logrotate >/dev/null; then
     logrotate --debug "$LOGROTATE_CONF" >/dev/null 2>&1 \
         && log "  logrotate config parses cleanly" \
-        || warn "  logrotate rejected $LOGROTATE_CONF -- check it by hand"
+        || warn "  logrotate rejected $LOGROTATE_CONF -- check it manually"
 fi
 
 # ------------------------------------------------------------------------------
@@ -5588,7 +5588,7 @@ if [ -d "$REPO_DIR/.git" ] && [ -z "$(git -C "$REPO_DIR" config --get http.versi
     if git -C "$REPO_DIR" config http.version HTTP/1.1 2>/dev/null; then
         log "  pinned http.version=HTTP/1.1 on $REPO_DIR (git over HTTP/2 fails against GitHub on git 2.30.x, reporting it as a missing username)"
     else
-        warn "  could not set http.version on $REPO_DIR -- if hourly updates report 'could not read Username', set it by hand: git -C $REPO_DIR config http.version HTTP/1.1"
+        warn "  could not set http.version on $REPO_DIR -- if hourly updates report 'could not read Username', set it manually: git -C $REPO_DIR config http.version HTTP/1.1"
     fi
 fi
 
@@ -5731,7 +5731,7 @@ if [ -d "$REPO_DIR/.git" ]; then
         *) log "$_behind commit(s) behind the last fetched origin/main -- the hourly update will catch up" ;;
     esac
     if [ -L "$UPDATE_HOLD_FILE" ] || [ -L "$PREV_REV_FILE" ]; then
-        warn "update-control state at $UPDATE_STATE_DIR contains a symlink where a plain file is expected -- --self-update/--rollback/--resume-updates will all refuse to run until this is resolved by hand: ls -la $UPDATE_STATE_DIR"
+        warn "update-control state at $UPDATE_STATE_DIR contains a symlink where a plain file is expected -- --self-update/--rollback/--resume-updates will all refuse to run until this is resolved manually: ls -la $UPDATE_STATE_DIR"
     else
         if [ -e "$UPDATE_HOLD_FILE" ]; then
             warn "AUTOMATIC UPDATES ARE HELD: $(read_state_file "$UPDATE_HOLD_FILE")"
@@ -6048,7 +6048,7 @@ do_pair() {
     if [ "$PEER_ROTATE" -eq 1 ]; then
         [ -r "$mpath" ] || die "--rotate needs an existing pairing for '$PEER_HOST' -- run --pair once first (without --rotate)"
         record_load manifest "$mpath"
-        [ "${PEER_ROTATING:-no}" = "yes" ] && die "peer '$PEER_HOST' already has a rotation in progress -- finish it with --revoke-old first, or remove ${PEER_KEY_DIR}/${label}_ed25519.new by hand to restart"
+        [ "${PEER_ROTATING:-no}" = "yes" ] && die "peer '$PEER_HOST' already has a rotation in progress -- finish it with --revoke-old first, or remove ${PEER_KEY_DIR}/${label}_ed25519.new manually to restart"
         PEER_ROLE="${PEER_SAVED_ROLE:-$PEER_ROLE}"
         PEER_TARGET="${PEER_SAVED_TARGET:-$PEER_TARGET}"
         PEER_AS="${PEER_SAVED_AS:-$PEER_AS}"
@@ -6411,7 +6411,7 @@ EOF
                     ;;
                 2)
                     log "The draft FAILED (see the error above) -- no scope file was created."
-                    log "The join is already done, do NOT repeat it. By hand on $PEER_HOST:"
+                    log "The join is already done, do NOT repeat it. Manually on $PEER_HOST:"
                     log "  ssh root@$PEER_HOST"
                     log "  cd $REPO_DIR"
                     log "  ./deploy.sh --draft-scope=$my_label"
@@ -6421,7 +6421,7 @@ EOF
                 3)
                     log "The editor session on $PEER_HOST exited non-zero -- the scope is NOT ready."
                     log "The file may already exist (if the draft succeeded): $remote_scope"
-                    log "By hand on $PEER_HOST:"
+                    log "Manually on $PEER_HOST:"
                     log "  ssh root@$PEER_HOST"
                     log "  cd $REPO_DIR"
                     log "  \${EDITOR:-vi} $remote_scope"
@@ -6429,7 +6429,7 @@ EOF
                     ;;
                 4)
                     log "The scope was edited but did NOT pass --commit-scope-check (see the error above)."
-                    log "Fix it by hand on $PEER_HOST:"
+                    log "Fix it manually on $PEER_HOST:"
                     log "  ssh root@$PEER_HOST"
                     log "  cd $REPO_DIR"
                     log "  \${EDITOR:-vi} $remote_scope"
@@ -6463,7 +6463,7 @@ EOF
         fi
     else
         log "Package ready: $pkg"
-        log "Move it to $PEER_HOST by hand and run it there from the console:"
+        log "Move it to $PEER_HOST manually and run it there from the console:"
         log "  scp $pkg root@$PEER_HOST:/root/"
         log "  ssh root@$PEER_HOST"
         log "  cd $REPO_DIR && ./deploy.sh --join=/root/$(basename "$pkg")"
@@ -6883,7 +6883,7 @@ do_join() {
         prior_granted_datasets="${PEER_JOIN_GRANTED_DATASETS:-}"
         if [ -n "${PEER_JOIN_FINGERPRINT:-}" ] && [ "$PEER_JOIN_FINGERPRINT" != "$new_fp" ]; then
             if [ "${PEER_JOIN_ACCOUNT:-}" != "$PEER_CONF_ACCOUNT" ] || [ "${PEER_JOIN_TARGET:-}" != "$PEER_CONF_TARGET" ]; then
-                die "manifest for label '$label' already exists with a DIFFERENT account/target ($PEER_JOIN_ACCOUNT/$PEER_JOIN_TARGET vs $PEER_CONF_ACCOUNT/$PEER_CONF_TARGET) -- this looks like a label collision between two unrelated peers, not a rotation. Resolve by hand, do not re-run blindly."
+                die "manifest for label '$label' already exists with a DIFFERENT account/target ($PEER_JOIN_ACCOUNT/$PEER_JOIN_TARGET vs $PEER_CONF_ACCOUNT/$PEER_CONF_TARGET) -- this looks like a label collision between two unrelated peers, not a rotation. Resolve manually, do not re-run blindly."
             fi
             log "new key for an already-known peer '$label' (rotation) -- adding alongside the existing one"
         fi
@@ -7002,7 +7002,7 @@ EOF2
     # and repairs it -- never deletes an account or key that may predate this
     # attempt.
     local want_remote=""; [ "$PEER_CONF_REMOTE_JOIN" = "yes" ] && want_remote="yes"
-    local partial_msg="PARTIAL ENROLMENT: account '$account' and its authorized key already exist (created above, before this failure) -- the manifest at $mpath was NOT published. Re-running './deploy.sh --join=<same package>' is safe and will repair it (the account/key steps above are already idempotent); do not delete the account or key by hand, they may predate this attempt."
+    local partial_msg="PARTIAL ENROLMENT: account '$account' and its authorized key already exist (created above, before this failure) -- the manifest at $mpath was NOT published. Re-running './deploy.sh --join=<same package>' is safe and will repair it (the account/key steps above are already idempotent); do not delete the account or key manually, they may predate this attempt."
 
     local mtmp
     mtmp=$(mktemp "${mpath}.XXXXXX" 2>/dev/null) || die "join: could not create a manifest temp file next to $mpath -- $partial_msg"
@@ -7141,8 +7141,8 @@ do_revoke_old() {
 
     local keyfile="$PEER_KEY_DIR/${label}_ed25519"
     local newkey="${keyfile}.new"
-    [ -f "$newkey" ] || die "expected $newkey from --rotate, not found -- rotation state is inconsistent, resolve by hand"
-    [ -n "${PEER_PREVIOUS_PUBKEY:-}" ] || die "manifest has no PEER_PREVIOUS_PUBKEY -- cannot safely identify which line to remove, resolve by hand"
+    [ -f "$newkey" ] || die "expected $newkey from --rotate, not found -- rotation state is inconsistent, resolve manually"
+    [ -n "${PEER_PREVIOUS_PUBKEY:-}" ] || die "manifest has no PEER_PREVIOUS_PUBKEY -- cannot safely identify which line to remove, resolve manually"
 
     local remote_user="${PEER_SAVED_ACCOUNT:-root}"
     log "removing the OLD key from ${remote_user}@${PEER_HOST} using the already-verified NEW key..."
@@ -7226,7 +7226,7 @@ unpair_report_residual_access() {
         $1 == "user" && $2 == u    { if (ds != "") print ds }' | sort -u) || return 0
     [ -n "$residual" ] || return 0
     warn "$user STILL has effective access to $dataset -- inherited from a grant on: $(printf '%s' "$residual" | tr '\n' ' ')"
-    warn "that grant predates this pairing and is not ours to remove; if isolation is the point, revoke it by hand: zfs unallow -u $user <this dataset>"
+    warn "that grant predates this pairing and is not ours to remove; if isolation is the point, revoke it manually: zfs unallow -u $user <this dataset>"
 }
 
 # do_unpair -- end the relationship on THIS side and print exactly what to run
@@ -7332,7 +7332,7 @@ do_unpair() {
                 warn "any prune/monitor job for $dest_root running as $local_user will now fail -- re-grant with: zfs allow -u $local_user $ZFS_PERMS $dest_root"
                 unpair_report_residual_access "$local_user" "$dest_root"
             else
-                warn "could not revoke the delegation on $dest_root -- check it by hand: zfs allow $dest_root"
+                warn "could not revoke the delegation on $dest_root -- check it manually: zfs allow $dest_root"
             fi
         fi
         [ -n "${PEER_SAVED_TARGET:-}" ] && log "DATA LEFT IN PLACE: $dest_root (unpairing ends the relationship, not the backup)"
@@ -7588,7 +7588,7 @@ do_draft_config() {
             echo "# the account ${remote_user} on the peer knows ONLY that key."
             echo "#"
             echo "# '-k' is the other half of the same thing: the pinned HOST key of the"
-            echo "# peer, checked by hand during --pair. Without it the job falls back to"
+            echo "# peer, checked manually during --pair. Without it the job falls back to"
             echo "# accept-new, i.e. trusts whatever answers on the first connection."
             [ -n "$kh_flag" ] || echo "# WARNING: file $job_knownhosts is missing -- '-k' omitted, see the log."
             if [ -n "$port_flag" ]; then
@@ -7644,7 +7644,7 @@ do_draft_config() {
             echo "# the account ${remote_user} on the peer knows ONLY that key."
             echo "#"
             echo "# '-k' is the other half of the same thing: the pinned HOST key of the"
-            echo "# peer, checked by hand during --pair. Without it the job falls back to"
+            echo "# peer, checked manually during --pair. Without it the job falls back to"
             echo "# accept-new, i.e. trusts whatever answers on the first connection."
             [ -n "$kh_flag" ] || echo "# WARNING: file $job_knownhosts is missing -- '-k' omitted, see the log."
             if [ -n "$port_flag" ]; then
@@ -7681,7 +7681,7 @@ do_draft_config() {
             draft_emit_uncovered "To add: --pair --peer=$PEER_HOST --peer-datasets=\"$granted <new>\" (and --join on the peer)."
         } > "$out"
     fi
-    log "draft written: $out -- review it by hand before touching cron-configs"
+    log "draft written: $out -- review it manually before touching cron-configs"
 }
 
 if [ "$PAIR_MODE" -eq 1 ]; then
@@ -7940,7 +7940,7 @@ EOF
     if command -v logrotate >/dev/null; then
         logrotate --debug "$LOGROTATE_CONF" >/dev/null 2>&1 \
             && log "  logrotate config parses cleanly" \
-            || warn "  logrotate rejected $LOGROTATE_CONF -- check it by hand"
+            || warn "  logrotate rejected $LOGROTATE_CONF -- check it manually"
     fi
 
     # ------------------------------------------------------------------------------
@@ -8036,7 +8036,7 @@ cat <<'EOF'
      copying another host's dataset names blindly is how backups silently
      stop protecting the right data. Prefer writing a config and letting
      gen-cron.sh render the lines -- it lints what these hand-written
-     shapes cannot. If writing by hand anyway:
+     shapes cannot. If writing manually anyway:
 
        <schedule> /root/scripts/zfs-snapshot-all/snapsend.sh -m <prefix> \
          [-e] [-r|-R] [-u] [-z] -v 3 <DATASETS> [<REMOTE>] \

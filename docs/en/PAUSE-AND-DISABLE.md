@@ -251,7 +251,7 @@ with the pairing key, if it is behind, jump straight to the newest state, decide
 
 ## Peer side: what `deploy.sh` does
 
-Nothing has to be typed by hand: `--join` installs the gate when the relation is set up.
+Nothing has to be typed manually: `--join` installs the gate when the relation is set up.
 
 ```text
 >>> pair gate installed at /usr/local/sbin/zfs-pair-gate; relationship state at /var/lib/zfs-snapshot-all/relationships/kolektor
@@ -291,7 +291,7 @@ rm -f /var/lib/zfs-snapshot-all/relationships/<label>/disabled
   rejects it. The tool says so outright ("relationship is DISABLED at the peer … This is not an
   address problem"): do not hunt for a network fault, lift the disable first.
 - **`remove-client` does not clean up the peer.** It prints the commands to run there (`deploy.sh --leave=<label>`)
-  and they have to be run by hand. Skipping it leaves a manifest that, at the next `--join` under the same
+  and they have to be run manually. Skipping it leaves a manifest that, at the next `--join` under the same
   label, will rightly block enrolment as a collision.
 - **One relation per pair of hosts.** A second client for the same peer address interweaves the state on both
   sides.

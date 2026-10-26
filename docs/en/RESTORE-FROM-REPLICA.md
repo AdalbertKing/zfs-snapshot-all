@@ -83,7 +83,7 @@ zero.
 zfs-media-gate.sh detach repl weekly
 ```
 
-It exports **only if it imported itself** — a pool brought up by hand will not be
+It exports **only if it imported itself** — a pool brought up manually will not be
 taken from under the operator.
 
 ## Good to know
@@ -98,7 +98,7 @@ aim the restore by someone else's records.
 **The pause happens by itself.** The source has no relation, but **the target does**
 — the collector's copy is written by pull. The run recognises the relation that owns
 the target and puts its schedule on hold for the duration of the restore
-(`paused 'src9'` … `resumed 'src9'`). Nothing has to be stopped by hand.
+(`paused 'src9'` … `resumed 'src9'`). Nothing has to be stopped manually.
 
 **Restored datasets are not mounted** — `recv -u`, deliberately. To look inside:
 `zfs set mountpoint=… && zfs mount`.
