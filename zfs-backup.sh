@@ -7454,7 +7454,15 @@ tiers_apply_ops() {   # <config working copy> <name> <ops...> -> TIERS_CHANGES; 
                 [ -n "$key" ] || fail "'$op' names no tier -- put --tier=T (or --src-tier=T) before it"
                 case "$op" in
                     --keep=*)
-                        case "$v" in ''|*[!0-9]*|0*) fail "--keep='$v' -- a whole number above 0" ;; esac
+                        # 0 AT THE SOURCE (owner 2026-10-26, A-TASSA: a 60 GB conversion day filled a
+                        # small source while its snapshots were long copied): keep none of this tier
+                        # there after the copy. The incremental base is the newest COMMON snapshot of
+                        # ANY family (snapget find_common_snapshot), so the other tiers carry it. On
+                        # the target a zero would be no copy at all -- refused.
+                        case "$v" in
+                            0) [ "$side" = source ] || fail "--keep=0 -- only at the source (--src-tier); the copy target keeps at least 1" ;;
+                            ''|*[!0-9]*|0*) fail "--keep='$v' -- a whole number above 0 (0 only at the source)" ;;
+                        esac
                         r=$(rb_get "$key" "$side" retain 2>/dev/null) || fail "tier '$key' counts nothing on the $side side -- nothing to set a number on"
                         rb_set "$key" "$side" retain "-${r:1:1}$v" ;;
                     --retain=*)
@@ -7537,6 +7545,19 @@ tiers_apply_ops() {   # <config working copy> <name> <ops...> -> TIERS_CHANGES; 
             *) fail "unknown change '$op'" ;;
         esac
     done
+    # At least one tier keeps something at the source: with all of them at 0 no snapshot is
+    # common to both sides and every copy would be a full one.
+    if [ "$hasS" -eq 1 ]; then
+        local _t _r _any=0 _nz=0
+        for _t in "${RB_TIERS[@]}"; do
+            [ "$(rb_get "$_t" "" source 2>/dev/null)" = no ] && continue
+            _r=$(rb_get "$_t" source retain 2>/dev/null) || continue
+            _any=1
+            case "$_r" in -[A-Za-z]0) ;; *) _nz=1 ;; esac
+        done
+        [ "$_any" -eq 0 ] || [ "$_nz" -eq 1 ] \
+            || fail "every tier would keep 0 at the source -- keep at least one there (the newest common snapshot is the base of the next incremental copy)"
+    fi
     relblock_write "$wf" "$name" || fail "could not write the [relation:$name] block"
 }
 

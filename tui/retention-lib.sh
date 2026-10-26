@@ -42,7 +42,7 @@ source_retention_editor() {   # 0 = dalej (SRCPROF ustawiony albo pusty), 1 = ws
         u=""; case "${tm[$i]}" in retain:*) u="$(age_unit "${tm[$i]#retain:}")" ;; esac
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$(tier_word "${tn[$i]}")" "${tk[$i]}" "${sk[$i]}" "$u" "${tp[$i]}" >>"$TMPD/srcrows.tsv"
     done
-    "$PY" - "$TMPD/srcrows.tsv" "$TMPD/srcspec.json" "${SRC_TITLE:-$(Tv 'Jak długo trzymać u źródła ($HOST)?' '$HOST' "$HOST")}" <<'PYEOF'
+    SRC_ZERO_OK="$([ -n "${SRC_ARGS_OUT:-}" ] && echo 1)" "$PY" - "$TMPD/srcrows.tsv" "$TMPD/srcspec.json" "${SRC_TITLE:-$(Tv 'Jak długo trzymać u źródła ($HOST)?' '$HOST' "$HOST")}" <<'PYEOF'
 import json, sys
 import os as _os
 _C = json.load(open(_os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if _os.environ.get("ZFS_TUI_CAT") else {}
@@ -50,11 +50,15 @@ def _(s): return _C.get(s, s)
 rows = []
 for line in open(sys.argv[1], encoding="utf-8"):
     i, lab, here, src, unit, fam = (line.rstrip("\n").split("\t") + [""] * 6)[:6]
-    rows.append({"key": i, "label": lab, "on": src != "0", "value": (here if src == "0" else src), "unit": unit,
-                 "ref": ("%s %s" % (here, unit)).strip(), "q": None, "family": fam or None})
+    off = src in ("off", "")
+    rows.append({"key": i, "label": lab, "on": not off, "value": (here if off else src), "unit": unit,
+                 "ref": ("%s %s" % (here, unit)).strip(), "q": None, "family": fam or None,
+                 "zero_ok": _os.environ.get("SRC_ZERO_OK") == "1"})
 json.dump({"title": sys.argv[3], "head": [_(u"SZCZEBEL"), _(u"TUTAJ (cel)"), _(u"U ŹRÓDŁA")], "rows": rows,
            "note": [_(u"W źródle zostaje mniej migawek niż w celu kopii."),
-                    _(u"Bez zmian = źródło jak cel. Kratka = szczebel u źródła w ogóle.")]},
+                    _(u"Bez zmian = źródło jak cel. Kratka = szczebel u źródła w ogóle.")]
+                   + ([_(u"0 = po skopiowaniu nic z tego szczebla u źródła (baza kopii to inne szczeble).")]
+                      if _os.environ.get("SRC_ZERO_OK") == "1" else [])},
           open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
 PYEOF
     clear 2>/dev/null
@@ -65,7 +69,7 @@ PYEOF
     done < <("$PY" -c '
 import json, sys
 for r in json.load(open(sys.argv[1], encoding="utf-8"))["rows"]:
-    print("%s\t%s" % (r["key"], r["value"] if r["on"] else "0"))' "$TMPD/srcout.json" | tr -d '\r')
+    print("%s\t%s" % (r["key"], r["value"] if r["on"] else "off"))' "$TMPD/srcout.json" | tr -d '\r')
     SRCKEEP="$PROFILE:${sk[*]}"
     # CONFIG JAKO JEDYNE ŹRÓDŁO (właściciel 2026-10-13): w "Zmień relację" okno nie zapisuje
     # szablonu -- oddaje argumenty set-tiers (--src-tier ...) w pliku SRC_ARGS_OUT, liczone
@@ -78,13 +82,13 @@ for r in json.load(open(sys.argv[1], encoding="utf-8"))["rows"]:
             # cel, więc różnice liczone od liczb celu.
             if [ "${SRC_ARGS_BASE:-}" = target ]; then cur="${tk[$i]}"
             else cur=$(awk -F'\t' -v s="${CUR_S:-}" -v t="${tn[$i]}" '$1==s && $2==t {print $4; exit}' "$TMPD/prof.json.tiers"); fi
-            cur="${cur:-0}"
+            cur="${cur:-off}"
             # X15: szczebel dodany w tabeli celu -- set-tiers doda go po obu stronach; tu tylko
             # jego liczba u źródła, zawsze (dodany dostaje inaczej liczbę domyślną).
             local isnew=0; case " ${SRC_NEW_TIERS:-} " in *" ${tn[$i]} "*) isnew=1 ;; esac
             [ "$isnew" -eq 0 ] && [ "${sk[$i]}" = "$cur" ] && continue
-            if [ "${sk[$i]}" = 0 ]; then echo "--drop-src-tier=${tn[$i]}" >>"$SRC_ARGS_OUT"; continue; fi
-            [ "$isnew" -eq 0 ] && [ "$cur" = 0 ] && echo "--add-src-tier=${tn[$i]}" >>"$SRC_ARGS_OUT"
+            if [ "${sk[$i]}" = off ]; then echo "--drop-src-tier=${tn[$i]}" >>"$SRC_ARGS_OUT"; continue; fi
+            [ "$isnew" -eq 0 ] && [ "$cur" = off ] && echo "--add-src-tier=${tn[$i]}" >>"$SRC_ARGS_OUT"
             echo "--src-tier=${tn[$i]}" >>"$SRC_ARGS_OUT"
             case "${tm[$i]}" in
                 retain:*) echo "--retain=-${tm[$i]#retain:}${sk[$i]}" >>"$SRC_ARGS_OUT" ;;
@@ -117,7 +121,7 @@ for r in json.load(open(sys.argv[1], encoding="utf-8"))["rows"]:
     fi
     local -a args=(--from="$from" --force)
     for i in "${!tn[@]}"; do
-        if [ "${sk[$i]}" = 0 ]; then args+=(--drop-tier="${tn[$i]}"); continue; fi
+        if [ "${sk[$i]}" = off ]; then args+=(--drop-tier="${tn[$i]}"); continue; fi
         name="$name$(tier_letter "${tn[$i]}")${sk[$i]}"
         [ "$from" = "$PROFILE" ] && [ "${sk[$i]}" = "${tk[$i]}" ] && continue
         # Ten sam tryb co w szablonie celu: licznik zostaje licznikiem, wiek wiekiem.

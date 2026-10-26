@@ -287,7 +287,7 @@ class Grid(object):
         for r in self.rows:
             if r.get("on") and r.get("value") not in ("-",) and r.get("editable", True):
                 v = r["value"]
-                if not v.isdigit() or int(v) < 1:
+                if not v.isdigit() or int(v) < (0 if r.get("zero_ok") else 1):
                     self.msg = _(u"%s: podaj liczbę większą od zera (albo wyłącz szczebel).") % r["label"]
                     return False
         return True
