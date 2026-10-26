@@ -9530,7 +9530,24 @@ Taking over older jobs (a v4 config written by hand): remove their sections firs
         # snapshot and transfers nothing. Passing an empty second argument
         # happened to work, but it made the seed and the job it is seeding
         # differ in the one place they must not.
-        if [ "$no_copy" -eq 1 ]; then
+        if [ "$no_copy" -eq 1 ] && [ "${#seed_x[@]}" -gt 0 ] && [ "$lb_recursion" = flat ]; then
+            # EXCLUSIONS, NOTHING COPIED (lab campaign 2026-10-26, pve10): -X shapes a
+            # transfer, it does not keep snapsend -R from snapshotting -- the unticked
+            # child got the seed snapshot, and no prune line ever takes it away. So each
+            # dataset under the root that no exclusion matches is seeded on its own.
+            local _sd _sok=1
+            while IFS= read -r _sd; do
+                [ -n "$_sd" ] || continue
+                printf '%s\n' "$_sd" | grep -qE -- "$(IFS='|'; printf '%s' "${lb_excl[*]}")" && continue
+                bash "$SNAPSEND" -m "$seed_prefix" -v 3 "$_sd" || _sok=0
+            done < <(zfs list -H -o name -r -- "$sr" 2>/dev/null)
+            if [ "$_sok" -eq 1 ]; then
+                log "  OK: $sr (snapshot only, the excluded datasets left out)"
+            else
+                warn "  FAILED: $sr (snapshot only)"
+                seed_failed=$((seed_failed + 1))
+            fi
+        elif [ "$no_copy" -eq 1 ]; then
             if bash "$SNAPSEND" -m "$seed_prefix" -v 3 ${seed_rec[@]+"${seed_rec[@]}"} "$sr"; then
                 log "  OK: $sr (snapshot only -- nothing is copied)"
             else
