@@ -101,11 +101,12 @@ verb_refusal() {   # <plik z wyjściem czasownika> -> przyczyna odmowy do okna
         | sed -e 's/^!!! //' -e 's/^[[:space:]]*//' -e 's/^FATAL: //' | awk '!seen[$0]++' | tail -6
 }
 # OKNO POSTĘPU (U66/U64, właściciel 2026-10-21: "czarny ekran ponad 15 sekund i dopiero powrót"):
-# polecenie biegnie w tle z wyjściem do dziennika, okno co sekundę pokazuje, ile już trwa, i
-# ostatnie linie dziennika. Bez terminala dla polecenia (stdin z /dev/null): pytanie w terminalu
+# polecenie biegnie w tle z wyjściem do dziennika, okno pokazuje, ile już trwa. Właściciel
+# 2026-10-26 (pve2): linie dziennika w oknie migały przy każdym odświeżeniu -- okno mówi tylko
+# "trwa" i gdzie jest dziennik, odświeża się co 2 s; wyjście czyta result_box. Bez terminala dla polecenia (stdin z /dev/null): pytanie w terminalu
 # kończy się odmową, nie zawieszeniem za oknem. Ctrl-C przerywa polecenie.
 run_progress() {   # <tytuł> <dziennik> <polecenie...> -> rc polecenia; dziennik dopisywany
-    local t="$1" log="$2" pid rc=0 s0=$SECONDS n i
+    local t="$1" log="$2" pid rc=0 s0=$SECONDS i
     shift 2
     case "$1" in */*) { printf '$'; printf ' %s' "$@"; printf '\n\n'; } >>"$log" ;; esac   # nagłówek dla programu, nie dla funkcji
     "$@" >>"$log" 2>&1 </dev/null &
@@ -113,10 +114,9 @@ run_progress() {   # <tytuł> <dziennik> <polecenie...> -> rc polecenia; dzienni
     trap 'kill "$pid" 2>/dev/null' INT
     while kill -0 "$pid" 2>/dev/null; do
         geom
-        n=$((H - 8)); [ "$n" -gt 14 ] && n=14; [ "$n" -lt 3 ] && n=3
         TERM="$INFO_TERM" "$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" --title "$(T '%s -- trwa %d s' "$t" "$((SECONDS - s0))")" \
-              --infobox "$(tail -n "$n" "$log" | cut -c1-$((W - 6)))" $((n + 4)) "$W"
-        for i in 1 2 3 4 5; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+              --infobox "$(T 'Trwa wykonywanie, proszę czekać.\n\nKomunikaty poleceń idą do dziennika:\n  %s\n\nCtrl-C przerywa.' "$log")" 12 "$W"
+        for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
     done
     wait "$pid" || rc=$?
     trap - INT

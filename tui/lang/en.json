@@ -1122,6 +1122,7 @@
 "To byl podglad": "That was a preview",
 "To nie liczba": "Not a number",
 "To okna do obsługi zfs-snapshot-all. Każda akcja uruchamia zwykłe polecenie zfs-backup.sh, nic więcej.": "These windows operate zfs-snapshot-all. Every action runs an ordinary zfs-backup.sh command, nothing more.",
+"Trwa wykonywanie, proszę czekać.\\n\\nKomunikaty poleceń idą do dziennika:\\n  %s\\n\\nCtrl-C przerywa.": "Running, please wait.\\n\\nCommand messages go to the log:\\n  %s\\n\\nCtrl-C stops it.",
 "Tryb": "Mode",
 "Tryb „całość naraz” (-r) skopiowałby też miejsce docelowe kopii (%s). Zaznacz mniejsze miejsca, które go nie zawierają.": "\"All at once\" mode (-r) would also copy the copies' target (%s). Select smaller places that do not contain it.",
 "Trzyma": "Keeps",

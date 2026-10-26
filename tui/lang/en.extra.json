@@ -624,5 +624,6 @@
 "Nowa relacja '$RNAME': zakres wg drzewa": "New relation '$RNAME': scope as in the tree",
 "   DOJDĄ:    $n  (pierwsza migawka od razu)": "   ADDED:    $n  (first snapshot at once)",
 "   ODPADNĄ:  $n  (jego migawki ZOSTAJĄ, nikt ich nie przycina)": "   DROPPED:  $n  (its snapshots STAY, nothing prunes them)",
-"   Relacja obejmie:": "   The relation will cover:"
+"   Relacja obejmie:": "   The relation will cover:",
+"Trwa wykonywanie, proszę czekać.\\n\\nKomunikaty poleceń idą do dziennika:\\n  %s\\n\\nCtrl-C przerywa.": "Running, please wait.\\n\\nCommand messages go to the log:\\n  %s\\n\\nCtrl-C stops it."
 }
