@@ -16716,12 +16716,13 @@ cmd_new_relation() {
 # Where the mail has nothing (no -v 3, no runs in the window) this has nothing
 # -- and says so with an empty list, never a zero dressed as a measurement.
 cmd_job_stats() {
-    local as_json=0 days="${ZFS_DIGEST_DAYS:-7}" a
+    local as_json=0 days="${ZFS_DIGEST_DAYS:-7}" a vol_cache=0
     for a in "$@"; do
         case "$a" in
             --json)   as_json=1 ;;
             --days=*) days="${a#*=}" ;;
-            -*)       die "job-stats: unknown option '$a' (only --json and --days=N)" ;;
+            --vol-cache=*) vol_cache="${a#*=}" ;;
+            -*)       die "job-stats: unknown option '$a' (only --json, --days=N and --vol-cache=SECONDS)" ;;
             *)        die "job-stats: takes no positional arguments" ;;
         esac
     done
@@ -16845,8 +16846,21 @@ cmd_job_stats() {
     # Volume, the digest's way: `written` of every snapshot created since the
     # window start, summed per dataset and per family (the snapshot name up to
     # its timestamp), so a caller can pick the family its job stamps.
-    local vol_rows
-    vol_rows=$(zfs list -H -p -t snapshot -o name,written,creation 2>/dev/null | awk -F'\t' -v since="$since_ep" '
+    # --vol-cache=SECONDS (the GUI, after every window -- lab campaign 2026-10-26): `written`
+    # of every snapshot on the host is the slow part (4 s of system time on pve10), and a
+    # few minutes old is exact enough for a 7-day sum. The cache is per user, 0600 under
+    # /run, keyed by the window; anyone else (cron, digest) computes it fresh as before.
+    local vol_rows="" vol_cf=""
+    case "$vol_cache" in ''|*[!0-9]*) vol_cache=0 ;; esac
+    if [ "$vol_cache" -gt 0 ]; then
+        vol_cf="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+        [ -d "$vol_cf" ] && [ -w "$vol_cf" ] || vol_cf="/tmp"
+        vol_cf="$vol_cf/zfs-snapshot-all-jobstats-vol.$(id -u).$since_ep"
+        if [ -f "$vol_cf" ] && [ -O "$vol_cf" ] && [ $(( $(date +%s) - $(stat -c %Y "$vol_cf" 2>/dev/null || echo 0) )) -lt "$vol_cache" ]; then
+            vol_rows=$(cat "$vol_cf")
+        fi
+    fi
+    [ -n "$vol_rows" ] || vol_rows=$(zfs list -H -p -t snapshot -o name,written,creation 2>/dev/null | awk -F'\t' -v since="$since_ep" '
         { p = index($1, "@"); if (p == 0) next; ds = substr($1, 1, p - 1); sn = substr($1, p + 1) }
         $3 + 0 < since + 0 { next }
         {
@@ -16856,6 +16870,9 @@ cmd_job_stats() {
         END {
             for (k in b) { split(k, a, "\t"); printf "%s\t%s\t%.0f\n", a[1], a[2], b[k] }
         }' | sort)
+    if [ -n "$vol_cf" ] && [ -n "$vol_rows" ]; then
+        ( umask 077; printf '%s\n' "$vol_rows" > "$vol_cf.$$" && mv -f "$vol_cf.$$" "$vol_cf" ) 2>/dev/null || rm -f "$vol_cf.$$"
+    fi
     printf '{"window_days":%s' "$days"
     jsonw_field since "$dstart"
     printf ',"logs":['
