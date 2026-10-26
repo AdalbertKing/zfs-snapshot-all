@@ -373,6 +373,7 @@ for ln in open(sys.argv[1], encoding="utf-8"):
         used = None
     ds.append({"name": p[0], "used": used, "type": p[2]})
 spec = {"title": sys.argv[3], "host": sys.argv[4], "show_mode": False, "no_exc": False,
+        "no_close": True,      # odzysk: dwa stany Spacji, "bez przyszłych" nic tu nie znaczy
         "legend": _(u" [x] odtwarzane   [-] część   [ ] nie"),
         "recursion": "flat", "hide": [], "datasets": ds, "roots": sys.argv[5:], "excl": {}}
 lp = os.environ.get("RESTORE_LAST_TREE") or ""

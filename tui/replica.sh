@@ -95,7 +95,7 @@ rtitle() {   # <nr kroku> <tekst>
 }
 basket_from_replica() {   # SRCS + CURX (wzorce -X) -> B_ROOT/B_EXCL; '^x$' to pominięty x, '^x/' jego dzieci
     local r x
-    B_ROOT=(); B_EXCL=()
+    B_ROOT=(); B_EXCL=(); B_CLOSED=""
     for r in ${SRCS//,/ }; do
         [ -n "$r" ] && [ "$r" != - ] || continue
         local ex=""
@@ -434,7 +434,7 @@ while :; do
             fi
             [ -n "$SRCS" ] && basket_from_replica
         fi
-        if ! basket_step; then
+        if ! BASKET_NO_CLOSE=1 basket_step; then
             [ "$MENU" -eq 1 ] && { step=0; continue; }
             [ "$EDIT" -eq 1 ] && { clear 2>/dev/null; wt_end "$(T 'Replika: przerwane, nic nie zmieniono')"; exit 1; }
             step=1; continue

@@ -12021,7 +12021,7 @@ fi
 lj_short="$( declare -A JOB_F=(
         ["template:profile__relacja-ab__hourly|send_schedule"]="1 * * * *"
         ["dataset:hdd/data|send_schedule_hourly"]="15 * * * *" )
-    jobs_field dataset hdd/data profile__relacja-ab__hourly send_schedule )"
+    jobs_field_v _o dataset hdd/data profile__relacja-ab__hourly send_schedule; printf '%s' "$_o" )"
 if [ "$lj_short" = "15 * * * *" ]; then
     ok "listjobs: a relation tier's schedule comes from the dataset's staggered send_schedule_<tier>, not the block"
 else
