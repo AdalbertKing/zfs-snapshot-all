@@ -68,7 +68,7 @@ describe() {    # <indeks> -> jedno zdanie o pozycji koszyka
     else Tv 'dziś $k pod nim; BEZ: $short' '$k' "$k" '$short' "$short"; echo; fi
 }
 mode_words() { [ "$RECURSION" = atomic ] && T 'cała gałąź atomowo (-r)' || T 'każdy dataset osobno (-R)'; echo; }
-any_excl() { local i; for i in "${!B_ROOT[@]}"; do [ -n "${B_EXCL[$i]}" ] && return 0; done; return 1; }
+any_excl() { local i; [ -n "${B_CLOSED:-}" ] && return 0; for i in "${!B_ROOT[@]}"; do [ -n "${B_EXCL[$i]}" ] && return 0; done; return 1; }
 
 # basket_step -> 0 = Dalej z niepustym wyborem, 1 = Wstecz. X12 (właściciel 2026-10-12): JEDNO
 # okno -- drzewo z kratkami jak w eksploratorze (tui/tree.py, curses: drugi wyjątek od whiptail,
@@ -87,9 +87,9 @@ basket_step() {
     q="$(Tv 'Co kopiować z $HOST?' '$HOST' "$HOST")"
     if [ "${NOCOPY:-0}" = 1 ] || [ "${MODE:-}" = snaponly ]; then
         q="$(Tv 'Gdzie robić migawki na $HOST?' '$HOST' "$HOST")"
-        lg="$(T ' [x] z migawkami, razem z tym, co pod nim POWSTANIE   [-] część   [ ] bez')"
+        lg="$(T ' [x] z migawkami, razem z tym, co pod nim POWSTANIE   [-] tylko obecne albo część   [ ] bez')"
     fi
-    BASKET_LEGEND="$lg" "$PY" - "$BASKET_DS_JSON" "$TMPD/tree-spec.json" "$(title 4 "$q")" "$HOST" "$mode" "$noexc" \
+    BASKET_CLOSED="${B_CLOSED:-}" BASKET_LEGEND="$lg" "$PY" - "$BASKET_DS_JSON" "$TMPD/tree-spec.json" "$(title 4 "$q")" "$HOST" "$mode" "$noexc" \
         "${RECURSION:-flat}" "${BASKET_HIDE:-}" "${#B_ROOT[@]}" ${B_ROOT[@]+"${B_ROOT[@]}"} ${B_EXCL[@]+"${B_EXCL[@]}"} <<'PYEOF' || return 1
 import sys, json, os
 ds = json.load(open(sys.argv[1], encoding="utf-8")).get("datasets") or []
@@ -97,7 +97,9 @@ n = int(sys.argv[9]); roots = sys.argv[10:10 + n]; ex = sys.argv[10 + n:10 + 2 *
 spec = {"title": sys.argv[3], "host": sys.argv[4], "show_mode": sys.argv[5] == "1", "no_exc": sys.argv[6] == "1",
         "recursion": sys.argv[7], "hide": sys.argv[8].split(),
         "datasets": [{"name": d.get("name", ""), "used": d.get("used"), "type": d.get("type")} for d in ds],
-        "roots": roots, "excl": {r: [x for x in e.split("\n") if x] for r, e in zip(roots, ex)}}
+        "roots": roots, "excl": {r: [x for x in e.split("\n") if x] for r, e in zip(roots, ex)},
+        "closed": [x for x in os.environ.get("BASKET_CLOSED", "").split("\n") if x],
+        "no_close": os.environ.get("BASKET_NO_CLOSE") == "1"}
 if os.environ.get("BASKET_LEGEND"):
     spec["legend"] = os.environ["BASKET_LEGEND"]
 with open(sys.argv[2], "w", encoding="utf-8") as f:
@@ -110,12 +112,15 @@ o = json.load(open(sys.argv[1], encoding="utf-8"))
 print("R\t" + (o.get("recursion") or "flat"))
 for r in o.get("roots") or []:
     print("B\t%s\t%s" % (r, "\x1f".join((o.get("excl") or {}).get(r) or [])))
+for c in o.get("closed") or []:
+    print("C\t%s\t" % c)
 PYEOF
-    B_ROOT=(); B_EXCL=()
+    B_ROOT=(); B_EXCL=(); B_CLOSED=""
     while IFS=$'\t' read -r k a b; do
         case "$k" in
             R) RECURSION="$a" ;;
             B) B_ROOT+=("$a"); B_EXCL+=("$(printf '%s' "$b" | tr '\037' '\n')") ;;
+            C) B_CLOSED="${B_CLOSED:+$B_CLOSED$'\n'}$a" ;;
         esac
     done <"$TMPD/tree-out.tsv"
     [ "${#B_ROOT[@]}" -gt 0 ]
@@ -209,9 +214,10 @@ basket_entries() {
     local i
     for i in "${!B_ROOT[@]}"; do
         printf 'B\t%s\t%s\n' "${B_ROOT[$i]}" "$(printf '%s' "${B_EXCL[$i]}" | tr '\n' '\037')"
-    done | "$PY" -c '
-import sys, json
+    done | BASKET_CLOSED="${B_CLOSED:-}" "$PY" -c '
+import sys, json, os
 names = [d.get("name", "") for d in (json.load(open(sys.argv[1], encoding="utf-8")).get("datasets") or [])]
+closed = set(x for x in os.environ.get("BASKET_CLOSED", "").split("\n") if x)
 kids = {}
 for n in names:
     if "/" in n: kids.setdefault(n.rsplit("/", 1)[0], []).append(n)
@@ -223,7 +229,7 @@ if len(sys.argv) > 2:   # obecne pozycje: liść (bez dzieci) zachowuje swoją r
         p = line.rstrip("\r\n").split("\t")
         if len(p) > 1: cur[p[0]] = p[1]
 def emit(n, ex):
-    if not any(under(e, n) for e in ex):
+    if not any(under(e, n) for e in ex) and not (n in closed and kids.get(n)):
         out.append((n, cur.get(n, "flat") if not kids.get(n) else "flat")); return
     out.append((n, "no"))
     for c in kids.get(n, []):
@@ -256,5 +262,9 @@ for r in [e for e in lst if not any(under(e, y) for y in lst if y != e)]:
     for n in names:
         if under(n, r) and not covered(n) and not any(n == e or under(n, e) for e in ex):
             ex.append(n)
-    print("B\t%s\t%s" % (r, "\x1f".join(ex)))' "$1" "$2" | tr -d '\r'
+    print("B\t%s\t%s" % (r, "\x1f".join(ex)))
+haskids = set(n.rsplit("/", 1)[0] for n in names if "/" in n)
+for e, rec in ents:
+    if rec == "no" and e in haskids:
+        print("C\t%s\t" % e)' "$1" "$2" | tr -d '\r'
 }
