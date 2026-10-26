@@ -3550,6 +3550,75 @@ restore_one_isolated() {   # <copy dataset> <destination> -> 0 | 1 untouched | 2
     return "$rc"
 }
 
+# ---- LIVE DATASETS: the running system and the disks of running guests -------------
+# Owner, 2026-10-26, pve2: restoring the relation 'pve2' to a point in time took BOTH of its
+# datasets -- the urbackup container AND rpool/ROOT/pve-1, the root of the host running the
+# restore. `zfs rollback` works on a mounted file system, so the running system had its
+# files replaced underneath it (I/O errors, old crontab and config back in force).
+#
+#   1. a dataset MOUNTED AT / is never rolled back in place. It is restored as a NEW boot
+#      environment beside it (--as-boot-env): received into <pool>/ROOT/<name>-restore-<ts>,
+#      not mounted, and the switch and the reboot stay the operator's;
+#   2. the disk of a RUNNING guest (vm-N-disk-*, subvol-N-disk-*) is refused until the
+#      guest is stopped -- what a restore puts there would be overwritten by the guest, or
+#      would pull the floor from under it.
+# Read-only checks, run in the pre-flight before anything is touched.
+RESTORE_AS_BOOT_ENV="${RESTORE_AS_BOOT_ENV:-0}"
+restore_live_guard() {   # <destination> -> 0 fine | 1 refused (RESTORE_ONE_VERDICT) | 3 the mounted root
+    local d="$1" ds host="" q mp mo base id kind st
+    case "$d" in *:*) host="${d%%:*}"; ds="${d#*:}" ;; *) ds="$d" ;; esac
+    if [ -n "$host" ]; then
+        q="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$host" "zfs get -H -o value mountpoint,mounted '$ds'" 2>/dev/null)"
+    else
+        q="$(zfs get -H -o value mountpoint,mounted -- "$ds" 2>/dev/null)"
+    fi
+    mp="$(printf '%s\n' "$q" | sed -n 1p)"; mo="$(printf '%s\n' "$q" | sed -n 2p)"
+    if [ "$mp" = / ] && [ "$mo" = yes ]; then
+        RESTORE_ONE_VERDICT="the RUNNING SYSTEM of ${host:-this host} (mounted at /) -- never rolled back in place; restore it as a new boot environment: the same command with --source=$ds --as-boot-env"
+        return 3
+    fi
+    base="${ds##*/}"
+    case "$base" in
+        vm-*-disk-*)     id="${base#vm-}"; id="${id%%-*}"; kind=qm ;;
+        subvol-*-disk-*) id="${base#subvol-}"; id="${id%%-*}"; kind=pct ;;
+        *) return 0 ;;
+    esac
+    case "$id" in ''|*[!0-9]*) return 0 ;; esac
+    if [ -n "$host" ]; then
+        st="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$host" "$kind status $id" 2>/dev/null)"
+    else
+        st="$(command -v "$kind" >/dev/null 2>&1 && "$kind" status "$id" 2>/dev/null)"
+    fi
+    case "$st" in
+        *running*)
+            RESTORE_ONE_VERDICT="guest $id is RUNNING on ${host:-this host} -- stop it first ($kind stop $id), then run this again"
+            return 1 ;;
+        "") [ -n "$host" ] && log 1 "restore: could not read the state of guest $id on '$host' -- make sure it is stopped" ;;
+    esac
+    return 0
+}
+
+# --as-boot-env: the system dataset received BESIDE the running one. Nothing existing is
+# touched; the new dataset is not mounted (canmount=noauto). Local only -- the switch of a
+# boot environment is done as root on the machine that boots it.
+restore_boot_env() {   # <copy dataset> <point snapshot> <system dataset>
+    local copy="$1" point="$2" ds="$3" new
+    case "$ds" in *:*) log 0 "restore: --as-boot-env works on THIS host only -- run it as root on '${ds%%:*}'. Nothing was changed."; return 1 ;; esac
+    new="${ds}-restore-$(date '+%Y%m%d-%H%M')"
+    log 0 "restore: $ds is the running system -- receiving $copy@$point as a NEW boot environment: $new"
+    if ! zfs send "$copy@$point" | zfs recv -u -o canmount=noauto -o mountpoint=/ "$new"; then
+        log 0 "restore: the receive into $new failed -- the running system was not touched."
+        return 1
+    fi
+    log 0 "restore: $new is ready (not mounted). The running system $ds is untouched."
+    log 0 "restore: to boot it -- as root on this host, at a time you choose:"
+    log 0 "restore:   proxmox-boot-tool status        (which boot loader this host uses)"
+    log 0 "restore:   GRUB (no proxmox-boot-tool):     zpool set bootfs=$new ${ds%%/*}"
+    log 0 "restore:   systemd-boot/proxmox-boot-tool:  in /etc/kernel/cmdline root=ZFS=$new, then: proxmox-boot-tool refresh"
+    log 0 "restore:   reboot -- and $ds stays beside it as the way back."
+    return 0
+}
+
 restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     local n="${#RESTORE_SCOPE_SRC[@]}" i rc ok_n=0 bad_n=0 changed_n=0
     local -a verdict=()
@@ -3625,13 +3694,23 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     #
     # And EVERY bad dataset is named, not the first. An operator who has to fix
     # them one round trip at a time stops trusting the tool.
-    local -a unfit=() fitlist=()
-    local _pf_rc _pf_i
+    local -a unfit=() fitlist=() bootenv=()
+    local _pf_rc _pf_i _pf_g _pf_v
     for (( _pf_i=0; _pf_i<n; _pf_i++ )); do
         RESTORE_ONE_VERDICT=""
         RESTORE_PREFLIGHT_ONLY=1 restore_one_isolated "${RESTORE_SCOPE_COPY[$_pf_i]}" "${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}"; _pf_rc=$?
         if [ "$_pf_rc" -eq 0 ]; then
-            fitlist+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}|${RESTORE_ONE_VERDICT:-}")
+            _pf_v="${RESTORE_ONE_VERDICT:-}"
+            restore_live_guard "${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}"; _pf_g=$?
+            if [ "$_pf_g" -eq 3 ] && [ "$RESTORE_AS_BOOT_ENV" = 1 ]; then
+                bootenv+=("${RESTORE_SCOPE_COPY[$_pf_i]}|${_pf_v##* from }|${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}")
+                continue
+            fi
+            if [ "$_pf_g" -ne 0 ]; then
+                unfit+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}   ${RESTORE_ONE_VERDICT}")
+                continue
+            fi
+            fitlist+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}|${_pf_v}")
         else
             unfit+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}   ${RESTORE_ONE_VERDICT:-no reason recorded}")
         fi
@@ -3648,6 +3727,23 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
         # effort making impossible.
         restore_pause_release
         return 2
+    fi
+
+    # --as-boot-env takes the running system ALONE: mixed with ordinary datasets the run would
+    # be half a boot environment and half an overwrite, under one answer.
+    if [ "$RESTORE_AS_BOOT_ENV" = 1 ]; then
+        if [ "${#bootenv[@]}" -eq 0 ] || [ "${#fitlist[@]}" -gt 0 ]; then
+            log 0 "restore: --as-boot-env is for the running system alone -- name only it (--source=<pool>/ROOT/<name>). Nothing was changed."
+            restore_pause_release
+            return 2
+        fi
+        local _be _bc=0 _c _p _d
+        for _be in "${bootenv[@]}"; do
+            IFS='|' read -r _c _p _d <<<"$_be"
+            restore_boot_env "$_c" "$_p" "$_d" || _bc=1
+        done
+        restore_pause_release
+        return "$_bc"
     fi
 
     # OVERWRITING ASKS FIRST (owner 2026-10-15: "nadpisanie zawsze z potwierdzeniem,
@@ -4746,6 +4842,7 @@ cmd_restore() {
             --yes|-y)     yes=1 ;;
             --key-file=*) RESTORE_KEY_FILE="${a#*=}" ;;
             --with-history) RESTORE_WITH_HISTORY=1 ;;
+            --as-boot-env) RESTORE_AS_BOOT_ENV=1 ;;
             --*) die "restore: unknown option $a" ;;
             *)
                 # Positional tokens: the public addresses. Resolved AFTER the

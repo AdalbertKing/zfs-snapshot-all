@@ -2825,6 +2825,39 @@ else
     bad "local raw recovery: key at once" "$(lr_get hdd/enc/docs2 keystatus)|$(lr_get hdd/enc/docs2 encryptionroot)" "$lr_out"
 fi
 
+# LIVE DATASETS (owner 2026-10-26, pve2: "cała relacja" rolled the host's own root back under
+# it). restore_live_guard: a dataset mounted at / -> 3 (never in place); a running guest's
+# disk -> 1; anything else -> 0. restore_boot_env receives beside, never onto, the system.
+LG="$WORK/lg"; mkdir -p "$LG"
+lg_fns=$(sed -n '/^restore_live_guard() {/,/^}/p; /^restore_boot_env() {/,/^}/p' "$ZB")
+lg_run() {   # <dataset> <mountpoint> <mounted> <qm/pct answer> -> "rc|verdict"
+    LG_MP="$2" LG_MO="$3" LG_ST="$4" bash -c "$lg_fns
+log() { :; }
+zfs() { printf '%s\n%s\n' \"\$LG_MP\" \"\$LG_MO\"; }
+qm()  { echo \"\$LG_ST\"; }
+pct() { echo \"\$LG_ST\"; }
+RESTORE_ONE_VERDICT=''
+restore_live_guard \"$1\"; echo \"\$?|\$RESTORE_ONE_VERDICT\"" 2>&1
+}
+g1=$(lg_run rpool/ROOT/pve-1 / yes "")
+g2=$(lg_run hdd/vm-disks/subvol-103-disk-0 /hdd/vm-disks/subvol-103-disk-0 yes "status: running")
+g3=$(lg_run hdd/vm-disks/subvol-103-disk-0 /hdd/vm-disks/subvol-103-disk-0 yes "status: stopped")
+g4=$(lg_run rpool/data/vm-106-disk-0 - - "status: running")
+g5=$(lg_run hdd/data /hdd/data yes "")
+be=$(bash -c "$lg_fns
+log() { echo \"\$*\"; }
+zfs() { echo \"ZFS \$*\" >> '$LG/calls'; [ \"\$1\" = send ] && echo stream; return 0; }
+restore_boot_env hdd/backups/pve2/rpool/ROOT/pve-1 automated_daily_2026-10-26_01-08-01 rpool/ROOT/pve-1" 2>&1)
+if [ "${g1%%|*}" = 3 ] && printf '%s' "$g1" | grep -q -- '--as-boot-env' \
+   && [ "${g2%%|*}" = 1 ] && printf '%s' "$g2" | grep -q 'guest 103 is RUNNING' \
+   && [ "${g3%%|*}" = 0 ] && [ "${g4%%|*}" = 1 ] && printf '%s' "$g4" | grep -q 'qm stop 106' && [ "${g5%%|*}" = 0 ] \
+   && grep -q '^ZFS recv -u -o canmount=noauto -o mountpoint=/ rpool/ROOT/pve-1-restore-' "$LG/calls" \
+   && ! grep -qE '^ZFS (rollback|destroy)' "$LG/calls" && printf '%s' "$be" | grep -q 'stays beside it'; then
+    ok "live datasets: the mounted root is never restored in place (--as-boot-env receives BESIDE it, not mounted), a running guest's disk is refused, a stopped one and an ordinary dataset pass"
+else
+    bad "live datasets guard" "root=[$g1]" "running ct=[$g2]" "stopped=[$g3]" "running vm=[$g4]" "plain=[$g5]" "$(cat "$LG/calls" 2>/dev/null)" "$be"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

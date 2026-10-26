@@ -206,6 +206,7 @@
 " Sposób liczenia i układ migawek bierze się z szablonu bazowego -- inny = wybierz inną bazę.": " The counting method and snapshot layout come from the base template -- for a different one, pick another base.",
 " Sposób: cała gałąź atomowo (-r)": " Mode: whole branch atomically (-r)",
 " Sposób: każdy dataset osobno (-R)": " Mode: each dataset separately (-R)",
+" System hosta (…/ROOT/…) domyślnie odznaczony: wybrany sam odtwarza się jako nowe środowisko startowe.": " The host's system (…/ROOT/…) starts unticked: chosen alone it is restored as a new boot environment.",
 " WYŁĄCZONA": " DISABLED",
 " Wybrane miejsca: %d   pominięte: %d%s": " Selected places: %d   excluded: %d%s",
 " Zapis = save-profile do /etc/zfs-snapshot-all/profiles; nic zbudowanego nie rusza.": " Save = save-profile to /etc/zfs-snapshot-all/profiles; nothing already built is touched.",
