@@ -91,6 +91,7 @@
 "   ODPADNĄ:  $n  (jego migawki ZOSTAJĄ, nikt ich nie przycina)": "   DROPPED:  $n  (its snapshots STAY, nothing prunes them)",
 "   ODPADNĄ:  $n  (kopie na tym hoście ZOSTAJĄ)": "   DROPPED:  $n  (copies on this host STAY)",
 "   Po zmianie relacja obejmuje:": "   After the change the relation covers:",
+"   Relacja obejmie:": "   The relation will cover:",
 "   alarm po %s": "   critical after %s",
 "   biegnie teraz: %d": "   running now: %d",
 "   dziennik: %s": "   log: %s",

@@ -2591,6 +2591,12 @@ if [ "$(printf '%s\n' "$NRSD" | grep -c .)" -eq 1 ] && has "$NRSD" "set-datasets
 else
     bad "new-relation: set-datasets po założeniu z [-]" "$NRSD" "$(cat "$NR/zb.log")"
 fi
+# Podsumowanie mówi to samo, co zapisze set-datasets: lista [x]/[-], nie "BEZ: mail".
+if grep -qF '[-] hdd/data ' "$NR/wt.log" && grep -qF '[x] hdd/test-kreator ' "$NR/wt.log" && ! grep -qF 'BEZ: mail' "$NR/wt.log"; then
+    ok "new-relation: podsumowanie z [-] pokazuje pozycje [x]/[-] jak okno zmiany"
+else
+    bad "new-relation: podsumowanie z [-]" "$(grep -F 'obejmie' -A4 "$NR/wt.log")"
+fi
 NRTL="$(cat "$NR/tree.log" 2>/dev/null)"
 if ! grep -qF -- '--radiolist' <(grep -F 'Co kopiować z' "$NR/wt.log") && ! grep -qF 'Jak kopiować' "$NR/wt.log" && ! has "$NRTL" 'Jak kopiować'; then
     ok "new-relation: dodanie miejsca NIE zadaje pytan -- w polu Datasety nie ma ani 'co kopiowac?', ani -R/-r (to 'jak', nie 'co')"

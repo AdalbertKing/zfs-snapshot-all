@@ -992,7 +992,16 @@ summary_text() {
     else
         echo "$(Tv 'BACKUP: $(hostname) będzie POBIERAĆ z $HOST' '$(hostname)' "$(hostname)" '$HOST' "$HOST")${HOSTNAME_R:+ ($HOSTNAME_R)}$(Tv ' do $TARGET/$HOST/...' '$TARGET' "$TARGET" '$HOST' "$HOST")"
     fi
-    for i in "${!B_ROOT[@]}"; do echo "    ${B_ROOT[$i]}  -- $(describe "$i")"; done
+    # Z wyjątkami relacja to lista [x]/[-] (set-datasets po założeniu), jak w planie okna zmiany.
+    if any_excl && [ -s "${BASKET_DS_JSON:-}" ]; then
+        echo "$(T '   Relacja obejmie:')"
+        basket_entries "$BASKET_DS_JSON" | while IFS=$'\t' read -r n r; do
+            [ -n "$n" ] || continue
+            if [ "$r" = flat ]; then echo "     [x] $n  $(T '(z dziećmi, także przyszłymi)')"; else echo "     [-] $n  $(T '(sam dataset; dzieci tylko wymienione)')"; fi
+        done
+    else
+        for i in "${!B_ROOT[@]}"; do echo "    ${B_ROOT[$i]}  -- $(describe "$i")"; done
+    fi
     echo "$(Tv 'Sposób:  $(mode_words).   Nazwa: $RNAME.   Konto: ${a:-root}.' '$(mode_words)' "$(mode_words)" '$RNAME' "$RNAME" '${a:-root}' "${a:-root}")"
     echo "$(T 'Szablon:') $( [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ] && echo "$(Tv 'Ręcznie -- $PROFILE' '$PROFILE' "$PROFILE")" || echo "$PROFILE")$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" '$1==n{print "  (" $3 "; " $2 "; " $4 ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "$(Tv '; u źródła: $SRCPROF' '$SRCPROF' "$SRCPROF")")"
     if [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
