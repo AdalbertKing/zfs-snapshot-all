@@ -900,8 +900,9 @@ while :; do
             "$ZB" relation-sources "$NAME" >"$TMPD/ents.tsv" 2>"$TMPD/ents.err" || : >"$TMPD/ents.tsv"
             CUR_ENT="$(sort "$TMPD/ents.tsv")"
             [ -n "$P_ENT" ] && printf '%s\n' "$P_ENT" >"$TMPD/ents.tsv"
-            B_ROOT=(); B_EXCL=()
+            B_ROOT=(); B_EXCL=(); B_CLOSED=""
             while IFS=$'\t' read -r _k _r _e; do
+                [ "$_k" = C ] && { B_CLOSED="${B_CLOSED:+$B_CLOSED$'\n'}$_r"; continue; }
                 [ "$_k" = B ] || continue
                 B_ROOT+=("$_r"); B_EXCL+=("$(printf '%s' "$_e" | tr '\037' '\n')")
             done < <(basket_from_entries "$TMPD/ds.json" "$TMPD/ents.tsv")

@@ -25,7 +25,12 @@ OUT:  {"action":"next"|"back", "roots":[w kolejnosci drzewa], "excl":{korzen:[po
 
 MODEL: stanem sa korzenie + wyjatki; obraz jest z nich wyliczany. Dataset jest zaznaczony, gdy
 lezy w korzeniu (lub jest nim) i nie lezy w wyjatku tego korzenia. Kratka [x] = zaznaczony i nic
-widocznego pod nim nie jest odznaczone, [ ] = odwrotnie, [-] = czesciowo. Spacja:
+widocznego pod nim nie jest odznaczone, [ ] = odwrotnie, [-] = czesciowo albo ZAMKNIETY.
+ZAMKNIETY (wlasciciel 2026-10-26, "wszystkie obecne dzieci, bez przyszlych"): zaznaczony dataset z
+dziecmi, ktorego przyszle dzieci nie wejda -- pozycja DS:no z obecnymi dziecmi (spec/wynik "closed").
+Spacja:
+  * zaznaczony z dziecmi, nie zamkniety -> ZAMKNIETY (odmowa przy no_exc/no_close i trybie atomowym:
+    wtedy jak nizej);
   * zaznaczony korzen -> korzen znika (z wyjatkami);
   * zaznaczony pod korzeniem r -> staje sie wyjatkiem r (odmowa przy no_exc i przy trybie atomowym);
   * odznaczony przez wyjatek e -> gdy to e, wyjatek znika; inaczej odmowa ("najpierw zaznacz e");
@@ -110,6 +115,7 @@ class Tree(object):
         self.selectable = set(sel) if sel is not None else None
         self.show_mode = bool(spec.get("show_mode")) and not self.single
         self.no_exc = bool(spec.get("no_exc"))
+        self.no_close = bool(spec.get("no_close"))
         self.recursion = "atomic" if spec.get("recursion") == "atomic" else "flat"
         hide = list(dict.fromkeys(h for h in (spec.get("hide") or []) if h))
         self.hide = set(hide)
@@ -119,7 +125,8 @@ class Tree(object):
         # stan na starcie -- wraca przy "back"
         self.init = {"roots": list(spec.get("roots") or []),
                      "excl": dict((r, list(v)) for r, v in (spec.get("excl") or {}).items()),
-                     "recursion": self.recursion}
+                     "recursion": self.recursion, "closed": list(spec.get("closed") or [])}
+        self.closed = set(self.init["closed"])
         self.roots = sorted(dict.fromkeys(self.init["roots"]), key=self.tkey)
         self.excl = dict((r, list(dict.fromkeys(self.init["excl"].get(r) or []))) for r in self.roots)
         self.expanded = set(n for n in self.order if self.nodes[n]["depth"] == 0)
@@ -202,7 +209,7 @@ class Tree(object):
             return u"" if self.can_pick(n) else u"·"
         sub = self.nodes[n]["sub"]
         if chk[n]:
-            return u"[-]" if any(not chk[s] for s in sub) else u"[x]"
+            return u"[-]" if (sub and n in self.closed) or any(not chk[s] for s in sub) else u"[x]"
         return u"[-]" if any(chk[s] for s in sub) else u"[ ]"
 
     def need_skip(self, n):
@@ -216,12 +223,23 @@ class Tree(object):
             return _(u"Pod %s leży cel kopii (%s); przy kopiowaniu atomowym nie da się go pominąć. Zaznacz węższe miejsce.") % (n, hs[0]), hs
         return u"", hs
 
+    def can_close(self, n):
+        return (bool(self.nodes[n]["kids"]) and n not in self.closed and not self.no_exc
+                and not self.no_close and self.recursion != "atomic")
+
+    def unclose(self, n):
+        self.closed = set(c for c in self.closed if not (c == n or under(c, n)))
+
     def space(self, n):
         cov = self.covering(n)
+        if cov and self.can_close(n):         # [x] -> [-]: obecne dzieci, bez przyszlych
+            self.closed.add(n)
+            return
         if cov:
             if n in cov:                      # zaznaczony korzen -> korzen znika
                 self.roots.remove(n)
                 self.excl.pop(n, None)
+                self.unclose(n)
                 return
             r = cov[0]
             if self.no_exc:
@@ -234,6 +252,7 @@ class Tree(object):
                 return
             for r in cov:
                 self.excl[r] = [e for e in self.excl.get(r, []) if not under(e, n)] + [n]
+            self.unclose(n)
             return
         cands = [e for r in self.roots if under(n, r) for e in self.excl.get(r, []) if under(n, e)]
         if cands:
@@ -258,6 +277,7 @@ class Tree(object):
         for r in [r for r in self.roots if under(r, n)]:
             self.roots.remove(r)
             self.excl.pop(r, None)
+        self.unclose(n)
         self.roots.append(n)
         self.excl[n] = list(hs)
         if hs:
@@ -338,10 +358,13 @@ class Tree(object):
     def result(self):
         if self.done != "next":
             return {"action": self.done or "back", "roots": self.init["roots"],
-                    "excl": self.init["excl"], "recursion": self.init["recursion"]}
+                    "excl": self.init["excl"], "recursion": self.init["recursion"],
+                    "closed": self.init["closed"]}
         roots = sorted(self.roots, key=self.tkey)
+        chk = self.checked_map()
         return {"action": "next", "roots": roots,
                 "excl": dict((r, sorted(self.excl.get(r, []), key=self.tkey)) for r in roots),
+                "closed": sorted((c for c in self.closed if chk.get(c)), key=self.tkey),
                 "recursion": self.recursion}
 
     # -- obraz
@@ -375,7 +398,7 @@ class Tree(object):
         mlines = [u" " + l for l in wrap(self.msg, iw - 2)] if self.msg else [u""]
         # Legenda zawijana: po angielsku jest dłuższa niż okno (linie ciała są obcinane do iw).
         legend = _(self.spec.get("legend") or u"") or (_(u" · = sama gałąź (nic do wybrania)") if self.single
-                                                       else _(u" [x] kopiowane z potomnymi, także przyszłymi   [-] część   [ ] nie"))
+                                                       else _(u" [x] kopiowane z potomnymi, także przyszłymi   [-] tylko obecne albo część   [ ] nie"))
         llines = [u" " + l for l in wrap(legend.strip(), iw - 2)] or [u""]
         lh = self.list_height(len(mlines) + len(llines) - 1)
         idx = rows.index(self.cur) if self.cur in rows else 0

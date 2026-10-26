@@ -77,7 +77,7 @@ step_mode() {
     if [ "$WT_OUT" = snap ]; then NOCOPY=1; WT_OUT=local; TARGET=""; else NOCOPY=0; fi
     if [ -n "$WT_OUT" ] && [ "$WT_OUT" != "$MODE" ]; then
         # Inna droga = inne źródło: koszyk z poprzedniej nie należy do tej.
-        B_ROOT=(); B_EXCL=(); TREE_FOR="-"
+        B_ROOT=(); B_EXCL=(); B_CLOSED=""; TREE_FOR="-"
         MODE="$WT_OUT"; [ "$MODE" = local ] || GRANT=1
     fi
     if [ "$MODE" = local ]; then
@@ -117,7 +117,7 @@ Dataset do istniejącej relacji dodaje się w jej zmianie,' '$h' "$h" '$rel' "$r
 $(T 'pozycja „Datasety” (zfs-backup.sh add-source).\n\nWskaż host, z którym nie ma jeszcze relacji.')" 14 "$W"
             continue
         fi
-        [ "$h" = "$HOST" ] || { B_ROOT=(); B_EXCL=(); }
+        [ "$h" = "$HOST" ] || { B_ROOT=(); B_EXCL=(); B_CLOSED=""; }
         HOST="$h"; PORT="$p"
         return 0
     done
@@ -224,7 +224,7 @@ step_diag() {   # 0 = dalej, 1 = wróć do hosta
 # kształtem relacji. Dlatego dodanie miejsca nie zadaje pytań; wyjątki (tylko dla tego,
 # co już istnieje) są osobną akcją koszyka; -R/-r to "jak", nie "co" -- poza krokiem 4.
 T_NAME=(); T_KIDS=(); T_LABEL=()      # drzewo źródła
-B_ROOT=(); B_EXCL=()                   # koszyk: korzeń, pominięte (po jednym w linii)
+B_ROOT=(); B_EXCL=(); B_CLOSED=""      # koszyk: korzeń, pominięte (po jednym w linii)
 
 TREE_FOR=""; DIAG_OK_FOR=""
 load_tree() {   # -> T_*[] ; rc!=0 = błąd w $TMPD/ds.err
@@ -1136,7 +1136,7 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
         # JEDNA REGUŁA DRZEWA TAKŻE PRZY TWORZENIU (relacja = config, 2026-10-26): przy jakimkolwiek
         # [-] zakres zapisany od razu jako pozycje relacji -- to samo set-datasets co w oknie zmiany,
         # w każdym rodzaju relacji. Seed powyżej szanował wyjątki, więc nic zbędnego nie przyszło.
-        if [ "$RC_RUN" -eq 0 ] && [ -n "$(printf '%s' "${B_EXCL[*]:-}" | tr -d ' \n')" ]; then
+        if [ "$RC_RUN" -eq 0 ] && any_excl; then
             _da=(); mapfile -t _da < <(basket_entries "$BASKET_DS_JSON" | awk -F'\t' 'NF { printf "--dataset=%s:%s\n", $1, $2 }')
             : >"$TMPD/run2.log"
             run_progress "$(Tv 'Nowa relacja '\''$RNAME'\'': zakres wg drzewa' '$RNAME' "$RNAME")" "$TMPD/run2.log" "$ZB" set-datasets "$RNAME" "${_da[@]}" --yes || RC_RUN=$?

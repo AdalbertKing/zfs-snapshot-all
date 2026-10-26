@@ -4428,13 +4428,13 @@ JSON
 printf 'hdd/vm-disks\tno\nhdd/vm-disks/a\tflat\nhdd/vm-disks/b\tflat\nrpool/data\tflat\n' > "$TE/ents.tsv"
 te_fn=$(sed -n '/^basket_entries() {/,/^}/p; /^basket_from_entries() {/,/^}/p' "$REPO/tui/basket-lib.sh")
 got=$(PY="$PY" bash -c "$te_fn
-B_ROOT=(); B_EXCL=()
-while IFS=\$'\t' read -r k r e; do B_ROOT+=(\"\$r\"); B_EXCL+=(\"\$(printf '%s' \"\$e\" | tr '\037' '\n')\"); done < <(basket_from_entries '$TE/ds.json' '$TE/ents.tsv')
-printf 'TREE:'; for i in \"\${!B_ROOT[@]}\"; do printf ' %s[%s]' \"\${B_ROOT[\$i]}\" \"\$(printf '%s' \"\${B_EXCL[\$i]}\" | tr '\n' ',')\"; done; echo
+B_ROOT=(); B_EXCL=(); B_CLOSED=''
+while IFS=\$'\t' read -r k r e; do [ \"\$k\" = C ] && { B_CLOSED=\"\$r\"; continue; }; B_ROOT+=(\"\$r\"); B_EXCL+=(\"\$(printf '%s' \"\$e\" | tr '\037' '\n')\"); done < <(basket_from_entries '$TE/ds.json' '$TE/ents.tsv')
+printf 'TREE:'; for i in \"\${!B_ROOT[@]}\"; do printf ' %s[%s]' \"\${B_ROOT[\$i]}\" \"\$(printf '%s' \"\${B_EXCL[\$i]}\" | tr '\n' ',')\"; done; printf ' closed=%s' \"\$B_CLOSED\"; echo
 printf 'BACK:'; basket_entries '$TE/ds.json' | tr '\t\n' ': '; echo
 B_EXCL[0]=\$'hdd/vm-disks/vm-102\nhdd/vm-disks/b'
 printf 'EXCL-B:'; basket_entries '$TE/ds.json' | tr '\t\n' ': '; echo" 2>&1 | tr '\n' '|')
-want="TREE: hdd/vm-disks[hdd/vm-disks/vm-102] rpool/data[]|BACK:hdd/vm-disks:no hdd/vm-disks/a:flat hdd/vm-disks/b:flat rpool/data:flat |EXCL-B:hdd/vm-disks:no hdd/vm-disks/a:flat rpool/data:flat |"
+want="TREE: hdd/vm-disks[hdd/vm-disks/vm-102] rpool/data[] closed=hdd/vm-disks|BACK:hdd/vm-disks:no hdd/vm-disks/a:flat hdd/vm-disks/b:flat rpool/data:flat |EXCL-B:hdd/vm-disks:no hdd/vm-disks/a:flat rpool/data:flat |"
 if [ "$got" = "$want" ]; then
     ok "drzewo <-> pozycje relacji: z configu do drzewa i z powrotem bez zmian; odznaczone dziecko pod [-] znika z pozycji"
 else
@@ -4450,6 +4450,31 @@ if [ "$got" = "hdd/vm-disks/a:no |hdd/vm-disks/a:flat " ]; then
     ok "drzewo -> pozycje: liść zachowuje rekurencję z configu (bez fałszywej zmiany), bez configu [x] = flat"
 else
     bad "drzewo -> pozycje: liść" "$got"
+fi
+# [-] = TYLKO OBECNE DZIECI (właściciel 2026-10-26): DS:no ze WSZYSTKIMI obecnymi dziećmi wraca do
+# drzewa jako zamknięty (closed), nie jako [x] -- inaczej zapis bez zmian robił z niego DS:flat.
+printf 'hdd/vm-disks\tno\nhdd/vm-disks/a\tflat\nhdd/vm-disks/b\tflat\nhdd/vm-disks/vm-102\tflat\n' > "$TE/all.tsv"
+got=$(PY="$PY" bash -c "$te_fn
+B_ROOT=(); B_EXCL=(); B_CLOSED=''
+while IFS=\$'\t' read -r k r e; do [ \"\$k\" = C ] && { B_CLOSED=\"\$r\"; continue; }; B_ROOT+=(\"\$r\"); B_EXCL+=(\"\$e\"); done < <(basket_from_entries '$TE/ds.json' '$TE/all.tsv')
+basket_entries '$TE/ds.json' | tr '\t\n' ': '" 2>&1)
+if [ "$got" = "hdd/vm-disks:no hdd/vm-disks/a:flat hdd/vm-disks/b:flat hdd/vm-disks/vm-102:flat " ]; then
+    ok "drzewo <-> pozycje: [-] ze wszystkimi obecnymi dziećmi wraca jako zamknięty i zapisuje się bez zmian (nie DS:flat)"
+else
+    bad "drzewo <-> pozycje: zamknięty [-]" "$got"
+fi
+# Spacja na zaznaczonym datasecie z dziećmi: [x] -> [-] (closed) -> [ ]; na liściu dalej wyjątek.
+TD='{"name":"hdd"},{"name":"hdd/vm"},{"name":"hdd/vm/a"},{"name":"hdd/vm/b"}'
+printf '{"datasets":[%s],"roots":["hdd/vm"],"excl":{}}' "$TD" > "$TE/spec.json"
+printf '{"datasets":[%s],"roots":["hdd/vm"],"excl":{},"closed":["hdd/vm"]}' "$TD" > "$TE/spec2.json"
+"$PY" "$REPO/tui/tree.py" --spec "$TE/spec.json" --out "$TE/o1.json" --keys 'goto:hdd/vm,space,enter' >/dev/null 2>&1
+TS2="$("$PY" "$REPO/tui/tree.py" --spec "$TE/spec2.json" --out "$TE/o2.json" --keys 'goto:hdd/vm,space' 2>&1)"
+"$PY" "$REPO/tui/tree.py" --spec "$TE/spec.json" --out "$TE/o3.json" --keys 'goto:hdd/vm/a,space,enter' >/dev/null 2>&1
+if grep -qF '"closed": ["hdd/vm"]' "$TE/o1.json" && grep -qF '"roots": ["hdd/vm"]' "$TE/o1.json" \
+   && has "$TS2" '[ ] vm' && grep -qF '"excl": {"hdd/vm": ["hdd/vm/a"]}' "$TE/o3.json" && grep -qF '"closed": []' "$TE/o3.json"; then
+    ok "drzewo: Spacja na [x] z dziećmi -> [-] (obecne, bez przyszłych) -> [ ]; na liściu wyjątek jak dotąd"
+else
+    bad "drzewo: trzeci stan Spacji" "$(cat "$TE/o1.json")" "$TS2" "$(cat "$TE/o3.json")"
 fi
 rm -rf "$TE"
 if ! grep -qE 'add-source|remove-source|needs_rerender|dataset_steps' "$REPO/tui/edit-relation.sh" \
