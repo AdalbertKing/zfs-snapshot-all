@@ -28,6 +28,26 @@
     <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
   - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
     `update-control` jako „not clean”.
+- **Kampania labowa 2026-10-26: kreator, okno zmiany, monitory, czasy GUI (PR #888-#901).** Na
+  `main` (repo dev), nie wydane; pve9, pve10 i pve11 stoją na `main` z `update-hold`.
+  - Drzewo ma trzeci stan: Spacja na zaznaczonym datasecie z dziećmi daje `[x]` -> `[-]` (obecne
+    dzieci, bez przyszłych) -> `[ ]`. `DS:no` z configu wraca jako `[-]`, nie jako `[x]`. Replika i
+    odzysk mają dwa stany.
+  - Zakładanie od razu z zakresem drzewa: przy migawkach zdalnych kreator podaje pozycje drzewa, a
+    pozycja listy z wymienionym dzieckiem dostaje zgodę bez dzieci (`include_children = no`). Przy
+    migawkach lokalnych z wyjątkami pierwsza migawka omija wykluczone datasety. Na żywo: wykluczony
+    `vm-102` (pve11) i `v-ntfs` (pve10) bez żadnej migawki; pierwszy bieg robi każdy szczebel raz.
+  - `set-datasets` podmienia pola rekordu zamiast je dopisywać i liczy `MANAGED_DATASETS` z configu,
+    więc relacja po zmianie zakresu daje się usunąć (`delete-relation --destroy-copies`). Purge
+    rekordu kolektora nie rusza już stanu relacji źródłowej o tej samej nazwie na tym samym hoście
+    (wcześniej znikała bramka i jej zadania dostawały `PAIR_UNKNOWN`).
+  - Czasy GUI (start / powrót z okna), zmierzone w tmux: pve9 z 19,7 / 18,6 s do 5,1 / 5,9 s,
+    pve10 7,3 / 4,0 s, pve11 2,6 / 2,1 s. Monitor dzieli jedno połączenie ssh na host, `list-jobs`
+    nie robi podpowłoki na pole, `job-stats` dla GUI trzyma sumę wolumenu 5 minut. Po oknie GUI
+    pokazuje „Wczytuję aktualne dane hosta…” i rysuje ekran dopiero ze świeżymi danymi.
+  - Znane: po założeniu backupu ze starymi migawkami rodziny (resztki) monitor dobowy może być
+    CRITICAL do najbliższego biegu dobowego. Sekcja `addsource` suity zfsbackup ma 4 porażki
+    rev175 (`delete-relation`) także na czystym `main`.
 - **Relacja = jej config: jeden zakres, jedno drzewo, jedno wywołanie (2026-10-26, projekt
   `docs/project/DESIGN-RELACJA-TO-CONFIG-2026-10-25.md`).** Na `main` (repo dev), jeszcze nie wydane.
   - Odczyt zakresu jest jeden dla każdego rodzaju relacji: `relation_sources` czyta sekcje relacji
