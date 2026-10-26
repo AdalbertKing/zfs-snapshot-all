@@ -64,6 +64,7 @@ restore_remote_state() {
     return 0
 }
 restore_grant_require()  { return 0; }
+restore_live_guard()     { return 0; }
 restore_remote_ahead()   { return 0; }
 restore_point_unique()   { return 0; }
 restore_engine_argv()    { RESTORE_ENGINE_ARGV=(x); return 0; }

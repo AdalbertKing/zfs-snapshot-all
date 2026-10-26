@@ -3710,7 +3710,7 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
         RESTORE_PREFLIGHT_ONLY=1 restore_one_isolated "${RESTORE_SCOPE_COPY[$_pf_i]}" "${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}"; _pf_rc=$?
         if [ "$_pf_rc" -eq 0 ]; then
             fitlist+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}|${RESTORE_ONE_VERDICT:-}")
-        elif [ "$RESTORE_AS_BOOT_ENV" = 1 ] && case "${RESTORE_ONE_VERDICT:-}" in "the RUNNING SYSTEM of"*) true ;; *) false ;; esac; then
+        elif [ "${RESTORE_AS_BOOT_ENV:-0}" = 1 ] && case "${RESTORE_ONE_VERDICT:-}" in "the RUNNING SYSTEM of"*) true ;; *) false ;; esac; then
             # the mounted root, asked for as a boot environment (restore_live_guard, restore_one)
             bootenv+=("${RESTORE_SCOPE_COPY[$_pf_i]}|${RESTORE_ONE_VERDICT##* from }|${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}")
         else
@@ -3733,7 +3733,7 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
 
     # --as-boot-env takes the running system ALONE: mixed with ordinary datasets the run would
     # be half a boot environment and half an overwrite, under one answer.
-    if [ "$RESTORE_AS_BOOT_ENV" = 1 ]; then
+    if [ "${RESTORE_AS_BOOT_ENV:-0}" = 1 ]; then
         if [ "${#bootenv[@]}" -eq 0 ] || [ "${#fitlist[@]}" -gt 0 ]; then
             log 0 "restore: --as-boot-env is for the running system alone -- name only it (--source=<pool>/ROOT/<name>). Nothing was changed."
             restore_pause_release
