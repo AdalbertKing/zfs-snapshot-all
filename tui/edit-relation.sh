@@ -817,7 +817,10 @@ while :; do
     er_row harmon "$(T Harmonogram)" "$_sz" "$([ "${#P_EDIT[@]}" -gt 0 ] || [ "${#P_RARGS[@]}" -gt 0 ] && echo 1 || echo 0)"
     case "$_rodzaj" in backup|"kopia lokalna")
         er_row srcret "$(T 'Retencja źródła')" "$_sr" "$([ "${#P_SARGS[@]}" -gt 0 ] && echo 1 || echo 0)" ;; esac
-    case "$_rodzaj" in "migawki zdalne"|"migawki lokalne") ;; *)
+    # Pasywna kopia lokalna (replika pvesr, MIRROR=1): bez historii i bez łącza okno silnika
+    # było puste -- "Przywróć fabryczne" i "Gotowe" (właściciel 2026-10-26, pve2-nextcloud).
+    _eng=1; [ "$_rodzaj" = "kopia lokalna" ] && [ "${MIRROR:-0}" = 1 ] && _eng=0
+    [ "$_eng" -eq 1 ] && case "$_rodzaj" in "migawki zdalne"|"migawki lokalne") ;; *)
         er_row silnik "$(T Silnik)" "$_en" "$([ "${#P_TRANSFER[@]}" -gt 0 ] && echo 1 || echo 0)" ;; esac
     CARD_ACT_TAGS=(wykonaj)
     if [ "$np" -gt 0 ]; then CARD_ACT_LABELS=("$(Tv 'ZAPISZ ZMIANY ($np) -- najpierw plan do potwierdzenia' '$np' "$np")")
