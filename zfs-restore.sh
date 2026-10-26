@@ -404,7 +404,7 @@ restore_safe_land() {   # <copy> <snapshot> <landing> <what the source WAS> <yes
             if zfs destroy -r "$staging" 2>/dev/null; then
                 die "restore failed ($failure). This attempt's staging dataset was removed; nothing else was touched, and re-running is clean."
             fi
-            die "restore failed ($failure) AND this attempt's staging dataset could not be removed. '$staging' is still there and is NOT a valid restore -- remove it by hand. Nothing at '$landing' was touched."
+            die "restore failed ($failure) AND this attempt's staging dataset could not be removed. '$staging' is still there and is NOT a valid restore -- remove it manually. Nothing at '$landing' was touched."
         fi
         die "restore failed ($failure). Nothing was left behind."
     fi
@@ -1702,7 +1702,7 @@ restore_fence_lower() {   # <dataset> <previous value> <previous source>
     fi
 
     [ "$rc" -eq 0 ] || {
-        echo "WARNING: could not restore the 'readonly' property on '$ds' -- the dataset may still be readonly=on. State before: value '$val', source '$srcp'. Restore it by hand:" >&2
+        echo "WARNING: could not restore the 'readonly' property on '$ds' -- the dataset may still be readonly=on. State before: value '$val', source '$srcp'. Restore it manually:" >&2
         case "$srcp" in
             local)    echo "  zfs set readonly=$val $ds" >&2 ;;
             received) echo "  zfs inherit -S readonly $ds" >&2 ;;
@@ -1725,7 +1725,7 @@ restore_drop_tech_snapshots() {   # <source dataset> <snapshot names...>
         [ -n "$s" ] || continue
         zfs list -H -o name -t snapshot "${src}@${s}" >/dev/null 2>&1 || continue
         zfs destroy "${src}@${s}" >/dev/null 2>&1 || {
-            echo "WARNING: could not remove the technical snapshot '${src}@${s}' -- remove it by hand: zfs destroy ${src}@${s}" >&2
+            echo "WARNING: could not remove the technical snapshot '${src}@${s}' -- remove it manually: zfs destroy ${src}@${s}" >&2
             rc=1
         }
     done
@@ -1757,7 +1757,7 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
     local left=""
     [ "$fence" = dirty ] && left="the 'readonly' property (details and the repair command above)"
     [ "$snaps" = dirty ] && left="${left:+$left and }the technical snapshots of this run (listed above)"
-    die "$msg WARNING: '$src' is NOT in its state from before the command -- left to repair by hand: $left."
+    die "$msg WARNING: '$src' is NOT in its state from before the command -- left to repair manually: $left."
 }
 # ------------------------------------------------------------------------------
 # restore_one -- ONE dataset, from the copy back onto the machine it came from
@@ -4640,7 +4640,7 @@ The way in two steps:
     # The restore succeeded; housekeeping did not fully. Keep the two facts apart --
     # a single sentence would send the operator to fix only half of it.
     [ "$fence_after" = dirty ] && echo "WARNING: the restore SUCCEEDED, but the write lock (readonly=on) could not be removed from source '$src' -- repair command above. This is a separate failure from the one you were repairing." >&2
-    [ "$snaps_left" = dirty ] && echo "WARNING: the restore SUCCEEDED, but a technical snapshot of this run remains (listed above) -- remove it by hand." >&2
+    [ "$snaps_left" = dirty ] && echo "WARNING: the restore SUCCEEDED, but a technical snapshot of this run remains (listed above) -- remove it manually." >&2
     return 3
 }
 
@@ -5164,7 +5164,7 @@ cmd_restore() {
                 2)
                     echo "  POINT --at:  AMBIGUOUS -- several snapshots share the same, latest creation time at that moment."
                     echo "               Refusing to choose: the snapshot name does NOT decide it (see --at above)."
-                    echo "               Name a specific snapshot by hand or give another moment."
+                    echo "               Name a specific snapshot manually or give another moment."
                     at_ambig=$((at_ambig + 1))
                     ;;
             esac

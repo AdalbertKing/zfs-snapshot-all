@@ -80,7 +80,7 @@ Testing is described in [../../test/README.md](../../test/README.md).
 | `lib-*.sh` | Shared code, sourced and never run: [`lib-zfs-snap.sh`](../../lib-zfs-snap.sh) (send/receive/quiesce engine for snapsend and snapget), `lib-cron.sh` (the one crontab writer), `lib-backup-common.sh`, `lib-pairing.sh`, `lib-scope.sh`, `lib-profile.sh`, `lib-record.sh`, `lib-rekey.sh` |
 | [`profiles/`](../../profiles) | Retention templates; see [profiles/README.md](../../profiles/README.md) |
 
-Versions are not listed here, because a number kept by hand in two places goes stale. Ask the
+Versions are not listed here, because a number kept manually in two places goes stale. Ask the
 program: `snapsend.sh`, `snapget.sh`, `delsnaps.sh`, `check-snap-age.sh` and `gen-cron.sh` answer
 `-V`; `deploy.sh` and `zfs-backup.sh` answer `--version` (the checkout's revision). The changelog is
 `git log`; this document describes current behavior only.
@@ -207,7 +207,7 @@ token a later run needs that exact snapshot.
 `@__replicate_` snapshot, the hold is skipped and the reason logged. `pvesr` moves data with
 `zfs send -Rpv | zfs recv -F`, and a forced receive of a replication stream destroys every
 destination snapshot the sending side no longer has. A held snapshot cannot be destroyed, so the
-receive would abort and replication would stay broken until someone releases the hold by hand.
+receive would abort and replication would stay broken until someone releases the hold manually.
 Watch for snapshots named `recv-<pid>-1`: that is what a forced receive does with a destination
 snapshot it could not delete.
 
@@ -440,7 +440,7 @@ cannot mount at all (`mount(2)` needs `CAP_SYS_ADMIN` regardless of `zfs allow`)
 | descendants received under `-r` | closed (`canmount=noauto`) after a successful recursive transfer; filesystems only; skipped under `-U` |
 
 `canmount` on a pre-existing target is never rewritten, so `zfs mount <dataset>` brings any of
-them back by hand. `-U` sets `canmount=on` for targets it creates, since `canmount=noauto` would
+them back manually. `-U` sets `canmount=on` for targets it creates, since `canmount=noauto` would
 otherwise outrank the recv flag and make the opt-out powerless. The source's own `canmount` is
 never touched. The descendants of a recursive stream are created by `zfs recv` itself and arrive
 carrying the source's `canmount`; the engines close the received subtree afterwards so the
@@ -482,7 +482,7 @@ GUID match, then bookmark match, then a full send) and transfers it. It is also 
 restore-to-place and of local snapshot-only jobs.
 
 **Remote push is a CLI mode for existing fleets.** The GUI creates pull, mirror, local-copy and
-snapshot-only relations and has no window for push. To set one up by hand: run
+snapshot-only relations and has no window for push. To set one up manually: run
 `deploy.sh --pair --role=push --peer=COLLECTOR` on the source and `deploy.sh --join=…` on the
 collector, then add a `[dataset:]` section with `dst = account@COLLECTOR:target` and
 `flags = -K <pairing key> -k <pinned known_hosts>` to the source's config and install it with
@@ -1334,10 +1334,10 @@ with the source and installs the jobs into that account's crontab:
 ./zfs-backup.sh --source=src-a:rpool/data --target=hdd/backups --local-user=zfsbackup --install
 ```
 
-Keys and the pinned host key are exchanged by the pairing, not by hand. The account has `zfs allow`
+Keys and the pinned host key are exchanged by the pairing, not manually. The account has `zfs allow`
 delegation on the target (and everything created under it later), so it receives incrementals
 without root, including a brand-new multi-level target path; `-f`, or `-F` against a mounted
-clone, still needs root. To run a job by hand as that account, copy the engine command from
+clone, still needs root. To run a job manually as that account, copy the engine command from
 `crontab -l -u zfsbackup`: the line carries the `-K` and `-k` it needs, and runs exactly as cron
 runs it.
 
@@ -1408,7 +1408,7 @@ A large initial send to a remote host drops mid-stream (network blip, host reboo
 ./snapsend.sh tank/data user@host:backup/tank/data   # dies partway through
 ```
 
-The target is left with a `receive_resume_token`. Nothing is needed by hand: the *next* scheduled
+The target is left with a `receive_resume_token`. Nothing is needed manually: the *next* scheduled
 (or manual) run of the same command detects the token via `get_resume_token()` and resumes with
 `zfs send -t <token>`. If it fails to resume 3 times running, the next run gives up cleanly
 (`zfs receive -A`, discarding only the stuck partial state) and falls back to a normal incremental

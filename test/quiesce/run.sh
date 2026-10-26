@@ -1401,7 +1401,7 @@ case "$out" in *"tanka/x@t"*)
 case "$out" in *"tankb/z@t"*)
     check "ledger: ...the survivor from the last group is named too" "y" "y" ;;
   *) check "ledger: ...the survivor from the last group is named too" "y" "n ($out)" ;; esac
-case "$out" in *"remove by hand: zfs destroy"*)
+case "$out" in *"remove manually: zfs destroy"*)
     check "ledger: ...each with the exact removal command" "y" "y" ;;
   *) check "ledger: ...each with the exact removal command" "y" "n ($out)" ;; esac
 # Over-reporting is its own defect: it sends an operator hunting for a snapshot

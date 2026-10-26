@@ -49,7 +49,7 @@ rekey_raw_recovered() {   # <key locations, space-separated> <dataset roots...> 
             _rk_done=1
             break
         done
-        [ -n "$_rk_done" ] || echo "WARN $_rk_ds is locked with keylocation=prompt (a raw recovery) and no key on this machine opens it -- open it by hand: zfs load-key $_rk_ds"
+        [ -n "$_rk_done" ] || echo "WARN $_rk_ds is locked with keylocation=prompt (a raw recovery) and no key on this machine opens it -- open it manually: zfs load-key $_rk_ds"
     done
     return 0
 }

@@ -456,7 +456,7 @@ printf 'REMOVED_NAME=gone\nDATA=hdd/stillhere\n' > "$T/removed/gone.20260820-000
 # result that depends on what the runner happens to have installed is the flake
 # test/pairgate already documents.
 out=$(ZFS_BIN="$T/no-such-zfs" run_cr "$T" 2>&1)
-if grep -q 'zfs is not available' <<<"$out" && grep -q 'read them by hand' <<<"$out"; then
+if grep -q 'zfs is not available' <<<"$out" && grep -q 'read them manually' <<<"$out"; then
     ok "without zfs the data check says so rather than reporting nothing"
 else
     bad "without zfs the data check says so rather than reporting nothing" "$out"

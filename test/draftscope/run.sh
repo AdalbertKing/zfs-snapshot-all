@@ -485,7 +485,7 @@ if declare -F new_account_drop_inherited_grants >/dev/null; then
         check "U42/REV-165: the rollback code has no userdel -r and no ownership guess" "0" "1: found"
     else check "U42/REV-165: the rollback code has no userdel -r and no ownership guess" "0" "0"; fi
     _r=$(g42_run listfail prefail)
-    case "$_r:$(_hs)" in *"run 'userdel newacct' by hand"*:sentinel)
+    case "$_r:$(_hs)" in *"run 'userdel newacct' manually"*:sentinel)
             case "$_r" in *"userdel -r"*) check "U42/REV-165: rollback fails, pre-existing home -> hand command" "0" "1: says userdel -r: $_r" ;;
                 *) check "U42/REV-165: rollback itself fails with a pre-existing home -> hand command is plain userdel, home kept" "0" "0" ;; esac ;;
         *) check "U42/REV-165: rollback failure" "0" "1: $_r home=$(_hs)" ;; esac

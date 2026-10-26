@@ -54,7 +54,7 @@ die()  { echo "FATAL: $*" >&2; exit 1; }
 # untrustworthy and stops the caller rather than being used anyway.
 ensure_update_state_dir() {
     if [ -L "$UPDATE_STATE_DIR" ]; then
-        warn "$UPDATE_STATE_DIR is a symlink -- refusing to follow it. Remove it by hand and re-run: ls -la $UPDATE_STATE_DIR"
+        warn "$UPDATE_STATE_DIR is a symlink -- refusing to follow it. Remove it manually and re-run: ls -la $UPDATE_STATE_DIR"
         return 1
     fi
     if [ -e "$UPDATE_STATE_DIR" ] && [ ! -d "$UPDATE_STATE_DIR" ]; then
@@ -76,7 +76,7 @@ ensure_update_state_dir() {
 write_state_file() {
     local dst="$1" content="$2" tmp
     if [ -L "$dst" ]; then
-        warn "$dst is a symlink -- refusing to write through it. Remove it by hand: ls -la $dst"
+        warn "$dst is a symlink -- refusing to write through it. Remove it manually: ls -la $dst"
         return 1
     fi
     tmp=$(mktemp "$UPDATE_STATE_DIR/.tmp.XXXXXX" 2>/dev/null) || { warn "mktemp in $UPDATE_STATE_DIR failed"; return 1; }
@@ -92,7 +92,7 @@ write_state_file() {
 read_state_file() {
     local src="$1"
     if [ -L "$src" ]; then
-        warn "$src is a symlink -- refusing to read through it. Remove it by hand: ls -la $src"
+        warn "$src is a symlink -- refusing to read through it. Remove it manually: ls -la $src"
         return 1
     fi
     [ -f "$src" ] || return 1
@@ -102,7 +102,7 @@ read_state_file() {
 remove_state_file() {
     local dst="$1"
     if [ -L "$dst" ]; then
-        warn "$dst is a symlink, not the state file this script wrote -- refusing to remove it automatically. Inspect and remove by hand: ls -la $dst"
+        warn "$dst is a symlink, not the state file this script wrote -- refusing to remove it automatically. Inspect and remove manually: ls -la $dst"
         return 1
     fi
     [ -e "$dst" ] || return 0
@@ -122,11 +122,11 @@ emergency_disable() {
     fi
     warn "could not write the update hold at $UPDATE_HOLD_FILE -- attempting an emergency circuit breaker instead"
     if chmod 000 "$SELF" 2>/dev/null; then
-        warn "removed exec permission on $SELF -- the hourly cron line will now fail closed instead of retrying. Fix $UPDATE_STATE_DIR by hand, then: chmod 0700 $SELF"
+        warn "removed exec permission on $SELF -- the hourly cron line will now fail closed instead of retrying. Fix $UPDATE_STATE_DIR manually, then: chmod 0700 $SELF"
         return 0
     fi
     if crontab -l 2>/dev/null | grep -vF "$SELF" | crontab - 2>/dev/null; then
-        warn "removed the hourly cron line invoking $SELF as a last-resort circuit breaker -- re-add it by hand once $UPDATE_STATE_DIR is fixed"
+        warn "removed the hourly cron line invoking $SELF as a last-resort circuit breaker -- re-add it manually once $UPDATE_STATE_DIR is fixed"
         return 0
     fi
     warn "CRITICAL: could not write a hold, could not disable $SELF, could not remove its cron line -- $UPDATE_STATE_DIR needs immediate manual attention or this host will keep retrying hourly"
@@ -199,7 +199,7 @@ apply_repo_to_host() {   # <what> <revision-8> -> 0 applied/skipped, 1 not appli
         if printf '%s\n' "$cron_before" > "$pre" 2>/dev/null; then
             warn "the root crontab CHANGED while applying $rev ($what). The pre-image is saved at $pre -- restore with: crontab $pre"
         else
-            warn "the root crontab CHANGED while applying $rev ($what) AND the pre-image could not be saved to $pre -- compare against a backup by hand before trusting this host's schedule"
+            warn "the root crontab CHANGED while applying $rev ($what) AND the pre-image could not be saved to $pre -- compare against a backup manually before trusting this host's schedule"
         fi
     fi
     if [ "$rc" -ne 0 ]; then
@@ -215,7 +215,7 @@ do_self_update() {
     ensure_update_state_dir || { warn "refusing to update: $UPDATE_STATE_DIR is not safe to use as update-control state"; return 1; }
 
     if [ -L "$UPDATE_HOLD_FILE" ]; then
-        warn "$UPDATE_HOLD_FILE is a symlink -- treating update-control state as tampered with, refusing to update. Resolve by hand: ls -la $UPDATE_HOLD_FILE"
+        warn "$UPDATE_HOLD_FILE is a symlink -- treating update-control state as tampered with, refusing to update. Resolve manually: ls -la $UPDATE_HOLD_FILE"
         return 1
     fi
     if [ -e "$UPDATE_HOLD_FILE" ]; then
@@ -223,7 +223,7 @@ do_self_update() {
         return 0
     fi
     if [ -L "$PREV_REV_FILE" ]; then
-        warn "$PREV_REV_FILE is a symlink -- treating update-control state as tampered with, refusing to update. Resolve by hand: ls -la $PREV_REV_FILE"
+        warn "$PREV_REV_FILE is a symlink -- treating update-control state as tampered with, refusing to update. Resolve manually: ls -la $PREV_REV_FILE"
         return 1
     fi
 
@@ -244,7 +244,7 @@ do_self_update() {
     fi
 
     if [ -n "$dirty" ]; then
-        warn "$REPO_DIR is not clean -- refusing to update to $(printf '%.8s' "$target"). Running a mix of reviewed and unreviewed local code as root is exactly what this check exists to prevent. Resolve by hand: git -C $REPO_DIR status"
+        warn "$REPO_DIR is not clean -- refusing to update to $(printf '%.8s' "$target"). Running a mix of reviewed and unreviewed local code as root is exactly what this check exists to prevent. Resolve manually: git -C $REPO_DIR status"
         return 1
     fi
 
@@ -286,12 +286,12 @@ do_rollback() {
     [ -d "$REPO_DIR/.git" ] || die "no git checkout at $REPO_DIR"
     ensure_update_state_dir || die "$UPDATE_STATE_DIR is not safe to use as update-control state -- see above"
     local target
-    target=$(read_state_file "$PREV_REV_FILE") || die "no previous revision recorded at $PREV_REV_FILE (or it is not a plain file) -- nothing to roll back to. Pick a revision by hand: git -C $REPO_DIR log --oneline"
+    target=$(read_state_file "$PREV_REV_FILE") || die "no previous revision recorded at $PREV_REV_FILE (or it is not a plain file) -- nothing to roll back to. Pick a revision manually: git -C $REPO_DIR log --oneline"
     [ -n "$target" ] || die "$PREV_REV_FILE is empty -- nothing to roll back to"
     local from
     from=$(git -C "$REPO_DIR" rev-parse HEAD) || die "cannot resolve current HEAD in $REPO_DIR"
     git -C "$REPO_DIR" cat-file -e "${target}^{commit}" 2>/dev/null \
-        || die "recorded revision $target is not in $REPO_DIR -- resolve by hand"
+        || die "recorded revision $target is not in $REPO_DIR -- resolve manually"
 
     write_state_file "$UPDATE_HOLD_FILE" \
         "rollback $(printf '%.8s' "$from") -> $(printf '%.8s' "$target") started $(date '+%Y-%m-%d %H:%M:%S')" \
@@ -304,7 +304,7 @@ do_rollback() {
         # original (now possibly stale) hold to still be doing its job.
         emergency_disable "rollback to $(printf '%.8s' "$target") FAILED at $(date '+%Y-%m-%d %H:%M:%S') -- checkout may be inconsistent, held for manual investigation" \
             || warn "emergency circuit breaker also failed after a failed reset -- $UPDATE_STATE_DIR needs manual attention immediately"
-        die "git reset --hard $target failed -- automatic updates remain HELD, investigate $REPO_DIR by hand"
+        die "git reset --hard $target failed -- automatic updates remain HELD, investigate $REPO_DIR manually"
     fi
 
     write_state_file "$UPDATE_HOLD_FILE" \
@@ -326,7 +326,7 @@ do_rollback() {
 do_resume_updates() {
     ensure_update_state_dir || die "$UPDATE_STATE_DIR is not safe to use as update-control state -- see above"
     if [ -L "$UPDATE_HOLD_FILE" ]; then
-        die "$UPDATE_HOLD_FILE is a symlink -- refusing to touch it. Resolve by hand: ls -la $UPDATE_HOLD_FILE"
+        die "$UPDATE_HOLD_FILE is a symlink -- refusing to touch it. Resolve manually: ls -la $UPDATE_HOLD_FILE"
     fi
 
     local had_hold=0 hold_content=""
@@ -348,7 +348,7 @@ do_resume_updates() {
     if [ "$rc" -ne 0 ] && [ "$had_hold" -eq 1 ]; then
         warn "the explicit update after --resume-updates failed -- restoring the hold rather than leaving automatic updates enabled"
         emergency_disable "restored after a failed --resume-updates on $(date '+%Y-%m-%d %H:%M:%S') -- previous hold was: $hold_content" \
-            || warn "emergency circuit breaker also failed after a failed resume -- automatic updates may retry hourly. Investigate $UPDATE_STATE_DIR by hand."
+            || warn "emergency circuit breaker also failed after a failed resume -- automatic updates may retry hourly. Investigate $UPDATE_STATE_DIR manually."
     fi
     return "$rc"
 }

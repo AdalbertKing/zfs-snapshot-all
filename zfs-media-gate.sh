@@ -640,7 +640,7 @@ guid=%s
             say "'$POOL' was exported again -- the machine is as it was before this run, and nothing was transferred."
             emit import_unrecorded
         else
-            say "WARNING: could not export '$POOL' either. DO NOT UNPLUG THE DISK. The pool is imported, unrecorded, and this run cannot put it back -- export it by hand."
+            say "WARNING: could not export '$POOL' either. DO NOT UNPLUG THE DISK. The pool is imported, unrecorded, and this run cannot put it back -- export it manually."
             emit import_unrecorded_stuck
         fi
         exit 2
@@ -843,10 +843,10 @@ detach)
         emit exported; exit 0
     fi
     if [ "$_erc" -eq 124 ]; then
-        say "WARNING: exporting '$POOL' did not finish within ${MEDIA_EXPORT_TIMEOUT}s and was abandoned. DO NOT UNPLUG THE DISK. This is what a medium pulled DURING a run looks like: ZFS is waiting for a device that is not coming back, and with failmode=wait that wait has no end. The pool is still imported. Reconnect the disk if it was removed, then export by hand; if the export itself is stuck in uninterruptible sleep, only a reboot clears it."
+        say "WARNING: exporting '$POOL' did not finish within ${MEDIA_EXPORT_TIMEOUT}s and was abandoned. DO NOT UNPLUG THE DISK. This is what a medium pulled DURING a run looks like: ZFS is waiting for a device that is not coming back, and with failmode=wait that wait has no end. The pool is still imported. Reconnect the disk if it was removed, then export manually; if the export itself is stuck in uninterruptible sleep, only a reboot clears it."
         emit export_timeout; exit 2
     fi
-    say "WARNING: could not export '$POOL'. DO NOT UNPLUG THE DISK. Something still holds the pool -- a mounted dataset, an open file, a running send. Find it (zpool export shows the reason above), then export by hand."
+    say "WARNING: could not export '$POOL'. DO NOT UNPLUG THE DISK. Something still holds the pool -- a mounted dataset, an open file, a running send. Find it (zpool export shows the reason above), then export manually."
     emit export_failed; exit 2
     ;;
 esac
