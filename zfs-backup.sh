@@ -15177,6 +15177,11 @@ cmd_delete_relation() {
     if [ "$destroy" -eq 1 ]; then
         local d
         for d in $copies; do
+            # A copy under another copy of the list went with its parent's -r: gone is done,
+            # not a leftover (lab 2026-10-26: [-] parent + [x] children, false "LEFTOVERS").
+            if ! zfs list -H -o name -- "$d" >/dev/null 2>&1; then
+                log "delete-relation: 4/4 $d -- already gone (destroyed with its parent)"; continue
+            fi
             log "delete-relation: 4/4 zfs destroy -r $d"
             zfs destroy -r "$d" || { rc=1; log "!!! delete-relation: could not destroy $d"; continue; }
             # The empty shells above it (<target>/<peer>/<pool>...) were created for this
@@ -15346,6 +15351,19 @@ local_source_change() {   # <add|remove> <name> <dataset> <yes 0|1>
     record_replace_fields "$cpath" REQUESTED_DATASETS "$now" MANAGED_DATASETS "$out" \
         || warn "$how-source: the config is installed, but the record $cpath could not be updated -- its source list is stale (the config decides)"
     return 0
+}
+
+# The paths of one relation's marked sections of one kind, space-separated (the record's
+# list form): [dataset:X] / [prune:X] whose body carries the marker. A remote prune scope
+# (account@host:ds) is not a local path and is left out.
+relation_marked_headers() {   # <config> <marker line> <dataset|prune>
+    awk -v mk="$2" -v kind="$3" '
+        function out() { if (hit && p != "" && p !~ /@/) print p }
+        /^\[/ { out(); p = ""; hit = 0
+                 if (index($0, "[" kind ":") == 1) { p = $0; sub(/^\[[a-z]+:/, "", p); sub(/\]$/, "", p) }
+                 next }
+        { t = $0; sub(/^[ \t]+/, "", t); if (t == mk) hit = 1 }
+        END { out() }' "$1" | paste -sd' ' -
 }
 
 record_replace_fields() {   # <record> <FIELD> <value> [<FIELD> <value>]... -- one atomic rewrite
@@ -15792,14 +15810,24 @@ cmd_set_datasets() {
 
     log "set-datasets: 3/3 the request follows the config"
     local joined; joined=$(IFS=,; printf '%s' "${want[*]}")
-    {
-        cat "$cpath"
-        write_client_field REQUESTED_DATASETS "$joined"
-        if [ -n "${RUX_SOURCE:-}" ]; then write_client_field RUX_SOURCE "${RUX_SOURCE%%:*}:$joined"; fi
-        if [ "${RUX_MODE:-}" = snaponly ]; then
-            write_client_field MANAGED_SOURCES "$(relation_sources "$name" | cut -f1 | sed "s/^[^@]*@//" | paste -sd' ' -)"
-        fi
-    } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath" || die "set-datasets: could not update the record of '$name' ($cpath); the config is already installed"
+    # Fields are REPLACED, not appended (lab campaign 2026-10-26: a record carried ten
+    # REQUESTED_DATASETS lines), and the relationship's COPIES follow the config too:
+    # MANAGED_DATASETS is what remove-client strips and --destroy-copies destroys -- a copy
+    # added here was left out, and delete-relation then refused ("relation = 'pve9', but
+    # there is no [relation:pve9] block"). The copies are this relation's marked [dataset:]
+    # sections; a relation that copies nothing (local snapshots) keeps it empty -- there the
+    # sections are the originals.
+    local -a recf=(REQUESTED_DATASETS "$joined")
+    [ -n "${RUX_SOURCE:-}" ] && recf+=(RUX_SOURCE "${RUX_SOURCE%%:*}:$joined")
+    if [ "${RUX_MODE:-}" = snaponly ]; then
+        recf+=(MANAGED_SOURCES "$(relation_sources "$name" | cut -f1 | sed "s/^[^@]*@//" | paste -sd' ' -)")
+    elif [ "${RUX_MODE:-}" != local ] || [ -n "${CLIENT_TARGET:-}" ]; then
+        local _mk="# managed-by: zfs-backup.sh client=$name"
+        recf+=(MANAGED_DATASETS "$(relation_marked_headers "$CRON_CONFIG" "$_mk" dataset)")
+        [ "${RUX_MODE:-}" = local ] && recf+=(MANAGED_PRUNE_SCOPE "$(relation_marked_headers "$CRON_CONFIG" "$_mk" prune)")
+    fi
+    record_replace_fields "$cpath" "${recf[@]}" \
+        || die "set-datasets: could not update the record of '$name' ($cpath); the config is already installed"
     chmod 0600 "$cpath" 2>/dev/null || :
 
     # The first run of a dataset that was not covered: every installed snapshot / copy line of
