@@ -115,7 +115,7 @@ run_progress() {   # <tytuł> <dziennik> <polecenie...> -> rc polecenia; dzienni
     while kill -0 "$pid" 2>/dev/null; do
         geom
         TERM="$INFO_TERM" "$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" --title "$(T '%s -- trwa %d s' "$t" "$((SECONDS - s0))")" \
-              --infobox "$(T 'Trwa wykonywanie, proszę czekać.\n\nKomunikaty poleceń idą do dziennika:\n  %s\n\nCtrl-C przerywa.' "$log")" 10 "$W"
+              --infobox "$(T 'Trwa wykonywanie, proszę czekać.\n\nKomunikaty poleceń idą do dziennika:\n  %s\n\nCtrl-C przerywa.' "$log")" 12 "$W"
         for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
     done
     wait "$pid" || rc=$?
