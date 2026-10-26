@@ -1198,6 +1198,7 @@
 "WYJŚCIE: ": "OUTPUT: ",
 "WYKONAJ": "EXECUTE",
 "WYŁĄCZENIE = pauza tutaj ORAZ zamek na źródle %s:": "DISABLE = pause here AND a lock on source %s:",
+"Wczytuję aktualne dane hosta… %d s": "Loading the host's current data… %d s",
 "Wpisz nazwę repliki, np. usb1.": "Enter the replica name, e.g. usb1.",
 "Wpisz ścieżkę…  (dataset na tym hoście, może jeszcze nie istnieć)": "Enter path…     (a dataset on this host, may not exist yet)",
 "Wstecz": "Back",

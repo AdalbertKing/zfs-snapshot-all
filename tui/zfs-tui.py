@@ -5264,6 +5264,7 @@ class UI(object):
                 if obj.get("proc") is not None and obj["proc"].poll() is None:
                     self.message = _(u"proces biegnie dalej (pid %d); wyjście: %s") % (obj["proc"].pid, obj["path"])
                 self.refresh_bg()
+                self.wait_fresh = True
             elif k in ("down", "j"):
                 self.scroll += 1
             elif k in ("up", "k"):
@@ -5869,6 +5870,33 @@ def curses_loop(ui):
                 return ord(k), True
             return k, False
 
+        # POWRÓT BEZ STAREGO EKRANU (właściciel 2026-10-26, pve2: po oknie GUI stało ze starymi
+        # danymi i napisem "odświeżam w tle" -- "user może odnieść wrażenie, że hang"). Po oknie
+        # główny ekran rysuje się dopiero ze świeżymi danymi; do tego czasu widać, że trwa
+        # wczytywanie (sekundy) i komunikat okna. Bezpiecznik: po BG_KEY_WAIT * 2 s rysuje stary.
+        def wait_fresh(scr):
+            ui.wait_fresh = False
+            bg = getattr(ui, "_bg", None)
+            t0 = time.time()
+            while bg is not None and bg[0].is_alive() and time.time() - t0 < ui.BG_KEY_WAIT * 2:
+                h, w = scr.getmaxyx()
+                msg = ui.message or u""
+                if msg.endswith(_(ui.BG_NOTE)):
+                    msg = msg[:-len(_(ui.BG_NOTE))]
+                lines = [_(u"Wczytuję aktualne dane hosta… %d s") % int(time.time() - t0)]
+                if msg.strip():
+                    lines += [u"", msg.strip()]
+                scr.erase()
+                for i, l in enumerate(lines):
+                    l = l[:max(1, w - 2)]
+                    try:
+                        scr.addstr(max(0, h // 2 - 1) + i, max(0, (w - len(l)) // 2), l)
+                    except curses.error:
+                        pass
+                scr.refresh()
+                bg[0].join(0.3)
+            ui.poll_bg()
+
         def read_key():
             k, is_char = wch()
             if k != 27:
@@ -5903,6 +5931,8 @@ def curses_loop(ui):
                     pass
             return 27, None, False
         while True:
+            if getattr(ui, "wait_fresh", False):
+                wait_fresh(stdscr)
             h, w = stdscr.getmaxyx()
             if h < 10 or w < 40:
                 stdscr.erase()
@@ -6006,6 +6036,7 @@ def curses_loop(ui):
                 ui.rel_names_before_bg = getattr(ui, "rel_names_before", None)
                 ui.rel_names_before = None
                 ui.refresh_bg()
+                ui.wait_fresh = True
     curses.wrapper(main)
 
 
