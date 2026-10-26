@@ -633,5 +633,6 @@
 "zfs-snapshot-all: wczytuję dane hosta (status, zadania, monitory)…": "zfs-snapshot-all: loading the host's data (status, jobs, monitors)…",
 "  $n: migawki automated_*: $f, najnowsza $when ($ago temu)": "  $n: automated_* snapshots: $f, newest $when ($ago ago)",
 "  $n: migawki automated_*: $f": "  $n: automated_* snapshots: $f",
-"0 = po skopiowaniu nic z tego szczebla u źródła (baza kopii to inne szczeble).": "0 = nothing of this tier kept at the source after the copy (the copy base comes from the other tiers)."
+"0 = po skopiowaniu nic z tego szczebla u źródła (baza kopii to inne szczeble).": "0 = nothing of this tier kept at the source after the copy (the copy base comes from the other tiers).",
+" System hosta (…/ROOT/…) domyślnie odznaczony: wybrany sam odtwarza się jako nowe środowisko startowe.": " The host's system (…/ROOT/…) starts unticked: chosen alone it is restored as a new boot environment."
 }

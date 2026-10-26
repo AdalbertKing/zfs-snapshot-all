@@ -357,7 +357,12 @@ while :; do
         # Kampania wariantów 2026-10-22 (W5): Wstecz z "Gdzie odtworzyć?" wracało do drzewa
         # z zaznaczonym WSZYSTKIM -- wybór admina znikał, a nieuważny Enter + "na miejsce"
         # nadpisałby całą relację. Drzewo dostaje z powrotem ostatni wybór.
-        RESTORE_LAST_TREE="$TMPD/tree-last.json" "$PY" - "$TMPD/ds.tsv" "$TMPD/tree-spec.json" "$(Tv 'Przywróć $REL: co?' '$REL' "$REL")" "$TARGET" "${ROWC[@]}" <<'PYEOF' || exit 1
+        # SYSTEM HOSTA DOMYŚLNIE ODZNACZONY (właściciel 2026-10-26, pve2: "cała relacja" cofnęła
+        # rpool/ROOT/pve-1 pod działającym hostem). Kopia, której źródło leży w <pula>/ROOT/,
+        # startuje bez kratki; wybrana sama odtwarza się jako nowe środowisko startowe.
+        SYSROOTS=""
+        for i in "${!ROWC[@]}"; do case "${ROWS[$i]#*:}" in */ROOT/*) SYSROOTS="$SYSROOTS ${ROWC[$i]}" ;; esac; done
+        SYSROOTS="$SYSROOTS" RESTORE_LAST_TREE="$TMPD/tree-last.json" "$PY" - "$TMPD/ds.tsv" "$TMPD/tree-spec.json" "$(Tv 'Przywróć $REL: co?' '$REL' "$REL")" "$TARGET" "${ROWC[@]}" <<'PYEOF' || exit 1
 import sys, json, os
 _C = json.load(open(os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if os.environ.get("ZFS_TUI_CAT") else {}
 def _(s): return _C.get(s, s)
@@ -375,7 +380,10 @@ for ln in open(sys.argv[1], encoding="utf-8"):
 spec = {"title": sys.argv[3], "host": sys.argv[4], "show_mode": False, "no_exc": False,
         "no_close": True,      # odzysk: dwa stany Spacji, "bez przyszłych" nic tu nie znaczy
         "legend": _(u" [x] odtwarzane   [-] część   [ ] nie"),
-        "recursion": "flat", "hide": [], "datasets": ds, "roots": sys.argv[5:], "excl": {}}
+        "recursion": "flat", "hide": [], "datasets": ds, "excl": {},
+        "roots": [r for r in sys.argv[5:] if r not in (os.environ.get("SYSROOTS") or "").split()]}
+if (os.environ.get("SYSROOTS") or "").split():
+    spec["legend"] += u"\n" + _(u" System hosta (…/ROOT/…) domyślnie odznaczony: wybrany sam odtwarza się jako nowe środowisko startowe.")
 lp = os.environ.get("RESTORE_LAST_TREE") or ""
 if lp and os.path.exists(lp):
     try:
@@ -530,6 +538,8 @@ PYEOF
             CMD+=("$REL" "--source=$(join_by_comma "${SEL[@]}")" "--onto=$(join_by_comma "${ONTO[@]}")")
         elif [ "$WHOLE" != 1 ]; then
             CMD+=("--source=$(join_by_comma "${SEL[@]}")")
+            _sys=1; for o in "${ORIG[@]}"; do case "${o#*:}" in */ROOT/*) ;; *) _sys=0 ;; esac; done
+            [ "${#ORIG[@]}" -gt 0 ] && [ "$_sys" = 1 ] && CMD+=("--as-boot-env")
         fi
         [ -n "$AT" ] && CMD+=("--at=$AT")
         CMD+=("--config=$CFG")
