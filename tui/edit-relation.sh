@@ -702,8 +702,14 @@ save_all() {
             k=$((k + 1)); echo "$(Tv '$k. Datasety:' '$k' "$k")"
             # Kampania wariantów 2026-10-22: dataset dodany z powrotem szedł PRZYROSTOWO od kopii, która
             # tu została -- "pierwsza pełna kopia" wprowadzała w błąd.
+            # Słowa z rodzaju relacji (2026-10-26): relacja bez kopii mówi o migawkach, nie o kopiach.
+            if [ "${RMODE:-}" = snaponly ] || { [ "${RMODE:-}" = local ] && { [ -z "${TGT:-}" ] || [ "$TGT" = - ]; }; }; then
+                for n in $P_ADDED; do echo "$(Tv '   DOJDĄ:    $n  (pierwsza migawka od razu)' '$n' "$n")"; done
+                for n in $P_REMOVED; do echo "$(Tv '   ODPADNĄ:  $n  (jego migawki ZOSTAJĄ, nikt ich nie przycina)' '$n' "$n")"; done
+            else
             for n in $P_ADDED; do echo "$(Tv '   DOJDĄ:    $n  (pierwsza kopia od razu; przyrostowo, gdy kopia już tu jest)' '$n' "$n")"; done
             for n in $P_REMOVED; do echo "$(Tv '   ODPADNĄ:  $n  (kopie na tym hoście ZOSTAJĄ)' '$n' "$n")"; done
+            fi
             echo "$(T '   Po zmianie relacja obejmuje:')"
             printf '%s\n' "$P_ENT" | while IFS=$'\t' read -r n r; do
                 [ -n "$n" ] || continue

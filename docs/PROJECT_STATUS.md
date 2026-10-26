@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 0802b9db55869499 -->
+<!-- status-covers-digest: 5ae1ebe4bd9054d3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -49,9 +49,8 @@
     pve11, kopia lokalna pve9). Okno zmiany na żywo: pve9 i pve11; kreator na żywo: pve9.
     `test/tui` 414/0 na pve9.
   - Znane drobiazgi: przy tworzeniu relacji z [-] zgoda na źródle obejmuje najpierw całe drzewo
-    (jedna migawka na wyłączonym dziecku), a zawęża ją dopiero `set-datasets`. Plan okna zmiany
-    mówi „pierwsza kopia” / „kopie zostają” także przy migawkach. Podsumowanie kreatora z [-] pokazuje
-    listę [x]/[-] (PR wizard-summary-partial).
+    (jedna migawka na wyłączonym dziecku), a zawęża ją dopiero `set-datasets`. Podsumowanie
+    kreatora z [-] pokazuje listę [x]/[-] (PR #889). Plan okna zmiany przy relacji bez kopii mówi o migawkach (PR #888).
 - **Metropolis: jeden kolektor pve2 (przejęcie 2026-10-25).** Wszystkie zadania pakietu są na koncie
   `zfsbackup` hosta pve2, w configu `jobs.pve2.v4.conf`. W cronie pve1 nie ma zadań pakietu: migawki na jego dyskach robi i przycina pve2 przez SSH.
   - `pve1`: migawki zdalne (snaponly) na 7 dyskach pve1 i labowym CT 990, h24 d7 w4 m6, bez zamrażania.
