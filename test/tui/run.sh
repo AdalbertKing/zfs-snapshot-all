@@ -916,10 +916,11 @@ else
 fi
 PXL="$(mktemp)"; : > "$PXL"
 PRF="$(prz F7 --exec-log "$PXL")"
+PRF_LOG="$(cat "$PXL")"
 PRG="$(prz down,F7 --exec-log "$PXL")"
-if has "$PRF" 'ten bieg już był -- F7 uruchamia zadanie z wiersza nadchodzącego' && [ ! -s "$PXL" ] \
-   && ! has "$PRG" 'ten bieg już był'; then
-    ok "przebiegi: wiersze tylko do czytania (c) -- F7 na wykonanym biegu mowi 'ten bieg już był' i nic nie uruchamia; na nadchodzacym tego komunikatu nie ma"
+if has "$PRF" 'ten bieg już był -- F7 uruchamia zadanie z wiersza nadchodzącego' && [ -z "$PRF_LOG" ] \
+   && ! has "$PRG" 'ten bieg już był' && grep -q 'zfs-job.sh' "$PXL"; then
+    ok "przebiegi: wiersze tylko do czytania (c) -- F7 na wykonanym biegu mowi 'ten bieg już był' i nic nie uruchamia; ten sam F7 na nadchodzacym uruchamia linie crona"
 else
     bad "przebiegi: F7 na wykonanym biegu" "$(printf '%s\n' "$PRF" | tail -3)" "log: $(cat "$PXL")"
 fi
