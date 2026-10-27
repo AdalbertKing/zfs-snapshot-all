@@ -607,17 +607,67 @@ def job_stats_for(data, j, label):
     return row, vol
 
 
+# Znaki NAZWY datasetu (lib-scope.sh pc_is_dataset): litery, cyfry, _ . - i ':'
+# -- dwukropek jest legalny W SRODKU nazwy (REV-20261027-177, runda 2).
+_DS_NAME_CH = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-:")
+
+
+def _transport_prefix(text, colon):
+    """Czy ':' na pozycji `colon` to separator transportu host:ds / konto@host:ds?
+    Tak, gdy slowo przed nim (od odstepu, cudzyslowu albo poczatku) nie ma '/'
+    i sklada sie tylko ze znakow hosta/konta. "pool/foo:pool/bar" -- przed ':'
+    stoi sciezka, wiec to dwukropek W NAZWIE, nie granica."""
+    i = colon
+    while i > 0 and text[i - 1] not in " \t'\"([{,=<>":
+        i -= 1
+    word = text[i:colon]
+    return bool(word) and "/" not in word and all(c in _DS_NAME_CH or c in "@[]" for c in word)
+
+
+def scope_dataset(scope):
+    """Dataset z zakresu zadania: bez prefiksu transportu (konto@host:), ale z
+    dwukropkiem, ktory nalezy do nazwy ('pool/foo:bar' zostaje cale)."""
+    scope = scope or "?"
+    c = scope.find(":")
+    if c > 0 and _transport_prefix(scope, c):
+        return scope[c + 1:]
+    return scope
+
+
 def text_names_dataset(text, ds):
     """Czy tekst bledu NAZYWA dataset ds -- cala nazwa, nie jej kawalek
-    (REV-20261027-177: 'pool/vm-10' w 'pool/vm-100', 'data' w 'metadata').
-    Przed nazwa wolno stac: poczatek, odstep, cudzyslow, ':' (host:ds,
-    konto@host:ds) albo '/' (kopia pod baza celu: .../pve2/rpool/ROOT/pve-1).
-    Po nazwie: koniec, '@' (migawka), ':' , odstep, cudzyslow, kropka konczaca
-    zdanie -- nigdy dalszy znak nazwy ani '/' (to juz dziecko)."""
+    (REV-20261027-177: 'pool/vm-10' w 'pool/vm-100', 'data' w 'metadata',
+    'pool/foo' w 'pool/foo:bar').
+    Przed nazwa: poczatek, znak spoza nazwy (odstep, cudzyslow...), '/' (kopia
+    pod baza celu: .../pve2/rpool/ROOT/pve-1) albo ':' separatora transportu
+    (host:ds, konto@host:ds -- nie dwukropek w nazwie).
+    Po nazwie: koniec, '@' (migawka), znak spoza nazwy, ':' albo '.' tylko gdy
+    dalej NIE ma znaku nazwy ani '/' ("pool/x: busy", "pool/x."), nigdy '/' (dziecko)."""
     if not ds or not text:
         return False
-    pat = r"(?<![A-Za-z0-9_.\-])" + re.escape(ds) + r"(?![A-Za-z0-9_\-/]|\.[A-Za-z0-9_\-])"
-    return re.search(pat, text) is not None
+    start = 0
+    while True:
+        i = text.find(ds, start)
+        if i < 0:
+            return False
+        start = i + 1
+        if i > 0:
+            pc = text[i - 1]
+            if pc == ":":
+                if not _transport_prefix(text, i - 1):
+                    continue
+            elif pc in _DS_NAME_CH:
+                continue
+        j = i + len(ds)
+        if j < len(text):
+            nc = text[j]
+            if nc == "/":
+                continue
+            if nc in ".:" and j + 1 < len(text) and (text[j + 1] in _DS_NAME_CH or text[j + 1] == "/"):
+                continue
+            if nc in _DS_NAME_CH and nc not in ".:":
+                continue
+        return True
 
 
 def job_run_issue(data, j):
@@ -2465,7 +2515,7 @@ def rel_panel_pairs(row, data, now, ch):
             if j.get("section_kind") in SEND_KINDS:
                 f, _disc = job_run_issue(data, j)
                 if f:
-                    sc = (j.get("scope") or "?").split(":")[-1]
+                    sc = scope_dataset(j.get("scope"))
                     lbl = job_cron_label(j)
                     if lbl in by_label:
                         by_label[lbl][0].append(sc)
