@@ -613,15 +613,18 @@ _DS_NAME_CH = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345678
 
 
 def _transport_prefix(text, colon):
-    """Czy ':' na pozycji `colon` to separator transportu host:ds / konto@host:ds?
-    Tak, gdy slowo przed nim (od odstepu, cudzyslowu albo poczatku) nie ma '/'
-    i sklada sie tylko ze znakow hosta/konta. "pool/foo:pool/bar" -- przed ':'
-    stoi sciezka, wiec to dwukropek W NAZWIE, nie granica."""
+    """Czy ':' na pozycji `colon` to separator transportu konto@host:ds?
+    Tylko gdy slowo przed nim (od odstepu, cudzyslowu albo poczatku) ma '@' i nie
+    ma '/': '@' NIE moze wystapic w nazwie datasetu (to separator migawki), wiec
+    konto@host: nie jest zgadywaniem. Goly 'host:' wyglada jak pula z dwukropkiem
+    ('x:pool/foo' to legalna nazwa, lib-scope.sh pc_is_dataset) -- nie odcinamy go
+    (REV-20261027-177, runda 3); gdy tozsamosci nie da sie ustalic, panel pokazuje
+    caly zakres."""
     i = colon
     while i > 0 and text[i - 1] not in " \t'\"([{,=<>":
         i -= 1
     word = text[i:colon]
-    return bool(word) and "/" not in word and all(c in _DS_NAME_CH or c in "@[]" for c in word)
+    return "@" in word and "/" not in word and word[0] != "@" and all(c in _DS_NAME_CH or c in "@[]" for c in word)
 
 
 def scope_dataset(scope):
