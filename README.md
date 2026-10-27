@@ -1,5 +1,11 @@
 # zfs-snapshot-all
 
+The development repository. The public face is the release repository
+[AdalbertKing/zfsbackup](https://github.com/AdalbertKing/zfsbackup), generated from here by
+`release/publish.sh`: its README is [release/README.md](release/README.md) (Polish:
+[README.pl.md](README.pl.md)), plus [CHANGELOG.md](CHANGELOG.md), [CONTRIBUTING.md](CONTRIBUTING.md)
+and [SECURITY.md](SECURITY.md).
+
 ZFS snapshots, replication, retention and monitoring for small Proxmox VE fleets — run from one
 **collector** host, configured through a text GUI in the server console, executed by cron.
 Plain bash; no daemon, no database.
@@ -46,6 +52,7 @@ technical reference.
 | config examples | [docs/en/CONFIG-EXAMPLES.md](docs/en/CONFIG-EXAMPLES.md) | [docs/pl/PRZYKLADY-CONFIGU.md](docs/pl/PRZYKLADY-CONFIGU.md) |
 | shipped retention templates | [profiles/README.md](profiles/README.md) | |
 | tests | [test/README.md](test/README.md) | |
+| interactive tutorial (Polish GUI screens) | | [docs/tutorial/index.html](docs/tutorial/index.html) |
 
 ## License
 

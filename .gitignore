@@ -3,6 +3,10 @@
 !.gitattributes
 !LICENSE
 !README.md
+!README.pl.md
+!CHANGELOG.md
+!CONTRIBUTING.md
+!SECURITY.md
 !PAIRING-DESIGN.md
 !LVM-TWIN-DESIGN.md
 !AGENTS.md
