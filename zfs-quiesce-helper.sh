@@ -55,7 +55,7 @@
 # So on Windows, qemu will never tell you anything about writer state. This verb
 # is the only way to see it from the host.
 #
-# What writer state does NOT tell you -- measured on vsql2, 2026-07-31
+# What writer state does NOT tell you -- measured on a SQL Server guest, 2026-07-31
 # ---------------------------------------------------------------------
 # An earlier version of this header claimed a `Failed` SqlServerWriter proves the
 # snapshot was not application-consistent. That claim was WRONG, and the measured
@@ -67,7 +67,7 @@
 #   ERROR_OPERATION_ABORTED) and the writer ends in [10] Failed / Timed out.
 #   That is the aftermath of a SUCCESSFUL freeze, not of a broken one.
 #
-# Verified end to end: on vsql2 the writer read [1] Stable immediately before a
+# Verified end to end: on a SQL Server guest the writer read [1] Stable immediately before a
 # manual `qm guest cmd 100 fsfreeze-freeze` + `fsfreeze-thaw`, and [10] Failed
 # immediately after, with the SAME writer instance id -- so nothing re-registered
 # or crashed; the successful freeze itself put it there. Application event 24583
@@ -93,7 +93,7 @@
 #
 # A balanced 3197/3198 pair is the documented, POSITIVE signal that an
 # application-level freeze really happened -- unlike writer state, which says
-# nothing. Measured on vsql2 2026-07-31: both ids appear at every quiesce -- the
+# nothing. Measured on a SQL Server guest 2026-07-31: both ids appear at every quiesce -- the
 # 2h pvesr replication runs, the nightly snapsend job at 00:12, and a manual test
 # at 16:48 -- perfectly balanced (227/227 on MSSQLSERVER, 187/187 on
 # MSSQL$SQL2019).
@@ -439,7 +439,7 @@ case "$verb" in
         # ONE physical line, deliberately. qemu-ga on Windows joins argv back
         # into a command line, and a multi-line -Command argument arrives as
         # nothing at all: "Cannot process the command because of a missing
-        # parameter. A command must follow -Command." Measured on vsql2, not
+        # parameter. A command must follow -Command." Measured on a SQL Server guest, not
         # guessed. Keep it one line even though it is long.
         ps_cmd='$ProgressPreference="SilentlyContinue"; $e = Get-WinEvent -FilterHashtable @{LogName="Application";Id=@(3197,3198);StartTime=(Get-Date).AddSeconds(-'"$window"')} -ErrorAction SilentlyContinue; if (-not $e) { "SQLFREEZE-NONE"; exit 0 }; $e | Group-Object ProviderName | ForEach-Object { $f = @($_.Group | Where-Object {$_.Id -eq 3197}).Count; $r = @($_.Group | Where-Object {$_.Id -eq 3198}).Count; $l = ($_.Group | Sort-Object TimeCreated -Descending)[0].TimeCreated.ToString("yyyy-MM-ddTHH:mm:ss"); "SQLFREEZE-INSTANCE {0} {1} {2} {3}" -f $_.Name,$f,$r,$l }'
         qexec_timeout=120
@@ -515,7 +515,7 @@ zfs-quiesce-helper -- narrow privileged surface for delegated backup accounts.
 `writers` reports the writers' own state machine, NOT a health verdict. A
 freeze-only quiesce (which is what qemu-ga performs) normally leaves writers in
 a failed state, so class=failed sampled after a backup is expected and must not
-be alerted on. Measured on vsql2 2026-07-31; see the header of this script.
+be alerted on. Measured on a SQL Server guest 2026-07-31; see the header of this script.
 
 Allowed guests are those whose disks live under the datasets listed in
 /etc/zfs-quiesce-allow/<account>, written by deploy.sh --join. There is no
