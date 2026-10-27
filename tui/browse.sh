@@ -256,9 +256,44 @@ undo_or_warn() {   # <tekst przy sukcesie> -> zawsze 0
     fi
     return 0
 }
+# U89 (wlasciciel 2026-10-27, pve10: kopia szyfrowana "can not be mounted: Permission
+# denied"): klucz zaladowany TYLKO na czas przegladania -- po odmontowaniu zdjety.
+KEYLOADED=""
+unload_key() {   # -> 0 zdjety albo nie bylo czego; 1 nie (opis w RESIDUE)
+    [ -n "$KEYLOADED" ] || return 0
+    if zfs unload-key -- "$KEYLOADED" 2>"$TMPD/unload.err"; then
+        KEYLOADED=""; return 0
+    fi
+    RESIDUE="$RESIDUE
+  $(Tv 'klucz wciąż załadowany: $KEY  (ręcznie: zfs unload-key $KEY)' '$KEY' "$KEYLOADED")"
+    return 1
+}
+# Kopia szyfrowana bez zaladowanego klucza: zapytaj o klucz (nigdzie nie zapisywany),
+# zfs load-key na korzeniu szyfrowania. -> 0 mozna montowac; 1 nie (komunikat pokazany)
+need_key() {   # <dataset>
+    local ds="$1" root ks kf
+    root="$(zfs get -H -o value encryptionroot -- "$ds" 2>/dev/null | tr -d '\r')"
+    case "$root" in ''|-) return 0 ;; esac
+    ks="$(zfs get -H -o value keystatus -- "$root" 2>/dev/null | tr -d '\r')"
+    [ "$ks" = unavailable ] || return 0
+    kf="$(zfs get -H -o value keyformat -- "$root" 2>/dev/null | tr -d '\r')"
+    if [ "$kf" = raw ]; then
+        wt --title "$TITLE" --msgbox "$(Tv 'Kopia $DS jest zaszyfrowana kluczem binarnym ($ROOT). Tego klucza nie da się wpisać -- załaduj go ręcznie: zfs load-key -L file:///ścieżka $ROOT' '$DS' "$ds" '$ROOT' "$root")" 10 "$W"
+        return 1
+    fi
+    while :; do
+        wt --title "$(Tv '$TITLE: klucz' '$TITLE' "$TITLE")" --passwordbox "$(Tv 'Kopia $DS jest zaszyfrowana ($ROOT, klucz: $KF).\nPodaj klucz. Nie jest nigdzie zapisywany; po wyjściu zostanie zdjęty.' '$DS' "$ds" '$ROOT' "$root" '$KF' "$kf")" 12 "$W" || return 1
+        if printf '%s' "$WT_OUT" | zfs load-key -L prompt -- "$root" 2>"$TMPD/key.err"; then
+            WT_OUT=""; KEYLOADED="$root"; return 0
+        fi
+        WT_OUT=""
+        wt --title "$TITLE" --msgbox "$(Tv 'Klucz nie pasuje:\n$ERR\nSpróbuj jeszcze raz albo Anuluj.' '$ERR' "$(head -2 "$TMPD/key.err")")" 11 "$W"
+    done
+}
+
 cleanup() {
     RESIDUE=""
-    unmount_all; restore_snapdev
+    unmount_all; restore_snapdev; unload_key
     rm -rf "$TMPD"
     if [ -n "$RESIDUE" ]; then
         T 'Przeglądaj kopię -- NIE wszystko posprzątane:%s\n' "$RESIDUE" >&2
@@ -362,11 +397,11 @@ browse_and_exit() {
         ( cd "$MNT" && "${SHELL:-/bin/bash}" -i ) </dev/tty >/dev/tty 2>&1
     fi
     RESIDUE=""
-    unmount_all; restore_snapdev
+    unmount_all; restore_snapdev; unload_key
     echo
     if [ -z "$RESIDUE" ]; then
-        echo "$(T '=== Odmontowane. Enter = powrót do GUI')"
-        read -r _ </dev/tty 2>/dev/null || true
+        # U90 (wlasciciel 2026-10-27): bez "Enter = powrót" -- wraca samo; Ctrl-O w GUI pokaze to.
+        echo "$(T '=== Odmontowane.')"
         exit 0
     fi
     echo "$(Tv '=== NIE wszystko posprzątane:$RESIDUE' '$RESIDUE' "$RESIDUE")"
@@ -526,7 +561,8 @@ walk(d.get("blockdevices"))' | tr -d '\r' >"$TMPD/parts.tsv"
             undo_or_warn ""; step=2; continue
         fi
         browse_and_exit "$DS@$SNAP, $PDEV ($PFS)" ;;
-    4)  if ! mount_ro "$DS@$SNAP" zfs; then
+    4)  need_key "$DS" || { step=2; continue; }
+        if ! mount_ro "$DS@$SNAP" zfs; then
             wt --title "$TITLE" --msgbox "$(Tv 'Nie udało się zamontować $DS@$SNAP:\n$ERR' '$DS' "$DS" '$SNAP' "$SNAP" '$ERR' "$(head -3 "$TMPD/mount.err")")" 10 "$W"
             step=2; continue
         fi

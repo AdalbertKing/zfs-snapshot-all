@@ -710,5 +710,15 @@
 "własne migawki -- replika przy każdym biegu robi migawkę %s": "own snapshots -- on every run the replica takes a snapshot %s",
 "%s ostatnich migawek replica_ (pośrednie nie trafiają)": "last %s replica_ snapshots (intermediate ones are not carried)",
 "Przeglądaj kopię na $(hostname)": "Browse a copy on $(hostname)",
-"Przeglądaj $REL na $(hostname)": "Browse $REL on $(hostname)"
+"Przeglądaj $REL na $(hostname)": "Browse $REL on $(hostname)",
+"-- konsola pod oknami: dowolny klawisz wraca --": "-- console under the windows: any key returns --",
+"Ctrl-O pokaże wynik": "Ctrl-O shows the output",
+"Konsola": "Console",
+"  Ctrl-O            konsola pod oknami: wynik ostatnich poleceń; dowolny klawisz wraca": "  Ctrl-O            console under the windows: output of the last commands; any key returns",
+"=== Odmontowane.": "=== Unmounted.",
+"=== GOTOWE (rc=0).": "=== DONE (rc=0).",
+"klucz wciąż załadowany: $KEY  (ręcznie: zfs unload-key $KEY)": "key still loaded: $KEY  (by hand: zfs unload-key $KEY)",
+"Kopia $DS jest zaszyfrowana kluczem binarnym ($ROOT). Tego klucza nie da się wpisać -- załaduj go ręcznie: zfs load-key -L file:///ścieżka $ROOT": "Copy $DS is encrypted with a binary key ($ROOT). That key cannot be typed -- load it by hand: zfs load-key -L file:///path $ROOT",
+"Kopia $DS jest zaszyfrowana ($ROOT, klucz: $KF).\\nPodaj klucz. Nie jest nigdzie zapisywany; po wyjściu zostanie zdjęty.": "Copy $DS is encrypted ($ROOT, key: $KF).\\nEnter the key. It is not stored anywhere; it is unloaded when you leave.",
+"Klucz nie pasuje:\\n$ERR\\nSpróbuj jeszcze raz albo Anuluj.": "The key does not fit:\\n$ERR\\nTry again or Cancel."
 }

@@ -2944,7 +2944,33 @@ def key_bar_parts(active, width, actions=()):
             break
     if room >= len(line) + 16:
         line += u"  Ctrl-R " + _(u"Odśwież")
+    if room >= len(line) + 16:
+        line += u"  Ctrl-O " + _(u"Konsola")
     return fit(fit(line, room), width), marks   # dopelniona do width: kazdy wiersz ma szerokosc ekranu
+
+
+def show_console(stdscr):
+    """Ctrl-O (U90): zejdz z okien do zwyklego ekranu terminala -- tam zostalo wyjscie
+    polecen, ktore okna uruchamialy -- i wroc po dowolnym klawiszu."""
+    import termios
+    import tty
+    curses.def_prog_mode()
+    curses.endwin()
+    sys.stdout.write("\n" + _(u"-- konsola pod oknami: dowolny klawisz wraca --") + "\n")
+    sys.stdout.flush()
+    fd = sys.stdin.fileno()
+    try:
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            os.read(fd, 16)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    except (termios.error, OSError, ValueError):
+        pass
+    curses.reset_prog_mode()
+    stdscr.clear()
+    stdscr.refresh()
 
 
 def push_key_bar(scr, active, width, actions=()):
@@ -4298,6 +4324,7 @@ HELP = [
     "",
     u"  strzałki          ruch po liście     PgUp PgDn Home End   szybciej",
     u"  Ctrl-R            odśwież źródła (monitor liczy na żywo, to chwilę trwa)",
+    u"  Ctrl-O            konsola pod oknami: wynik ostatnich poleceń; dowolny klawisz wraca",
     u"  Esc               zamknij okno na wierzchu (w oknie także q; j k przewijają)",
     u"  Tab               następny obiekt: lista, pary (F3), linia poleceń",
     u"  F12               wyjście (litery idą do linii poleceń, więc q nie wychodzi)",
@@ -6198,7 +6225,7 @@ def curses_loop(ui):
                        curses.KEY_F7: "F7", curses.KEY_F8: "F8", curses.KEY_IC: "ins", curses.KEY_DC: "del",
                        curses.KEY_BACKSPACE: "bs", 127: "bs", 8: "bs", curses.KEY_ENTER: "enter",
                        10: "enter", 13: "enter", 27: "esc", curses.KEY_F10: "F10", curses.KEY_F9: "F9", curses.KEY_F11: "F11", curses.KEY_F12: "F12", 9: "tab",
-                       21: "ctrl-u", 18: "ctrl-r"})
+                       21: "ctrl-u", 18: "ctrl-r", 15: "ctrl-o"})
         stdscr.keypad(True)
         # OBA DIALEKTY STRZALEK I F-KLAWISZY, CZYTANE WPROST. keypad() wlacza w
         # terminalu tryb aplikacyjny (ESC O B), a terminal, ktory go nie honoruje
@@ -6319,6 +6346,12 @@ def curses_loop(ui):
             if k == curses.KEY_RESIZE:
                 continue
             name = seqname if k == -2 else KEYMAP.get(k)
+            # U90 (wlasciciel 2026-10-27: "w całym pakiecie przycisk pokazujący, co jest pod
+            # panelem"): Ctrl-O jak w mc -- konsola pod oknami, czyli wyjscie ostatnich polecen;
+            # dowolny klawisz wraca. Okna wracaja same, bez "Enter = powrót".
+            if name == "ctrl-o" and not (ui.window and ui.window[0] in ("prompt", "form")):
+                show_console(stdscr)
+                continue
             # W polu tekstowym KAZDY drukowalny znak jest wejsciem, nie klawiszem
             # skrotu -- inaczej sciezki z 'q' albo 'j' nie daloby sie wpisac.
             if ui.window and ui.window[0] == "form" and k == 32:
@@ -6374,18 +6407,14 @@ def curses_loop(ui):
                 if rc == 130:
                     rc = u"130, przerwane (Ctrl+C)"
                 if not nowait:
-                    sys.stdout.write(_("[rc=%s]  Enter wraca do okien\n") % rc)
+                    sys.stdout.write("[rc=%s]\n" % rc)
                     sys.stdout.flush()
-                    try:
-                        sys.stdin.readline()
-                    except (IOError, KeyboardInterrupt):
-                        pass
                 stdscr.clear()
                 stdscr.refresh()
                 if nowait:
                     ui.message = ui.window_end_message(rc)
                 else:
-                    ui.message = u"[rc=%s] %s" % (rc, line)
+                    ui.message = (u"[rc=%s] %s   " % (rc, line)) + _(u"Ctrl-O pokaże wynik")
                     log_path, ui.pending_log_path = ui.pending_log_path, None
                     if log_path:
                         ui.message += _(u"   dziennik: %s") % log_path
