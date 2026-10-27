@@ -2216,10 +2216,13 @@ def run_dataset_bytes(r, j, data):
     biegu tej linii i nie pozniej niz koniec tego. None = nie wiadomo (brak danych)."""
     if not r.get("past") or "snaps" not in (data.stats or {}):
         return None
+    # Porzadki nie przenosza danych; cel zdalny (wysylka, zdalne migawki) mierzy sie
+    # tam, nie tu -- "-", nie zero.
+    if j.get("section_kind") == "prune" or u"prune" in (r["item"].get("task") or u""):
+        return None
     src, dst = job_src_dst(j)
     where = dst if j.get("direction") not in ("snaponly",) else src
-    where = (where or "").rsplit(":", 1)[-1] if "@" in (where or "") else (where or "")
-    if not where or where in ("-", "?"):
+    if not where or where in ("-", "?") or "@" in where or ":" in where:
         return None
     fam = family_of(j) or ""
     hi = (r.get("end") or r["at"]) + 60
