@@ -24,7 +24,7 @@ else
     bad "publish: HEAD publishes" "rc=$rc" "$(printf '%s\n' "$out" | tail -3)"
 fi
 leaked=""
-for p in test docs/internal docs/project .github .claude CLAUDE.md AGENTS.md release tui/lang/build.py tui/lang/en.extra.json; do
+for p in test docs/internal docs/project .github/workflows .claude CLAUDE.md AGENTS.md release tui/lang/build.py tui/lang/en.extra.json; do
     [ -e "$REL/$p" ] && leaked="$leaked $p"
 done
 [ -z "$leaked" ] && ok "publish: nothing from outside the package (tests, reviews, project docs, build tools)" \
@@ -78,6 +78,26 @@ else
 fi
 [ "$(cat "$REL/RELEASE-OF" 2>/dev/null)" = "$head_sha" ] && ok "RELEASE-OF names the full development SHA" \
     || bad "RELEASE-OF" "$(cat "$REL/RELEASE-OF" 2>/dev/null)" "want $head_sha"
+
+# 5a. the public face: the community files are there, and every relative link in them resolves in
+#     the release tree itself (a link into test/ or docs/project/ would be dead for the world)
+face_missing=""
+for p in README.md README.pl.md CHANGELOG.md CONTRIBUTING.md SECURITY.md LICENSE docs/tutorial/index.html          .github/FUNDING.yml .github/ISSUE_TEMPLATE/bug_report.md .github/pull_request_template.md; do
+    [ -f "$REL/$p" ] || face_missing="$face_missing $p"
+done
+dead=""
+for f in README.md README.pl.md CHANGELOG.md CONTRIBUTING.md SECURITY.md; do
+    [ -f "$REL/$f" ] || continue
+    while IFS= read -r l; do
+        l="${l%%#*}"
+        [ -n "$l" ] && [ ! -e "$REL/$l" ] && dead="$dead $f->$l"
+    done < <(grep -oE '\]\([^)]+\)' "$REL/$f" | sed -E 's/^\]\(//; s/\)$//' | grep -vE '^[a-z]+:')
+done
+if [ -z "$face_missing" ] && [ -z "$dead" ]; then
+    ok "public face: README.pl.md, CHANGELOG, CONTRIBUTING, SECURITY, tutorial, FUNDING and templates shipped; every relative link resolves"
+else
+    bad "public face" "missing:${face_missing:- none}" "dead links:${dead:- none}"
+fi
 
 # 5b. file modes come from the dev tree (cron calls the scripts directly): every listed file
 #     carries the same mode in the release index as in HEAD -- not what the filesystem says

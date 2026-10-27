@@ -60,7 +60,7 @@ itself** — you do not have to do it manually.
 Clone the repository onto both hosts, to the same location:
 
 ```bash
-git clone https://github.com/AdalbertKing/zfs-snapshot-all.git /root/zfs-snapshot-all
+git clone https://github.com/AdalbertKing/zfsbackup.git /root/zfs-snapshot-all
 ```
 
 > **Never copy scripts to the hosts with `scp`/`pscp`.** Updates arrive through
