@@ -8,3 +8,6 @@ s/10\.98\.0\./203.0.113./g
 s/Metropolis/Site-A/g
 s/metropolis/site-a/g
 s/METROPOLIS/SITE-A/g
+# after the Metropolis rules: its domain becomes a documentation domain, not site-a.net
+s/site-a\.net/example.org/g
+s/10\.99\.0\./203.0.113./g
