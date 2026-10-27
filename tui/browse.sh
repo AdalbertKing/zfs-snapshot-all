@@ -372,9 +372,7 @@ browse_and_exit() {
 }
 
 step=1
-# Wskazany dataset (albo jedyny kandydat) -- drzewo nie ma czego wybierac.
-_one="$(awk -F'\t' 'END { if (NR == 1) print $1 }' "$TMPD/cand.tsv")"
-[ -z "$PRE_DS" ] && [ -n "$_one" ] && PRE_DS="$_one"
+# Wskazany dataset (--dataset=, z F4 Kopie) -- drzewo pominiete, gdy jest na liscie.
 if [ -n "$PRE_DS" ]; then
     TYP="$(awk -F'\t' -v d="$PRE_DS" '$1 == d { print $2; exit }' "$TMPD/cand.tsv")"
     if [ -n "$TYP" ]; then DS="$PRE_DS"; step=2; fi
