@@ -1,6 +1,7 @@
 # Audyt przed publikacją 1.0: dane prywatne i plan podmiany (2026-10-27)
 
-Status: **RAPORT DO AKCEPTACJI WŁAŚCICIELA. Nic nie podmienione.** Podstawa:
+Status: **PRZYJĘTY przez właściciela 2026-10-27 („Akceptuję plan …; e-mail z nagłówków skryptów usuń”) i wykonany
+w §3 pkt 1-3; pkt 4 (publikacja) nadal tylko za zgodą.** Wcześniej: raport do akceptacji. Podstawa:
 `PLAN-WYDANIA-PUBLICZNEGO-2026-10-23.md` (dwa repo, bez przepisywania historii) i
 `DESIGN-REPO-WYDAN-2026-10-24.md` (repo wydań `AdalbertKing/zfsbackup`, eksport `release/publish.sh`
 według `release/MANIFEST`, podmiana `release/scrub.sed`). Inwentarz zrobił agent haiku na drzewie

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 11408778c356c59d -->
+<!-- status-covers-digest: b0296d2d32471d3b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -28,13 +28,16 @@
     <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
   - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
     `update-control` jako „not clean”.
-- **Strona publiczna wydania (2026-10-27, gałąź `claude/release-public-prep-e94930`).** `release/MANIFEST` niesie
+- **Strona publiczna wydania (2026-10-27, PR #932).** `release/MANIFEST` niesie
   do `zfsbackup` także `README.pl.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `docs/tutorial/`,
   `.github/FUNDING.yml` i szablony issue/PR (bez `.github/workflows/`); `test/release` sprawdza ich obecność
-  i to, że każdy względny link w nich prowadzi do pliku wydania. Licencja MIT zostaje (decyzja właściciela).
+  i to, że każdy względny link w README, CHANGELOG, CONTRIBUTING i SECURITY prowadzi do pliku wydania. Licencja MIT zostaje (decyzja właściciela).
   Konto Buy Me a Coffee jeszcze nie istnieje: w `FUNDING.yml` i obu README jest tylko komentarz z miejscem
-  na link. Audyt danych prywatnych i plan podmiany: `docs/project/AUDYT-PUBLIKACJI-2026-10-27.md`, czeka na
-  akceptację; do `zfsbackup` nic z tego nie poszło (publikacja tylko za zgodą).
+  na link. Audyt danych prywatnych: `docs/project/AUDYT-PUBLIKACJI-2026-10-27.md`, plan przyjęty przez
+  właściciela 2026-10-27 i wykonany: `scrub.sed` przepisuje też `site-a.net` i 10.99.0.x, `publish.sh`
+  i `test/release` odrzucają eksport z `kancelaria`, `a-tassa`, `vsql2` i adresem e-mail autora;
+  komentarze w pakiecie mają nazwy neutralne, e-mail zniknął z nagłówków silników (wpis w ENGINE-FREEZE).
+  Do `zfsbackup` nic z tego nie poszło (publikacja tylko za zgodą); starsze wydania zostają w jego historii.
 - **F4 Kopie: przeglądanie i odzysk w jednym oknie (2026-10-27, `gui/kopie`, U74/U76/U78/U82/U83).** F4 to
   lista źródeł kopii (relacje z kopiami i „z innego dysku”, czyli nośnik repliki): Enter przegląda (migawka tylko
   do odczytu, mc, dysk VM przez partycję), F9 przywraca (okna Przywróć bez zmian). Dawne F4 Historia weszło w F2
