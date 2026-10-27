@@ -2952,6 +2952,7 @@ def key_bar_parts(active, width, actions=()):
 def show_console(stdscr):
     """Ctrl-O (U90): zejdz z okien do zwyklego ekranu terminala -- tam zostalo wyjscie
     polecen, ktore okna uruchamialy -- i wroc po dowolnym klawiszu."""
+    import curses
     import termios
     import tty
     curses.def_prog_mode()
