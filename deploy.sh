@@ -3315,7 +3315,11 @@ apt_install_with_fallback() {
     apt-get install -y "$pkg" 2>/dev/null && return 0
     warn "plain install of $pkg failed, running apt-get update first (pve-enterprise 401 is expected/harmless here)"
     apt-get update || true
-    apt-get install -y "$pkg"
+    apt-get install -y "$pkg" && return 0
+    # A recommended package can fail alone -- measured on pve2 2026-10-26: mc pulled unzip,
+    # whose security-repo URL was a 404, and the whole install failed. The package itself
+    # does not need its recommendations.
+    apt-get install -y --no-install-recommends "$pkg"
 }
 
 # ---- can this host actually DELIVER an alert? ------------------------------
@@ -4840,6 +4844,9 @@ check_dep mbuffer  mbuffer          required    "snapsend.sh/snapget.sh refuse t
 check_dep hostname hostname         required    "validate_remote_host uses 'hostname -f' to refuse loopback replication"
 check_dep md5sum   coreutils        required    "per-target bookmark tags (lib-zfs-snap.sh)"
 check_dep awk      gawk             required    "snapshot list parsing"
+# Owner 2026-10-26: browsing a copy (GUI: Przeglądaj) opens it in mc; without mc it falls
+# back to a plain shell in the copy directory. Installed with the package, not required.
+check_dep mc       mc               optional    "browsing a copy in the GUI (without it a plain shell)"
 
 # zstd is the DEFAULT compressor since 2026-07-22 -- it measured better than pigz
 # on BOTH ratio and throughput (see the benchmark table in snapsend.sh's header).
