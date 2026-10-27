@@ -4584,6 +4584,10 @@ class UI(object):
             return len(self.runrows)
         if screen == "relacje":
             return len(self.rows)
+        if screen == "monitor":
+            return len(monitor_rows(self.data))
+        if screen == "szablony":
+            return len(self.data.profiles or [])
         if screen == "odzysk":
             return len(odzysk_rows(self.rows))
         return len((self.data.replicas or {}).get("replicas", []))

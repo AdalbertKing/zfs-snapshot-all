@@ -38,6 +38,14 @@ EOF
 mkfake whiptail <<'EOF'
 #!/bin/bash
 for ((i = 1; i <= $#; i++)); do [ "${!i}" = --title ] && { j=$((i + 1)); printf '%s\n' "${!j}" >>"$D/titles"; }; done
+# F4 Kopie (2026-10-27): zapis --default-item oraz pozycji menu (tag <TAB> opis), zeby test widzial,
+# na ktorej migawce stanal kursor i jak wygladaja etykiety. --menu: tekst, wysokosc, szerokosc, wysokosc listy, potem pary tag/opis.
+for ((i = 1; i <= $#; i++)); do
+    case "${!i}" in
+        --default-item) j=$((i + 1)); printf '%s\n' "${!j}" >>"$D/dflt" ;;
+        --menu) for ((j = i + 5; j < $#; j += 2)); do k=$((j + 1)); printf '%s\t%s\n' "${!j}" "${!k}" >>"$D/menus"; done ;;
+    esac
+done
 for ((i = 1; i <= $#; i++)); do
     case "${!i}" in
         --msgbox|--infobox|--gauge) j=$((i + 1)); printf '%s\n' "${!j}" >>"$D/msgs"; exit 0 ;;
@@ -61,7 +69,10 @@ case "$*" in
     "list -H -o name -t filesystem,volume") awk '{ print $1 }' "$D/datasets" ;;
     "list -H -o name,type -r -- "*) awk -v x="$last" '$1 == x { printf "%s\t%s\n", $1, $2 }' "$D/datasets" ;;
     "list -H -t snapshot -o name -d 1 -- "*) echo "$last@s1" ;;
-    "list -H -p -t snapshot -o name,creation,used,written -s creation -d 1 -- "*) printf '%s@s1\t100\n' "$last" ;;
+    "list -H -p -t snapshot -o name,creation,used,written -s creation -d 1 -- "*)
+        # $D/snaps (nazwa<TAB>creation<TAB>used<TAB>written, rosnaco po creation) = wlasne migawki testu
+        if [ -e "$D/snaps" ]; then awk -F'\t' -v d="$last" '{ printf "%s@%s\t%s\t%s\t%s\n", d, $1, $2, $3, $4 }' "$D/snaps"
+        else printf '%s@s1\t100\n' "$last"; fi ;;
     "get -H -o value snapdev "*) [ -e "$D/fail_get" ] && exit 1; cat "$SV" ;;
     "get -H -o source snapdev "*) [ -e "$D/fail_get" ] && exit 1; cat "$SS" ;;
     "set snapdev=visible "*)
@@ -147,6 +158,21 @@ k = int(sys.argv[3])
 json.dump({"action": "next", "roots": [sel[k]] if k < len(sel) else []}, open(sys.argv[2], "w"))
 P
 EOF
+# F4 Kopie: tryb relacji (browse.sh REL ...) pyta zfs-backup.sh restore --plan o datasety kopii;
+# atrapa oddaje te z $D/plan-copies (po jednym w linii), wszystkie "copy_exists".
+mkfake zb <<'EOF'
+#!/bin/bash
+echo "zb $*" >>"$D/log"
+if [ "${1:-}" = restore ] && [ "${2:-}" = --plan ]; then
+    python3 - "$D/plan-copies" <<'P'
+import json, sys
+c = [l.strip() for l in open(sys.argv[1], encoding="utf-8") if l.strip()]
+print(json.dumps({"datasets": [{"copy": x, "copy_exists": True} for x in c]}))
+P
+    exit 0
+fi
+exit 1
+EOF
 for n in udevadm modinfo clear sleep mc; do
     printf '#!/bin/bash\nexit 0\n' >"$FB/$n"; chmod +x "$FB/$n"
 done
@@ -176,6 +202,21 @@ run_script(){   # -> rc w $rc, stdout+stderr w $D/out
         BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" \
         "${runner[@]}" bash "$REPO/tui/browse.sh" --any </dev/null >"$D/out" 2>&1
     rc=$?
+}
+run_rel(){   # [opcje browse.sh...] -> rc w $rc, stdout+stderr w $D/out; tryb RELACJI (rel1), nie --any
+    local runner=()
+    command -v setsid >/dev/null 2>&1 && runner=(setsid -w)
+    PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" ZFS_TREE="$D/bin/tree" ZFS_BACKUP="$D/bin/zb" \
+        BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" \
+        "${runner[@]}" bash "$REPO/tui/browse.sh" rel1 "$@" </dev/null >"$D/out" 2>&1
+    rc=$?
+}
+rel_case(){   # <dataset kopii...>: kopie relacji rel1 (filesystem), plan z atrapy zb; migawki z $D/snaps, jesli test je poda
+    local c; : >"$D/plan-copies"; : >"$D/datasets"; : >"$D/conf/jobs.t.conf"
+    for c in "$@"; do printf '%s\n' "$c" >>"$D/plan-copies"; printf '%s filesystem\n' "$c" >>"$D/datasets"; done
+}
+snaps3(){   # trzy migawki: creation 1000/2000/3000 (rosnaco), rozmiary o roznej dlugosci
+    printf 'xsnap-1\t1000\t0\t0\nxsnap-2\t2000\t2048\t1024\nxsnap-3\t3000\t10485760\t5368709120\n' >"$D/snaps"
 }
 key(){ printf '%s' "$1" | sha256sum | cut -c1-32; }
 run_bg(){   # <id> [pauza]: sesja w tle, wstrzymana po montazu (i w punkcie <pauza>); rc w $D/rc.<id>
@@ -434,6 +475,62 @@ new_case "27 I-2: dysk VM z jedna partycja -- bez okna 'która partycja?', montu
 : >"$D/titles"; vol_case ext4; run_script
 grep -q 'która partycja' "$D/titles" && errs+=("okno wyboru partycji przy jednej partycji: $(cat "$D/titles")")
 has out "=== Odmontowane"; fin
+
+# ---- F4 Kopie (2026-10-27): browse.sh REL [--dataset=DS] [--at=EPOCH] -----------------------
+new_case "28 --dataset= z listy kandydatow: drzewo pominiete, od razu menu migawek TEGO datasetu"
+rel_case tank/c1 tank/c2; snaps3; printf 'OK p0\n' >"$D/answers"
+run_rel --dataset=tank/c2
+rc0
+[ ! -e "$D/tree-spec.last" ] || errs+=("drzewo uruchomione mimo --dataset= z listy kandydatow")
+lg '^zfs list -H -p -t snapshot -o name,creation,used,written -s creation -d 1 -- tank/c2$'
+lg '^mount -t zfs -o ro tank/c2@xsnap-3 '; nolg '^mount .* tank/c1@'
+has out "=== Odmontowane"; fin
+
+new_case "29 kontrola: --dataset= spoza kandydatow -> drzewo jednak sie otwiera (pierwsza pozycja drzewa)"
+rel_case tank/c1 tank/c2; snaps3; printf 'OK d0\nOK p0\n' >"$D/answers"
+run_rel --dataset=tank/nie-ma
+rc0
+[ -e "$D/tree-spec.last" ] || errs+=("drzewo nie uruchomione, choc --dataset= nie jest kandydatem")
+lg '^mount -t zfs -o ro tank/c1@xsnap-3 '
+has out "=== Odmontowane"; fin
+
+at_case(){   # <opis> <--at=> <oczekiwany --default-item albo "-" = brak>; migawki 1000/2000/3000, najnowsza = p0
+    new_case "$1"
+    rel_case tank/c1; snaps3; printf 'OK p0\n' >"$D/answers"
+    run_rel --dataset=tank/c1 "--at=$2"
+    rc0
+    if [ "$3" = - ]; then
+        [ ! -s "$D/dflt" ] || errs+=("--default-item=$(cat "$D/dflt") mimo chwili sprzed wszystkich migawek")
+    else
+        [ "$(cat "$D/dflt" 2>/dev/null)" = "$3" ] || errs+=("--default-item=$(cat "$D/dflt" 2>/dev/null), oczekiwano $3")
+    fi
+    fin
+}
+at_case "30 --at=2500 (miedzy 2000 a 3000) -> kursor na najnowszej migawce nie pozniejszej: p1 (xsnap-2)" 2500 p1
+at_case "31 --at=2000 (rowno z migawka) -> p1: nie pozniejsza = wlacznie" 2000 p1
+at_case "32 --at=9999 (po wszystkich) -> p0, najnowsza" 9999 p0
+at_case "33 --at=500 (przed wszystkimi) -> brak --default-item" 500 -
+
+new_case "34 rozmiary migawek do prawej, szerokosc 6 -> nazwy migawek zaczynaja sie w tej samej kolumnie"
+rel_case tank/c1; snaps3; printf 'OK p0\n' >"$D/answers"
+run_rel --dataset=tank/c1
+rc0
+[ "$(grep -c . "$D/menus")" -eq 3 ] || errs+=("pozycji menu: $(grep -c . "$D/menus") (oczekiwano 3)")
+has menus 'zajmuje     0B, zmian     0B'; has menus 'zajmuje   2.0K, zmian   1.0K'; has menus 'zajmuje  10.0M, zmian   5.0G'
+cols="$(awk -F'\t' '{ print index($2, "xsnap-") }' "$D/menus" | sort -u)"
+{ [ "$(printf '%s\n' "$cols" | grep -c .)" -eq 1 ] && [ "${cols:-0}" -gt 1 ]; } || errs+=("kolumna nazwy migawki rozna albo brak: $(printf '%s' "$cols" | tr '\n' ' ')")
+fin
+
+new_case "35 drzewo: spec niesie expand_to = kandydaci (galezie nad nimi otwarte od razu)"
+rel_case tank/c1 tank/c2; printf 'OK d0\nOK p0\n' >"$D/answers"
+run_rel
+python3 - "$D/tree-spec.last" <<'P' >"$D/spec.chk" 2>&1
+import json, sys
+s = json.load(open(sys.argv[1], encoding="utf-8"))
+print("expand=%s sel=%s" % (s.get("expand_to"), s.get("selectable")))
+P
+grep -q "expand=\['tank/c1', 'tank/c2'\] sel=\['tank/c1', 'tank/c2'\]" "$D/spec.chk" || errs+=("spec drzewa: $(cat "$D/spec.chk")")
+fin
 
 echo "browse: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -215,8 +215,8 @@ fi
 # F5 -- kontrola ujemna na "progress" i "list-replicas" zostaje nizej.)
 BAD="$(mktemp -d)/bad.json"; printf '{ZEPSUTY
 ' > "$BAD"
-EB="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen transfery --keys "" --progress "$BAD" --width 100 2>&1)"
-if has "$EB" 'zfs-backup.sh progress --json' && has "$EB" 'błąd źródła' && ! has "$EB" 'Uruchom czasownik ręcznie'; then
+EB="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen zadania --keys "" --jobs "$BAD" --width 100 2>&1)"
+if has "$EB" 'zfs-backup.sh list-jobs --json' && has "$EB" 'błąd źródła' && ! has "$EB" 'Uruchom czasownik ręcznie'; then
     ok "zepsute zrodlo: ekran nazywa DOKLADNA komende do wpisania, zamiast odsylac do 'czasownika'"
 else
     bad "zepsute zrodlo: brak komendy" "$EB"
@@ -235,7 +235,8 @@ else
 fi
 # R4-2: pomoc mowi, ze F7-F9 to akcje okna, Ctrl-R odswieza, a litery NIGDY nie sa skrotami.
 # F5 od 2026-10-09 to ekran Szablony (uwaga 24), odswiezanie zostaje pod Ctrl-R.
-if has "$H1" "F7 chowa/pokazuje transfery" && has "$H1" "F7 F8 F9          akcje BIEŻĄCEGO okna" \
+if has "$H1" "główne okna (F4 Kopie" && ! has "$H1" "F7 chowa/pokazuje transfery" && ! has "$H1" "F11 " \
+   && has "$H1" "F7 F8 F9          akcje BIEŻĄCEGO okna" \
    && has "$H1" "Ctrl-R            odśwież" && ! has "$H1" "F5 / Ctrl-R" && ! has "$H1" "wyjątek: 'u'" && ! has "$H1" "F9 / Ctrl-R"; then
     ok "pomoc: F7-F9 = akcje okna, Ctrl-R odswieza, bez wyjatku dla liter (R4-2)"
 else
@@ -925,6 +926,30 @@ else
     bad "przebiegi: F7 na wykonanym biegu" "$(printf '%s\n' "$PRF" | tail -3)" "log: $(cat "$PXL")"
 fi
 rm -f "$PXL"
+# F4 Z PRZEBIEGOW (U82): na wykonanym biegu F4 otwiera Kopie z kursorem na relacji tego biegu
+# i zapamietanym kontekstem {dataset celu, chwila = koniec biegu}; panel zaczyna od grupy
+# "Wskazane" (Dataset, Chwila), a Enter oddaje terminal oknu browse z --dataset= i --at=.
+# Fikstura: wykonany bieg konczy sie o NOW-5400 (PRS), pierwszy wiersz listy. Na biegu
+# NADCHODZACYM (down) nie ma chwili -- jest tylko dataset, wiec bez --at=.
+PKX="$(mktemp)"; : > "$PKX"
+PK4="$(prz F4 --exec-log "$PKX")"
+PK4E="$(prz F4,enter --exec-log "$PKX")"; PK4LOG="$(cat "$PKX")"
+: > "$PKX"
+PK4N="$(prz down,F4 --exec-log "$PKX")"
+PK4NE="$(prz down,F4,enter --exec-log "$PKX")"; PK4NLOG="$(cat "$PKX")"
+if has "$PK4" '╔═ Kopie na pve20' && has "$PK4" '── Wskazane' && hasE "$PK4" 'Dataset +hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]' && hasE "$PK4" 'Chwila +20[0-9]{2}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' \
+   && printf '%s\n' "$PK4LOG" | grep -Eq "zfs-backup.sh'? browse sync-test --ask --dataset=hdd/backups/192\.168\.28\.50/hdd/lab/[a-d] --at=$((NOW - 5400))\$"; then
+    ok "kopie: F4 na wykonanym biegu (F2) -- ekran Kopie z grupa 'Wskazane' (Dataset, Chwila), Enter = browse REL --ask --dataset=CEL --at=KONIEC_BIEGU"
+else
+    bad "kopie: F4 z wykonanego biegu" "$(printf '%s\n' "$PK4" | grep -E 'Kopie na|Wskazane|Dataset|Chwila')" "log: $PK4LOG"
+fi
+if has "$PK4N" '╔═ Kopie na pve20' && has "$PK4N" '── Wskazane' && has "$PK4N" 'najnowsza migawka' && ! hasE "$PK4N" 'Chwila +20[0-9]{2}-' \
+   && printf '%s\n' "$PK4NLOG" | grep -Eq "zfs-backup.sh'? browse sync-test --ask --dataset=hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]\$" && ! printf '%s' "$PK4NLOG" | grep -q -- '--at='; then
+    ok "kopie: F4 na biegu nadchodzacym -- jest dataset, nie ma chwili ('najnowsza migawka'), Enter bez --at="
+else
+    bad "kopie: F4 z nadchodzacego biegu" "$(printf '%s\n' "$PK4N" | grep -E 'Kopie na|Wskazane|Dataset|Chwila')" "log: $PK4NLOG"
+fi
+rm -f "$PKX"
 # F8 chowa wykonane (bez kreski), drugi F8 je przywraca; kursor zostaje na TYM SAMYM biegu
 # (run_cursor_for: ten sam bieg -- zadanie i chwila; wykonanego, ktory zniknal, zastepuje
 # pierwszy nadchodzacy). F9 przeklada wiersze do grup, a bieg pod kursorem sie nie zmienia.
@@ -1209,11 +1234,11 @@ if grep -q "resume-client lab-srv-b$" "$XL" && has "$AP" 'WYJŚCIE: Wznów relac
 else
     bad "akcje: F7 = resume na pauzie" "$(cat "$XL")" "$AP"
 fi
-# R4-1 (wlasciciel 2026-09-24): F4 na F3 to OKNO Transfery, nie pauza --
-# klawisze F1-F6 sa zawsze glownymi oknami; pauza jest na F7.
+# R4-1 (wlasciciel 2026-09-24): F4 na F3 to GLOWNE OKNO (dzis Kopie), nie pauza --
+# klawisze F1-F6 sa zawsze glownymi oknami; pauza jest na F8.
 A="$(act F4)"
-if has "$A" '╔═ Historia transferów' && ! has "$A" 'POTWIERDZENIE' && [ ! -s "$XL" ]; then
-    ok "akcje: F4 na ekranie Relacje przelacza na Historie (R4-1), nie wstrzymuje relacji"
+if has "$A" '╔═ Kopie na pve10' && ! has "$A" 'POTWIERDZENIE' && [ ! -s "$XL" ]; then
+    ok "akcje: F4 na ekranie Relacje przelacza na Kopie (R4-1), nie wstrzymuje relacji"
 else
     bad "akcje: F4 na F3" "$A"
 fi
@@ -1374,52 +1399,81 @@ if grep -Eq "zfs-backup.sh'? delete-relation lab-ct201 --ask\$" "$XL"; then
 else
     bad "akcje: Del -> delete-relation --ask" "$(cat "$XL")"
 fi
-# F11 ODZYSK DANYCH (właściciel 2026-10-18): odzysk to osobny ekran główny -- nie 'p'
-# obok 'e zmień' w oknie relacji ani F9 na Replice ("ktoś może się machnąć").
-# Enter na relacji -> restore NAZWA --ask, na wierszu 'z dysku' -> restore --from-copy --ask
-# (te same okna whiptail co wcześniej). 'p' w oknie relacji niczego już nie robi.
-od() {   # <keys> -> ekran F11; dziennik w $XL
+# F4 KOPIE (U82; dawny F11 Odzysk danych): ekran glowny -- nie 'p' obok 'e zmień' w oknie
+# relacji ani F9 na Replice ("ktoś może się machnąć"). Enter = PRZEGLADAJ (browse NAZWA --ask,
+# na wierszu 'z dysku' browse --any --ask), F9 = PRZYWROC (restore NAZWA --ask, na 'z dysku'
+# restore --from-copy --ask) -- te same okna whiptail. 'p' w oknie relacji niczego nie robi.
+# Ekran osiagamy KLAWISZEM F4 z F3 (kursor na pierwszej relacji, fokus na liscie: bez kontekstu).
+od() {   # <keys po F4> -> ekran F4 Kopie; dziennik w $XL
     : > "$XL"
-    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen odzysk --keys "$1" 2>&1
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen relacje --keys "F4${1:+,$1}" "${@:2}" 2>&1
 }
 A="$(od "")"
-if has "$A" '╔═ Odzysk danych na pve10' && hasE "$A" '^║ lab-ct201 ' && hasE "$A" '^║ z innego dysku +nośnik' && has "$A" 'duplikat -- odzysk' && has "$A" '[Datasety]' \
-   && has "$A" '11Odzysk' && has "$A" '12Wyj' && has "$A" '10Ust' && ! has "$A" '10Wyj'; then
-    ok "odzysk: F11 to ekran glowny -- relacje z kopia i wiersz 'z innego dysku', panel odzysku, zakladka Datasety; na pasku 11Odzysk i 12Wyjście, bez F10"
+if has "$A" '╔═ Kopie na pve10' && ! has "$A" 'Odzysk danych' && hasE "$A" '^║ lab-ct201 ' && hasE "$A" '^║ z innego dysku +nośnik' && has "$A" 'duplikat -- odzysk' && has "$A" '[Datasety]' \
+   && ! has "$A" '── Wskazane'; then
+    ok "odzysk: F4 Kopie -- relacje z kopia i wiersz 'z innego dysku', panel, zakladka Datasety; tytul 'Kopie na', bez grupy Wskazane (F4 z listy bez kontekstu)"
 else
-    bad "odzysk: ekran F11" "$A"
+    bad "odzysk: ekran F4 Kopie" "$A"
+fi
+A="$(od "" --width 140 | tail -1)"
+if has "$A" 'F4 Kopie' && has "$A" 'F9 Przywróć' && has "$A" 'F12 Wyjście' && ! has "$A" 'F11' && ! has "$A" 'Odzysk' && ! has "$A" 'Historia' && ! has "$A" 'F7'; then
+    ok "odzysk: pasek F4 -- 'F4 Kopie' i akcja 'F9 Przywróć', bez F11, Odzysku, Historii i F7"
+else
+    bad "odzysk: pasek F4" "$A"
 fi
 A="$(od enter)"
-if grep -Eq "zfs-backup.sh'? restore [a-z0-9-]+ --ask\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
-    ok "odzysk: Enter na relacji oddaje terminal oknu 'Przywróć' (restore NAZWA --ask)"
+if grep -Eq "zfs-backup.sh'? browse [a-z0-9-]+ --ask\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
+    ok "odzysk: Enter na relacji oddaje terminal oknu 'Przeglądaj kopię' (browse NAZWA --ask)"
 else
     bad "odzysk: Enter na relacji" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 A="$(od end,enter)"
-if grep -Eq "zfs-backup.sh'? restore --from-copy --ask\$" "$XL"; then
-    ok "odzysk: Enter na 'z dysku' oddaje terminal oknu 'Przywróć z dysku' (restore --from-copy --ask)"
+if grep -Eq "zfs-backup.sh'? browse --any --ask\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
+    ok "odzysk: Enter na 'z dysku' -- browse --any --ask (dowolny dataset tego hosta)"
 else
     bad "odzysk: Enter na z dysku" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
-# CHUDY ODZYSK (2026-10-18): F7 na F11 = "Przeglądaj kopię" -- okna browse --ask
-# (migawka RO + mc); na wierszu 'z dysku' -- browse --any --ask.
-A="$(od F7)"
-if grep -Eq "zfs-backup.sh'? browse [a-z0-9-]+ --ask\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
-    ok "odzysk: F7 na relacji oddaje terminal oknu 'Przeglądaj kopię' (browse NAZWA --ask)"
+A="$(od F9)"
+if grep -Eq "zfs-backup.sh'? restore [a-z0-9-]+ --ask\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
+    ok "odzysk: F9 na relacji oddaje terminal oknu 'Przywróć' (restore NAZWA --ask)"
 else
-    bad "odzysk: F7 na relacji" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+    bad "odzysk: F9 na relacji" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
-A="$(od end,F7)"
-if grep -Eq "zfs-backup.sh'? browse --any --ask\$" "$XL"; then
-    ok "odzysk: F7 na 'z dysku' -- browse --any --ask (dowolny dataset tego hosta)"
+A="$(od end,F9)"
+if grep -Eq "zfs-backup.sh'? restore --from-copy --ask\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
+    ok "odzysk: F9 na 'z dysku' oddaje terminal oknu 'Przywróć z dysku' (restore --from-copy --ask)"
 else
-    bad "odzysk: F7 na z dysku" "$(cat "$XL")"
+    bad "odzysk: F9 na z dysku" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
-A="$(od "" | tail -1)"
-if has "$A" 'Przeglądaj'; then
-    ok "odzysk: pasek F11 podpisuje F7 Przeglądaj"
+A="$(od F7)"; XA="$(cat "$XL")"; B="$(od end,F7)"
+if [ -z "$XA" ] && [ ! -s "$XL" ] && has "$A" '╔═ Kopie na pve10' && has "$B" '╔═ Kopie na pve10'; then
+    ok "odzysk: F7 na Kopiach niczego nie uruchamia (ani na relacji, ani na 'z dysku')"
 else
-    bad "odzysk: pasek F11" "$A"
+    bad "odzysk: F7 na Kopiach" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+fi
+# F4 Z F3: kursor Kopii staje na relacji z F3; fokus na LISCIE = sama relacja (Enter bez --dataset=
+# i bez --at=); fokus w zakladce Datasety (Tab) = tez lokalny cel TEJ pary (--dataset=CEL).
+A="$(od enter)"
+if grep -Eq "zfs-backup.sh'? browse duplikat --ask\$" "$XL" && ! grep -q -- '--dataset' "$XL" && ! grep -q -- '--at' "$XL"; then
+    ok "kopie: F4 z wiersza relacji na F3 (fokus na liscie) -- Enter = browse REL --ask, bez --dataset= i --at="
+else
+    bad "kopie: F4 z F3, fokus na liscie" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+fi
+: > "$XL"
+A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen relacje --keys tab,F4 --width 200 2>&1)"
+"$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen relacje --keys tab,F4,enter >/dev/null 2>&1
+if has "$A" '╔═ Kopie na pve10' && has "$A" '── Wskazane' && hasE "$A" 'Dataset +hdd/backups/192\.168\.28\.99/hdd/lab/vm-101' && has "$A" 'najnowsza migawka' \
+   && grep -Eq "zfs-backup.sh'? browse duplikat --ask --dataset=hdd/backups/192\.168\.28\.99/hdd/lab/vm-101\$" "$XL"; then
+    ok "kopie: F4 z zakladki Datasety na F3 -- 'Wskazane' z celem tej pary, Enter = browse REL --ask --dataset=CEL (bez --at=)"
+else
+    bad "kopie: F4 z F3, fokus w Datasety" "$(printf '%s\n' "$A" | grep -E 'Kopie na|Wskazane|Dataset|Chwila')" "log: $(cat "$XL")"
+fi
+# F4 na relacji BEZ kopii (rekord usuniety): Kopie sie otwiera, ale bez kontekstu, z komunikatem.
+A="$(act end,F4 --width 130)"
+if has "$A" '╔═ Kopie na pve10' && has "$A" 'nie ma kopii na tym hoście -- nie ma czego przeglądać' && ! has "$A" '── Wskazane' && [ ! -s "$XL" ]; then
+    ok "kopie: F4 na relacji bez kopii (usunieta) -- Kopie bez kontekstu i komunikat 'nie ma kopii na tym hoście'"
+else
+    bad "kopie: F4 na relacji bez kopii" "$(printf '%s\n' "$A" | grep -E 'Kopie na|Wskazane|kopii')" "log: $(cat "$XL")"
 fi
 if grep -q '^        browse)$' "$REPO/zfs-backup.sh" && grep -q 'tui/browse.sh' "$REPO/zfs-backup.sh" && bash -n "$REPO/tui/browse.sh" \
    && grep -q 'mount -t zfs -o ro' "$REPO/tui/browse.sh" && grep -q 'trap cleanup EXIT' "$REPO/tui/browse.sh"; then
@@ -1429,20 +1483,20 @@ else
 fi
 A="$(act down,enter,p)"
 if [ ! -s "$XL" ] && ! has "$A" 'p przywróć'; then
-    ok "odzysk: 'p' w oknie relacji niczego nie uruchamia i stopka o nim nie mówi (odzysk jest na F11)"
+    ok "odzysk: 'p' w oknie relacji niczego nie uruchamia i stopka o nim nie mówi (odzysk jest na F4 Kopie)"
 else
     bad "odzysk: p w oknie relacji" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 : > "$XL"
 A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen nosniki --keys F9 2>&1)"
-if [ ! -s "$XL" ] && has "$A" 'przywracanie z dysku jest teraz na F11 Odzysk'; then
-    ok "odzysk: F9 na F6 niczego nie uruchamia, mowi gdzie jest odzysk (F11)"
+if [ ! -s "$XL" ] && has "$A" 'przywracanie z dysku jest teraz na F4 Kopie (F9)'; then
+    ok "odzysk: F9 na F6 niczego nie uruchamia, mowi gdzie jest odzysk (F4 Kopie, F9)"
 else
     bad "odzysk: F9 na F6" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen nosniki --width 80 2>&1 | grep 'Pomoc' | tail -1)"
-if has "$A" '11Odzysk' && has "$A" '12Wyj' && ! has "$A" '9Odzysk'; then
-    ok "akcje: pasek F6 przy 80 kolumnach -- bez F9, z 11Odzysk i 12Wyj(ście/dź)"
+if has "$A" '4Kopie' && has "$A" '12Wyj' && ! has "$A" '11' && ! has "$A" 'Odzysk' && ! has "$A" '9Przyw'; then
+    ok "akcje: pasek F6 przy 80 kolumnach -- bez F9, z 4Kopie i 12Wyj(ście/dź), bez F11"
 else
     bad "akcje: pasek F6 przy 80 kolumnach" "$A"
 fi
@@ -1468,7 +1522,7 @@ else
     bad "akcje: s/c w oknie relacji" "$XS" "$XC"
 fi
 A="$(act down,enter)"
-# Odzysk przeszedł na F11 (2026-10-18); U65: w stopce 'e zmień', 's' i 'c'.
+# Odzysk jest na F4 Kopie; U65: w stopce 'e zmień', 's' i 'c'.
 if has "$A" 'e zmienia   s jako szablon   c edycja ręczna   Esc zamyka'; then
     ok "akcje: ...okno relacji mowi o tym w stopce ('e zmień'), bez 'p przywróć'"
 else
@@ -1704,56 +1758,19 @@ else
 fi
 
 # ============================================================================
-# TRANSFERY
+# F4 Historia (ekran "transfery": lista transferow, F7 chowa usuniete, odswiezanie na zywo)
+# ZNIESIONA razem z F11 Odzysk -- jej testy (ramki, wiersz transferu, panel, F7 chowa/pokazuje,
+# Enter, kolumna Kiedy starszego wpisu) usuniete; biegi sa na F2 Przebiegi, kopie na F4 Kopie.
 # ============================================================================
-T="$(screen transfery)"
-if has "$T" '╔═ Historia transferów na pve10 (14)   biegnie teraz: 0' && ! has "$T" 'W toku'; then
-    ok "transfery: JEDNA lista (U21) -- tytul liczy wpisy i mowi, ile biegnie teraz"
-else
-    bad "transfery: ramki" "$T"
-fi
-T120="$(screen transfery "" --width 120)"
-if hasE "$T120" '^║ [0-9:]+ +lab-srv-b +hdd/lab/srv-b/www +przyrost\. +OK +0 s +- +║'; then
-    ok "transfery: wiersz = kiedy, relacja, dataset (bez @migawki), tryb, wynik, czas, dane"
-else
-    bad "transfery: wiersz transferu" "$T120"
-fi
-if hasE "$T" 'Poprzednia +automated_hourly' && hasE "$T" 'Start / koniec +2026-09-09'; then
-    ok "transfery: panel -- migawka, poprzednia, zrodlo i cel, start/koniec; bez powtorek z listy (U21)"
-else
-    bad "transfery: niemierzalne" "$T"
-fi
-# NOTE 8 (wlasciciel, 2026-09-24), R4-2: F7 chowa/pokazuje transfery relacji,
-# ktorych juz nie ma -- z 14 zapisow fikstury 6 ma etykiete "labsp"/"lab1"/""
-# (brak rekordu w status.json), 8 nalezy do zywych relacji. Listwa (dopisek
-# 'F7 ...') potrzebuje szerszego terminala, zeby sie zmiescic, a panel ma stac obok (prog 150) -- stad --width 160.
-TW130="$(screen transfery "" --width 160)"
-if has "$TW130" 'F7 Ukryj usunięte' && ! has "$TW130" 'F7 Pokaż usunięte' && ! has "$TW130" 'F7 ukryj usunięte'; then
-    ok "transfery: domyslnie POKAZANE (dziennik transferow), pasek mowi 'F7 Ukryj usunięte', ramka bez F"
-else
-    bad "transfery: domyslny stan F7" "$TW130"
-fi
-TU="$(screen transfery F7 --width 160)"
-if has "$TU" 'Historia transferów na pve10 (8) -- bez usuniętych relacji' && ! has "$TU" '(bez relacji)' && has "$TU" 'F7 Pokaż usunięte'; then
-    ok "transfery: F7 chowa transfery bez zywej relacji (14 -> 8), tytul mowi, listwa odwraca podpis"
-else
-    bad "transfery: F7 chowa" "$TU"
-fi
-TUU="$(screen transfery F7,F7 --width 160)"
-if has "$TUU" 'Historia transferów na pve10 (14)' && has "$TUU" '(bez relacji)' && ! has "$TUU" 'bez usuniętych relacji'; then
-    ok "transfery: drugie F7 pokazuje je znowu"
-else
-    bad "transfery: F7 pokazuje znowu" "$TUU"
-fi
-# R4-2: LITERA TO TEKST. 'u' w rundzie 3 bylo zielone w tym tescie i martwe na
+# R4-2: LITERA TO TEKST. 'u' w rundzie 3 bylo zielone w tescie i martwe na
 # zywo: --keys podawal 'u' prosto do UI.key, a petla curses oddaje je linii
 # polecen. --keys idzie teraz ta sama droga (live_key_name), wiec 'u' ma NIC
-# nie schowac i stanac w linii polecen.
-TUL="$(screen transfery u --width 160)"
-if has "$TUL" 'Historia transferów na pve10 (14)' && ! has "$TUL" 'bez usuniętych relacji' && has "$TUL" '$ u_ '; then
-    ok "transfery: 'u' to TEKST linii polecen, nie skrot (R4-2: droga --keys = droga petli curses)"
+# nie zrobic i stanac w linii polecen (tu na F2 Przebiegi, gdzie 'u' nie jest skrotem).
+TUL="$(screen zadania u --width 160)"
+if has "$TUL" 'Przebiegi na pve10' && has "$TUL" '$ u_ '; then
+    ok "przebiegi: 'u' to TEKST linii polecen, nie skrot (R4-2: droga --keys = droga petli curses)"
 else
-    bad "transfery: 'u' jako tekst" "$TUL"
+    bad "przebiegi: 'u' jako tekst" "$TUL"
 fi
 # R4-1/R4-2 PRZEZ PRAWDZIWA PETLE CURSES (pty), nie przez --keys: runda 3
 # miala 'u' i 's' zielone tutaj i martwe na zywo. Klawisze ida jako bajty
@@ -1763,21 +1780,23 @@ pkb() { printf '%s\n' "$PK" | awk -v k="=== $1" -v n="$2" '$0 ~ /^=== / { i++; o
 if [ "$PKRC" -eq 2 ]; then
     echo "SKIP pty: brak modulu pty (Windows) -- klawisze przez petle curses sprawdza CI"
 elif has "$(pkb s 2)" 's_' && ! has "$(pkb s 2)" 'tylko nadchodzące' && has "$(pkb F8 3)" 'tylko nadchodzące' \
-     && has "$(pkb F4 5)" 'Historia transferów' && ! has "$(pkb F4 5)" 'POTWIERDZENIE' \
-     && has "$(pkb u 6)" 'u_' && ! has "$(pkb u 6)" 'bez usuniętych' && has "$(pkb F7 7)" 'bez usuniętych relacji'      && has "$(pkb ctrl-r 8)" 'odświeżam'; then
-    ok "pty: 's' i 'u' to tekst linii, F8 chowa wykonane na F2 Przebiegi (tytul 'tylko nadchodzące'), F7 chowa usuniete na F4, F4 na F3 otwiera Transfery (petla curses, R4-1/R4-2)"
+     && has "$(pkb F4 5)" 'Kopie na' && ! has "$(pkb F4 5)" 'POTWIERDZENIE' \
+     && has "$(pkb u 6)" 'u_' && has "$(pkb u 6)" 'Kopie na' && has "$(pkb F7 7)" 'Kopie na' && ! has "$(pkb F7 7)" 'POTWIERDZENIE' && has "$(pkb ctrl-r 8)" 'odświeżam'; then
+    ok "pty: 's' i 'u' to tekst linii, F8 chowa wykonane na F2 Przebiegi (tytul 'tylko nadchodzące'), F4 na F3 otwiera Kopie, F7 tam niczego nie otwiera (petla curses, R4-1/R4-2)"
 else
     bad "pty: klawisze przez petle curses" "$PK"
 fi
-# F11 / F12 / Tab PRZEZ PETLE CURSES (2026-10-18): ESC [ 23 ~ otwiera Odzysk, Tab
-# przenosi do linii polecen (strzalka w gore = historia), ESC [ 24 ~ konczy program.
-PK2="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 'F11,tab,F12' -- --offline --utf8 --now "$NOW" $ALL 2>&1)"; PK2RC=$?
+# F11 / F4 / F12 / Tab PRZEZ PETLE CURSES (2026-10-18): F11 (ESC [ 23 ~) jest WOLNY -- nic nie
+# otwiera; F4 otwiera Kopie, Tab przenosi do linii polecen (strzalka w gore = historia),
+# ESC [ 24 ~ (F12) konczy program.
+PK2="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 'F11,F4,tab,F12' -- --offline --utf8 --now "$NOW" $ALL 2>&1)"; PK2RC=$?
 pk2() { printf '%s\n' "$PK2" | awk -v k="=== $1" '$0 ~ /^=== / { on = ($0 == k); next } on'; }
 if [ "$PK2RC" -eq 2 ]; then
     echo "SKIP pty F11/F12: brak modulu pty (Windows) -- sprawdza CI"
-elif has "$(pk2 F11)" 'Odzysk danych na pve10' && true \
+elif has "$(pk2 F11)" 'Przebiegi na pve10' && ! has "$(pk2 F11)" 'Kopie na' && ! has "$(pk2 F11)" 'Odzysk danych' \
+     && has "$(pk2 F4)" 'Kopie na pve10' \
      && printf '%s\n' "$PK2" | grep -qx '=== exited'; then
-    ok "pty: F11 (ESC[23~) otwiera Odzysk, Tab, F12 (ESC[24~) konczy program rc=0 (petla curses)"
+    ok "pty: F11 (ESC[23~) niczego nie otwiera, F4 otwiera Kopie, Tab, F12 (ESC[24~) konczy program rc=0 (petla curses)"
 else
     bad "pty: F11/F12 przez petle curses" "rc=$PK2RC" "$PK2"
 fi
@@ -1812,29 +1831,12 @@ else
     bad "szablony: akcje" "ins: $A1" "e: $B1" "del: $C1"
 fi
 TF="$(screen zadania F4)"
-if has "$TF" '╔═ Historia transferów' && ! has "$TF" '[F4'; then
-    ok "transfery: F4 z innego ekranu przelacza (aktywne okno na pasku kolorem, bez nawiasow)"
+if has "$TF" '╔═ Kopie na pve10' && ! has "$TF" '[F4'; then
+    ok "kopie: F4 z innego ekranu przelacza (aktywne okno na pasku kolorem, bez nawiasow)"
 else
-    bad "transfery: F4" "$TF"
+    bad "kopie: F4" "$TF"
 fi
-TW="$(screen transfery down,enter)"
-if has "$TW" '╔═ transfer lab-srv-b ═' && hasE "$TW" 'Migawka +automated_hourly' && hasE "$TW" 'Źródło +192\.168\.28\.99:hdd/lab/srv-b/db'; then
-    ok "transfery: Enter otwiera szczegoly wiersza pod kursorem jako okno"
-else
-    bad "transfery: Enter" "$TW"
-fi
-
-# KOLUMNA KIEDY NIE UCINA SIE. Wpis z innego dnia niz "dzis" (fmt_when_short:
-# DD.MM HH:MM, bez roku) plus czas trwania (45 min) mial sie NIE zmiescic w
-# starej stalej szerokosci 16 i wychodzil jako "...22:0…" (owner brief, runda 2).
-OLD100="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --progress "$FIX/progress-older.json" --screen transfery --width 100 2>&1)"
-OLD120="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --progress "$FIX/progress-older.json" --screen transfery --width 120 2>&1)"
-if hasE "$OLD100" '[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2} ' && has "$OLD100" '45 min' && ! has "$OLD100" '…' \
-    && hasE "$OLD120" '[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2} ' && has "$OLD120" '45 min' && ! has "$OLD120" '…'; then
-    ok "transfery: Kiedy starszego wpisu -- DD.MM HH:MM i czas trwania w osobnej kolumnie, bez wielokropka, przy 100 i 120 kolumnach"
-else
-    bad "transfery: kolumna Kiedy starszego wpisu" "$OLD100" "$OLD120"
-fi
+# (Enter na wierszu Historii transferow i kolumna Kiedy starszego wpisu -- usuniete razem z F4 Historia.)
 
 # ============================================================================
 # F5 MONITOR ZNIESIONY (wlasciciel, wariant b, 2026-09-24): F2 i F5 pokazywaly
@@ -2216,7 +2218,7 @@ fi
 # komendy z palca"). Nad listwa klawiszy, na KAZDYM ekranie; styl mc.
 # ============================================================================
 cl_ok=1
-for sc in zadania relacje transfery nosniki; do
+for sc in zadania relacje nosniki; do
     out="$(screen "$sc" "")"
     printf '%s\n' "$out" | tail -2 | head -1 | grep -qE '^[^ ]+@pve10:zfs-snapshot-all\$ _ *$' || { cl_ok=0; echo "  $sc: brak linii polecen"; }
 done
@@ -2332,7 +2334,7 @@ rm -f "$XL"
 # ============================================================================
 widths_ok=1
 for w in 80 120 200; do
-    for sc in zadania relacje transfery nosniki; do
+    for sc in zadania relacje nosniki; do
         for keys in "" "enter" "F1"; do
             out="$(screen "$sc" "$keys" --width "$w" --height 24)"
             n="$(printf '%s\n' "$out" | "$PY" -c "import sys; ls=sys.stdin.read().split('\n')[:-1]; print(sum(1 for l in ls if len(l)!=$w), len(ls))")"
@@ -2353,7 +2355,7 @@ else
 fi
 # Terminal bez UTF-8: ramki +-|= i slowa bez ogonkow. Zero bajtow spoza ASCII.
 ascii_ok=1
-for sc in zadania relacje transfery nosniki; do
+for sc in zadania relacje nosniki; do
     for keys in "" "enter" "F1"; do
         out="$("$PY" "$TUI" --render-once --offline --ascii --now "$NOW" $ALL --screen "$sc" --keys "$keys" 2>&1)"
         if [ "$(printf '%s' "$out" | LC_ALL=C grep -c '[^ -~]')" -ne 0 ]; then ascii_ok=0; echo "  $sc keys=$keys ma bajty spoza ASCII"; fi
@@ -2378,8 +2380,8 @@ if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' &&
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" '1Pomoc2Przeb3Rel4Hist5Szabl6Repl7Uruchom8Pauza9Plik10Ust11Odzysk12Wyjdź'; then
-    ok "wyglad: przy 80 kolumnach pasek miesci WSZYSTKIE klawisze F, z F11 i F12 (zapis skrocony, cyfra = F; najciasniej Hist/Szabl/Wyjdz)"
+if has "$S" '1Pomoc2Przeb3Rel4Kopie5Szabl6Repl7Uruchom8Pauza9Plik10Ust12Wyjdź' && ! has "$(printf '%s\n' "$S" | tail -1)" '11'; then
+    ok "wyglad: przy 80 kolumnach pasek miesci WSZYSTKIE klawisze F, z F12 i bez F11 (zapis skrocony, cyfra = F; najciasniej Przeb/Kopie/Szabl/Wyjdz)"
 else
     bad "wyglad: listwa F" "$S"
 fi
@@ -2387,7 +2389,7 @@ fi
 # okna"; "trzeba to zrobic poprawnie bez dubli"). Kazdy ekran, kazda szerokosc: klawisz F
 # wystepuje TYLKO w ostatniej linii (pasek), a kazda akcja okna jest na pasku dokladnie raz.
 NODUP=""
-for _sc in zadania relacje transfery szablony nosniki; do
+for _sc in zadania relacje szablony nosniki; do
     for _w in 80 120 200; do
         _o="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --screen "$_sc" --width "$_w" --height 30 2>&1)"
         _body="$(printf '%s\n' "$_o" | sed '$d')"; _bar="$(printf '%s\n' "$_o" | tail -1)"
@@ -2395,11 +2397,11 @@ for _sc in zadania relacje transfery szablony nosniki; do
         case "$_sc" in
             # F2 Przebiegi: F8 'Schowaj wykonane'/'Pokaż wykonane' (krotko 'Wykonane'), F9 'Grupuj po relacji'
             # (krotko 'Grupuj') -- wspolny rdzen 'ykonane' i 'Grupuj' jest na pasku raz przy kazdej szerokosci.
-            zadania) _acts="Uruchom ykonane Grupuj" ;; relacje) _acts="Uruchom Pauza" ;; transfery) _acts="sunięte" ;;
+            zadania) _acts="Uruchom ykonane Grupuj" ;; relacje) _acts="Uruchom Pauza" ;;
             nosniki) _acts="Uruchom" ;; *) _acts="" ;;
         esac
-        # Transf/Szabl/Wyj: pelne slowo albo najciasniejszy skrot (80 kolumn, 2026-10-18).
-        for _a in Pomoc Przeb Rel Hist Szabl Repl Ust Odzysk Wyj $_acts; do
+        # Przeb/Kopie/Szabl/Wyj: pelne slowo albo najciasniejszy skrot (80 kolumn); bez Historii i Odzysku (F11 wolny).
+        for _a in Pomoc Przeb Rel Kopie Szabl Repl Ust Wyj $_acts; do
             [ "$(printf '%s' "$_bar" | grep -o "$_a" | wc -l)" -eq 1 ] || NODUP="$NODUP $_sc/$_w:$_a"
         done
     done
@@ -2417,13 +2419,13 @@ m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 out = []
 for w in (80, 120, 200):
-    line, marks = m.key_bar_parts("transfery", w, m.screen_actions("transfery"))
+    line, marks = m.key_bar_parts("odzysk", w, m.screen_actions("odzysk"))
     act = [line[a:b] for a, b, k in marks if k == "active"]
     out.append("%s:%s" % (w, "|".join(act)))
 print(" ".join(out))
 PYEOF
 )"
-if [ "$MKOUT" = "80:4Hist 120:4Historia 200:F4 Historia" ]; then
+if [ "$MKOUT" = "80:4Kopie 120:F4 Kopie 200:F4 Kopie" ]; then
     ok "klawisze: aktywne okno zaznaczone na pasku kolorem (marks), bez nawiasow"
 else
     bad "klawisze: zaznaczenie aktywnego okna" "got=$MKOUT"
@@ -2451,10 +2453,10 @@ if has "$X" '! bez odpowiedzi: 1'; then
 else
     bad "ujemna: licznik w pasku" "$X"
 fi
-XT="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --progress "$BROKEN" --screen transfery 2>&1)"
+XT="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$BROKEN" --screen zadania 2>&1)"
 XN="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --replicas "$BROKEN" --screen nosniki 2>&1)"
-if has "$XT" 'błąd źródła: progress --json' && has "$XN" 'błąd źródła: list-replicas --json'; then
-    ok "ujemna: kazdy z pozostalych ekranow nazywa SWOJE zepsute zrodlo (F5/monitor zniesiony razem z ekranem)"
+if has "$XT" 'błąd źródła: list-jobs --json' && has "$XN" 'błąd źródła: list-replicas --json'; then
+    ok "ujemna: kazdy z pozostalych ekranow nazywa SWOJE zepsute zrodlo (F4 Historia i F5/monitor zniesione razem z ekranami)"
 else
     bad "ujemna: zepsute zrodla na pozostalych ekranach" "$XT" "$XN"
 fi
@@ -5752,7 +5754,7 @@ fi
 # konczy kolumne wczesniej -- F4 przy 80 ucinal "Ctrl-R Odświe". Na kazdym ekranie przy 80
 # kolumnach tresc listwy (bez dopelnienia spacjami) ma najwyzej 79 znakow.
 lw_bad=""
-for lw_s in zadania relacje transfery szablony nosniki odzysk; do
+for lw_s in zadania relacje szablony nosniki odzysk; do
     lw_n="$(screen "$lw_s" "" --width 80 | tail -1 | "$PY" -c 'import sys; print(len(sys.stdin.read().rstrip()))')"
     [ "${lw_n:-99}" -le 79 ] || lw_bad="$lw_bad $lw_s=$lw_n"
 done
