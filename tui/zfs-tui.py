@@ -2259,15 +2259,27 @@ def rel_panel_pairs(row, data, now, ch):
     last = row["last"]
     # U61: "Ostatni bieg OK" (historia transferow) stal obok "błąd biegu" (job-stats).
     # Nieudany ostatni bieg ktoregos zadania wygrywa i panel mowi, KTORY dataset i dlaczego.
-    fails = []
+    # One cron line can carry several datasets (pve2, 2026-10-27: subvol-103 and
+    # ROOT/pve-1 in one snapget call). Every dataset job then reads the SAME
+    # failure, so it counts once, and it is pinned on a dataset only when the
+    # error text names it -- the panel blamed subvol-103 for a refusal on pve-1.
+    fails, by_label = [], {}
     if rel.get("state") == "active":
         for j in row["jobs"]:
             if j.get("section_kind") in SEND_KINDS:
                 f, _disc = job_run_issue(data, j)
                 if f:
-                    fails.append(((j.get("scope") or "?").split(":")[-1], f))
+                    sc = (j.get("scope") or "?").split(":")[-1]
+                    lbl = job_cron_label(j)
+                    if lbl in by_label:
+                        by_label[lbl][0].append(sc)
+                        continue
+                    by_label[lbl] = ([sc], f)
+                    fails.append(by_label[lbl])
     if fails:
-        ds, f = fails[0]
+        scs, f = fails[0]
+        named = [s for s in scs if s in (f[2] or "")]
+        ds = named[0] if len(named) == 1 else u", ".join(scs)
         pairs.append((_(u"Ostatni bieg"), _(u"BŁĄD   %s   rc=%s%s") % (f[1], f[0], (u"   (+%d)" % (len(fails) - 1)) if len(fails) > 1 else u"")))
         pairs.append((_(u"Przyczyna"), u"%s: %s" % (ds, f[2] or _(u"zobacz cron.log"))))
     elif last:
