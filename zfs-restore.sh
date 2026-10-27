@@ -3621,13 +3621,32 @@ restore_live_guard() {   # <destination> [mode] -> 0 fine | 1 refused (RESTORE_O
     # for the run, and a write on it makes the engine refuse after the rollback -- CHANGED
     # AND UNFINISHED. Who holds it is read (fuser -m) and the run refuses BEFORE anything is
     # touched. This host only: a delegated account on a remote one cannot see that.
+    #
+    # FAIL CLOSED (REV-20261027-176): no fuser, or a probe that did not answer cleanly, is NOT
+    # "idle". Measured on pve9 (psmisc 23.x): idle = rc 1 with nothing on stdout or stderr;
+    # busy = rc 0, the PIDs on stdout, "<mountpoint>:<access letters>" on stderr; an error
+    # (missing path, no permission) = rc 1 with a message on stderr. Only the first passes.
     if [ -z "$host" ] && [ "$mo" = yes ] && [ -n "$mp" ] && [ "$mp" != - ] && [ "$mp" != none ] && [ "$mp" != legacy ] \
-       && case "$mode" in rewind|replace) true ;; *) false ;; esac && command -v fuser >/dev/null 2>&1; then
-        pids="$(fuser -m "$mp" 2>/dev/null | tr -s ' \t' '\n' | grep -E '^[0-9]+$' | sort -u)"
-        if [ -n "$pids" ]; then
+       && case "$mode" in rewind|replace) true ;; *) false ;; esac; then
+        if ! command -v fuser >/dev/null 2>&1; then
+            RESTORE_ONE_VERDICT="cannot verify that '$ds' (mounted at $mp) is idle: fuser is not installed (apt install psmisc) -- refused rather than assumed idle"
+            return 1
+        fi
+        local _fo _fe _frc=0
+        _fe="$(mktemp)" || { RESTORE_ONE_VERDICT="cannot verify that '$ds' is idle: mktemp failed"; return 1; }
+        _fo="$(fuser -m "$mp" 2>"$_fe")" || _frc=$?
+        pids="$(printf '%s\n' "$_fo" | tr -s ' \t' '\n' | grep -E '^[0-9]+$' | sort -u)"
+        if [ "$_frc" -eq 0 ] && [ -n "$pids" ]; then
+            rm -f "$_fe"
             RESTORE_ONE_VERDICT="'$ds' (mounted at $mp) is IN USE -- $(for q in $pids; do printf '%s(%s) ' "$(ps -o comm= -p "$q" 2>/dev/null || echo '?')" "$q"; done)-- stop them, then run this again"
             return 1
         fi
+        if [ "$_frc" -ne 1 ] || [ -n "$(printf '%s' "$_fo" | tr -d ' \t\n')" ] || [ -s "$_fe" ]; then
+            RESTORE_ONE_VERDICT="cannot verify that '$ds' (mounted at $mp) is idle: fuser -m rc=$_frc$( [ -s "$_fe" ] && printf ' (%s)' "$(head -c 200 "$_fe" | tr '\n' ' ')") -- refused rather than assumed idle"
+            rm -f "$_fe"
+            return 1
+        fi
+        rm -f "$_fe"
     fi
     base="${ds##*/}"
     case "$base" in
