@@ -794,7 +794,7 @@ for sjk in "" down down,down; do
     pl="$(printf '%s\n' "$SJ" | grep 'Przyczyna')"
     if hasE "$SJ" 'Ostatni bieg +BŁĄD +2026-09-08 13:48 +rc=1 ' && ! hasE "$SJ" 'rc=1 +\(\+' \
        && printf '%s' "$pl" | grep -q 'lab/a' && printf '%s' "$pl" | grep -q 'lab/b' \
-       && printf '%s' "$pl" | grep -q 'dataset is busy'; then sj_ok=1; fi
+       && has "$SJ" 'dataset is busy'; then sj_ok=1; fi
     break
 done
 if [ "$sj_ok" -eq 1 ]; then
