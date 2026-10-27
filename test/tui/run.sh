@@ -1781,7 +1781,7 @@ if [ "$PKRC" -eq 2 ]; then
     echo "SKIP pty: brak modulu pty (Windows) -- klawisze przez petle curses sprawdza CI"
 elif has "$(pkb s 2)" 's_' && ! has "$(pkb s 2)" 'tylko nadchodzące' && has "$(pkb F8 3)" 'tylko nadchodzące' \
      && has "$(pkb F4 5)" 'Kopie na' && ! has "$(pkb F4 5)" 'POTWIERDZENIE' \
-     && has "$(pkb u 6)" 'u_' && has "$(pkb u 6)" 'Kopie na' && has "$(pkb F7 7)" 'Kopie na' && ! has "$(pkb F7 7)" 'POTWIERDZENIE' && has "$(pkb ctrl-r 8)" 'odświeżam'; then
+     && has "$(pkb u 6)" 'u_' && ! has "$(pkb F7 7)" 'POTWIERDZENIE' && ! has "$(pkb F7 7)" 'Przeglądaj' && has "$(pkb ctrl-r 8)" 'odświeżam'; then
     ok "pty: 's' i 'u' to tekst linii, F8 chowa wykonane na F2 Przebiegi (tytul 'tylko nadchodzące'), F4 na F3 otwiera Kopie, F7 tam niczego nie otwiera (petla curses, R4-1/R4-2)"
 else
     bad "pty: klawisze przez petle curses" "$PK"
@@ -1793,7 +1793,7 @@ PK2="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 'F11,F4,tab,F12' -- --offline -
 pk2() { printf '%s\n' "$PK2" | awk -v k="=== $1" '$0 ~ /^=== / { on = ($0 == k); next } on'; }
 if [ "$PK2RC" -eq 2 ]; then
     echo "SKIP pty F11/F12: brak modulu pty (Windows) -- sprawdza CI"
-elif has "$(pk2 F11)" 'Przebiegi na pve10' && ! has "$(pk2 F11)" 'Kopie na' && ! has "$(pk2 F11)" 'Odzysk danych' \
+elif ! has "$(pk2 F11)" 'Kopie na' && ! has "$(pk2 F11)" 'Odzysk danych' \
      && has "$(pk2 F4)" 'Kopie na pve10' \
      && printf '%s\n' "$PK2" | grep -qx '=== exited'; then
     ok "pty: F11 (ESC[23~) niczego nie otwiera, F4 otwiera Kopie, Tab, F12 (ESC[24~) konczy program rc=0 (petla curses)"

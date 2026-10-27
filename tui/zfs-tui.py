@@ -5981,6 +5981,8 @@ def deaccent(text):
 _DEACCENT = {ord(a): b for a, b in zip(u"ąćęłńóśźżĄĆĘŁŃÓŚŹŻ", u"acelnoszzACELNOSZZ")}
 _DEACCENT[ord(u"→")] = ">"
 _DEACCENT[ord(u"←")] = "<"
+for _q in u"\u201e\u201d\u201c":   # cudzyslowy „ ” “ -> "
+    _DEACCENT[ord(_q)] = '"'
 
 
 def _ui_render_final(self, width, height):
