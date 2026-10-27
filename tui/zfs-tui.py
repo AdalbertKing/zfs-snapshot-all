@@ -607,6 +607,19 @@ def job_stats_for(data, j, label):
     return row, vol
 
 
+def text_names_dataset(text, ds):
+    """Czy tekst bledu NAZYWA dataset ds -- cala nazwa, nie jej kawalek
+    (REV-20261027-177: 'pool/vm-10' w 'pool/vm-100', 'data' w 'metadata').
+    Przed nazwa wolno stac: poczatek, odstep, cudzyslow, ':' (host:ds,
+    konto@host:ds) albo '/' (kopia pod baza celu: .../pve2/rpool/ROOT/pve-1).
+    Po nazwie: koniec, '@' (migawka), ':' , odstep, cudzyslow, kropka konczaca
+    zdanie -- nigdy dalszy znak nazwy ani '/' (to juz dziecko)."""
+    if not ds or not text:
+        return False
+    pat = r"(?<![A-Za-z0-9_.\-])" + re.escape(ds) + r"(?![A-Za-z0-9_\-/]|\.[A-Za-z0-9_\-])"
+    return re.search(pat, text) is not None
+
+
 def job_run_issue(data, j):
     """(blad, wyrzucenie) zadania z job-stats: blad = (rc, kiedy, tekst), gdy
     jego NAJNOWSZY bieg sie nie udal (rc nie 0 i nie 75 -- pominiecie przez
@@ -2278,7 +2291,7 @@ def rel_panel_pairs(row, data, now, ch):
                     fails.append(by_label[lbl])
     if fails:
         scs, f = fails[0]
-        named = [s for s in scs if s in (f[2] or "")]
+        named = [s for s in scs if text_names_dataset(f[2] or "", s)]
         ds = named[0] if len(named) == 1 else u", ".join(scs)
         pairs.append((_(u"Ostatni bieg"), _(u"BŁĄD   %s   rc=%s%s") % (f[1], f[0], (u"   (+%d)" % (len(fails) - 1)) if len(fails) > 1 else u"")))
         pairs.append((_(u"Przyczyna"), u"%s: %s" % (ds, f[2] or _(u"zobacz cron.log"))))
