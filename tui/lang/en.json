@@ -1866,6 +1866,7 @@
 "z $SRCHOST": "from $SRCHOST",
 "z ilu dni strażnik liczy normę przyrostu": "how many days the monitor uses to compute normal growth",
 "z innego dysku": "from another disk",
+"za %s": "in %s",
 "za maly terminal (%dx%d); minimum 40x10": "terminal too small (%dx%d); minimum 40x10",
 "zadania": "jobs",
 "zadanie": "job",

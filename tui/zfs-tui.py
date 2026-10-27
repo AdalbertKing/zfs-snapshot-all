@@ -2100,7 +2100,7 @@ def run_pairs(r, now, ch):
     if not r.get("at"):
         return [group(ch, _(u"Nadchodzący bieg")), (_(u"Kiedy"), _(u"bez terminu (po włożeniu nośnika albo poza cronem)"))]
     return [group(ch, _(u"Nadchodzący bieg")), (_(u"Kiedy"), u"%s   %s" % (
-        time.strftime("%Y-%m-%d %H:%M", time.localtime(r["at"])), fmt_when(r["at"], now)))]
+        time.strftime("%Y-%m-%d %H:%M", time.localtime(r["at"])), _(u"za %s") % fmt_dur(max(0, r["at"] - now))))]
 
 
 def run_children(r, data, now, ch):
@@ -2516,13 +2516,13 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
     cells = []
     for r in rows:
         if r["kind"] == "now":
-            cells.append([(u"-- " if ch.ascii else u"\u2500\u2500 ") + _(u"teraz %s") % time.strftime("%H:%M", time.localtime(r["at"])), u"", u"", u"", u""])
+            cells.append([(u"-- " if ch.ascii else u"\u2500\u2500 ") + _(u"teraz %s") % time.strftime("%H:%M", time.localtime(r["at"])), u" ", u" ", u" ", u" "])
         elif r["kind"] == "grp":
             it = r["item"]
-            cells.append([(u"> " if ch.ascii else u"\u25b8 ") + r["name"], it.get("dir") or u"", u"", _(u"błąd biegu") if r["bad"] else u"", u""])
+            cells.append([(u"> " if ch.ascii else u"\u25b8 ") + r["name"], it.get("dir") or u" ", u" ", _(u"błąd biegu") if r["bad"] else u" ", u" "])
         else:
             it = r["item"]
-            co = (u"%s %s" % (it.get("task") or u"", it.get("tier") or u"")).strip() if it.get("kind") == "job" else \
+            co = (u"%s %s" % (it.get("task") or u"", u"" if grouped else (it.get("tier") or u""))).strip() if it.get("kind") == "job" else \
                 (_(u"replika") if it.get("kind") == "replica" else (it.get("task") or u"-"))
             czas = fmt_dur(r["end"] - r["start"]) if r.get("past") and r.get("start") and r.get("end") else u"-"
             when = run_when(r["at"])
