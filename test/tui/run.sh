@@ -830,7 +830,12 @@ for name, sc, err in [
     ("both", ["pool/a", "pool/b"], "pool/a and pool/b: out of space."),
     ("target", ["hdd/vm-disks/subvol-103-disk-0", "rpool/ROOT/pve-1"], "Hint: 'hdd/backups/pve2/rpool/ROOT/pve-1' is MOUNTED"),
     ("remote", ["pool/vm-10", "pool/vm-100"], "zfsbackup@pve1:pool/vm-100@s1: refused"),
-    ("child", ["pool/vm-10", "pool/vm-100"], "pool/vm-10/sub: busy")]:
+    ("child", ["pool/vm-10", "pool/vm-100"], "pool/vm-10/sub: busy"),
+    # round 2: ':' is legal INSIDE a dataset name (lib-scope.sh pc_is_dataset)
+    ("colon", ["pool/foo", "pool/other"], "cannot receive pool/foo:bar: dataset is busy"),
+    ("colonpath", ["pool/bar", "pool/other"], "busy: pool/foo:pool/bar"),
+    ("hostcolon", ["pool/foo", "pool/other"], "pve1:pool/foo: dataset is busy"),
+    ("member", ["zfsbackup@pve1:pool/foo:bar", "pool/foo"], "cannot receive pool/foo:bar: dataset is busy")]:
     print("%s=%s" % (name, reason(sc, err)))
 PYEOF
 )"
@@ -838,8 +843,8 @@ exn() { printf '%s\n' "$EXN" | sed -n "s/^$1=//p"; }
 if [ "$(exn prefix | cut -d: -f1)" = "pool/vm-100" ] && [ "$(exn short | cut -d: -f1)" = "metadata" ] \
    && [ "$(exn none | cut -d: -f1)" = "pool/a, pool/b" ] && [ "$(exn both | cut -d: -f1)" = "pool/a, pool/b" ] \
    && [ "$(exn target | cut -d: -f1)" = "rpool/ROOT/pve-1" ] && [ "$(exn remote | cut -d: -f1)" = "pool/vm-100" ] \
-   && [ "$(exn child | cut -d: -f1)" = "pool/vm-10, pool/vm-100" ] && ! printf '%s' "$EXN" | grep -q '(+'; then
-    ok "relacje REV-177: blad przypisany datasetowi tylko przy calej nazwie (vm-10/vm-100, data/metadata, cel pod baza, host:ds); nic albo dwa -> caly zakres; wspolna linia liczona raz"
+   && [ "$(exn child | cut -d: -f1)" = "pool/vm-10, pool/vm-100" ] && ! printf '%s' "$EXN" | grep -q '(+'    && [ "$(exn colon | sed 's/: cannot.*//')" = "pool/foo, pool/other" ] && [ "$(exn colonpath | sed 's/: busy.*//')" = "pool/bar, pool/other" ]    && [ "$(exn hostcolon | sed 's/: pve1.*//')" = "pool/foo" ] && [ "$(exn member | sed 's/: cannot.*//')" = "pool/foo:bar" ]; then
+    ok "relacje REV-177: blad przypisany datasetowi tylko przy calej nazwie (vm-10/vm-100, data/metadata, cel pod baza, host:ds; dwukropek W nazwie nie jest granica: pool/foo:bar); nic albo dwa -> caly zakres; wspolna linia liczona raz"
 else
     bad "relacje REV-177: przypisanie bledu" "$EXN"
 fi
