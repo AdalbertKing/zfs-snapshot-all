@@ -525,7 +525,7 @@ fi
 # zadanie i szczebel w kolumnie Co.
 # Szerokosc 200: przy ciasnej liscie odpada kolumna Co (prio), a ona niesie zadanie.
 ZW="$(screen zadania "$(zkeys "^║ $KD +lab-vm101 +pobranie " $ALL)" --width 200 --height 60)"
-if hasE "$ZW" "^║ $KD +lab-vm101 +pobranie +standard_hourly +nadchodzący" && hasE "$ZW" 'Kierunek +pve10<192\.168\.28\.99' \
+if hasE "$ZW" "^║ $KD +lab-vm101 +pobranie +standard_hourly: vm-101 +nadchodzący" && hasE "$ZW" 'Kierunek +pve10<192\.168\.28\.99' \
    && has "$ZW" 'Nadchodzący bieg' && ! has "$ZW" 'Zakres'; then
     ok "zadania: POBRANIE nazywa sie pobraniem (nie 'wysylka'), w Co ma szczebel, kierunek 'pve10<peer' w panelu (U21), bez 'Zakres' dla jednego datasetu"
 else
@@ -626,8 +626,8 @@ if has "$ZSORT0" 'Przebiegi na ' && has "$ZSORT0" 'wykonane 12h i nadchodzące 6
 else
     bad "zadania: F8 raz -- tytul" "$ZSORT0" "$ZSORT1"
 fi
-L1=$(lst "$ZSORT0" | grep -nE "^║ $KD .*wysyłka +(\S+ +)?nadchodzący" | head -1 | cut -d: -f1)
-L2=$(lst "$ZSORT0" | grep -nE "^║ $KD .*kopia +(\S+ +)?nadchodzący" | head -1 | cut -d: -f1)
+L1=$(lst "$ZSORT0" | grep -nE "^║ $KD .*wysyłka .*nadchodzący" | head -1 | cut -d: -f1)
+L2=$(lst "$ZSORT0" | grep -nE "^║ $KD .*kopia .*nadchodzący" | head -1 | cut -d: -f1)
 if [ -n "$L1" ] && [ -n "$L2" ] && [ "$L1" -lt "$L2" ]; then
     ok "zadania: os czasu -- 'wysyłka hourly' (biegnie w ciagu godziny) stoi przed 'kopia daily' (biegnie dopiero jutro)"
 else
@@ -722,7 +722,7 @@ GN1="$(printf '%s' "$GN" | cut -d, -f1)"; GN2="$(printf '%s' "$GN" | cut -d, -f2
 GZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 60 2>&1)"
 if [ "$(printf '%s' "$GN" | tr -cd ',' | wc -c | tr -d ' ')" -eq 2 ] && [ "${GN1#* }" = "05" ] && [ "${GN2#* }" = "10" ] \
     && [ "${GN1%% *}" -eq $(( ${GN2%% *} * 3 )) ] && [ "${GN2%% *}" -ge 1 ] \
-    && hasE "$G" "^║ $KD +backup-test +pobranie +standard_hourly " \
+    && hasE "$G" "^║ $KD +backup-test +pobranie +standard_hourly: e " \
     && hasE "$GZ" 'Kierunek +pve20<>192\.168\.28\.50' && hasE "$GZ" 'Źródło +zfsbackup-pve20@192\.168\.28\.50:hdd/lab/a'; then
     ok "zadania: F2 -- kazda linia crona ma swoj bieg (a/b/c pod :05 = 3x wierszy d pod :10); panel: synchro '<>' mimo ze linia to pull, zrodlo tego datasetu"
 else
@@ -1973,7 +1973,7 @@ fi
 # 'aktualne' jest na F3 (test 'relacje: dataset snaponly' wyzej). Wysokosc 400: dzienne
 # zadanie biegnie dopiero jutro, wiec stoi na koncu osi czasu.
 SO2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen zadania --width 200 --height 400 2>&1)"
-if hasE "$SO2" "^║ $KD +som +migawka +hourly +nadchodzący" && hasE "$SO2" "^║ $KD +som +migawka +daily +nadchodzący"; then
+if hasE "$SO2" "^║ $KD +som +migawka +hourly: [^ ]+ +nadchodzący" && hasE "$SO2" "^║ $KD +som +migawka +daily: [^ ]+ +nadchodzący"; then
     ok "zadania: zadania snaponly to 'migawka' z wlasnym szczeblem (hourly, daily) w kolumnie Co"
 else
     bad "zadania: zadania snaponly" "$(printf '%s\n' "$SO2" | grep -E 'som')"
