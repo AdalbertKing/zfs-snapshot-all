@@ -23,7 +23,19 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "browse: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 REL="${1:-}"
-[ -n "$REL" ] || { echo "usage: browse.sh RELATION | browse.sh --any" >&2; exit 2; }
+[ -n "$REL" ] || { echo "usage: browse.sh RELATION [--dataset=DS] [--at=EPOCH] | browse.sh --any" >&2; exit 2; }
+# Wejscie z miejsca, w ktorym operator stoi (F4 Kopie z Przebiegow albo z datasetu,
+# 2026-10-27): --dataset= = kopia, od ktorej zaczac (drzewo pominiete, gdy jest na
+# liscie), --at= = chwila -- kursor na najnowszej migawce nie pozniejszej od niej.
+PRE_DS=""; PRE_AT=""
+for _a in "${@:2}"; do
+    case "$_a" in
+        --dataset=*) PRE_DS="${_a#*=}" ;;
+        --at=*)      PRE_AT="${_a#*=}" ;;
+        *) echo "browse.sh: unknown option '$_a'" >&2; exit 2 ;;
+    esac
+done
+case "$PRE_AT" in *[!0-9]*) PRE_AT="" ;; esac
 CONFDIR="${ZFS_CONF_DIR:-/etc/zfs-snapshot-all}"
 MC="${BROWSE_MC:-mc}"
 BROOT="${BROWSE_ROOT:-/run/zfs-browse}"
@@ -360,6 +372,11 @@ browse_and_exit() {
 }
 
 step=1
+# Wskazany dataset (--dataset=, z F4 Kopie) -- drzewo pominiete, gdy jest na liscie.
+if [ -n "$PRE_DS" ]; then
+    TYP="$(awk -F'\t' -v d="$PRE_DS" '$1 == d { print $2; exit }' "$TMPD/cand.tsv")"
+    if [ -n "$TYP" ]; then DS="$PRE_DS"; step=2; fi
+fi
 while :; do
     case $step in
     1)  # U68 (właściciel 2026-10-21: "zginęło okno z rozwijającymi się gałęziami; to musi być
@@ -381,7 +398,9 @@ for n in names:                       # gałęzie nad kandydatami: do nawigacji,
     parts = n.split("/")
     for i in range(1, len(parts)):
         allnames.add("/".join(parts[:i]))
-spec = {"title": sys.argv[3], "single": True, "selectable": names,
+# U83 (pve9 2026-10-27: piec rozwiniec pustych galezi do jedynego datasetu relacji):
+# galezie nad kandydatami sa otwarte od razu.
+spec = {"title": sys.argv[3], "single": True, "selectable": names, "expand_to": names[:200],
         "legend": _(u" Kopia zostanie zamontowana TYLKO DO ODCZYTU.  · = gałąź (bez migawek), → rozwija"),
         "roots": [sys.argv[4]] if sys.argv[4] else [],
         "datasets": [{"name": n, "type": types.get(n, "filesystem"), "used": None} for n in sorted(allnames)]}
@@ -400,15 +419,21 @@ PYEOF
                     while (b >= 1024 && i < 6) { b /= 1024; i++ }
                     return (i == 1 ? sprintf("%d%s", b, u[i]) : sprintf("%.1f%s", b, u[i])) }
                 { n = $1; sub(/^[^@]*@/, "", n); print $2 "\t" n "\t" h($3) "\t" h($4) }' | tac | head -n 50 >"$TMPD/points.tsv"
-        menu=(); i=0
+        menu=(); i=0; dflt=""
         while IFS=$'\t' read -r cr nm su sw; do
             [ -n "$cr" ] || continue
             # Rozmiary przed nazwą: przy oknie 100 kolumn ucina się najwyżej koniec nazwy.
+            # U74 (właściciel 2026-10-27, "okno się rozjeżdża"): rozmiary o stałej szerokości,
+            # żeby nazwy migawek stały w jednej kolumnie.
+            su="$(printf '%6s' "$su")"; sw="$(printf '%6s' "$sw")"
             lbl="$(date -d "@$cr" '+%Y-%m-%d %H:%M')  $(Tv 'zajmuje $su, zmian $sw' '$su' "$su" '$sw' "$sw")  $nm$([ "$i" -eq 0 ] && printf '  %s' "$(T '(najnowsza)')")"
-            menu+=("p$i" "$(clip_label "$lbl" $((W - 12)))"); i=$((i + 1))
+            menu+=("p$i" "$(clip_label "$lbl" $((W - 12)))")
+            [ -z "$dflt" ] && [ -n "$PRE_AT" ] && [ "$cr" -le "$PRE_AT" ] && dflt="p$i"
+            i=$((i + 1))
         done <"$TMPD/points.tsv"
+        PRE_AT=""
         geom
-        wt --title "$(Tv '$TITLE: z kiedy?' '$TITLE' "$TITLE")" --menu "$(Tv '$DS -- migawka do przejrzenia (czas hosta, $(date +%Z)).' '$DS' "$DS" '$(date +%Z)' "$(date +%Z)")" "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || { step=1; continue; }
+        wt --title "$(Tv '$TITLE: z kiedy?' '$TITLE' "$TITLE")" ${dflt:+--default-item "$dflt"} --menu "$(Tv '$DS -- migawka do przejrzenia (czas hosta, $(date +%Z)).' '$DS' "$DS" '$(date +%Z)' "$(date +%Z)")" "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || { step=1; continue; }
         k="${WT_OUT#p}"
         SNAP="$(sed -n "$((k + 1))p" "$TMPD/points.tsv" | cut -f2)"
         if [ "$TYP" = volume ]; then step=3; else step=4; fi ;;

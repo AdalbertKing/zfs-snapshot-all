@@ -130,7 +130,9 @@ class Tree(object):
         self.roots = sorted(dict.fromkeys(self.init["roots"]), key=self.tkey)
         self.excl = dict((r, list(dict.fromkeys(self.init["excl"].get(r) or []))) for r in self.roots)
         self.expanded = set(n for n in self.order if self.nodes[n]["depth"] == 0)
-        for n in self.roots + [e for r in self.roots for e in self.excl[r]]:
+        # expand_to (U83): galezie nad tymi nazwami otwarte od razu -- przy wyborze jednej
+        # kopii nie trzeba rozwijac pieciu pustych poziomow do jedynego datasetu relacji.
+        for n in self.roots + [e for r in self.roots for e in self.excl[r]] + list(spec.get("expand_to") or []):
             parts = n.split("/")
             for i in range(1, len(parts)):
                 self.expanded.add("/".join(parts[:i]))

@@ -133,16 +133,15 @@ commands, so everything it does can be done on the command line. The GUI is in P
 | Key | Window or action |
 |---|---|
 | F1 | Pomoc — Help |
-| F2 | Zadania — Jobs |
+| F2 | Przebiegi — Runs (past and upcoming) |
 | F3 | Relacje — Relations (Ins = new, Del = delete, Enter = open, `e` = edit inside a relation window) |
-| F4 | Historia — History |
+| F4 | Kopie — Copies (Enter browses, F9 restores) |
 | F5 | Szablony — Templates |
 | F6 | Replika — Replicas |
 | F7 | Uruchom teraz — Run now |
-| F8 | Sortuj / Pauza — Sort, or pause/resume on a relation |
-| F9 | Plik — File (export/import) |
+| F8 | Wykonane / Pauza — Show/hide past runs (F2), or pause/resume a relation (F3) |
+| F9 | Grupuj / Plik / Przywróć — Group by relation (F2), File export/import (F3), Restore (F4) |
 | F10 | Ustawienia — Host settings (`settings.ini`, see [Alerting](#alerting)) |
-| F11 | Odzysk — Restore |
 | F12 | Wyjście — Exit |
 
 ## Core concepts

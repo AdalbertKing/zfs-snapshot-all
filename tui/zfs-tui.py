@@ -189,8 +189,11 @@ ARROWS_ASCII = {"local": "-> tutaj", "push": "-> {peer}", "pull": "<- {peer}",
 # sam werdykt "Kopie" i wlasciciel nie widzial roznicy. Swiezosc zostaje na
 # F3/F2; to, co F5 pokazywal WIECEJ (harmonogram straznika, progi, straznik bez
 # zadania), przenioslo sie do panelu F2 (rel_detail_pairs, build_jobs).
-SCREENS = [("zadania", "F2", u"Przebiegi"), ("relacje", "F3", "Relacje"), ("transfery", "F4", "Historia"),
-           ("szablony", "F5", "Szablony"), ("nosniki", "F6", u"Replika"), ("odzysk", "F11", u"Odzysk")]
+# KOPIE (U82, wlasciciel 2026-10-27: "Upraszczamy"): F4 to jedno okno kopii -- przegladanie
+# (Enter) i przywracanie (F9) z tej samej listy zrodel; F4 Historia weszla w F2 Przebiegi,
+# F11 Odzysk w F4. F11 jest wolne.
+SCREENS = [("zadania", "F2", u"Przebiegi"), ("relacje", "F3", "Relacje"), ("odzysk", "F4", u"Kopie"),
+           ("szablony", "F5", "Szablony"), ("nosniki", "F6", u"Replika")]
 
 
 def home_dir():
@@ -2791,11 +2794,9 @@ def screen_actions(active, hide_gone=False, paused=False, show_done=True, groupe
         # Pauza przeszla na F8, Eksport i Import dziela F9 (okienko wyboru).
         return [("F7", u"Uruchom teraz", u"Uruchom"), ("F8", u"Włącz" if paused == "disabled" else (u"Wznów" if paused else u"Pauza")),
                 ("F9", u"Eksport/Import", u"Plik")]
-    if active == "transfery":
-        return [("F7", u"Pokaż usunięte" if hide_gone else u"Ukryj usunięte", u"Usunięte")]
     if active == "odzysk":
-        # CHUDY ODZYSK (właściciel 2026-10-18): pliki z kopii -- migawka RO + mc.
-        return [("F7", u"Przeglądaj kopię", u"Przeglądaj")]
+        # KOPIE (U82): Enter przeglada (migawka RO + mc), F9 przywraca -- ten sam wybor zrodla.
+        return [("F9", u"Przywróć", u"Przywróć")]
     if active == "nosniki":
         # Krótkie (3. pole) tylko, gdy pasek się nie mieści: przy 80 kolumnach F9 wypychał F10.
         # "Przywróć z dysku" przeszedł na F11 Odzysk (właściciel 2026-10-18).
@@ -2826,9 +2827,9 @@ def key_bar_parts(active, width, actions=()):
     # Listwa to dolny wiersz ekranu, a curses nie pisze w jego ostatnia kolumne (prawy dolny
     # rog) -- pasek musi sie zmiescic w width - 1 (kampania 3: F4 ucinal "Ctrl-R Odświe").
     room = width - 1
-    tight = {"F2": u"Przeb", "F4": u"Hist", "F5": u"Szabl", "F10": u"Ust", "F12": u"Wyjdź", "F6": u"Repl", "F3": u"Rel"}
+    tight = {"F2": u"Przeb", "F4": u"Kopie", "F5": u"Szabl", "F10": u"Ust", "F12": u"Wyjdź", "F6": u"Repl", "F3": u"Rel"}
     if LANG_CAT:
-        tight = {"F2": u"Runs", "F4": u"Hist", "F5": u"Tmpl", "F10": u"Set", "F12": u"Quit", "F6": u"Repl", "F3": u"Rel"}
+        tight = {"F2": u"Runs", "F4": u"Copy", "F5": u"Tmpl", "F10": u"Set", "F12": u"Quit", "F6": u"Repl", "F3": u"Rel"}
     items = [(fk, _(label), key) for fk, label, key in items]
     short = dict((k, _(v)) for k, v in short.items())
     for compact, sep, brief in ((False, u" ", False), (True, u" ", False), (True, u"", False), (True, u"", True),
@@ -3739,104 +3740,6 @@ def render_window(base, title, lines, scroll, width, height, ch, footer=u"Esc za
     return scr, scroll
 
 
-# --- Transfery -------------------------------------------------------------
-def relation_exists(data, label):
-    """NOTE 8: relacja 'ktorej juz nie ma' = bez etykiety, albo etykieta, ktorej
-    status --json juz nie wymienia (usunieta albo nigdy nie byla rekordem)."""
-    if not label:
-        return False
-    for r in (data.status or {}).get("relations", []):
-        if r.get("name") == label and r.get("state") != "removed":
-            return True
-    return False
-
-
-def build_transfers(data, now, hide_gone=False):
-    jobs = list((data.progress or {}).get("jobs", []))
-    if hide_gone:
-        jobs = [j for j in jobs if relation_exists(data, j.get("label"))]
-    running = [j for j in jobs if j.get("state") == "running"]
-    done = [j for j in jobs if j.get("state") != "running"]
-    running.sort(key=lambda j: int(j.get("started_epoch") or 0), reverse=True)
-    done.sort(key=lambda j: int(j.get("finished_epoch") or j.get("updated_epoch") or 0), reverse=True)
-    return running, done
-
-
-def transfer_detail_pairs(t, now, ch, data=None):
-    """Panel transferu (F4, przebiegi F2/F6), U21: bez Relacji, Trybu i Stanu (sa w
-    liscie); "Poprzednia" zamiast "od @" (wlasciciel 2026-10-19)."""
-    wd, note = transfer_word(t, now)
-    snap = t.get("dataset", "?")
-    pairs = [(_(u"Migawka"), snap.split("@", 1)[-1] if "@" in snap else snap),
-             (_(u"Poprzednia"), t["base"].split("@", 1)[-1] if t.get("base") else _(u"brak -- pełna kopia"))]
-    src = ds_of(snap)
-    tgt = t.get("target", "?")
-    peer = t.get("peer") or ""
-    if peer == "local":
-        peer = ""
-    if t.get("direction") == "pull" and peer:
-        src = u"%s:%s" % (peer, src)
-    elif t.get("direction") == "push" and peer:
-        tgt = u"%s:%s" % (peer, tgt)
-    pairs += [(_(u"Źródło"), src), (_(u"Cel"), tgt)]
-    tot, dn, wire = int(t.get("total_bytes") or 0), int(t.get("done_bytes") or 0), int(t.get("wire_bytes") or -1)
-    if t.get("state") == "running":
-        rate, eta = int(t.get("rate_bps") or 0), int(t.get("eta_seconds") or -1)
-        prog = u"%s z %s" % (human_bytes(dn), human_bytes(tot) if tot > 0 else _(u"nieznanej wielkości"))
-        if tot > 0:
-            prog += u" (%d%%)" % (dn * 100 // tot)
-        prog += _(u", %s/s, zostało %s") % (human_bytes(rate), fmt_dur(eta) if eta >= 0 else "?")
-        pairs.append((_(u"Postęp"), prog))
-    else:
-        pairs.append((_(u"Dane"), human_bytes(tot) if tot > 0 else (human_bytes(dn) if dn > 0 else _(u"0 B -- nic się nie zmieniło"))))
-    if wire >= 0:
-        pairs.append((_(u"Na łączu"), human_bytes(wire)))
-    st, fin, upd = int(t.get("started_epoch") or 0), int(t.get("finished_epoch") or 0), int(t.get("updated_epoch") or 0)
-    pairs.append((_(u"Start / koniec"), u"%s / %s" % (fmt_full(st), fmt_full(fin) if fin else (u"trwa, aktualizacja %s" % fmt_ago(upd, now)))))
-    if note:
-        pairs.append((_(u"Uwaga"), note))
-    pairs.append((_(u"Proces"), u"pid %s" % t.get("pid", "?")))
-    return pairs
-
-
-def transfer_rows(data, now, hide_gone=False):
-    """F4: JEDNA lista, to co biegnie na gorze, potem najnowsze (U21)."""
-    r, d = build_transfers(data, now, hide_gone)
-    return r + d
-
-
-def render_transfery(data, cursor, width, height, now, ch, message="", hide_gone=False):
-    if data.failed("progress"):
-        scr = Screen()
-        scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, _(u"Historia"), source_error_body(ch, "progress", data, "progress"), width)
-        scr.bars.add(0)
-        while len(scr.lines) < height - 1:
-            scr.lines.append(fit("", width))
-        scr.lines = scr.lines[:height - 1]
-        push_key_bar(scr, "transfery", width, screen_actions("transfery", hide_gone))
-        return scr
-    allrows = transfer_rows(data, now, hide_gone)
-    running = [t for t in allrows if t.get("state") == "running"]
-    cells = []
-    for t in allrows:
-        it = transfer_item(t, data, now, ch)
-        mode = {"incremental": _(u"przyrost."), "full": _(u"pełny")}.get(t.get("mode", ""), t.get("mode", "?"))
-        when, wd, ds, dur, dane = it["cells"]
-        cells.append([when, transfer_label(t, data), ds, mode, wd, dur, dane])
-    host = (data.jobs or {}).get("host") or ""
-    title = (_(u"Historia transferów%s (%d)") % ((_(u" na ") + host) if host else "", len(allrows))) \
-        + (_(u" -- bez usuniętych relacji") if hide_gone else "") + _(u"   biegnie teraz: %d") % len(running)
-    det_title, det = u"", []
-    if allrows and 0 <= cursor < len(allrows):
-        t = allrows[cursor]
-        det_title = u"%s -- %s" % (transfer_label(t, data), ds_of(t.get("dataset")))
-        det = transfer_detail_pairs(t, now, ch, data)
-    return render_tabbed(data, width, height, now, ch, "transfery", title,
-                         [_(u"Kiedy"), _(u"Relacja"), _(u"Dataset"), _(u"Tryb"), _(u"Wynik"), _(u"Czas"), _(u"Dane")], cells, cursor,
-                         _(u"Enter pełne okno transferu") if allrows else "", det_title, det, None, "list", 0,
-                         screen_actions("transfery", hide_gone), [_(u"brak zapisów w historii transferów")], prio=[0, 1, 4, 2, 6, 5, 3], flex=2)
-
-
 # --- Monitor ---------------------------------------------------------------
 def monitor_rows(data):
     mons = list((data.monitors or {}).get("monitors", []))
@@ -4197,7 +4100,8 @@ def odzysk_detail(row, copies=()):
                 (_(u"Kiedy"), _(u"także bez relacji i bez replik, np. czysty serwer po ransomware")),
                 group(None, _(u"Zgody")),
                 (_(u"Na bok"), _(u"tak -- do nowego datasetu, istniejące dane nietknięte")),
-                (_(u"Przeglądanie"), _(u"tak: migawka tylko do odczytu, mc"))]
+                (_(u"Przeglądanie"), _(u"Enter: migawka tylko do odczytu, mc")),
+                (_(u"Przywracanie"), _(u"F9: okna Przywróć -- plan i WYKONAJ"))]
     path = compact_paths(list(copies)) if copies else "?"
     return [group(None, _(u"Kopie")),
             (_(u"Ścieżka"), path),
@@ -4205,11 +4109,12 @@ def odzysk_detail(row, copies=()):
             group(None, _(u"Zgody")),
             (_(u"Na źródło"), _(u"sprawdza to okno Przywróć -- źródło musi wydać zgodę na dostęp (deploy.sh --allow-restore)")),
             (_(u"Na bok"), _(u"tak -- do nowego datasetu obok, oryginał nietknięty")),
-            (_(u"Przeglądanie"), _(u"tak: migawka tylko do odczytu, mc, potem odmontowanie")),
+            (_(u"Przeglądanie"), _(u"Enter: migawka tylko do odczytu, mc, potem odmontowanie")),
+            (_(u"Przywracanie"), _(u"F9: okna Przywróć -- dataset, cel, migawka, plan, WYKONAJ")),
             (_(u"Uwaga"), _(u"odzysk może nadpisać albo dołożyć dane -- nic się nie zmieni, dopóki nie wybierzesz WYKONAJ"))]
 
 
-def render_odzysk(data, rows, cursor, width, height, now, ch, message="", focus="list", pair_cursor=0, ti=0):
+def render_odzysk(data, rows, cursor, width, height, now, ch, message="", focus="list", pair_cursor=0, ti=0, ctx=None):
     items = odzysk_rows(rows, data, now)
     cells = [[x["name"], x["typ"], fmt_when_short(x["newest"], now) if x.get("newest") else "-"] for x in items]
     det_title, det, child = u"", [], None
@@ -4218,10 +4123,14 @@ def render_odzysk(data, rows, cursor, width, height, now, ch, message="", focus=
         det_title = _(u"%s -- odzysk") % x["name"]
         child = odz_children("ds", x, rows, data, now, ch)
         det = odzysk_detail(x, [it.get("dataset") for it in child.get("items") or [] if it.get("dataset")])
+        if ctx and ctx.get("rel") == x.get("name") and (ctx.get("dataset") or ctx.get("at")):
+            det = [group(ch, _(u"Wskazane")),
+                   (_(u"Dataset"), ctx.get("dataset") or _(u"(wybierzesz w oknie)")),
+                   (_(u"Chwila"), time.strftime("%Y-%m-%d %H:%M", time.localtime(ctx["at"])) if ctx.get("at") else _(u"najnowsza migawka"))] + det
         child.update({"name": x["name"], "tabs": TABS["odzysk"], "ti": 0})
     host = (data.jobs or {}).get("host") or ""
-    return render_tabbed(data, width, height, now, ch, "odzysk", (_(u"Odzysk danych na %s") % host).strip(),
-                         [_(u"Skąd"), _(u"Rodzaj"), _(u"Najnowsza kopia")], cells, cursor, _(u"Enter odzyskaj   Tab do datasetów"),
+    return render_tabbed(data, width, height, now, ch, "odzysk", (_(u"Kopie na %s") % host).strip(),
+                         [_(u"Skąd"), _(u"Rodzaj"), _(u"Najnowsza kopia")], cells, cursor, _(u"Enter przeglądaj   F9 przywróć   Tab do datasetów"),
                          det_title, det, child, focus, pair_cursor, screen_actions("odzysk"))
 
 
@@ -4229,16 +4138,12 @@ def render_odzysk(data, rows, cursor, width, height, now, ch, message="", focus=
 HELP = [
     u"To okna do obsługi zfs-snapshot-all. Każda akcja uruchamia zwykłe polecenie zfs-backup.sh, nic więcej.",
     "",
-    u"  F2  Zadania    co chodzi w cronie: relacja, zadanie (pobranie, wysyłka,",
-    u"                 lokalny/zdalny prune), prefiks migawek, następny przebieg, kopie.",
-    u"                 Panel obok: kierunek, źródło i cel, kiedy, ile trzyma, czasy",
-    u"                 ostatni/średni/maks, wywołania, dane i strażnik (progi), tryb",
-    u"                 w mailu; na dole przebiegi zadania z historii transferów.",
-    u"                 Linia monitora, która nie pasuje do żadnego zadania, ma na",
-    u"                 liście osobny wiersz. F7 uruchamia zaznaczone",
-    u"                 zadanie teraz, bez pytania: dokładnie jego linię z crona,",
-    u"                 jako konto z crontaba; wynik w oknie. F8 przełącza sortowanie",
-    u"                 (relacje/oś czasu/ostatni bieg) -- nazwa widoku w tytule.",
+    u"  F2  Przebiegi  biegi zadań na jednej osi czasu: nad kreską „teraz” te z",
+    u"                 ostatnich 12 h (wynik, czas, powód błędu), pod nią nadchodzące.",
+    u"                 Panel: ten bieg i ustawienia zadania (kierunek, źródło i cel,",
+    u"                 kiedy, ile trzyma, czasy, strażnik); na dole źródło → cel.",
+    u"                 F7 uruchamia zadanie z wiersza nadchodzącego, F8 chowa wykonane,",
+    u"                 F9 grupuje po relacji. F4 tu = Kopie od razu na tym biegu.",
     u"  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
     u"                 = Zmień relację: adres hosta, datasety, szablon, retencja",
     u"                 ile trzyma źródło, program kopiujący; 's' zapisuje ustawienia",
@@ -4258,18 +4163,15 @@ HELP = [
     u"                 usunięcie całej relacji (źródło, nazwa, opcjonalnie kopie).",
     u"                 Pozostałe akcje: NAJPIERW komenda bash, potem 't', potem",
     u"                 wyjście na żywo. Esc zamyka okno, a proces biegnie dalej.",
-    u"  F4  Historia   transfery: co leci teraz (na górze) i co się skończyło;",
-    u"                 F7 chowa/pokazuje transfery relacji, których już nie ma",
+    u"  F4  Kopie      kopie relacji i dysk z repliką: Enter przegląda (migawka",
+    u"                 tylko do odczytu, mc, potem odmontowanie; dysk VM: partycja),",
+    u"                 F9 przywraca (okna Przywróć -- dataset, cel, migawka, plan,",
+    u"                 WYKONAJ). Z Przebiegów albo z datasetu relacji F4 otwiera od",
+    u"                 razu tę kopię i tę chwilę.",
     u"  F5  Szablony   szablony retencji: Ins nowy na podstawie zaznaczonego,",
     u"                 Enter szczegóły ('e' zmienia własny), Del usuwa własny",
     u"  F6  Replika    repliki i 4 stany nośnika; Ins/Del/F7 uruchom/F8 klucz,",
     u"                 Enter+'e' zmiana",
-    u"  F11 Odzysk     odzyskanie danych: z kopii relacji albo „z dysku”",
-    u"                 (dysk repliki, także bez replik, np. po ransomware); Enter",
-    u"                 otwiera okna Przywróć -- dataset, cel, migawka, plan, WYKONAJ.",
-    u"                 Tylko tutaj.",
-    u"                 F7 przeglądaj kopię: migawka zamontowana tylko do odczytu, mc",
-    u"                 do skopiowania plików; po wyjściu odmontowuje (datasety plikowe).",
     u"  F10 Ustawienia ustawienia hosta (/etc/zfs-snapshot-all/settings.ini): alerty",
     u"                 (adres, tryb, godzina maila, mail 'wszystko OK'), próg pojemności,",
     u"                 strażnik, szablon nowej relacji, aktualizacja, język GUI; wysłanie",
@@ -4283,7 +4185,7 @@ HELP = [
     u"  PANELE (każdy ekran): lista = wybór i stan; panel obok = fakty o",
     u"                 zaznaczonym wierszu, których nie widać na liście; na dole zakładki",
     u"                 z tym, co wiersz zawiera (F3: Datasety, Zadania; F5: Szczeble,",
-    u"                 Używają; F6: Datasety, Przebiegi; F11: Datasety). Tab wchodzi",
+    u"                 Używają; F6: Datasety, Przebiegi; F4: Datasety). Tab wchodzi",
     u"                 na dół, strzałki w lewo/prawo zmieniają zakładkę, panel obok",
     u"                 pokazuje zaznaczony element, Enter jego pełne okno, Esc",
     u"                 wraca do listy, kolejny Tab do linii poleceń. Datasety relacji",
@@ -4299,7 +4201,7 @@ HELP = [
     u"                 wykonaniem. Litery i cyfry NIE są skrótami klawiszowymi --",
     u"                 wszystko, co wpiszesz, trafia do linii.",
     "",
-    u"  F1-F6, F11        główne okna (F11 Odzysk danych); F12 wyjście",
+    u"  F1-F6             główne okna (F4 Kopie: przeglądanie i odzysk); F12 wyjście",
     u"  F7 F8 F9          akcje BIEŻĄCEGO okna -- podpisane TYLKO na pasku na dole",
     u"                    (wąski terminal: zapis skrócony, cyfra = klawisz F)",
     "",
@@ -4340,14 +4242,14 @@ class UI(object):
         self.now_fixed = now
         self.exec_log = exec_log   # testy: zamiast uruchamiac, zapisz komende tutaj
         self.screen = "zadania"
-        self.cursor = {"zadania": 0, "relacje": 0, "transfery": 0, "monitor": 0, "szablony": 0, "nosniki": 0, "odzysk": 0}
+        self.cursor = {"zadania": 0, "relacje": 0, "monitor": 0, "szablony": 0, "nosniki": 0, "odzysk": 0}
         self.window = None        # ("relacja", row) | ("pomoc", None) | ("prompt"|"confirm"|"output", dict)
         self.scroll = 0
         self.message = ""
         self.focus = "list"       # "list" | "pairs" (dolny panel, U21) | "cmd"
         self.pair_cursor = 0
         self.ctab = {}            # ekran -> numer zakladki dolnego panelu (TABS)
-        self.hide_transfers_gone = False   # NOTE 8: 'u' na F4 -- domyslnie POKAZANE (dziennik transferow)
+        self.kopie_ctx = None   # F4 Kopie otwarte z Przebiegow/Relacji: {"rel", "dataset", "at"}
         self.zad_sort = 0   # kolejnosc zadan (F3 zakladka Zadania): relacje, w srodku wg nastepnego
         self.prz_done, self.prz_group = True, False   # F2 Przebiegi: F8 wykonane, F9 grupy
         # LINIA POLECEN (wlasciciel 2026-09-11: "chcemy moc w kazdej chwili
@@ -4685,9 +4587,6 @@ class UI(object):
             return len(self.runrows)
         if screen == "relacje":
             return len(self.rows)
-        if screen == "transfery":
-            r, d = build_transfers(self.data, self.now(), self.hide_transfers_gone)
-            return len(r) + len(d)
         if screen == "monitor":
             return len(monitor_rows(self.data))
         if screen == "szablony":
@@ -4898,11 +4797,58 @@ class UI(object):
         return self.run_dialog([self.zb(), "restore", row["name"], "--ask"])
 
     def browse_action(self, row):
-        """F7 NA F11 -- "Przeglądaj kopię" (chudy odzysk): okna tui/browse.sh przez
-        `browse --ask`; migawka zamontowana tylko do odczytu, mc, odmontowanie."""
+        """Enter NA F4 KOPIE -- "Przeglądaj kopię": okna tui/browse.sh przez `browse --ask`;
+        migawka zamontowana tylko do odczytu, mc, odmontowanie. Otwarte z Przebiegow albo
+        z datasetu relacji -- od razu ta kopia i ta chwila (--dataset=, --at=)."""
         if row.get("kind") == "disk":
             return self.run_dialog([self.zb(), "browse", "--any", "--ask"])
-        return self.run_dialog([self.zb(), "browse", row["name"], "--ask"])
+        argv = [self.zb(), "browse", row["name"], "--ask"]
+        ctx = self.kopie_ctx or {}
+        if ctx.get("rel") == row["name"]:
+            if ctx.get("dataset"):
+                argv.append("--dataset=%s" % ctx["dataset"])
+            if ctx.get("at"):
+                argv.append("--at=%d" % int(ctx["at"]))
+        return self.run_dialog(argv)
+
+    def kopie_from_here(self):
+        """F4 z Przebiegow albo z Relacji: Kopie z kursorem na tej relacji i z zapamietanym
+        datasetem i chwila (koniec biegu) -- Enter otwiera od razu jego migawki (U82)."""
+        self.kopie_ctx = None
+        rel, ds, at = None, None, None
+        if self.screen == "zadania":
+            c = self.cursor["zadania"]
+            r = self.runrows[c] if 0 <= c < len(self.runrows) else None
+            if r and r.get("kind") == "run" and not r.get("static") and r["item"].get("kind") == "job":
+                rel = r["name"]
+                for j in run_jobs(r):
+                    dst = (job_src_dst(j)[1] or "")
+                    if dst and dst not in ("-", "?") and ":" not in dst:
+                        ds = dst
+                        break
+                if r.get("past"):
+                    at = r.get("end") or r.get("at")
+        else:
+            c = self.cursor["relacje"]
+            if 0 <= c < len(self.rows) and self.rows[c].get("kind") == "relation":
+                rel = self.rows[c]["name"]
+                if self.focus == "pairs":
+                    info = self.child_info() or {}
+                    items = info.get("items") or []
+                    if items:
+                        it = items[min(self.pair_cursor, len(items) - 1)]
+                        dst = ((it.get("pair") or {}).get("dst") or "")
+                        if dst and ":" not in dst:
+                            ds = dst
+        if not rel:
+            return
+        rows = odzysk_rows(self.rows, self.data, self.now())
+        for i, x in enumerate(rows):
+            if x.get("kind") == "relation" and x["name"] == rel:
+                self.cursor["odzysk"] = i
+                self.kopie_ctx = {"rel": rel, "dataset": ds, "at": at}
+                return
+        self.message = _(u"relacja %s nie ma kopii na tym hoście -- nie ma czego przeglądać") % rel
 
     def replica_action(self, k):
         """Klawisz akcji na F6 (repliki): Ins nowa (okna whiptail), Del usun,
@@ -4913,7 +4859,7 @@ class UI(object):
             return self.run_dialog([self.zb(), "add-replica", "--ask"])
         reps = (self.data.replicas or {}).get("replicas", [])
         if k == "F9":
-            self.message = _(u"przywracanie z dysku jest teraz na F11 Odzysk")
+            self.message = _(u"przywracanie z dysku jest teraz na F4 Kopie (F9)")
             return
         c = self.cursor["nosniki"]
         if not reps or not (0 <= c < len(reps)):
@@ -5561,9 +5507,10 @@ class UI(object):
                 obj["side"] = 1 - obj.get("side", 0)
                 self.scroll = 0
             elif k == "enter" and obj.get("dst"):
-                # Przeglądaj kopię (montaż tylko do odczytu + mc) -- to samo okno co F11.
+                # Przeglądaj kopię (montaż tylko do odczytu + mc) -- to samo okno co F4 Kopie,
+                # od razu na tej kopii.
                 self.window, self.scroll = None, 0
-                return self.run_dialog([self.zb(), "browse", obj["dst"], "--ask"]) or "stay"
+                return self.run_dialog([self.zb(), "browse", obj["name"], "--ask", "--dataset=%s" % obj["dst"]]) or "stay"
             elif k in ("down", "j"):
                 self.scroll += 1
             elif k in ("up", "k"):
@@ -5652,10 +5599,6 @@ class UI(object):
         # i 's' -- martwe w prawdziwym GUI, bo petla curses oddaje kazdy
         # drukowalny znak linii polecen. Dzialaja takze przy tekscie w linii
         # (klawisz F nie jest tekstem, wiec niczego nie zabiera).
-        if k == "F7" and self.screen == "transfery":
-            self.hide_transfers_gone = not self.hide_transfers_gone
-            self.cursor["transfery"] = min(self.cursor["transfery"], max(0, self.count("transfery") - 1))
-            return "stay"
         # Kursor zostaje na TYM SAMYM WIERSZU (ten sam obiekt), nie na tym samym
         # numerze -- inaczej przelaczenie widoku przenosiloby operatora na cudze zadanie.
         if k == "F7" and self.screen == "zadania":
@@ -5771,6 +5714,8 @@ class UI(object):
                 return "stay"
         # F2-F6 ZAWSZE przelaczaja okno (R4-1: F4 na F3 bylo pauza i przechwytywalo
         # Transfery). Pauza jest teraz na F8 (F7 = Uruchom teraz, jednolicie, 2026-10-17).
+        if k == "F4" and self.screen in ("zadania", "relacje"):
+            self.kopie_from_here()
         for key, fk, _label in SCREENS:
             if k == fk:
                 self.screen, self.focus, self.pair_cursor = key, "list", 0
@@ -5801,12 +5746,12 @@ class UI(object):
             return self.action(k) or "stay"
         elif k in ("F7", "F8", "F9", "del", "ins") and self.screen == "nosniki":
             return self.replica_action(k) or "stay"
-        elif k == "F7" and n and self.screen == "odzysk":
-            self.cursor["odzysk"] = c
-            return self.browse_action(odzysk_rows(self.rows)[c]) or "stay"
-        elif k == "enter" and n and self.screen == "odzysk":
+        elif k == "F9" and n and self.screen == "odzysk":
             self.cursor["odzysk"] = c
             return self.restore_action(odzysk_rows(self.rows)[c]) or "stay"
+        elif k == "enter" and n and self.screen == "odzysk":
+            self.cursor["odzysk"] = c
+            return self.browse_action(odzysk_rows(self.rows)[c]) or "stay"
         elif k == "enter" and n:
             if self.screen == "relacje":
                 self.window, self.scroll = ("relacja", self.rows[c]), 0
@@ -5893,10 +5838,6 @@ class UI(object):
     def panel_lines(self):
         now, ch = self.now(), self.ch
         c = self.cursor[self.screen]
-        if self.screen == "transfery":
-            r, d = build_transfers(self.data, now, self.hide_transfers_gone)
-            t = (r + d)[c]
-            return {"kind": "panel", "name": "transfer %s" % (t.get("label") or ""), "pairs": transfer_detail_pairs(t, now, ch)}
         if self.screen == "monitor":
             m = monitor_rows(self.data)[c]
             return {"kind": "panel", "name": "monitor %s" % (m.get("label") or ""), "pairs": monitor_detail_pairs(m, ch, full=True)}
@@ -5929,16 +5870,13 @@ def _ui_render(self, width, height):
         base = render_relacje(self.data, self.rows, self.cursor["relacje"], width, sh, now, self.ch, self.message,
                               focus=self.focus, pair_cursor=self.pair_cursor, jobrows=self.jobrows,
                               ti=self.ctab.get("relacje", 0))
-    elif self.screen == "transfery":
-        base = render_transfery(self.data, self.cursor["transfery"], width, sh, now, self.ch, self.message,
-                                hide_gone=self.hide_transfers_gone)
     elif self.screen == "monitor":
         base = render_monitor(self.data, self.cursor["monitor"], width, sh, now, self.ch, self.message)
     elif self.screen == "szablony":
         base = render_szablony(self.data, self.cursor["szablony"], width, sh, now, self.ch, self.message, rows=self.rows,
                                focus=self.focus, pair_cursor=self.pair_cursor, ti=self.ctab.get("szablony", 0))
     elif self.screen == "odzysk":
-        base = render_odzysk(self.data, self.rows, self.cursor["odzysk"], width, sh, now, self.ch, self.message,
+        base = render_odzysk(self.data, self.rows, self.cursor["odzysk"], width, sh, now, self.ch, self.message, ctx=self.kopie_ctx,
                              focus=self.focus, pair_cursor=self.pair_cursor)
     else:
         base = render_nosniki(self.data, self.cursor["nosniki"], width, sh, now, self.ch, self.message,
@@ -6046,6 +5984,8 @@ def deaccent(text):
 _DEACCENT = {ord(a): b for a, b in zip(u"ąćęłńóśźżĄĆĘŁŃÓŚŹŻ", u"acelnoszzACELNOSZZ")}
 _DEACCENT[ord(u"→")] = ">"
 _DEACCENT[ord(u"←")] = "<"
+for _q in u"\u201e\u201d\u201c":   # cudzyslowy „ ” “ -> "
+    _DEACCENT[ord(_q)] = '"'
 
 
 def _ui_render_final(self, width, height):
@@ -6275,13 +6215,11 @@ def curses_loop(ui):
             elif ui.bg_pending():
                 stdscr.timeout(300)          # dane z tła: przerysuj, gdy dojdą
             else:
-                stdscr.timeout(2000 if ui.screen == "transfery" and not ui.window else -1)
+                stdscr.timeout(-1)
             k, seqname, is_char = read_key()
             if k == -1:
                 if ui.poll_bg():
                     continue
-                if not ui.window and ui.screen == "transfery":
-                    ui.refresh("progress")
                 continue
             ui.poll_bg()
             if k == curses.KEY_RESIZE:

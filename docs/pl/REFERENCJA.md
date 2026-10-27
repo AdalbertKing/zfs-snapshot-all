@@ -133,16 +133,15 @@ same komendy, więc wszystko, co robi, da się zrobić z linii poleceń. GUI jes
 | Klawisz | Okno lub akcja |
 |---|---|
 | F1 | Pomoc |
-| F2 | Zadania |
+| F2 | Przebiegi (co biegło i co pobiegnie) |
 | F3 | Relacje (Ins = nowa, Del = usuń, Enter = otwórz, `e` = edytuj w oknie relacji) |
-| F4 | Historia |
+| F4 | Kopie (Enter przegląda, F9 przywraca) |
 | F5 | Szablony |
 | F6 | Replika |
 | F7 | Uruchom teraz |
-| F8 | Sortuj albo pauza/wznów na relacji |
-| F9 | Plik (eksport/import) |
+| F8 | Pokaż/schowaj wykonane (F2) albo pauza/wznów na relacji (F3) |
+| F9 | Grupuj po relacji (F2), Plik -- eksport/import (F3), Przywróć (F4) |
 | F10 | Ustawienia (`settings.ini` hosta, zobacz [Alerty](#alerty)) |
-| F11 | Odzysk |
 | F12 | Wyjście |
 
 ## Podstawowe pojęcia
