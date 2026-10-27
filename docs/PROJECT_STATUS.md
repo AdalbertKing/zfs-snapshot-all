@@ -28,6 +28,13 @@
     <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
   - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
     `update-control` jako „not clean”.
+- **Strona publiczna wydania (2026-10-27, gałąź `claude/release-public-prep-e94930`).** `release/MANIFEST` niesie
+  do `zfsbackup` także `README.pl.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `docs/tutorial/`,
+  `.github/FUNDING.yml` i szablony issue/PR (bez `.github/workflows/`); `test/release` sprawdza ich obecność
+  i to, że każdy względny link w nich prowadzi do pliku wydania. Licencja MIT zostaje (decyzja właściciela).
+  Konto Buy Me a Coffee jeszcze nie istnieje: w `FUNDING.yml` i obu README jest tylko komentarz z miejscem
+  na link. Audyt danych prywatnych i plan podmiany: `docs/project/AUDYT-PUBLIKACJI-2026-10-27.md`, czeka na
+  akceptację; do `zfsbackup` nic z tego nie poszło (publikacja tylko za zgodą).
 - **F4 Kopie: przeglądanie i odzysk w jednym oknie (2026-10-27, `gui/kopie`, U74/U76/U78/U82/U83).** F4 to
   lista źródeł kopii (relacje z kopiami i „z innego dysku”, czyli nośnik repliki): Enter przegląda (migawka tylko
   do odczytu, mc, dysk VM przez partycję), F9 przywraca (okna Przywróć bez zmian). Dawne F4 Historia weszło w F2

@@ -33,3 +33,13 @@ tui/
 !tui/lang/en.extra.json
 docs/pl/
 docs/en/
+docs/tutorial/
+# The public face: the Polish README (release/README.md becomes README.md), community files and
+# the GitHub metadata -- but never the dev repo's CI (.github/workflows/).
+README.pl.md
+CHANGELOG.md
+CONTRIBUTING.md
+SECURITY.md
+.github/FUNDING.yml
+.github/ISSUE_TEMPLATE/
+.github/pull_request_template.md

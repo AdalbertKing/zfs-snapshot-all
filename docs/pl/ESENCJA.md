@@ -21,7 +21,7 @@ Wszystko w bashu, zadania chodzą z crona, a do codziennej pracy jest tekstowe G
 1. Na kolektorze, jako root: pobierz pakiet i przygotuj host.
 
    ```bash
-   git clone https://github.com/AdalbertKing/zfs-snapshot-all.git /root/scripts/zfs-snapshot-all
+   git clone https://github.com/AdalbertKing/zfsbackup.git /root/scripts/zfs-snapshot-all
    cd /root/scripts/zfs-snapshot-all
    ./deploy.sh --backup-user=zfsbackup
    ```

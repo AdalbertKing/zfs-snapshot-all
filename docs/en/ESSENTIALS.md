@@ -22,7 +22,7 @@ server console.
 1. On the collector, as root: fetch the package and prepare the host.
 
    ```bash
-   git clone https://github.com/AdalbertKing/zfs-snapshot-all.git /root/scripts/zfs-snapshot-all
+   git clone https://github.com/AdalbertKing/zfsbackup.git /root/scripts/zfs-snapshot-all
    cd /root/scripts/zfs-snapshot-all
    ./deploy.sh --backup-user=zfsbackup
    ```
