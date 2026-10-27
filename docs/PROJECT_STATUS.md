@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 11408778c356c59d -->
+<!-- status-covers-digest: f2bfe5631b65b5e4 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -28,6 +28,19 @@
     <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
   - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
     `update-control` jako „not clean”.
+- **Uwagi z testu właściciela na pve10 (2026-10-27, `gui/uwagi-1027`, U84-U99).** Przebiegi: kolumna Dane
+  biegu (suma `written` migawek rodziny zadania na celu od poprzedniego biegu tej linii; `job-stats --runs` podaje
+  listę migawek z okna biegów i doby przed nim; porządki i cele zdalne „-”), dół Źródło | Cel | Dane na 5 wierszy z
+  przewijaniem po Tab, Enter na biegu pokazuje tylko jego linię crona (gdy żadna nie niesie etykiety biegu -- cały blok) i jego sekcje configu, głębsze wcięcie w
+  grupach. Kopie: F7 Przeglądaj na pasku. Przeglądanie: host w tytule i w nazwie katalogu montażu (nagłówek mc),
+  drzewo „z innego dysku” zwinięte, kopia szyfrowana pyta o klucz (`zfs load-key` na czas przeglądania,
+  `unload-key` po wyjściu). Okna wracają same (bez „Enter = powrót”; czeka tylko nieudany odzysk, pozostałość po przeglądaniu i test maila w ustawieniach), Ctrl-O pokazuje konsolę pod oknami.
+  Replika: kolumny Replika / Typ / Wykonana / Harmonogram, „migawki” zamiast „zdjęcia”, dni tygodnia słowami.
+  Panele: pusta linia przed grupą. Na żywo pve10: Ctrl-O i powrót, kopia `hdd/enc/docs` -- zły klucz odrzucony,
+  dobry otwiera mc, po wyjściu klucz zdjęty i nic nie zamontowane; Dane `pve9 enc` 32.0K. Suity na pve9: `tui`
+  432/0, `browse` 43/0, `restore` 334/1 i `zfsbackup` 1051/7 -- błędy te same co na main na pve9 (środowisko,
+  `preparesource` sieć).
+
 - **Strona publiczna wydania (2026-10-27, gałąź `claude/release-public-prep-e94930`).** `release/MANIFEST` niesie
   do `zfsbackup` także `README.pl.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `docs/tutorial/`,
   `.github/FUNDING.yml` i szablony issue/PR (bez `.github/workflows/`); `test/release` sprawdza ich obecność

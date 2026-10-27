@@ -256,9 +256,44 @@ undo_or_warn() {   # <tekst przy sukcesie> -> zawsze 0
     fi
     return 0
 }
+# U89 (wlasciciel 2026-10-27, pve10: kopia szyfrowana "can not be mounted: Permission
+# denied"): klucz zaladowany TYLKO na czas przegladania -- po odmontowaniu zdjety.
+KEYLOADED=""
+unload_key() {   # -> 0 zdjety albo nie bylo czego; 1 nie (opis w RESIDUE)
+    [ -n "$KEYLOADED" ] || return 0
+    if zfs unload-key -- "$KEYLOADED" 2>"$TMPD/unload.err"; then
+        KEYLOADED=""; return 0
+    fi
+    RESIDUE="$RESIDUE
+  $(Tv 'klucz wciąż załadowany: $KEY  (ręcznie: zfs unload-key $KEY)' '$KEY' "$KEYLOADED")"
+    return 1
+}
+# Kopia szyfrowana bez zaladowanego klucza: zapytaj o klucz (nigdzie nie zapisywany),
+# zfs load-key na korzeniu szyfrowania. -> 0 mozna montowac; 1 nie (komunikat pokazany)
+need_key() {   # <dataset>
+    local ds="$1" root ks kf
+    root="$(zfs get -H -o value encryptionroot -- "$ds" 2>/dev/null | tr -d '\r')"
+    case "$root" in ''|-) return 0 ;; esac
+    ks="$(zfs get -H -o value keystatus -- "$root" 2>/dev/null | tr -d '\r')"
+    [ "$ks" = unavailable ] || return 0
+    kf="$(zfs get -H -o value keyformat -- "$root" 2>/dev/null | tr -d '\r')"
+    if [ "$kf" = raw ]; then
+        wt --title "$TITLE" --msgbox "$(Tv 'Kopia $DS jest zaszyfrowana kluczem binarnym ($ROOT). Tego klucza nie da się wpisać -- załaduj go ręcznie: zfs load-key -L file:///ścieżka $ROOT' '$DS' "$ds" '$ROOT' "$root")" 10 "$W"
+        return 1
+    fi
+    while :; do
+        wt --title "$(Tv '$TITLE: klucz' '$TITLE' "$TITLE")" --passwordbox "$(Tv 'Kopia $DS jest zaszyfrowana ($ROOT, klucz: $KF).\nPodaj klucz. Nie jest nigdzie zapisywany; po wyjściu zostanie zdjęty.' '$DS' "$ds" '$ROOT' "$root" '$KF' "$kf")" 12 "$W" || return 1
+        if printf '%s' "$WT_OUT" | zfs load-key -L prompt -- "$root" 2>"$TMPD/key.err"; then
+            WT_OUT=""; KEYLOADED="$root"; return 0
+        fi
+        WT_OUT=""
+        wt --title "$TITLE" --msgbox "$(Tv 'Klucz nie pasuje:\n$ERR\nSpróbuj jeszcze raz albo Anuluj.' '$ERR' "$(head -2 "$TMPD/key.err")")" 11 "$W"
+    done
+}
+
 cleanup() {
     RESIDUE=""
-    unmount_all; restore_snapdev
+    unmount_all; restore_snapdev; unload_key
     rm -rf "$TMPD"
     if [ -n "$RESIDUE" ]; then
         T 'Przeglądaj kopię -- NIE wszystko posprzątane:%s\n' "$RESIDUE" >&2
@@ -270,10 +305,11 @@ trap 'exit 130' INT TERM
 
 if [ "$REL" = --any ]; then
     WT_BACKTITLE="$(Tv 'Przeglądaj kopię na dysku -- $(hostname)' '$(hostname)' "$(hostname)")"
-    TITLE="$(T 'Przeglądaj kopię')"
+    # U87 (wlasciciel 2026-10-27): w naglowku okna -- po jakim hoscie chodzimy.
+    TITLE="$(Tv 'Przeglądaj kopię na $(hostname)' '$(hostname)' "$(hostname)")"
 else
     WT_BACKTITLE="$(Tv 'Przeglądaj kopię relacji $REL -- $(hostname)' '$REL' "$REL" '$(hostname)' "$(hostname)")"
-    TITLE="$(Tv 'Przeglądaj $REL' '$REL' "$REL")"
+    TITLE="$(Tv 'Przeglądaj $REL na $(hostname)' '$REL' "$REL" '$(hostname)' "$(hostname)")"
 fi
 geom
 
@@ -325,7 +361,10 @@ fi
 # ---- montaż ro wg systemu plików: <urządzenie> <typ> -> 0, MNT ustawiony ---------------
 mount_ro() {
     local dev="$1" fs="$2" opts="ro"
-    mkdir -p "$BROOT" && MNT="$(mktemp -d "$BROOT/browse.XXXXXX")" || { MNT=""; echo "$(Tv 'nie mogę utworzyć katalogu w $BROOT' '$BROOT' "$BROOT")" >"$TMPD/mount.err"; return 1; }
+    # U87: nazwa katalogu montazu mowi host, dataset i migawke -- to widac w naglowku mc.
+    local tag
+    tag="$(hostname -s 2>/dev/null || hostname)_$(printf '%s' "${DS:-x}@${SNAP:-x}" | tr '/ ' '~_')"
+    mkdir -p "$BROOT" && MNT="$(mktemp -d "$BROOT/${tag:0:150}.XXXXXX")" || { MNT=""; echo "$(Tv 'nie mogę utworzyć katalogu w $BROOT' '$BROOT' "$BROOT")" >"$TMPD/mount.err"; return 1; }
     case "$fs" in
         ntfs)
             if modinfo ntfs3 >/dev/null 2>&1 || grep -qw ntfs3 /proc/filesystems; then
@@ -358,11 +397,11 @@ browse_and_exit() {
         ( cd "$MNT" && "${SHELL:-/bin/bash}" -i ) </dev/tty >/dev/tty 2>&1
     fi
     RESIDUE=""
-    unmount_all; restore_snapdev
+    unmount_all; restore_snapdev; unload_key
     echo
     if [ -z "$RESIDUE" ]; then
-        echo "$(T '=== Odmontowane. Enter = powrót do GUI')"
-        read -r _ </dev/tty 2>/dev/null || true
+        # U90 (wlasciciel 2026-10-27): bez "Enter = powrót" -- wraca samo; Ctrl-O w GUI pokaze to.
+        echo "$(T '=== Odmontowane.')"
         exit 0
     fi
     echo "$(Tv '=== NIE wszystko posprzątane:$RESIDUE' '$RESIDUE' "$RESIDUE")"
@@ -383,7 +422,7 @@ while :; do
         # jednolite w całym pakiecie"): to samo drzewo co przy wyborze datasetów do kopii, w trybie
         # JEDNEJ pozycji. Wybrać da się dataset z migawką; gałęzie nad nim są do rozwijania.
         # Wcześniej płaska lista (pve10: 66 pozycji, 32 strzałki do hdd/labbrowse/v-ntfs).
-        "$PY" - "$TMPD/cand.tsv" "$TMPD/tree-spec.json" "$(Tv '$TITLE: który dataset?' '$TITLE' "$TITLE")" "${DS:-}" <<'PYEOF' || exit 1
+        "$PY" - "$TMPD/cand.tsv" "$TMPD/tree-spec.json" "$(Tv '$TITLE: który dataset?' '$TITLE' "$TITLE")" "${DS:-}" "$REL" <<'PYEOF' || exit 1
 import sys, json
 import os as _os
 _C = json.load(open(_os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if _os.environ.get("ZFS_TUI_CAT") else {}
@@ -399,8 +438,10 @@ for n in names:                       # gałęzie nad kandydatami: do nawigacji,
     for i in range(1, len(parts)):
         allnames.add("/".join(parts[:i]))
 # U83 (pve9 2026-10-27: piec rozwiniec pustych galezi do jedynego datasetu relacji):
-# galezie nad kandydatami sa otwarte od razu.
-spec = {"title": sys.argv[3], "single": True, "selectable": names, "expand_to": names[:200],
+# galezie nad kandydatami relacji sa otwarte od razu. U88: "z innego dysku" to caly
+# host -- tam drzewo zostaje zwiniete (rozwiniete bylo sciana).
+spec = {"title": sys.argv[3], "single": True, "selectable": names,
+        "expand_to": names[:200] if sys.argv[5] != "--any" else [],
         "legend": _(u" Kopia zostanie zamontowana TYLKO DO ODCZYTU.  · = gałąź (bez migawek), → rozwija"),
         "roots": [sys.argv[4]] if sys.argv[4] else [],
         "datasets": [{"name": n, "type": types.get(n, "filesystem"), "used": None} for n in sorted(allnames)]}
@@ -520,7 +561,8 @@ walk(d.get("blockdevices"))' | tr -d '\r' >"$TMPD/parts.tsv"
             undo_or_warn ""; step=2; continue
         fi
         browse_and_exit "$DS@$SNAP, $PDEV ($PFS)" ;;
-    4)  if ! mount_ro "$DS@$SNAP" zfs; then
+    4)  need_key "$DS" || { step=2; continue; }
+        if ! mount_ro "$DS@$SNAP" zfs; then
             wt --title "$TITLE" --msgbox "$(Tv 'Nie udało się zamontować $DS@$SNAP:\n$ERR' '$DS' "$DS" '$SNAP' "$SNAP" '$ERR' "$(head -3 "$TMPD/mount.err")")" 10 "$W"
             step=2; continue
         fi

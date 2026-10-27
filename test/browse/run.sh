@@ -12,11 +12,13 @@
 # REV-20261021-162: SIGTERM w pauzie przywracania (pod blokada) -- pulapka EXIT musi przywrocic
 # snapdev bez drugiego flock na wlasnej blokadzie. Pauza jest jednorazowa, sygnal idzie raz.
 #
-# /dev/tty: browse_and_exit uruchamia mc z </dev/tty >/dev/tty i czyta Enter z /dev/tty. Bez
-# terminala sterujacego otwarcie /dev/tty konczy sie bledem, a skrypt idzie dalej (mc i read maja
+# /dev/tty: browse_and_exit uruchamia mc z </dev/tty >/dev/tty; Enter z /dev/tty czyta TYLKO po
+# niepelnym sprzataniu (od U90 czyste odmontowanie wychodzi bez czekania). Bez terminala
+# sterujacego otwarcie /dev/tty konczy sie bledem, a skrypt idzie dalej (mc i read maja
 # `|| true`/ignorowany rc) -- to wlasnie chcemy. Z terminalem sterujacym `read` by wisial, wiec
 # skrypt idzie pod `setsid -w` (bez ctty), jesli setsid jest. Napis "=== Odmontowane" idzie na
-# stdout, nie na tty, wiec jest w $D/out.
+# stdout, nie na tty, wiec jest w $D/out. Wyjatek: przypadek 39 (run_pty) daje skryptowi prawdziwy
+# terminal, zeby sprawdzic, ze czyste wyjscie NIE czeka na Enter.
 PASS=0; FAIL=0
 ok(){ echo "PASS $1"; PASS=$((PASS+1)); }
 bad(){ echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
@@ -75,6 +77,17 @@ case "$*" in
         else printf '%s@s1\t100\n' "$last"; fi ;;
     "get -H -o value snapdev "*) [ -e "$D/fail_get" ] && exit 1; cat "$SV" ;;
     "get -H -o source snapdev "*) [ -e "$D/fail_get" ] && exit 1; cat "$SS" ;;
+    # U89: kopia szyfrowana. $D/enc_root = korzen szyfrowania (brak pliku = "-", czyli bez szyfrowania),
+    # $D/keystatus (domyslnie available), $D/keyformat (domyslnie passphrase). load-key czyta klucz ze STDIN
+    # i zapisuje go w $D/loadkey.stdin (do porownania); unload-key zdejmuje klucz.
+    "get -H -o value encryptionroot -- "*) cat "$D/enc_root" 2>/dev/null || echo - ;;
+    "get -H -o value keystatus -- "*) cat "$D/keystatus" 2>/dev/null || echo available ;;
+    "get -H -o value keyformat -- "*) cat "$D/keyformat" 2>/dev/null || echo passphrase ;;
+    "load-key -L prompt -- "*)
+        cat >"$D/loadkey.stdin"
+        [ -e "$D/loadkey_fail" ] && { echo "Key load error: Incorrect key provided." >&2; exit 1; }
+        echo available >"$D/keystatus" ;;
+    "unload-key -- "*) echo unavailable >"$D/keystatus" ;;
     "set snapdev=visible "*)
         [ -e "$D/fail_set_visible" ] && exit 1
         echo visible >"$SV"
@@ -530,6 +543,125 @@ s = json.load(open(sys.argv[1], encoding="utf-8"))
 print("expand=%s sel=%s" % (s.get("expand_to"), s.get("selectable")))
 P
 grep -q "expand=\['tank/c1', 'tank/c2'\] sel=\['tank/c1', 'tank/c2'\]" "$D/spec.chk" || errs+=("spec drzewa: $(cat "$D/spec.chk")")
+fin
+
+# ---- 2026-10-27 (U87-U90): tytul z hostem, katalog montazu, drzewo --any, wyjscie bez Entera, klucz ---
+HN="$(hostname)"; HS="$(hostname -s 2>/dev/null || hostname)"
+
+new_case "36 U87: tytul okna --any niesie host: 'Przeglądaj kopię na HOST'"
+: >"$D/titles"; fs_case; run_script
+rc0
+grep -qF "Przeglądaj kopię na $HN: z kiedy?" "$D/titles" || errs+=("tytul --any: $(cat "$D/titles")")
+fin
+
+new_case "36b U87: tytul okna relacji niesie host: 'Przeglądaj rel1 na HOST'"
+: >"$D/titles"; rel_case tank/c1; snaps3; printf 'OK p0\n' >"$D/answers"; run_rel --dataset=tank/c1
+rc0
+grep -qF "Przeglądaj rel1 na $HN: z kiedy?" "$D/titles" || errs+=("tytul relacji: $(cat "$D/titles")")
+fin
+
+new_case "37 U87: katalog montazu = <host -s>_<dataset z / -> ~>@<migawka>.XXXXXX (nie 'browse.XXXXXX')"
+fs_case; run_script
+rc0
+MNTDIR="$(grep '^mount -t zfs -o ro tank/fs@s1 ' "$D/log" | awk '{ print $NF }')"
+case "${MNTDIR##*/}" in
+    "${HS}_tank~fs@s1."??????) ;;
+    *) errs+=("katalog montazu: '${MNTDIR:-brak wiersza mount w logu}' (oczekiwano ${HS}_tank~fs@s1.XXXXXX)") ;;
+esac
+case "$MNTDIR" in "$D/run/"*) ;; *) errs+=("katalog montazu poza BROWSE_ROOT: '$MNTDIR'") ;; esac
+fin
+
+new_case "38 U88: --any -> spec drzewa ma pusty expand_to (caly host zwiniety); relacja zachowuje kandydatow (test 35)"
+fs_case; run_script
+python3 - "$D/tree-spec.last" <<'P' >"$D/spec.chk" 2>&1
+import json, sys
+s = json.load(open(sys.argv[1], encoding="utf-8"))
+print("expand=%s sel=%s" % (s.get("expand_to"), s.get("selectable")))
+P
+grep -q "expand=\[\] sel=\['tank/fs'\]" "$D/spec.chk" || errs+=("spec drzewa --any: $(cat "$D/spec.chk")")
+fin
+
+# U90: po czystym odmontowaniu 'Odmontowane.' i wyjscie 0 BEZ czytania z tty. run_script ma </dev/null i
+# brak ctty, wiec `read </dev/tty` konczy sie bledem i NIE odroznia starego kodu od nowego. Tu skrypt
+# dostaje PRAWDZIWY terminal sterujacy (pty), na ktorym nikt nie pisze: stary kod wisi na `read` do limitu.
+run_pty(){   # -> rc w $rc (124 = wisi na tty, 2 = brak pty), wyjscie terminala w $D/out
+    PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" ZFS_TREE="$D/bin/tree" \
+        BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" \
+        python3 - "$REPO/tui/browse.sh" "$D/out" <<'P'
+import os, select, sys, time
+try:
+    import pty
+except ImportError:
+    sys.exit(2)
+script, outp = sys.argv[1], sys.argv[2]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp("bash", ["bash", script, "--any"])
+buf, rc, t0 = b"", None, time.time()
+while time.time() - t0 < 20:
+    r, _, _ = select.select([fd], [], [], 0.1)
+    if r:
+        try:
+            buf += os.read(fd, 65536)
+        except OSError:
+            pass
+    p, st = os.waitpid(pid, os.WNOHANG)
+    if p:
+        rc = os.WEXITSTATUS(st) if os.WIFEXITED(st) else 128
+        break
+if rc is None:
+    os.kill(pid, 9)
+    os.waitpid(pid, 0)
+    rc = 124
+open(outp, "wb").write(buf)
+sys.exit(rc)
+P
+    rc=$?
+}
+new_case "39 U90: czyste odmontowanie na terminalu -> '=== Odmontowane.' i wyjscie 0 bez czekania na Enter, bez 'Enter = powrot'"
+fs_case; run_pty
+if [ "$rc" -eq 2 ]; then
+    echo "SKIP 39: brak modulu pty -- wyjscie bez Entera sprawdza CI"
+else
+    rc0; has out "=== Odmontowane."; hasnt out "Enter = powrót"
+    [ "$rc" -ne 124 ] || errs+=("browse.sh wisi na read z tty po czystym odmontowaniu (20 s)")
+    fin
+fi
+
+# U89: kopia szyfrowana -- klucz tylko na czas przegladania. Atrapa zfs: encryptionroot=tank/c1,
+# keystatus=unavailable, keyformat z $D/keyformat.
+enc_case(){   # <keyformat> <odpowiedzi...>: dataset tank/c1 zaszyfrowany, klucz niezaladowany
+    fs_case_enc_fmt="$1"; shift
+    printf 'tank/c1 filesystem\n' >"$D/datasets"
+    printf 'tank/c1\n' >"$D/enc_root"; printf 'unavailable\n' >"$D/keystatus"; printf '%s\n' "$fs_case_enc_fmt" >"$D/keyformat"
+    : >"$D/answers"; local a; for a in "$@"; do printf '%s\n' "$a" >>"$D/answers"; done
+}
+new_case "40 U89: kopia szyfrowana (hex), klucz niezaladowany -> passwordbox, zfs load-key -L prompt z kluczem na STDIN przed montazem, unload-key po odmontowaniu"
+enc_case hex "OK d0" "OK p0" "OK s3cret-key"
+run_script
+rc0; has out "=== Odmontowane."
+lg '^zfs load-key -L prompt -- tank/c1$'; lg '^zfs unload-key -- tank/c1$'
+[ "$(cat "$D/loadkey.stdin" 2>/dev/null)" = "s3cret-key" ] || errs+=("klucz na stdin load-key: '$(cat "$D/loadkey.stdin" 2>/dev/null)'")
+grep -q 's3cret-key' "$D/log" && errs+=("klucz wyciekl do argumentow polecen (log)")
+nl="$(grep -n '^zfs load-key' "$D/log" | head -1 | cut -d: -f1)"; nm="$(grep -n '^mount -t zfs' "$D/log" | head -1 | cut -d: -f1)"
+nu="$(grep -n '^umount ' "$D/log" | head -1 | cut -d: -f1)"; nk="$(grep -n '^zfs unload-key' "$D/log" | head -1 | cut -d: -f1)"
+{ [ -n "$nl" ] && [ -n "$nm" ] && [ -n "$nu" ] && [ -n "$nk" ] && [ "$nl" -lt "$nm" ] && [ "$nm" -lt "$nu" ] && [ "$nu" -lt "$nk" ]; } \
+    || errs+=("kolejnosc load-key($nl) < mount($nm) < umount($nu) < unload-key($nk)")
+fin
+
+new_case "41 U89: kopia szyfrowana kluczem raw -> komunikat z 'zfs load-key', ani load-key, ani montazu, ani unload-key"
+enc_case raw "OK d0" "OK p0"
+run_script
+rc0; has msgs "zfs load-key"
+nolg '^zfs load-key'; nolg '^mount '; nolg '^zfs unload-key'
+fin
+
+new_case "42 U89: zly klucz -> komunikat i ponowne pytanie; po Anuluj bez montazu i bez unload-key (klucza nie zaladowano)"
+enc_case hex "OK d0" "OK p0" "OK zly" "NIE"
+touch "$D/loadkey_fail"
+run_script
+has msgs "Klucz nie pasuje"
+lg '^zfs load-key -L prompt -- tank/c1$'; nolg '^mount '; nolg '^zfs unload-key'
 fin
 
 echo "browse: PASS=$PASS FAIL=$FAIL"

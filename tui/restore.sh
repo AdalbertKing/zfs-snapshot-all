@@ -48,7 +48,7 @@ run_cmd() {
     echo
     # Napis zwykłym echo, jak w delete-relation.sh: podpowiedź `read -p` idzie na stderr,
     # a `2>/dev/null` ją chowało -- okno czekało na Enter bez słowa (właściciel, P1 10-15).
-    if [ "$RC" -eq 0 ]; then echo "$(T '=== GOTOWE (rc=0). Enter = powrót do GUI')"
+    if [ "$RC" -eq 0 ]; then echo "$(T '=== GOTOWE (rc=0).')"
     else
         # Sprawdź ponownie (właściciel 2026-10-26): odmowa przed zmianą (zajęty dataset, działający
         # gość) zwykle znika po zatrzymaniu usługi -- to samo polecenie jeszcze raz, bez wracania.
@@ -56,7 +56,6 @@ run_cmd() {
         local _a=""; read -r _a </dev/tty 2>/dev/null || true
         case "$_a" in p|P) run_cmd ;; esac
     fi
-    [ "$RC" -eq 0 ] && { read -r _ </dev/tty 2>/dev/null || true; }
     exit "$RC"
 }
 
