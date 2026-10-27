@@ -642,7 +642,7 @@ def text_names_dataset(text, ds):
     pod baza celu: .../pve2/rpool/ROOT/pve-1) albo ':' separatora transportu
     (host:ds, konto@host:ds -- nie dwukropek w nazwie).
     Po nazwie: koniec, '@' (migawka), znak spoza nazwy, ':' albo '.' tylko gdy
-    dalej NIE ma znaku nazwy ("pool/x: busy", "pool/x."), nigdy '/' (dziecko)."""
+    dalej NIE ma znaku nazwy ani '/' ("pool/x: busy", "pool/x."), nigdy '/' (dziecko)."""
     if not ds or not text:
         return False
     start = 0
