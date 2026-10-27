@@ -766,6 +766,43 @@ if [ "$u61_ok" -eq 1 ]; then
 else
     bad "relacje U61: sprzeczne werdykty" "$(printf '%s\n' "$u61_dump" | grep -E 'Ostatni bieg|Przyczyna|lab/[abcd]' | head -10)"
 fi
+# ONE CRON LINE, SEVERAL DATASETS (pve2, 2026-10-27): subvol-103 and ROOT/pve-1 went in one
+# snapget call, the refusal was on pve-1, and the panel said "Przyczyna subvol-103: ..." with
+# "(+3)". The shared failure counts once and names a dataset only when the error text does.
+GSJ="$(mktemp)"; GSS="$(mktemp)"
+"$PY" - "$GJ" "$GSJ" "$GSS" <<'PYEOF'
+import json, sys
+j = json.load(open(sys.argv[1], encoding="utf-8"))
+mine = [x for x in j["jobs"] if x["label"] == "sync-test"]
+line = '%s /x/zfs-job.sh "pve20 hourly backup (sync-test-all)" -- /x/snapget.sh -m "automated_hourly_" "%s" ""' % (
+    mine[0]["schedule"], ",".join(x["other_end"] for x in mine))
+for x in mine:
+    x["cron_lines"] = [line]
+json.dump(j, open(sys.argv[2], "w", encoding="utf-8"))
+json.dump({"window_days": 7,
+           "jobs": [{"label": "hourly backup (sync-test-all)", "runs": 2, "failures": 1, "avg_s": 6, "max_s": 6,
+                     "total_s": 12, "last_s": 6, "last_rc": 1, "last_at": "2026-09-08 13:48"}],
+           "events": [{"label": "hourly backup (sync-test-all)", "discard_at": "", "discard": "",
+                       "error_at": "2026-09-08 13:48", "error": "cannot receive incremental stream: dataset is busy"}],
+           "datasets": [], "volume": []}, open(sys.argv[3], "w", encoding="utf-8"))
+PYEOF
+sj_dump=""; sj_ok=0
+for sjk in "" down down,down; do
+    SJ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GSJ" --monitors "$GM" --stats "$GSS" --screen relacje --width 260 --height 60 --keys "$sjk" 2>&1)"
+    has "$SJ" 'Przyczyna' || continue
+    sj_dump="$SJ"
+    pl="$(printf '%s\n' "$SJ" | grep 'Przyczyna')"
+    if hasE "$SJ" 'Ostatni bieg +BŁĄD +2026-09-08 13:48 +rc=1 ' && ! hasE "$SJ" 'rc=1 +\(\+' \
+       && printf '%s' "$pl" | grep -q 'lab/a' && printf '%s' "$pl" | grep -q 'lab/b' \
+       && has "$SJ" 'dataset is busy'; then sj_ok=1; fi
+    break
+done
+if [ "$sj_ok" -eq 1 ]; then
+    ok "relacje: jedna linia crona dla kilku datasetow -- blad liczony raz, bez '(+N)', Przyczyna nie zrzuca go na pierwszy dataset"
+else
+    bad "relacje: wspolna linia crona" "$(printf '%s\n' "$sj_dump" | grep -E 'Ostatni bieg|Przyczyna' | head -4)"
+fi
+rm -f "$GSJ" "$GSS"
 rm -f "$GEJ" "$GES"
 # Wlasciciel 2026-10-08: "zmien synchro na lustro w GUI" -- dane ida w jedna
 # strone, od backupu rozni sie tylko retencja. Panel F3 podaje typ relacji.
