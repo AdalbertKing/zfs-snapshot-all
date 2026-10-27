@@ -803,6 +803,46 @@ else
     bad "relacje: wspolna linia crona" "$(printf '%s\n' "$sj_dump" | grep -E 'Ostatni bieg|Przyczyna' | head -4)"
 fi
 rm -f "$GSJ" "$GSS"
+# REV-20261027-177: the dataset the error names is matched as a WHOLE name -- 'pool/vm-10'
+# is not named by 'pool/vm-100', 'data' not by 'metadata'. The ACTUAL rel_panel_pairs, one
+# shared cron label, two members; the reason line for each error text.
+EXN="$("$PY" - "$TUI" <<'PYEOF'
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+m.job_cron_label = lambda j: "shared"
+class D:
+    stats = {"window_days": 7}
+    def failed(self, _): return False
+def reason(scopes, err):
+    m.job_run_issue = lambda data, j: ((1, "2026-10-27 13:00", err), None)
+    row = {"kind": "relation", "name": "r", "rel": {"name": "r", "state": "active", "mode": "backup", "profile": "default"},
+           "monitors": [], "vword": "aktualne", "verdict": "OK", "reasons": [], "last": None, "next_epoch": 0,
+           "next": "-", "stats": {}, "gb": "-", "jobs": [{"section_kind": "dataset", "scope": x} for x in scopes]}
+    out = {}
+    for k, v in m.rel_panel_pairs(row, D(), 0, m.Chars(False)):
+        out[k.strip()] = v
+    return out.get("Przyczyna", "?") + " || " + out.get("Ostatni bieg", "?")
+for name, sc, err in [
+    ("prefix", ["pool/vm-10", "pool/vm-100"], "cannot receive pool/vm-100: dataset is busy"),
+    ("short", ["data", "metadata"], "cannot receive metadata: dataset is busy"),
+    ("none", ["pool/a", "pool/b"], "cannot receive incremental stream: dataset is busy"),
+    ("both", ["pool/a", "pool/b"], "pool/a and pool/b: out of space."),
+    ("target", ["hdd/vm-disks/subvol-103-disk-0", "rpool/ROOT/pve-1"], "Hint: 'hdd/backups/pve2/rpool/ROOT/pve-1' is MOUNTED"),
+    ("remote", ["pool/vm-10", "pool/vm-100"], "zfsbackup@pve1:pool/vm-100@s1: refused"),
+    ("child", ["pool/vm-10", "pool/vm-100"], "pool/vm-10/sub: busy")]:
+    print("%s=%s" % (name, reason(sc, err)))
+PYEOF
+)"
+exn() { printf '%s\n' "$EXN" | sed -n "s/^$1=//p"; }
+if [ "$(exn prefix | cut -d: -f1)" = "pool/vm-100" ] && [ "$(exn short | cut -d: -f1)" = "metadata" ] \
+   && [ "$(exn none | cut -d: -f1)" = "pool/a, pool/b" ] && [ "$(exn both | cut -d: -f1)" = "pool/a, pool/b" ] \
+   && [ "$(exn target | cut -d: -f1)" = "rpool/ROOT/pve-1" ] && [ "$(exn remote | cut -d: -f1)" = "pool/vm-100" ] \
+   && [ "$(exn child | cut -d: -f1)" = "pool/vm-10, pool/vm-100" ] && ! printf '%s' "$EXN" | grep -q '(+'; then
+    ok "relacje REV-177: blad przypisany datasetowi tylko przy calej nazwie (vm-10/vm-100, data/metadata, cel pod baza, host:ds); nic albo dwa -> caly zakres; wspolna linia liczona raz"
+else
+    bad "relacje REV-177: przypisanie bledu" "$EXN"
+fi
 rm -f "$GEJ" "$GES"
 # Wlasciciel 2026-10-08: "zmien synchro na lustro w GUI" -- dane ida w jedna
 # strone, od backupu rozni sie tylko retencja. Panel F3 podaje typ relacji.
