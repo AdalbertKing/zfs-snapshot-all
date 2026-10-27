@@ -13063,6 +13063,48 @@ if [ "$got" = "$want" ]; then
 else
     bad "jobstats: events" "$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$got"))" "$(cat "$JS/err")"
 fi
+# RUNS ONE BY ONE (--runs=HOURS, the GUI's Przebiegi, 2026-10-27): every END of the last
+# HOURS with its BEGIN, rc and -- for a failure only -- the engine's error line; a BEGIN
+# without END is a run in progress (rc -1); an END older than HOURS is left out; without
+# --runs the field is absent. Times are made on this host, so they share its offset.
+rt() { date -Is -d "-$1 minutes"; }
+cat > "$JS/runs.log" <<RLOG
+$(rt 300) ZFS-JOB BEGIN pve10 hourly backup (rn-old)
+$(rt 299) ZFS-JOB END pve10 hourly backup (rn-old) rc=0
+$(rt 40) ZFS-JOB BEGIN pve10 hourly backup (rn-ok)
+$(rt 39) ZFS-JOB END pve10 hourly backup (rn-ok) rc=0
+$(rt 30) ZFS-JOB BEGIN pve10 hourly backup (rn-bad)
+$(date '+%Y-%m-%d %H:%M:%S' -d '-30 minutes') - Refusing 'hdd/lab/b': it is the disk of guest 901, which is currently RUNNING.
+$(rt 29) ZFS-JOB END pve10 hourly backup (rn-bad) rc=1
+$(rt 20) ZFS-JOB BEGIN pve10 hourly backup (rn-skip)
+$(rt 20) ZFS-JOB END pve10 hourly backup (rn-skip) rc=75
+$(rt 5) ZFS-JOB BEGIN pve10 hourly backup (rn-now)
+RLOG
+RNOUT=$( ( PATH="$JS/bin:$PATH" ZFS_CRON_LOGS="$JS/runs.log" bash "$ZFSBACKUP" job-stats --json --runs=2 ) 2>"$JS/err")
+RN0=$( ( PATH="$JS/bin:$PATH" ZFS_CRON_LOGS="$JS/runs.log" bash "$ZFSBACKUP" job-stats --json ) 2>/dev/null)
+got=$(printf '%s' "$RNOUT" | "$PY_OR_PYTHON" -c '
+import sys,json; d=json.load(sys.stdin); r={x["label"]: x for x in d["runs"]}
+print(d["runs_hours"], sorted(r))
+print(r["hourly backup (rn-ok)"]["rc"], r["hourly backup (rn-ok)"]["error"] == "", bool(r["hourly backup (rn-ok)"]["start"]) and r["hourly backup (rn-ok)"]["end"] > r["hourly backup (rn-ok)"]["start"])
+print(r["hourly backup (rn-bad)"]["rc"], r["hourly backup (rn-bad)"]["error"])
+print(r["hourly backup (rn-skip)"]["rc"], r["hourly backup (rn-skip)"]["error"] == "")
+print(r["hourly backup (rn-now)"]["rc"], r["hourly backup (rn-now)"]["end"] == "")' 2>&1 | tr -d '\r')
+want="2 ['hourly backup (rn-bad)', 'hourly backup (rn-now)', 'hourly backup (rn-ok)', 'hourly backup (rn-skip)']
+0 True True
+1 Refusing 'hdd/lab/b': it is the disk of guest 901, which is currently RUNNING.
+75 True
+-1 True"
+has_runs=$(printf '%s' "$RN0" | "$PY_OR_PYTHON" -c 'import sys,json; print("runs" in json.load(sys.stdin))' 2>&1 | tr -d '\r')
+if [ "$got" = "$want" ] && [ "$has_runs" = False ]; then
+    ok "jobstats --runs: each run with start/end/rc, the error only for a failure, rc=75 plain, a BEGIN without END running (rc -1), older than the window left out, absent without --runs"
+else
+    bad "jobstats --runs" "$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$got"))" "without --runs: runs present=$has_runs" "$(cat "$JS/err")"
+fi
+if ! bash "$ZFSBACKUP" job-stats --json --runs=x >/dev/null 2>"$JS/err" && grep -q 'count of hours' "$JS/err"; then
+    ok "jobstats --runs: a non-number is refused"
+else
+    bad "jobstats --runs=x" "$(cat "$JS/err")"
+fi
 # the NUMBERS, against the capture read by hand: how many "nextcloud" runs and
 # transfers does the log hold?
 want_runs=$(grep -c 'ZFS-JOB END pve2 hourly backup (nextcloud)' "$CAP/cron-log.pve2-2days.txt")

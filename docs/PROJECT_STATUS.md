@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 98a267d117ed351d -->
+<!-- status-covers-digest: 1d9715eca37be918 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -28,6 +28,17 @@
     <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
   - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
     `update-control` jako „not clean”.
+- **F2 Przebiegi zamiast Zadań (2026-10-27, `gui/przebiegi`, U77/U79/U80).** Jeden wiersz to jeden bieg
+  jednej linii crona: nad kreską „teraz” biegi z ostatnich 12 h (z dziennika, `job-stats --runs=HOURS`:
+  start, koniec, rc, linia błędu), pod nią nadchodzące z najbliższych 6 h (co najmniej jeden na zadanie).
+  Kolumny: Kiedy, Relacja, Co (rodzaj zadania, szczebel i datasety), Wynik (OK, BŁĄD rc=N, pominięty, biegnie,
+  nadchodzący), Czas. F8 chowa i pokazuje wykonane, F9 grupuje po relacji (w grupie chronologicznie, kolumna
+  Zadanie). Panel: ten bieg (powód błędu) i ustawienia zadania z przebiegami z 7 dni, dół: źródło → cel. F7
+  uruchamia z wiersza nadchodzącego. Wiersze bez zadania w cronie (strażnik bez zadania, nieczytelny config)
+  zostają na górze. F4 Historia zostaje do czasu okna Kopie (U82). Na żywo pve10: 12 h biegów 5 relacji,
+  błąd `cb zdalny prune` widoczny jako BŁĄD rc=1. Suity na pve9: `tui` 426/0; `zfsbackup` 1051/7, te same 6 błędów
+  co na main na pve9 plus `preparesource: bundle fallback` (sieć).
+
 - **Kampania labowa 2026-10-26: kreator, okno zmiany, monitory, czasy GUI (PR #888-#901).** Na
   `main` (repo dev), nie wydane; pve9, pve10 i pve11 stoją na `main` z `update-hold`.
   - Drzewo ma trzeci stan: Spacja na zaznaczonym datasecie z dziećmi daje `[x]` -> `[-]` (obecne

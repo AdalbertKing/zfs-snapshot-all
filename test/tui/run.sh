@@ -50,6 +50,29 @@ screen() {   # <screen> [keys] [extra args...] -> ekran jako tekst, fikstury pve
 has()  { printf '%s' "$1" | grep -qF -- "$2"; }
 hasE() { printf '%s' "$1" | grep -qE -- "$2"; }
 
+# F2 = PRZEBIEGI: wiersz to BIEG (Kiedy | Relacja | Co | Wynik | Czas), nie zadanie, a lista
+# idzie wg czasu -- zadanie nie ma juz "swojego" numeru wiersza. Wiersz zadania znajdujemy
+# po tresci: zkeys drukuje "down,down,..." od kursora na wierszu 0 do pierwszego wiersza
+# listy pasujacego do wzorca (puste = wiersz 0; rc 1, gdy takiego wiersza nie ma). Lista
+# z --height 400 ma wszystkie wiersze; wiersz i lezy w linii 5+i. 'down' przeskakuje wiersze
+# tylko do czytania (kreska "teraz", naglowek grupy), wiec ich nie liczymy.
+KD='[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2}'   # komorka Kiedy: "dd.mm HH:MM"
+# Sama LISTA (lewa strona ramki): wiersz listy dzieli linie z wierszem panelu, a panel ma
+# 'OK', 'BŁĄD (rc=1)', 'wysyłka' we wlasnych slowach -- wzorzec z '.*' bez tego lapie panel.
+lst() { printf '%s\n' "$1" | sed 's/║│.*//'; }
+zkeys() {   # <wzorzec wiersza listy> [argumenty zrodel: --status/--jobs/...] -> klucze
+    local rx="$1" full ln dv n keys="" i
+    shift
+    full="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" "$@" --screen zadania --keys "" --width 200 --height 400 2>&1)"
+    ln=$(printf '%s\n' "$full" | sed 's/║│.*//' | grep -nE -- "$rx" | head -1 | cut -d: -f1)
+    [ -n "$ln" ] || return 1
+    dv=0
+    [ "$ln" -gt 6 ] && dv=$(printf '%s\n' "$full" | sed -n "6,$((ln-1))p" | grep -cE '^║ (── teraz|▸ )')
+    n=$((ln - 5 - dv))
+    for ((i=0; i<n; i++)); do keys="${keys:+$keys,}down"; done
+    printf '%s' "$keys"
+}
+
 # ============================================================================
 # EKRAN 1: RELACJE -- wiersz to RELACJA (para hostow), nie zadanie
 # ============================================================================
@@ -158,7 +181,8 @@ if has "$SPW" 'F8 Wznów F9 Eksport/Import' && ! has "$SPW" 'F8 wznów' && ! has
 else
     bad "relacje: podpis F7 na pauzie" "$SPW"
 fi
-ZT="$(screen zadania down --width 100 --height 40)"
+# F2 Przebiegi: panel wiersza porzadkow (nie wiersz nr 1 -- lista idzie wg czasu).
+ZT="$(screen zadania "$(zkeys "^║ $KD +lab-vm101 +lokalny prune " $ALL)" --width 100 --height 40)"
 if hasE "$ZT" 'Trzyma +24 godz\.' && ! hasE "$ZT" 'Trzyma +-H24'; then
     ok "zadania: panel 'Trzyma' z jednostka, nie surowe -H24 (tester R4: B5)"
 else
@@ -218,26 +242,31 @@ else
     bad "pomoc: klawisze R4-2" "$H1"
 fi
 
-# SZEROKOSC: KOLUMNY PO PRIORYTECIE (R3-4; R4-4 dolozyl Prefiks/Trzyma/szt.).
-# Kierunek NIE UCINA SIE NIGDY (pelny adres synchro). Kolejnosc wchodzenia:
-# Relacja, Kierunek, Zadanie, Kopie, Nastepny, Prefiks, Trzyma, szt.,
-# Harmonogram, GB, Czas -- przy 100 kolumnach Harmonogram jest juz tylko w
-# panelu (11 kolumn sie nie miesci). Panel idzie OBOK
-# listy od 150, nie od 120 jak wczesniej (punkt 3) -- 120 zabieral liscie
-# miejsce, ktorego panelowi i tak nie oddawal w calosci.
+# SZEROKOSC: KOLUMNY PO PRIORYTECIE (R3-4). F2 Przebiegi ma piec kolumn: Kiedy,
+# Relacja, Co, Wynik, Czas -- od najwazniejszej; gdy lista jest za waska, odpada
+# najpierw Czas, potem Co (Relacja sie zwija do 12 znakow, nie znika). Kierunek,
+# Prefiks, Nastepny, Kopie i retencja zniknely z LISTY (kierunek, harmonogram, retencja
+# -- w panelu; prefiks i werdykt -- na F3). Panel idzie OBOK listy od 150, nie od 120
+# jak wczesniej (punkt 3) -- 120 zabieral liscie miejsce, ktorego panelowi i tak nie
+# oddawal w calosci.
+# Ucinanie sprawdzamy tylko po LEWEJ stronie ramki (panel obok ma wlasne zawijanie).
 Z100="$(screen zadania "" --width 100)"
-if has "$Z100" 'Zadanie' && has "$Z100" 'Następny' && has "$Z100" 'Kopie' && ! printf '%s\n' "$Z100" | sed -n '3,6p' | grep -q '…'; then
-    ok "zadania: przy 100 kolumnach lista ma Relacje, Zadanie, Nastepny i Kopie, nic nie uciete (U21: Prefiks spada pierwszy)"
+Z100L="$(printf '%s\n' "$Z100" | sed -n '3,6p' | sed 's/║│.*//')"
+Z100H="$(lst "$Z100" | sed -n '3p')"   # sam naglowek listy (dolna zakladka tez ma 'Wynik')
+if has "$Z100H" 'Kiedy' && has "$Z100H" 'Relacja' && has "$Z100H" 'Wynik' && ! printf '%s\n' "$Z100L" | grep -q '…'; then
+    ok "zadania: przy 100 kolumnach lista ma Kiedy, Relacje i Wynik, nic nie uciete (Czas i Co spadaja pierwsze)"
 else
     bad "zadania: kolumny przy 100" "$(printf '%s' "$Z100" | sed -n '3,5p')"
 fi
-# 260: od 150 panel stoi obok i lista ma 60% szerokosci; 11 kolumn R4-4
+# 260: od 150 panel stoi obok i lista ma 60% szerokosci; wszystkie piec kolumn
 Z160="$(screen zadania "" --width 260)"
-if has "$Z160" 'Relacja' && has "$Z160" 'Zadanie' && has "$Z160" 'Prefiks migawek' && has "$Z160" 'Następny' && has "$Z160" 'Kopie' \
-   && ! has "$Z160" 'Harmonogram' && ! has "$Z160" 'Czas o/ś/m' && ! has "$Z160" 'szt.'; then
-    ok "zadania: przy 260 kolumnach piec naglowkow listy (U21: kierunek, harmonogram, retencja, czasy -- w panelu)"
+Z160H="$(printf '%s\n' "$Z160" | sed -n '3p')"
+if hasE "$Z160H" 'Kiedy {2,}Relacja {2,}Co {2,}Wynik {2,}Czas' \
+   && ! has "$Z160H" 'Prefiks migawek' && ! has "$Z160H" 'Następny' && ! has "$Z160H" 'Kopie' \
+   && ! has "$Z160H" 'Harmonogram' && ! has "$Z160H" 'Czas o/ś/m' && ! has "$Z160H" 'szt.'; then
+    ok "zadania: przy 260 kolumnach piec naglowkow listy: Kiedy, Relacja, Co, Wynik, Czas (kierunek, harmonogram, retencja -- w panelu; prefiks i kopie -- na F3)"
 else
-    bad "zadania: naglowki przy 160" "$(printf '%s' "$Z160" | sed -n '3p')"
+    bad "zadania: naglowki przy 160" "$Z160H"
 fi
 if [ "$(printf '%s\n' "$Z160" | grep -c '║.*│')" -gt 0 ]; then
     ok "zadania: przy 160 panel stoi OBOK listy (prog 150, nie 120)"
@@ -253,7 +282,7 @@ fi
 for _w in 80 100 120 140 160 200; do
     _h="$(screen zadania "" --width $_w | sed -n '3p')"
     case "$_h" in
-        *"Czas..."*|*"Kopie …"*|*"Kopie..."*|*"Harmonogr…"*|*"Następn…"*) bad "zadania: uciety NAGLOWEK kolumny przy $_w" "$_h" ;;
+        *"Czas..."*|*"Wynik…"*|*"Wynik..."*|*"Relacj…"*|*"Relacj..."*|*"Kiedy…"*|*"Kiedy..."*) bad "zadania: uciety NAGLOWEK kolumny przy $_w" "$_h" ;;
         *) ok "zadania: przy $_w kolumnach zaden naglowek kolumny nie jest uciety" ;;
     esac
 done
@@ -484,32 +513,35 @@ fi
 # dobowego jest jutro; te testy pinuja tresc wierszy relacji przy 100 kolumnach,
 # wiersze replik maja wlasne testy przy NOSNIKACH.
 Z="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --progress "$P10/progress.json" --config "$P10/show-config.json" --stats "$P10/job-stats.json" --screen zadania --width 160 2>&1)"
-if has "$Z" '╔═ Zadania na pve10 (32 zadania, 4 relacje) -- sort'; then
-    ok "zadania: F2 liczy zadania z crona i relacje, ktore je maja, tytul nazywa domyslny widok sortowania"
+if has "$Z" '╔═ Przebiegi na pve10 -- wykonane 12h i nadchodzące 6h'; then
+    ok "zadania: F2 to Przebiegi -- tytul nazywa host i okno: wykonane 12h, nadchodzace 6h (nie liczy zadan ani relacji)"
 else
     bad "zadania: tytul" "$Z"
 fi
-# R3-4: kolejnosc kolumn po priorytecie zmienila sie (Kopie/GB/Czas nie sa juz w
-# tej samej kolejnosci co dawniej, Harmonogram i Nastepny moga wejsc miedzy
-# Zadanie a nimi) -- sprawdzamy PREFIKS wiersza (Relacja/Kierunek/Zadanie, ktore
-# sa priorytetem 1-3 i zawsze pierwsze) i ze werdykt gdzies na tym wierszu jest,
-# bez wiazania sie do dokladnej pozycji kolumn koncowych.
-if hasE "$Z" '^║ lab-vm101 +pobranie +automated_hourly ' && hasE "$Z" 'Kierunek +pve10<192\.168\.28\.99' && ! has "$Z" 'Zakres'; then
-    ok "zadania: POBRANIE nazywa sie pobraniem (nie 'wysylka'), kierunek 'pve10<peer' w panelu (U21), bez 'Zakres' dla jednego datasetu"
+# F2 Przebiegi: wiersz to BIEG, lista idzie wg czasu. Wiersz zadania znajdujemy po tresci
+# (zkeys), panel (kierunek, retencja) jest ten sam co dawniej, tylko pod grupa
+# "Nadchodzacy bieg". Prefiks migawek (automated_hourly) zniknal z F2 -- jest na F3, w
+# zakladce Zadania (test 'pobranie +automated_hourly +co godzinę' wyzej); tu wiersz niesie
+# zadanie i szczebel w kolumnie Co.
+# Szerokosc 200: przy ciasnej liscie odpada kolumna Co (prio), a ona niesie zadanie.
+ZW="$(screen zadania "$(zkeys "^║ $KD +lab-vm101 +pobranie " $ALL)" --width 200 --height 60)"
+if hasE "$ZW" "^║ $KD +lab-vm101 +pobranie +standard_hourly: vm-101 +nadchodzący" && hasE "$ZW" 'Kierunek +pve10<192\.168\.28\.99' \
+   && has "$ZW" 'Nadchodzący bieg' && ! has "$ZW" 'Zakres'; then
+    ok "zadania: POBRANIE nazywa sie pobraniem (nie 'wysylka'), w Co ma szczebel, kierunek 'pve10<peer' w panelu (U21), bez 'Zakres' dla jednego datasetu"
 else
-    bad "zadania: wiersz wysylki" "$Z"
+    bad "zadania: wiersz wysylki" "$ZW"
 fi
-ZL="$(screen zadania down --width 120)"
-if hasE "$Z" '^║ lab-vm101 +lokalny prune +automated_hourly ' && hasE "$ZL" 'Kierunek +lokalnie, na tym hoście' && hasE "$ZL" 'Trzyma +24 godz\.'; then
-    ok "zadania: porzadki na ladowisku = 'lokalny prune', rodzina w Prefiksie; w panelu 'lokalnie, na tym hoście' i retencja z jednostka"
+ZL="$(screen zadania "$(zkeys "^║ $KD +lab-vm101 +lokalny prune " $ALL)" --width 200 --height 60)"
+if hasE "$ZL" "^║ $KD +lab-vm101 +lokalny prune " && hasE "$ZL" 'Kierunek +lokalnie, na tym hoście' && hasE "$ZL" 'Trzyma +24 godz\.'; then
+    ok "zadania: porzadki na ladowisku = 'lokalny prune'; w panelu 'lokalnie, na tym hoście' i retencja z jednostka"
 else
-    bad "zadania: wiersz porzadkow" "$Z" "$ZL"
+    bad "zadania: wiersz porzadkow" "$ZL"
 fi
-ZR="$(screen zadania down,down,down,down,down --width 120)"
-if [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +zdalny prune +automated_hourly ')" -ge 1 ] && has "$ZR" 'lab-vm101 -- zdalny prune' && hasE "$ZR" 'Kierunek +pve10<192\.168\.28\.99'; then
+ZR="$(screen zadania "$(zkeys "^║ $KD +lab-vm101 +zdalny prune " $ALL)" --width 200 --height 60)"
+if hasE "$ZR" "^║ $KD +lab-vm101 +zdalny prune " && has "$ZR" 'lab-vm101 -- ' && hasE "$ZR" 'Kierunek +pve10<192\.168\.28\.99' && ! hasE "$ZR" 'Kierunek +lokalnie'; then
     ok "zadania: porzadki na ZDALNYM zrodle niosa kierunek relacji, nie 'lokalnie'"
 else
-    bad "zadania: zdalne porzadki" "$Z" "$ZR"
+    bad "zadania: zdalne porzadki" "$ZR"
 fi
 # CZASY I GB JAK W MAILU (wlasciciel 2026-09-11: "jak w digescie -- spojnie z
 # tym co przychodzi na mailu"). Zrodlo: job-stats --json z pve10, doslownie.
@@ -547,79 +579,110 @@ else
     bad "zadania: panel czasow" "$Z200"
 fi
 # bez zrodla: '?' w kolumnach i zdanie w panelu, nie zera
-ZS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --stats "$FIX/nie-ma.json" --screen zadania --width 200 2>&1)"
-# R3-4: Kopie/GB/Czas zamienily miejsca w priorytecie (Kopie teraz przed GB i
-# Czas) -- sprawdzamy fakty NA WIERSZU bez wiazania sie do ich wzajemnej
-# kolejnosci.
-ZS_LINE=$(printf '%s\n' "$ZS" | grep -E '^║ lab-vm101 +pve10<192\.168\.28\.99 ')
-QCOUNT=$(printf '%s' "$ZS_LINE" | grep -o '?' | wc -l | tr -d ' ')
-ZS_LINE=$(printf '%s\n' "$ZS" | grep -E '^║ lab-vm101 +pobranie ')
-if [ -n "$ZS_LINE" ] && printf '%s' "$ZS_LINE" | grep -qF 'aktualne' \
-   && has "$ZS" '? -- job-stats nie odpowiedział' && has "$ZS" '! bez odpowiedzi: 1'; then
-    ok "zadania: zepsute job-stats -> '?' i zdanie w panelu, nigdy zero udajace pomiar"
+ZSARGS="--status $P10/status.json --jobs $P10/list-jobs.json --monitors $P10/monitor.json --stats $FIX/nie-ma.json"
+ZS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZSARGS --screen zadania --keys "$(zkeys "^║ $KD +lab-vm101 +pobranie " $ZSARGS)" --width 200 --height 60 2>&1)"
+# F2 Przebiegi: werdykt ('aktualne') nie jest juz w liscie F2 -- mieszka na F3 Relacje
+# (testy 'relacje:' wyzej). Lista niesie bieg (Kiedy/Co/Wynik), wiec fakt, ktory tu
+# chronimy -- zepsute job-stats to '?' i zdanie, nie zera udajace pomiar -- siedzi w
+# panelu wiersza i w pasku tytulu.
+ZS_LINE=$(printf '%s\n' "$ZS" | grep -E "^║ $KD +lab-vm101 +pobranie ")
+if [ -n "$ZS_LINE" ] && printf '%s' "$ZS_LINE" | grep -qF 'nadchodzący' \
+   && has "$ZS" '? -- job-stats nie odpowiedział' && has "$ZS" '! bez odpowiedzi: 1' \
+   && ! hasE "$ZS" 'Czas +ostatni 0s' && ! hasE "$ZS" 'Wywołania +0,'; then
+    ok "zadania: zepsute job-stats -> '?' i zdanie w panelu (wiersz biegu zostaje), nigdy zero udajace pomiar"
 else
     bad "zadania: zepsute job-stats" "$ZS_LINE" "$ZS"
 fi
-ZH3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --stats "$P10/job-stats.json" --screen zadania --width 200 2>&1)"
-ZH3_LINE=$(printf '%s\n' "$ZH3" | grep -E '^║ pve9 +hostA>pve9 +wysyłka +automated_hourly ')
-ZH3_LINE=$(printf '%s\n' "$ZH3" | grep -E '^║ pve9 +wysyłka +automated_hourly ')
-if [ -n "$ZH3_LINE" ] && printf '%s' "$ZH3_LINE" | grep -qF 'spóźnione' \
+ZH3ARGS="--jobs $FIX/jobs.json --monitors $FIX/monitors.json --stats $P10/job-stats.json"
+ZH3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZH3ARGS --screen zadania --keys "$(zkeys "^║ $KD +pve9 +wysyłka " $ZH3ARGS)" --width 200 --height 60 2>&1)"
+ZH3_LINE=$(printf '%s\n' "$ZH3" | grep -E "^║ $KD +pve9 +wysyłka ")
+# Werdykt 'spóźnione' tego zadania jest na F3 (nie na F2 Przebiegi); tu: wiersz biegu
+# istnieje, a panel mowi 'brak biegow' zamiast zer.
+if [ -n "$ZH3_LINE" ] && printf '%s' "$ZH3_LINE" | grep -qF 'nadchodzący' \
    && has "$ZH3" 'brak biegów w dzienniku z tego okna'; then
-    ok "zadania: zadanie, ktorego nie ma w dzienniku, pokazuje werdykt i mowi 'brak biegow' w panelu"
+    ok "zadania: zadanie, ktorego nie ma w dzienniku, ma wiersz biegu, a panel mowi 'brak biegow'"
 else
     bad "zadania: brak biegow" "$ZH3_LINE" "$ZH3"
 fi
 
-# SORTOWANIE F2 (test c, R3-4; R4-2: F8, nie 's'): F8 (X9: bylo F7) cykluje trzy widoki, tytul mowi ktory.
+# F8/F9 NA F2 PRZEBIEGI (U79/U80). Trzytrybowe sortowanie (F8: relacje / os czasu / ostatni
+# bieg, 'sort: ...' w tytule) ZNIKLO razem z kolumnami Prefiks/Nastepny/Kopie: lista to
+# jedna os czasu. F8 = Schowaj/Pokaz wykonane (przelacznik), F9 = Grupuj po relacji /
+# Jedna os czasu (przelacznik). Fikstura hostA nie ma wykonanych biegow (brak --stats),
+# wiec F8 tu zmienia tytul i podpis na pasku; schowanie wierszy i kursor na tym samym
+# biegu po F8/F9 -- w sekcji 'przebiegi: wiersze tylko do czytania' nizej (ma wykonany bieg).
 # jobs.json (fixture hostA) ma zadanie GODZINOWE "wysyłka hourly" (schedule
 # "5 * * * *" -- nastepny bieg w ciagu godziny od NOW) i zadanie DOBOWE
 # "kopia daily" (schedule "21 0 * * *" -- NOW jest "środek dnia", 00:21 juz
-# minelo, nastepny bieg dopiero jutro) -- kolejnosc miedzy nimi w widoku "os
-# czasu" jest wiec DETERMINISTYCZNA niezaleznie od dokladnej minuty NOW.
+# minelo, nastepny bieg dopiero jutro) -- kolejnosc miedzy nimi na osi czasu
+# jest wiec DETERMINISTYCZNA niezaleznie od dokladnej minuty NOW.
 ZJARGS="--jobs $FIX/jobs.json --monitors $FIX/monitors.json"
+ZSORT0="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --width 200 --height 100 2>&1)"
 ZSORT1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F8 --width 200 2>&1)"
-if has "$ZSORT1" 'sort: oś czasu'; then
-    ok "zadania: F8 raz -- tytul mowi 'oś czasu'"
+if has "$ZSORT0" 'Przebiegi na ' && has "$ZSORT0" 'wykonane 12h i nadchodzące 6h' && has "$ZSORT0" 'F8 Schowaj wykonane' \
+   && has "$ZSORT1" 'Przebiegi na ' && has "$ZSORT1" '-- tylko nadchodzące' && ! has "$ZSORT1" 'wykonane 12h' && has "$ZSORT1" 'F8 Pokaż wykonane' \
+   && ! has "$ZSORT1" 'sort:' && ! has "$ZSORT1" 'Sortuj'; then
+    ok "zadania: F8 raz -- tytul 'tylko nadchodzące', podpis na pasku 'Pokaż wykonane' (bylo: sort: oś czasu)"
 else
-    bad "zadania: F8 raz -- tytul" "$ZSORT1"
+    bad "zadania: F8 raz -- tytul" "$ZSORT0" "$ZSORT1"
 fi
-L1=$(printf '%s\n' "$ZSORT1" | grep -n 'wysyłka ' | head -1 | cut -d: -f1)
-L2=$(printf '%s\n' "$ZSORT1" | grep -n 'kopia ' | head -1 | cut -d: -f1)
-L1=$(printf '%s\n' "$ZSORT1" | grep -n '^║ .*wysyłka ' | head -1 | cut -d: -f1)
-L2=$(printf '%s\n' "$ZSORT1" | grep -n '^║ .*kopia ' | head -1 | cut -d: -f1)
+L1=$(lst "$ZSORT0" | grep -nE "^║ $KD .*wysyłka .*nadchodzący" | head -1 | cut -d: -f1)
+L2=$(lst "$ZSORT0" | grep -nE "^║ $KD .*kopia .*nadchodzący" | head -1 | cut -d: -f1)
 if [ -n "$L1" ] && [ -n "$L2" ] && [ "$L1" -lt "$L2" ]; then
-    ok "zadania: F8 raz (oś czasu) -- 'wysyłka hourly' (biegnie w ciagu godziny) przed 'kopia daily' (biegnie dopiero jutro)"
+    ok "zadania: os czasu -- 'wysyłka hourly' (biegnie w ciagu godziny) stoi przed 'kopia daily' (biegnie dopiero jutro)"
 else
-    bad "zadania: F8 raz -- kolejnosc wierszy" "L1=$L1 L2=$L2" "$ZSORT1"
+    bad "zadania: kolejnosc wierszy na osi czasu" "L1=$L1 L2=$L2" "$ZSORT0"
 fi
 ZSORT2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F8,F8 --width 200 2>&1)"
-if has "$ZSORT2" 'sort: ostatni bieg'; then
-    ok "zadania: F8 dwa razy -- tytul mowi 'sort: ostatni bieg'"
+if has "$ZSORT2" 'wykonane 12h i nadchodzące 6h' && ! has "$ZSORT2" 'tylko nadchodzące' && has "$ZSORT2" 'F8 Schowaj wykonane'; then
+    ok "zadania: F8 dwa razy -- wykonane wracaja (tytul 'wykonane 12h i nadchodzące 6h', pasek 'Schowaj wykonane')"
 else
     bad "zadania: F8 dwa razy -- tytul" "$ZSORT2"
 fi
 ZSORTS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys s --width 200 2>&1)"
-if has "$ZSORTS" 'sort: relacje' && has "$ZSORTS" '$ s_ '; then
-    ok "zadania: 's' to TEKST linii polecen -- widok sortowania zostaje (R4-2)"
+if has "$ZSORTS" 'wykonane 12h i nadchodzące 6h' && has "$ZSORTS" '$ s_ '; then
+    ok "zadania: 's' to TEKST linii polecen -- widok zostaje (R4-2)"
 else
     bad "zadania: 's' jako tekst" "$ZSORTS"
 fi
 ZSORT3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F8,F8,F8 --width 200 2>&1)"
-if has "$ZSORT3" 'sort: relacje' && ! has "$ZSORT3" 'oś czasu' && ! has "$ZSORT3" 'ostatni bieg'; then
-    ok "zadania: F8 trzy razy -- wraca do domyslnego widoku (relacje, w srodku wg nastepnego)"
+if has "$ZSORT3" '-- tylko nadchodzące' && ! has "$ZSORT3" 'wykonane 12h' && ! has "$ZSORT3" 'po relacjach'; then
+    ok "zadania: F8 trzy razy -- to przelacznik, nie cykl: znowu 'tylko nadchodzące'"
 else
-    bad "zadania: F8 trzy razy -- powrot" "$ZSORT3"
+    bad "zadania: F8 trzy razy -- przelacznik" "$ZSORT3"
+fi
+ZG9="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F9 --width 200 2>&1)"
+ZG99="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F9,F9 --width 200 2>&1)"
+if has "$ZG9" 'wykonane 12h i nadchodzące 6h, po relacjach' && hasE "$ZG9" '^║ Kiedy +Zadanie +Co +Wynik' && hasE "$ZG9" '^║ ▸ ' \
+   && hasE "$ZG9" "^║   │ $KD " && has "$ZG9" 'F9 Jedna oś czasu' \
+   && ! has "$ZG99" 'po relacjach' && hasE "$ZG99" '^║ Kiedy +Relacja +Co +Wynik' && ! hasE "$ZG99" '^║ ▸ ' && has "$ZG99" 'F9 Grupuj po relacji'; then
+    ok "zadania: F9 grupuje po relacji (naglowki '▸ NAZWA', wiersze '│ dd.mm HH:MM', kolumna Zadanie, tytul ', po relacjach'); drugi F9 wraca do jednej osi czasu"
+else
+    bad "zadania: F9 grupowanie" "$ZG9" "$ZG99"
+fi
+# Kursor zostaje na TYM SAMYM biegu po F8/F9 (run_cursor_for): panel (tytul i 'Kiedy' z data)
+# jest ten sam przed i po -- inaczej przelaczenie widoku przenosiloby operatora na cudze zadanie.
+panel_id() { printf '%s\n' "$1" | sed -n 2p | sed 's/^.*╗//'; printf '%s\n' "$1" | grep -oE 'Kiedy +20[0-9]{2}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1; }
+ZCK="$(zkeys "^║ $KD +pve9 +wysyłka " $ZJARGS)"
+ZC0="$(panel_id "$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys "$ZCK" --width 200 --height 60 2>&1)")"
+ZC8="$(panel_id "$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys "${ZCK:+$ZCK,}F8" --width 200 --height 60 2>&1)")"
+ZC9="$(panel_id "$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys "${ZCK:+$ZCK,}F9" --width 200 --height 60 2>&1)")"
+if [ -n "$ZC0" ] && has "$ZC0" 'Kiedy' && [ "$ZC0" = "$ZC8" ] && [ "$ZC0" = "$ZC9" ]; then
+    ok "zadania: po F8 i po F9 kursor zostaje na tym samym biegu (ten sam panel: tytul i termin)"
+else
+    bad "zadania: kursor po F8/F9" "przed: $ZC0" "F8: $ZC8" "F9: $ZC9"
 fi
 
 # ============================================================================
 # R4-3/R4-5: co najmniej dwie spacje miedzy kolumnami; kiedy wszystkie sie
 # mieszcza, zapas idzie w odstepy, a nie w pustke po prawej (zrzut wlasciciela
-# z pve11 przy ~190 kolumnach). Fikstura hostA: 11 kolumn, przy 200 lista ma 130.
+# z pve11 przy ~190 kolumnach). Fikstura hostA: 5 kolumn Przebiegow (Kiedy, Relacja,
+# Co, Wynik, Czas); przy 260 lista ma 60% szerokosci.
 R45N="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 100 2>&1 | sed -n 3p)"
 R45W="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 260 2>&1 | sed -n 3p)"
 _r45="${R45N%%║│*}"
-if printf '%s' "$R45N" | grep -qE 'Relacja  +Zadanie' && ! printf '%s' "${_r45#║ }" | grep -qE '[^ ] [A-ZŁŚ][a-zęąśłó]' \
-   && printf '%s' "$R45W" | grep -qE 'Relacja {3,}Zadanie {3,}Prefiks'; then
+if printf '%s' "$R45N" | grep -qE 'Kiedy {2,}Relacja {2,}[CW]' && ! printf '%s' "${_r45#║ }" | grep -qE '[^ ] [A-ZŁŚ][a-zęąśłó]' \
+   && printf '%s' "$R45W" | grep -qE 'Kiedy {3,}Relacja {3,}Co {3,}Wynik'; then
     ok "zadania: odstep miedzy kolumnami >= 2 spacje; przy szerokiej liscie zapas rozlozony na odstepy (R4-3, R4-5)"
 else
     bad "zadania: odstepy kolumn" "$R45N" "$R45W"
@@ -629,32 +692,65 @@ fi
 # UWAGA 4 (wlasciciel, 2026-09-24): szczebel plaski (pobranie + porzadki w JEDNEJ sekcji)
 # mial w F2 tylko "pobranie". Porzadki z WLASNEJ linii zadania (tag "(sx-a)"), a linia
 # porzadkow sasiedniego datasetu z tego samego bloku ("(sx-b)", inny harmonogram) nie wchodzi.
-FP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs-flatprune.json" --monitors "$FIX/monitors-group.json" --screen zadania --width 200 2>&1)"
-FPD="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs-flatprune.json" --monitors "$FIX/monitors-group.json" --screen zadania --width 200 2>&1)"
-if hasE "$FP" '^║ sx +lokalny prune +automated ' && hasE "$FPD" 'Kiedy +co godzinę \(:21\)' && hasE "$FPD" 'Trzyma +168 godz\.' && ! hasE "$FPD" 'Kiedy +co godzinę \(:17\)' \
-   && [ "$(printf '%s\n' "$FP" | grep -c '^║ .*lokalny prune')" -eq 1 ]; then
+FP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs-flatprune.json" --monitors "$FIX/monitors-group.json" --screen zadania --width 200 --height 400 2>&1)"
+FPARGS="--jobs $FIX/jobs-flatprune.json --monitors $FIX/monitors-group.json"
+FPD="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $FPARGS --screen zadania --keys "$(zkeys "^║ $KD +sx +lokalny prune " $FPARGS)" --width 200 --height 60 2>&1)"
+# F2 Przebiegi: kazdy bieg to wiersz, wiec porzadkow jest tyle, ile ich terminow w oknie 6 h.
+# "Tylko wlasne" znaczy teraz: WSZYSTKIE wiersze 'lokalny prune' tej relacji maja minute
+# wlasnej linii delsnaps (:21), zadnego z minuta cudzej (:17) -- i panel wiersza to wlasny
+# harmonogram i retencja.
+FPMIN="$(printf '%s\n' "$FP" | grep -E "^║ $KD +sx +lokalny prune " | sed -E 's/^║ [0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort -u | tr '\n' ' ')"
+if hasE "$FP" "^║ $KD +sx +lokalny prune " && hasE "$FPD" 'Kiedy +co godzinę \(:21\)' && hasE "$FPD" 'Trzyma +168 godz\.' && ! hasE "$FPD" 'Kiedy +co godzinę \(:17\)' \
+   && [ "$FPMIN" = "21 " ]; then
     ok "zadania: szczebel plaski pokazuje WLASNE porzadki (harmonogram z jego linii delsnaps), bez cudzych z bloku (uwaga 4: pve9-synchro)"
 else
-    bad "zadania: porzadki szczebla plaskiego (uwaga 4)" "$FP"
+    bad "zadania: porzadki szczebla plaskiego (uwaga 4)" "minuty wierszy 'lokalny prune': '$FPMIN'" "$FP"
 fi
 # Atrapa relacji: sync-test ma TRZY linie crona identyczne poza zakresem (a/b/c,
 # ten sam harmonogram) plus czwarta pod INNYM harmonogramem (d) -- ta czwarta
 # NIE ma sie zlaczyc. backup-test to relacja BEZ rekordu synchro (mode
 # nieobecny), zeby pokazac, ze "<" zostaje, kiedy rekord nie mowi "sync".
 GJ="$FIX/jobs-group.json"; GS="$FIX/status-group.json"; GM="$FIX/monitors-group.json"
-G="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 2>&1)"
+G="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 400 2>&1)"
 GR="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen relacje --width 200 2>&1)"
-if [ "$(printf '%s\n' "$G" | grep -cE '^║ sync-test ')" -eq 2 ] && hasE "$G" '^║ backup-test +pobranie +automated_hourly ' \
-    && hasE "$G" 'Kierunek +pve20<>192\.168\.28\.50' && hasE "$G" 'Zakres +3 datasetów'; then
-    ok "zadania: F2 -- synchro ma w panelu '<>' mimo ze KAZDA linia crona jest pull; trzy zakresy pod tym samym zadaniem to JEDEN wiersz (Zakres: 3), czwarty (inny harmonogram) NIE laczy sie"
+# F2 Przebiegi: wiersz to BIEG jednej LINII CRONA. a, b, c maja kazde swoja linie (wlasna
+# etykiete) pod tym samym harmonogramem (:05), d inny (:10): wierszy :05 jest trzy razy tyle
+# co :10 -- kazda linia ma swoj bieg i swoj wynik, nic sie nie zlewa. Panel wiersza a: kierunek
+# synchro '<>' (z rekordu, choc linia crona to pull) i ZRODLO/CEL tego jednego datasetu.
+GN="$(lst "$G" | grep -E "^║ $KD +sync-test +pobranie " | sed -E 's/^║ [0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort | uniq -c | sed -E 's/^ *//' | tr '\n' ',')"
+GN1="$(printf '%s' "$GN" | cut -d, -f1)"; GN2="$(printf '%s' "$GN" | cut -d, -f2)"
+GZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 60 2>&1)"
+if [ "$(printf '%s' "$GN" | tr -cd ',' | wc -c | tr -d ' ')" -eq 2 ] && [ "${GN1#* }" = "05" ] && [ "${GN2#* }" = "10" ] \
+    && [ "${GN1%% *}" -eq $(( ${GN2%% *} * 3 )) ] && [ "${GN2%% *}" -ge 1 ] \
+    && hasE "$G" "^║ $KD +backup-test +pobranie +standard_hourly: e " \
+    && hasE "$GZ" 'Kierunek +pve20<>192\.168\.28\.50' && hasE "$GZ" 'Źródło +zfsbackup-pve20@192\.168\.28\.50:hdd/lab/a'; then
+    ok "zadania: F2 -- kazda linia crona ma swoj bieg (a/b/c pod :05 = 3x wierszy d pod :10); panel: synchro '<>' mimo ze linia to pull, zrodlo tego datasetu"
 else
-    bad "zadania: F2 grupowanie i symbol synchro" "$G"
+    bad "zadania: F2 grupowanie i symbol synchro" "minuty wierszy sync-test (liczba minuta): $GN" "$GZ"
 fi
-if has "$G" '3 datasetów w hdd/backups/192.168.28.50/hdd/lab: a, b, c' \
-    && ! has "$G" 'zakres 1' && ! has "$G" 'zakres 2'; then
-    ok "zadania: panel wiersza x3 -- JEDNA linia 'zakres' z liczba i wszystkimi trzema datasetami (R3-3: nie 'zakres N' per dataset)"
+# JEDNA linia crona z kilkoma datasetami (pve2 2026-10-27: subvol-103 + ROOT/pve-1 w jednym
+# snapget) to JEDEN bieg: wariant fikstury, w ktorym b i c niosa etykiete linii a. Panel ma
+# wtedy JEDNA linie 'Zakres' z liczba i wszystkimi trzema datasetami (R3-3), a przy 30
+# wierszach terminala 'Kiedy' (harmonogram) dalej widac.
+GJ1="$(mktemp)"
+"$PY" - "$GJ" "$GJ1" <<'PYEOF'
+import json, sys
+j = json.load(open(sys.argv[1], encoding="utf-8"))
+abc = [x for x in j["jobs"] if x["scope"].rsplit("/", 1)[-1] in ("a", "b", "c")]
+line = '%s /x/zfs-job.sh "pve20 hourly backup (sync-test-all)" -- /x/snapget.sh -m "automated_hourly_" "%s" ""' % (
+    abc[0]["schedule"], ",".join(x["other_end"] for x in abc))
+for x in abc:
+    x["cron_lines"] = [line]
+json.dump(j, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+G1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ1" --monitors "$GM" --screen zadania --width 200 --height 400 2>&1)"
+G1N="$(lst "$G1" | grep -E "^║ $KD +sync-test +pobranie " | sed -E 's/^║ [0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort | uniq -c | sed -E 's/^ *//' | tr '\n' ',')"
+G1A="$(printf '%s' "$G1N" | cut -d, -f1)"; G1B="$(printf '%s' "$G1N" | cut -d, -f2)"
+if grep -q 'sync-test-all' "$GJ1" && [ "${G1A%% *}" = "${G1B%% *}" ] \
+    && has "$G1" '3 datasetów w hdd/backups/192.168.28.50/hdd/lab: a, b, c' && ! has "$G1" 'zakres 1' && ! has "$G1" 'zakres 2'; then
+    ok "zadania: jedna linia crona z trzema datasetami to jeden bieg; panel -- JEDNA linia 'zakres' z liczba i wszystkimi trzema (R3-3)"
 else
-    bad "zadania: panel grupy" "$G"
+    bad "zadania: panel grupy" "minuty: $G1N" "$G1"
 fi
 # U26 (wlasciciel 2026-10-19, zrzut: lustro po F7 dalej "stare" w kazdym wierszu): jeden
 # monitor relacji pilnuje 4 datasetow, CRITICAL przez jeden (c). Para bierze linie SWOJEGO
@@ -680,18 +776,20 @@ else
 fi
 rm -f "$GSV"
 # R3-3: przy malym terminalu (30 wierszy) 'harmonogram' MA byc widoczny, mimo
-# ze zakres grupy jest jedna dluga linia -- puste linie miedzy grupami.
-G30="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 30 2>&1)"
+# ze zakres jednej linii z trzema datasetami jest jedna dluga linia.
+G30="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ1" --monitors "$GM" --screen zadania --width 200 --height 30 2>&1)"
 if has "$G30" '3 datasetów w' && hasE "$G30" 'Kiedy +co godzinę'; then
     ok "zadania: panel grupy przy --height 30 -- 'Zakres' jedna linia, 'Kiedy' wciaz widoczne"
 else
     bad "zadania: panel grupy przy malym terminalu" "$G30"
 fi
-GB_="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --keys down,down --width 200 2>&1)"
-if hasE "$GB_" 'Kierunek +pve20<192\.168\.28\.60' && ! hasE "$GB_" 'Kierunek +pve20<>'; then
+rm -f "$GJ1"
+GBK="$(zkeys "^║ $KD +backup-test " --status "$GS" --jobs "$GJ" --monitors "$GM")"
+GB_="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --keys "$GBK" --width 200 2>&1)"
+if [ -n "$GBK" ] && hasE "$GB_" 'Kierunek +pve20<192\.168\.28\.60' && ! hasE "$GB_" 'Kierunek +pve20<>'; then
     ok "zadania: panel kierunku backupu ma '<', synchro '<>' (rekord wygrywa z linia crona)"
 else
-    bad "zadania: panel kierunku synchro" "$GB_"
+    bad "zadania: panel kierunku synchro" "klawisze: $GBK" "$GB_"
 fi
 if hasE "$GR" '^║ sync-test +lustro +pve20<>192\.168\.28\.50 ' && hasE "$GR" '^║ backup-test +backup +pve20<192\.168\.28\.60 '; then
     ok "relacje: F3 tez rysuje '<>' dla synchro (z rekordu, nie z linii crona) i '<' dla backupu"
@@ -703,8 +801,8 @@ fi
 # gosc 901), bylo "aktualne" na F2 i F3. Ostatni bieg z rc != 0 (poza 75 =
 # pominiety przez blokade) daje "błąd biegu"; to, co bieg wyrzucil (P-0), panel.
 GEJ="$(mktemp)"; GES="$(mktemp)"
-"$PY" - "$GJ" "$GEJ" "$GES" <<'PYEOF'
-import json, sys
+"$PY" - "$GJ" "$GEJ" "$GES" "$NOW" <<'PYEOF'
+import datetime, json, sys
 j = json.load(open(sys.argv[1], encoding="utf-8"))
 # Real shape (pve10, 2026-10-08): every job of a block carries the WHOLE block's
 # lines, and a pull line quotes its SOURCE (the job's other_end), not the scope.
@@ -721,7 +819,27 @@ json.dump(j, open(sys.argv[2], "w", encoding="utf-8"))
 def row(leaf, rc):
     return {"label": "hourly backup (sync-test-%s)" % leaf, "runs": 5, "failures": 1 if rc else 0, "avg_s": 3, "max_s": 7,
             "total_s": 15, "last_s": 2, "last_rc": rc, "last_at": "2026-09-08 13:48"}
-json.dump({"window_days": 7, "jobs": [row("a", 0), row("b", 1), row("c", 0), row("d", 75)],
+# F2 PRZEBIEGI: wykonane biegi (job-stats --runs, z dziennika crona) w oknie 12 h przed NOW.
+# Wiersz F2 ma etykiete PIERWSZEJ linii zadania (a/b/c maja ten sam harmonogram i sa jednym
+# zadaniem, d -- drugim); bieg a/b/c jest wiec zapisany pod etykieta pierwszego z nich -- jak
+# prawdziwa wspolna linia (pve2: jedna etykieta, jeden rc, tekst bledu nazywa dataset).
+# Blad: odmowa na 'b' (rc=1); drugie zadanie (d) -- pominiete przez blokade (rc=75).
+now = int(sys.argv[4])
+def iso(ts):
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone(datetime.timedelta(hours=2))).isoformat()
+lead = {}
+for x in j["jobs"]:
+    if x["label"] == "sync-test":
+        lead.setdefault(x["schedule"], x["scope"].rsplit("/", 1)[-1])
+grp = {}
+for x in j["jobs"]:
+    if x["label"] == "sync-test":
+        grp[x["scope"].rsplit("/", 1)[-1]] = lead[x["schedule"]]
+runs = [{"label": "hourly backup (sync-test-%s)" % grp["b"], "start": iso(now - 3630), "end": iso(now - 3600), "rc": 1,
+         "error": "Refusing 'hdd/lab/b': it is the disk of guest 901, which is currently RUNNING."},
+        {"label": "hourly backup (sync-test-%s)" % grp["d"], "start": iso(now - 1830), "end": iso(now - 1800), "rc": 75,
+         "error": ""}]
+json.dump({"window_days": 7, "runs": runs, "jobs": [row("a", 0), row("b", 1), row("c", 0), row("d", 75)],
            "events": [{"label": "hourly backup (sync-test-b)", "discard_at": "", "discard": "", "error_at": "2026-09-08 13:48",
                        "error": "Refusing 'hdd/lab/b': it is the disk of guest 901, which is currently RUNNING."},
                       {"label": "hourly backup (sync-test-a)", "discard_at": "2026-09-08 12:16",
@@ -730,10 +848,20 @@ json.dump({"window_days": 7, "jobs": [row("a", 0), row("b", 1), row("c", 0), row
            "datasets": [], "volume": []}, open(sys.argv[3], "w", encoding="utf-8"))
 PYEOF
 GE="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES" --screen zadania --width 200 --height 50 2>&1)"
-if [ "$(printf '%s\n' "$GE" | grep -cE '^║ sync-test .*błąd biegu')" = 1 ] && ! hasE "$GE" '^║ backup-test .*błąd biegu'; then
-    ok "zadania: wiersz z datasetem, ktorego ostatni bieg sie nie udal (b, rc=1) to 'błąd biegu'; rc=75 (d, blokada) nie; inna relacja tez nie"
+# F2 PRZEBIEGI: slowa 'błąd biegu' w liscie juz nie ma (to byl werdykt zadania; jest na F3, test
+# 'relacje: relacja z nieudanym ostatnim biegiem' nizej). Lista mowi o KONKRETNYM biegu: wykonany
+# bieg z rc=1 to wiersz "BŁĄD rc=1", rc=75 (blokada) to "pominięty" -- nie blad, inna relacja
+# bez biegow w oknie ma tylko wiersze nadchodzace; kreska "teraz" dzieli wykonane od nadchodzacych.
+GEK="$(zkeys "^║ $KD +sync-test +.*BŁĄD rc=1" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES")"
+GEP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES" --screen zadania --keys "$GEK" --width 200 --height 60 2>&1)"
+GEL="$(lst "$GE")"
+if [ "$(printf '%s\n' "$GEL" | grep -cE "^║ $KD +sync-test .*BŁĄD rc=1")" = 1 ] && ! hasE "$GEL" "^║ $KD +sync-test .*BŁĄD rc=75" \
+   && [ "$(printf '%s\n' "$GEL" | grep -cE "^║ $KD +sync-test .*pominięty")" = 1 ] && ! hasE "$GEL" '^║ [0-9. :]+ +backup-test .*BŁĄD' \
+   && hasE "$GEL" '^║ ── teraz [0-9]{2}:[0-9]{2}' \
+   && hasE "$GEP" 'Wynik +BŁĄD rc=1' && hasE "$GEP" 'Powód +Refusing' && has "$GEP" '── Ten bieg'; then
+    ok "zadania: wykonany bieg z rc=1 to wiersz 'BŁĄD rc=1' z powodem w panelu ('Ten bieg'); rc=75 (blokada) to 'pominięty', nie blad; inna relacja bez bledu; kreska 'teraz' dzieli wykonane od nadchodzacych"
 else
-    bad "zadania: błąd biegu na F2" "$(printf '%s\n' "$GE" | grep -E '^║ (sync|backup)-test')"
+    bad "zadania: błąd biegu na F2" "$(printf '%s\n' "$GE" | grep -E '^║ (sync|backup)-test|teraz' | head -8)" "$(printf '%s\n' "$GEP" | grep -E 'Wynik|Powód|Ten bieg')"
 fi
 if hasE "$GE" 'Błąd +2026-09-08 13:48 +[^ ]*/lab/b +rc=1' && has "$GE" 'Refusing' \
    && hasE "$GE" 'Wyrzucono +2026-09-08 12:16  hdd/lab/a: 1 snapshot' \
@@ -742,6 +870,77 @@ if hasE "$GE" 'Błąd +2026-09-08 13:48 +[^ ]*/lab/b +rc=1' && has "$GE" 'Refusi
 else
     bad "zadania: panel błąd/wyrzucono" "$(printf '%s\n' "$GE" | grep -E 'Błąd|Wyrzuc|błędów')"
 fi
+# PRZEBIEGI: WIERSZE TYLKO DO CZYTANIA. Kreska "── teraz HH:MM" (i w grupach naglowek
+# "▸ NAZWA") nie jest biegiem: kursor jej nie zaznacza (panel zawsze mowi o biegu: 'Ten bieg'
+# albo 'Nadchodzący bieg'), a F7 na wykonanym biegu niczego nie uruchamia. Fikstura: jeden
+# wykonany bieg OK (etykieta pierwszej linii sync-test), reszta nadchodzaca; stan jak po
+# pierwszej godzinie dzialania -- [0] wykonany OK, [1] kreska, [2] pierwszy nadchodzacy.
+PRS="$(mktemp)"
+"$PY" - "$GES" "$PRS" "$NOW" "$GEJ" <<'PYEOF'
+import datetime, json, sys
+st = json.load(open(sys.argv[1], encoding="utf-8"))
+now = int(sys.argv[3])
+j = json.load(open(sys.argv[4], encoding="utf-8"))
+first = [x for x in j["jobs"] if x["label"] == "sync-test"][0]
+def iso(ts):
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone(datetime.timedelta(hours=2))).isoformat()
+st["runs"] = [{"label": "hourly backup (sync-test-%s)" % first["scope"].rsplit("/", 1)[-1],
+               "start": iso(now - 5430), "end": iso(now - 5400), "rc": 0, "error": ""}]
+json.dump(st, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+PRARGS="--status $GS --jobs $GEJ --monitors $GM --stats $PRS"
+prz() {   # <klawisze> [extra] -> ekran F2
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PRARGS --screen zadania --keys "$1" --width 200 --height 60 "${@:2}" 2>&1
+}
+PR0="$(prz "")"
+PR0L="$(lst "$PR0")"
+PRL="$(printf '%s\n' "$PR0L" | grep -nE "^║ ($KD|── teraz)" | head -3 | cut -d: -f1 | tr '\n' ' ')"
+set -- $PRL
+if hasE "$PR0L" "^║ $KD +sync-test +pobranie .* OK( |$)" && hasE "$PR0L" '^║ ── teraz [0-9]{2}:[0-9]{2}' && [ $# -ge 3 ] \
+   && printf '%s\n' "$PR0L" | sed -n "${1}p" | grep -qE ' OK( |$)' && printf '%s\n' "$PR0L" | sed -n "${2}p" | grep -q 'teraz' \
+   && printf '%s\n' "$PR0L" | sed -n "${3}p" | grep -q 'nadchodzący'; then
+    ok "przebiegi: wiersze tylko do czytania (a) -- kreska 'teraz' stoi miedzy wykonanym biegiem OK a pierwszym nadchodzacym"
+else
+    bad "przebiegi: kreska 'teraz'" "linie: $PRL" "$PR0"
+fi
+PRD="$(prz down)"; PRU="$(prz down,up)"; PRUU="$(prz down,down,up,up)"; PRUP="$(prz up)"
+# 'down' z wykonanego przeskakuje kreske na pierwszy nadchodzacy; 'up' z niego wraca na wykonany
+# (nie na kreske -- na kresce panel by zniknal); 'up' w gore od zerowego wiersza zostaje.
+if has "$PRD" 'Nadchodzący bieg' && ! has "$PRD" '── Ten bieg' \
+   && has "$PRU" '── Ten bieg' && ! has "$PRU" 'Nadchodzący bieg' \
+   && has "$PRUU" '── Ten bieg' && ! has "$PRUU" 'Nadchodzący bieg' \
+   && has "$PRUP" '── Ten bieg'; then
+    ok "przebiegi: wiersze tylko do czytania (b) -- kursor nie staje na kresce 'teraz': down przeskakuje ja, up z pierwszego nadchodzacego wraca na wykonany (panel zawsze o biegu)"
+else
+    bad "przebiegi: kursor na kresce" "down: $(printf '%s\n' "$PRD" | grep -E 'Ten bieg|Nadchodzący')" "down,up: $(printf '%s\n' "$PRU" | grep -E 'Ten bieg|Nadchodzący')" "down,down,up,up: $(printf '%s\n' "$PRUU" | grep -E 'Ten bieg|Nadchodzący')"
+fi
+PXL="$(mktemp)"; : > "$PXL"
+PRF="$(prz F7 --exec-log "$PXL")"
+PRF_LOG="$(cat "$PXL")"
+PRG="$(prz down,F7 --exec-log "$PXL")"
+if has "$PRF" 'ten bieg już był -- F7 uruchamia zadanie z wiersza nadchodzącego' && [ -z "$PRF_LOG" ] \
+   && ! has "$PRG" 'ten bieg już był' && grep -q 'zfs-job.sh' "$PXL"; then
+    ok "przebiegi: wiersze tylko do czytania (c) -- F7 na wykonanym biegu mowi 'ten bieg już był' i nic nie uruchamia; ten sam F7 na nadchodzacym uruchamia linie crona"
+else
+    bad "przebiegi: F7 na wykonanym biegu" "$(printf '%s\n' "$PRF" | tail -3)" "log: $(cat "$PXL")"
+fi
+rm -f "$PXL"
+# F8 chowa wykonane (bez kreski), drugi F8 je przywraca; kursor zostaje na TYM SAMYM biegu
+# (run_cursor_for: ten sam bieg -- zadanie i chwila; wykonanego, ktory zniknal, zastepuje
+# pierwszy nadchodzacy). F9 przeklada wiersze do grup, a bieg pod kursorem sie nie zmienia.
+pr_when() { printf '%s\n' "$1" | grep -oE 'Kiedy +20[0-9]{2}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1; }
+PRH="$(prz F8)"; PRHH="$(prz down,F8)"; PRHR="$(prz down,F8,F8)"; PRN="$(prz down)"
+PRG9="$(prz down,F9)"
+PRHL="$(lst "$PRH")"; PRHRL="$(lst "$PRHR")"; PRG9L="$(lst "$PRG9")"
+if ! hasE "$PRHL" "^║ $KD +sync-test +pobranie .* OK( |$)" && ! hasE "$PRHL" '^║ ── teraz' && has "$PRH" '-- tylko nadchodzące' && has "$PRH" 'Nadchodzący bieg' \
+   && [ -n "$(pr_when "$PRN")" ] && [ "$(pr_when "$PRN")" = "$(pr_when "$PRH")" ] && [ "$(pr_when "$PRN")" = "$(pr_when "$PRHH")" ] \
+   && [ "$(pr_when "$PRN")" = "$(pr_when "$PRHR")" ] && hasE "$PRHRL" "^║ $KD +sync-test +pobranie .* OK( |$)" && hasE "$PRHRL" '^║ ── teraz' \
+   && [ "$(pr_when "$PRN")" = "$(pr_when "$PRG9")" ] && hasE "$PRG9L" '^║ ▸ sync-test' && hasE "$PRG9L" '^║ ── teraz'; then
+    ok "przebiegi: F8 chowa wykonane i kreske, drugi F8 je przywraca; kursor zostaje na tym samym biegu po F8 i po F9 (grupa ma swoja kreske)"
+else
+    bad "przebiegi: F8/F9 i kursor" "bez F8: $(pr_when "$PRN")" "F8: $(pr_when "$PRH")" "down,F8: $(pr_when "$PRHH")" "down,F8,F8: $(pr_when "$PRHR")" "down,F9: $(pr_when "$PRG9")"
+fi
+rm -f "$PRS"
 GER="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES" --screen relacje --width 200 2>&1)"
 if hasE "$GER" '^║ sync-test .*błąd biegu' && ! hasE "$GER" '^║ backup-test .*błąd biegu'; then
     ok "relacje: relacja z nieudanym ostatnim biegiem jest na F3 'błąd biegu', nie 'aktualne'"
@@ -865,12 +1064,14 @@ if has "$Z" 'zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' && has "$Z" 'hdd/back
 else
     bad "zadania: zrodlo/cel w panelu" "$Z"
 fi
-ZP="$(screen zadania down)"
-ZP="$(screen zadania down --width 160)"
-if hasE "$ZP" 'Cel +hdd/backups/192.168.28.99/hdd/lab/vm-101' && ! hasE "$ZP" 'Źródło +'; then
+ZP="$(screen zadania "$(zkeys "^║ $KD +lab-vm101 +lokalny prune " $ALL)" --width 200 --height 60)"
+# Tylko PRAWY PANEL wiersza (po ramce listy): dolna zakladka 'Źródło → cel' ma swoj naglowek
+# 'Źródło', ktory nie jest polem panelu.
+ZPP="$(printf '%s\n' "$ZP" | sed -n 's/^.*║│//p')"
+if hasE "$ZPP" 'Cel +hdd/backups/192.168.28.99/hdd/lab/vm-101' && ! hasE "$ZPP" 'Źródło +'; then
     ok "zadania: porzadki maja tylko CEL (to, co przycinaja)"
 else
-    bad "zadania: porzadki zrodlo/cel" "$ZP"
+    bad "zadania: porzadki zrodlo/cel" "$ZPP"
 fi
 ZH2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --keys down,down 2>&1)"
 # down,down: widok domyslny grupuje wiersze relacji -- oba "(bez rel.)" sa pierwsze
@@ -880,8 +1081,10 @@ if has "$ZH2" 'hdd/vm-disks/subvol-100-disk-0' && has "$ZH2" 'pve9:hdd/backups' 
 else
     bad "zadania: wysylka zrodlo/cel" "$ZH2"
 fi
-ZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 120 2>&1)"
-if hasE "$ZH" '^║ pve9 +wysyłka ' && hasE "$ZH" '^║ pve1 +pobranie ' && hasE "$ZH" '^║ \(bez rel\.\) +kopia '; then
+# F2 Przebiegi: kazdy bieg to wiersz 'dd.mm HH:MM  relacja  zadanie ...'; wiersze wysylki,
+# pobrania i kopii sa na liscie (szeroko, 160: przy 120 kolumna Co by odpadla), nie na jednym numerze.
+ZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 160 --height 100 2>&1)"
+if hasE "$ZH" "^║ $KD +pve9 +wysyłka " && hasE "$ZH" "^║ $KD +pve1 +pobranie " && hasE "$ZH" "^║ $KD +\(bez rel\.\) +kopia "; then
     ok "zadania: wysylka, pobranie i kopia na hoscie w liscie; zadanie bez etykiety mowi '(bez rel.)' (kierunek w panelu, U21)"
 else
     bad "zadania: trzy kierunki na hostA" "$ZH"
@@ -908,7 +1111,8 @@ fi
 # zadania na F2, nie moze zniknac -- watchdog pilnujacy czegos, czego juz nie
 # ma w cronie, jest samodzielnym wierszem "straznik bez zadania".
 ZG="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/monitor-orphan.json" --screen zadania --width 200 2>&1)"
-if hasE "$ZG" '^║ ghost +strażnik bez zadania' && has "$ZG" 'aktualne'; then
+# Wiersz tylko-do-czytania z gory listy: Kiedy '-' (nie cron), Wynik = werdykt strażnika.
+if hasE "$ZG" '^║ - +ghost +strażnik bez zadania +aktualne'; then
     ok "zadania: monitor bez dopasowanego zadania jest WIERSZEM 'straznik bez zadania' (F5 zniesiony, uwaga 3)"
 else
     bad "zadania: straznik bez zadania" "$ZG"
@@ -1558,10 +1762,10 @@ PK="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 's,F8,F3,F4,u,F7,ctrl-r' -- --of
 pkb() { printf '%s\n' "$PK" | awk -v k="=== $1" -v n="$2" '$0 ~ /^=== / { i++; on = ($0 == k && i == n) ; next } on'; }
 if [ "$PKRC" -eq 2 ]; then
     echo "SKIP pty: brak modulu pty (Windows) -- klawisze przez petle curses sprawdza CI"
-elif has "$(pkb s 2)" 's_' && ! has "$(pkb s 2)" 'oś czasu' && has "$(pkb F8 3)" 'oś czasu' \
+elif has "$(pkb s 2)" 's_' && ! has "$(pkb s 2)" 'tylko nadchodzące' && has "$(pkb F8 3)" 'tylko nadchodzące' \
      && has "$(pkb F4 5)" 'Historia transferów' && ! has "$(pkb F4 5)" 'POTWIERDZENIE' \
      && has "$(pkb u 6)" 'u_' && ! has "$(pkb u 6)" 'bez usuniętych' && has "$(pkb F7 7)" 'bez usuniętych relacji'      && has "$(pkb ctrl-r 8)" 'odświeżam'; then
-    ok "pty: 's' i 'u' to tekst linii, F8 sortuje F2 (X9), F7 chowa usuniete na F4, F4 na F3 otwiera Transfery (petla curses, R4-1/R4-2)"
+    ok "pty: 's' i 'u' to tekst linii, F8 chowa wykonane na F2 Przebiegi (tytul 'tylko nadchodzące'), F7 chowa usuniete na F4, F4 na F3 otwiera Transfery (petla curses, R4-1/R4-2)"
 else
     bad "pty: klawisze przez petle curses" "$PK"
 fi
@@ -1578,7 +1782,9 @@ else
     bad "pty: F11/F12 przez petle curses" "rc=$PK2RC" "$PK2"
 fi
 # Odswiez: F9 -> F5 (R4-2) -> Ctrl-R (2026-10-09: F5 to ekran Szablony, uwaga 24).
-TR="$(screen zadania ctrl-r --width 160)"
+# Szerokosc 200: pelny zapis paska F2 (z 'Schowaj wykonane' i 'Grupuj po relacji') ma 165 znakow,
+# a 'Ctrl-R Odśwież' dochodzi dopiero, gdy zostaje 16 kolumn zapasu -- przy 160 pasek jest skrocony.
+TR="$(screen zadania ctrl-r --width 200)"
 if has "$TR" 'odświeżono' && has "$TR" 'Ctrl-R Odśwież' && ! has "$TR" 'F5 Odśwież' && has "$TR" 'F5 Szablony'; then
     ok "listwa: Ctrl-R odswieza i tak jest podpisane; F5 to Szablony"
 else
@@ -1767,11 +1973,15 @@ if grep -Eq "zfs-backup.sh'? edit-relation som --ask\$" "$SOL" 2>/dev/null && ! 
 else
     bad "relacje: e/p na snaponly" "$(cat "$SOL")"
 fi
-SO2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen zadania --width 160 --height 50 2>&1)"
-if [ "$(printf '%s\n' "$SO2" | grep -cE '^║ som +migawka .*aktualne')" = 2 ]; then
-    ok "zadania: zadania snaponly to 'migawka' z wlasna rodzina"
+# F2 Przebiegi: dwa zadania snaponly (hourly :39 i daily 01:49) to wiersze 'migawka hourly' i
+# 'migawka daily' -- rodzina (dawny Prefiks) jest w nazwie szczebla w kolumnie Co; werdykt
+# 'aktualne' jest na F3 (test 'relacje: dataset snaponly' wyzej). Wysokosc 400: dzienne
+# zadanie biegnie dopiero jutro, wiec stoi na koncu osi czasu.
+SO2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen zadania --width 200 --height 400 2>&1)"
+if hasE "$SO2" "^║ $KD +som +migawka +hourly: [^ ]+ +nadchodzący" && hasE "$SO2" "^║ $KD +som +migawka +daily: [^ ]+ +nadchodzący"; then
+    ok "zadania: zadania snaponly to 'migawka' z wlasnym szczeblem (hourly, daily) w kolumnie Co"
 else
-    bad "zadania: zadania snaponly" "$SO2"
+    bad "zadania: zadania snaponly" "$(printf '%s\n' "$SO2" | grep -E 'som')"
 fi
 rm -rf "$SOD" "$SOL"
 
@@ -1817,11 +2027,16 @@ d.setdefault("jobs", []).append({"label": "replica copy (sejf-a)", "runs": 4, "f
 json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 RALL="--status $P10/status.json --jobs $P10/list-jobs.json --monitors $P10/monitor.json --replicas $P10/replicas.json --stats $RST"
-Z2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen zadania --width 200 --height 60 2>&1)"
-if hasE "$Z2" '^║ sejf-a +replika ' && hasE "$Z2" '^║ sejf-b +replika .*po podłączeniu'; then
-    ok "zadania: repliki sa wierszami F2 (zadanie 'replika', 'po podłączeniu' bez godziny)"
+# F2 Przebiegi: replika z cronem to wiersz z terminem; replika 'po podłączeniu' nie ma terminu --
+# Kiedy '-', na koncu osi czasu, a panel mowi 'bez terminu' (nie wymyslona godzina). Wysokosc 400:
+# wiersz bez terminu jest ostatni.
+Z2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen zadania --width 200 --height 400 2>&1)"
+Z2K="$(zkeys '^║ - +sejf-b +replika ' $RALL)"
+Z2B="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen zadania --keys "$Z2K" --width 200 --height 60 2>&1)"
+if hasE "$Z2" "^║ $KD +sejf-a +replika +nadchodzący" && hasE "$Z2" '^║ - +sejf-b +replika +nadchodzący' && hasE "$Z2B" 'Kiedy +bez terminu'; then
+    ok "zadania: repliki sa wierszami F2 (zadanie 'replika'); 'po podłączeniu' bez godziny -- Kiedy '-', w panelu 'bez terminu'"
 else
-    bad "zadania: wiersze replik" "$(printf '%s' "$Z2" | grep -E 'sejf|replika')"
+    bad "zadania: wiersze replik" "$(printf '%s' "$Z2" | grep -E 'sejf|replika')" "$(printf '%s' "$Z2B" | grep -E 'Kiedy')"
 fi
 N2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen nosniki --width 200 --height 60 2>&1)"
 if hasE "$N2" 'Ostatni bieg +2026-09-08 02:30   BŁĄD \(rc=1\)' && hasE "$N2" 'Wywołania +4, błędów 1' && hasE "$N2" 'Czas +ostatni 2s'; then
@@ -1841,11 +2056,28 @@ d.setdefault("monitors", []).append({"account": "root", "label": "sejf-a", "patt
     "reason": "WARNING replica=sejf-a pool=bkp last_current=2026-09-06 02:30 age=3d0h (warn=2d crit=4d)"})
 json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
-Z3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$RMN" --replicas "$P10/replicas.json" --screen zadania --width 200 --height 60 2>&1)"
-if hasE "$Z3" '^║ sejf-a +replika .*spóźnione' && hasE "$Z3" '^║ sejf-b +replika .*bez monitora'; then
-    ok "zadania: wiersz repliki bierze werdykt z JEJ monitora (sejf-a spóźniona), bez monitora zostaje 'bez monitora' (sejf-b)"
+# F2 Przebiegi nie ma kolumny z werdyktem (lista mowi o biegu: Kiedy/Co/Wynik), a replika nie jest
+# relacja, wiec werdyktu z monitora nie widac na zadnym ekranie -- reguly dopasowania monitora do
+# repliki pilnujemy wiec tam, gdzie zyje: wiersze build_jobs (to z nich buduje sie F2) z tym samym
+# UI, ktory czyta fikstury. Gdy werdykt wroci na ekran, ta asercja ma isc na ekran.
+Z3="$("$PY" - "$TUI" "$REPO" "$NOW" "$P10/status.json" "$P10/list-jobs.json" "$RMN" "$P10/replicas.json" <<'PYEOF'
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+files = {"status": sys.argv[4], "jobs": sys.argv[5], "monitors": sys.argv[6], "progress": None, "replicas": sys.argv[7],
+         "stats": None, "config": None, "profiles": None, "offline": True, "datasets_local": None,
+         "datasets_remote": None, "check_source": None, "host_ip": None}
+ui = m.UI(sys.argv[2], files, m.Chars(False), int(sys.argv[3]), None)
+for r in m.build_jobs(ui.data, int(sys.argv[3])):
+    if r["kind"] == "replica":
+        print("%s=%s" % (r["name"], r["vword"]))
+PYEOF
+)"
+Z3="$(printf '%s\n' "$Z3" | tr -d '\r')"
+if printf '%s\n' "$Z3" | grep -qx 'sejf-a=spóźnione' && printf '%s\n' "$Z3" | grep -qx 'sejf-b=bez monitora'; then
+    ok "zadania: wiersz repliki bierze werdykt z JEJ monitora (sejf-a spóźniona), bez monitora zostaje 'bez monitora' (sejf-b) -- na poziomie build_jobs, F2 Przebiegi go nie pokazuje"
 else
-    bad "zadania: werdykt repliki z monitora" "$(printf '%s' "$Z3" | grep -E 'sejf')"
+    bad "zadania: werdykt repliki z monitora" "$Z3"
 fi
 rm -f "$RMN"
 # REPLIKI Z GUI (2026-10-07): Ins nowa i Enter+'e' zmiana oddaja terminal oknom
@@ -1861,13 +2093,27 @@ if ! has "$A" 'Uruchomić teraz?' && has "$A" 'bieg teraz' \
 else
     bad "zadania: F7 uruchom teraz (X9)" "$(cat "$XL")" "$(printf '%s' "$A" | grep -E 'Uruchom|bieg teraz|F7|F8' | head -4)"
 fi
-# X14: wiersz bez linii w cronie (strażnik, replika tylko po włożeniu) -- komunikat nazywa
-# wszystkie trzy przypadki. Wiersz "bez monitora" repliki sejf-b nie ma linii w cronie.
+# X14 -> F2 Przebiegi: strażnik bez zadania to wiersz tylko do czytania (nie bieg) -- F7 mowi
+# 'brak zadań -- nie ma czego uruchomić'. Komunikat X14 ('ten wiersz nie ma linii w cronie ...')
+# zostaje dla WIERSZA BIEGU zadania, ktorego linii nie ma w cronie (osierocony wpis): fikstura
+# P10 z wyczyszczonymi cron_lines, wiersz 0 to nadchodzacy bieg zadania. Listwa F2: F7 Uruchom
+# teraz, F8 Schowaj wykonane, F9 Grupuj po relacji (zadnego 'Sortuj').
 A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/monitor-orphan.json" --screen zadania --keys F7 --width 200 2>&1)"
-if has "$A" 'strażnik albo replika, bez harmonogramu, lub osierocony wpis' && has "$A" 'F7 Uruchom teraz F8 Sortuj'; then
-    ok "zadania: X14 -- komunikat nazywa strażnika, replikę bez harmonogramu i osierocony wpis; listwa F7 Uruchom teraz / F8 Sortuj (X9)"
+NCJ="$(mktemp)"
+"$PY" - "$P10/list-jobs.json" "$NCJ" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+for x in d["jobs"]:
+    x["cron_lines"] = []
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+A2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$NCJ" --screen zadania --keys F7 --width 200 2>&1)"
+rm -f "$NCJ"
+if has "$A" 'brak zadań -- nie ma czego uruchomić' && ! has "$A" 'ten bieg już był' \
+   && has "$A2" 'strażnik albo replika, bez harmonogramu, lub osierocony wpis' && has "$A" 'F7 Uruchom teraz F8 Schowaj wykonane F9 Grupuj po relacji' && ! has "$A" 'Sortuj'; then
+    ok "zadania: X14 -- F7 na strażniku bez zadania: 'brak zadań'; na biegu bez linii w cronie: komunikat nazywa strażnika, replikę bez harmonogramu i osierocony wpis; listwa F7 Uruchom teraz / F8 Schowaj wykonane / F9 Grupuj po relacji"
 else
-    bad "zadania: X14 komunikat" "$(printf '%s' "$A" | tail -4)"
+    bad "zadania: X14 komunikat" "$(printf '%s' "$A" | tail -4)" "$(printf '%s' "$A2" | tail -4)"
 fi
 # X11 (wlasciciel 2026-10-12): replika na liscie i w panelu mowi, CO TRAFIA NA DYSK --
 # kolumna Rodzaj (historia / zdjecia xN), panel: Rodzaj, Na dysku (z przykladem), Szyfrowane.
@@ -2132,7 +2378,7 @@ if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' &&
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" '1Pomoc2Zadania3Rel4Hist5Szabl6Repl7Uruchom8Pauza9Plik10Ust11Odzysk12Wyjdź'; then
+if has "$S" '1Pomoc2Przeb3Rel4Hist5Szabl6Repl7Uruchom8Pauza9Plik10Ust11Odzysk12Wyjdź'; then
     ok "wyglad: przy 80 kolumnach pasek miesci WSZYSTKIE klawisze F, z F11 i F12 (zapis skrocony, cyfra = F; najciasniej Hist/Szabl/Wyjdz)"
 else
     bad "wyglad: listwa F" "$S"
@@ -2147,11 +2393,13 @@ for _sc in zadania relacje transfery szablony nosniki; do
         _body="$(printf '%s\n' "$_o" | sed '$d')"; _bar="$(printf '%s\n' "$_o" | tail -1)"
         printf '%s' "$_body" | grep -qE '(^|[^A-Za-z0-9])F([1-9]|1[0-2])([^0-9]|$)' && NODUP="$NODUP $_sc/$_w:F-w-oknie"
         case "$_sc" in
-            zadania) _acts="Sortuj" ;; relacje) _acts="Uruchom Pauza" ;; transfery) _acts="sunięte" ;;
+            # F2 Przebiegi: F8 'Schowaj wykonane'/'Pokaż wykonane' (krotko 'Wykonane'), F9 'Grupuj po relacji'
+            # (krotko 'Grupuj') -- wspolny rdzen 'ykonane' i 'Grupuj' jest na pasku raz przy kazdej szerokosci.
+            zadania) _acts="Uruchom ykonane Grupuj" ;; relacje) _acts="Uruchom Pauza" ;; transfery) _acts="sunięte" ;;
             nosniki) _acts="Uruchom" ;; *) _acts="" ;;
         esac
         # Transf/Szabl/Wyj: pelne slowo albo najciasniejszy skrot (80 kolumn, 2026-10-18).
-        for _a in Pomoc Zadania Rel Hist Szabl Repl Ust Odzysk Wyj $_acts; do
+        for _a in Pomoc Przeb Rel Hist Szabl Repl Ust Odzysk Wyj $_acts; do
             [ "$(printf '%s' "$_bar" | grep -o "$_a" | wc -l)" -eq 1 ] || NODUP="$NODUP $_sc/$_w:$_a"
         done
     done

@@ -37,7 +37,7 @@ server console.
 
    The collector needs SSH access to the source host as root; the wizard installs the package on the source by itself.
 
-3. Check after an hour: **F2 Zadania (jobs)** (what runs and when), **F4 Historia (history)** (runs, errors).
+3. Check after an hour: **F2 Przebiegi (runs)** (what ran and what runs next, with errors).
 
 ## Day to day
 
