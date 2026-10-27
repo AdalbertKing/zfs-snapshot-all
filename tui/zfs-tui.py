@@ -2044,11 +2044,14 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False):
                 continue
             idx[key] = len(groups)
             groups.append((lbl, [it], [j] if j is not None else None))
-    out = []
+    out, shown = [], set()
     for lbl, its, gjobs in groups:
         it0 = its[0]
         base = {"kind": "run", "item": it0, "items": its, "jobs": gjobs, "name": it0["name"], "label": lbl}
-        if show_done and lbl:
+        # Bieg z dziennika jest JEDEN na etykiete: dwa szczeble jednej linii crona (pve10:
+        # pobranie hourly i daily w jednym snapget) nie dostaja go po razie (zmierzone 10-27).
+        if show_done and lbl and lbl not in shown:
+            shown.add(lbl)
             for x in runs_by.get(lbl, []):
                 st, en = iso_epoch(x.get("start") or ""), iso_epoch(x.get("end") or "")
                 at = en or st
@@ -2553,7 +2556,9 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
             cells.append([(u"> " if ch.ascii else u"\u25b8 ") + r["name"], it.get("dir") or u" ", u" ", _(u"błąd biegu") if r["bad"] else u" ", u" "])
         else:
             it = r["item"]
-            co = (u"%s %s" % (it.get("task") or u"", u"" if grouped else (it.get("tier") or u""))).strip() if it.get("kind") == "job" else \
+            # Na jednej osi czasu Co mowi tez, KTORYCH datasetow (pve10: dwa 'ab lokalny prune
+            # hourly' o 07:15 -- vms i data -- byly nie do odroznienia); w grupie to robi Zadanie.
+            co = (u"%s %s" % (it.get("task") or u"", u"" if grouped else job_id_cell(r["items"], r.get("jobs")))).strip() if it.get("kind") == "job" else \
                 (_(u"replika") if it.get("kind") == "replica" else (it.get("task") or u"-"))
             czas = fmt_dur(r["end"] - r["start"]) if r.get("past") and r.get("start") and r.get("end") else u"-"
             when = run_when(r["at"])
