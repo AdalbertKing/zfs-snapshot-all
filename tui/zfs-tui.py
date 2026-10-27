@@ -2001,9 +2001,10 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False):
     runs_by = {}
     for x in (data.stats or {}).get("runs") or []:
         runs_by.setdefault(x.get("label") or "", []).append(x)
-    groups, idx = [], {}
+    groups, idx, static = [], {}, []
     for it in jobrows or []:
         if it.get("kind") not in ("job", "replica"):
+            static.append({"kind": "run", "static": True, "past": False, "at": None, "item": it, "items": [it], "name": it.get("name") or u"?"})
             continue
         lbl = run_label_of(it)
         key = (lbl, it.get("schedule") or "") if lbl else ("\0", id(it))
@@ -2040,7 +2041,7 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False):
     key = lambda r: (r["at"] is None, r["at"] or 0)
     if not grouped:
         out.sort(key=key)
-        return insert_now(out, now, show_done)
+        return static + insert_now(out, now, show_done)
     names = []
     for r in out:
         if r["name"] not in names:
@@ -2052,7 +2053,7 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False):
             q["past"] and q["at"] > r["at"] and q.get("rc") == 0 and q["item"] is r["item"] for q in mine) for r in mine)
         res.append({"kind": "grp", "name": nm, "bad": bad, "item": mine[0]["item"]})
         res += insert_now(mine, now, show_done)
-    return res
+    return static + res
 
 
 def insert_now(rows, now, show_done):
@@ -2066,6 +2067,8 @@ def insert_now(rows, now, show_done):
 
 
 def run_result(r):
+    if r.get("static"):
+        return r["item"].get("vword") or u"-"
     if not r.get("past"):
         return _(u"nadchodzący")
     rc = r.get("rc")
@@ -2103,7 +2106,7 @@ def run_pairs(r, now, ch):
 def run_children(r, data, now, ch):
     """Dol PRZEBIEGOW: zrodlo -> cel kazdego datasetu biegu i, dla wykonanego, to,
     co historia transferow zapisala w jego czasie (stan, dane)."""
-    if r.get("kind") != "run":
+    if r.get("kind") != "run" or r.get("static"):
         return {"items": []}
     items, seen = [], set()
     prog = (data.progress or {}).get("jobs") or []
@@ -2519,10 +2522,12 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
             cells.append([(u"> " if ch.ascii else u"\u25b8 ") + r["name"], it.get("dir") or u"", u"", _(u"błąd biegu") if r["bad"] else u"", u""])
         else:
             it = r["item"]
-            co = (u"%s %s" % (it.get("task") or u"", it.get("tier") or u"")).strip() if it.get("kind") == "job" else _(u"replika")
+            co = (u"%s %s" % (it.get("task") or u"", it.get("tier") or u"")).strip() if it.get("kind") == "job" else \
+                (_(u"replika") if it.get("kind") == "replica" else (it.get("task") or u"-"))
             czas = fmt_dur(r["end"] - r["start"]) if r.get("past") and r.get("start") and r.get("end") else u"-"
             when = run_when(r["at"])
-            cells.append([(u"  %s " % bar + when) if grouped else when, job_id_cell(r["items"]) if grouped else r["name"],
+            cells.append([(u"  %s " % bar + when) if grouped and not r.get("static") else when,
+                          job_id_cell(r["items"]) if grouped and not r.get("static") else r["name"],
                           co, run_result(r), czas])
     n_runs = len([r for r in rows if r["kind"] == "run"])
     title = _(u"Przebiegi na %s -- %s%s") % (
@@ -2533,13 +2538,16 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
         r = rows[cursor]
         it = r["item"]
         det_title = u"%s -- %s" % (r["name"], job_id_cell(r["items"]))
-        if it["kind"] == "replica":
+        if r.get("static"):
+            det_title = u"%s -- %s" % (r["name"], it.get("task") or u"")
+            det = rel_detail_pairs(it, data, now, ch)
+        elif it["kind"] == "replica":
             det = run_pairs(r, now, ch) + replica_detail_pairs(it["replica"], ch, it["srow"], data.failed("stats"))
         else:
             one = dict(it)
             one["jobs"] = [j for x in r["items"] for j in (x.get("jobs") or [x["job"]])]
             det = run_pairs(r, now, ch) + job_panel_pairs(one, data, now, ch)
-        kids = run_children(r, data, now, ch)
+        kids = run_children(r, data, now, ch) if not r.get("static") else {"items": []}
         child = {"name": det_title, "tabs": TABS["zadania"], "ti": 0, "items": kids["items"],
                  "heads": [_(u"Źródło"), _(u"Cel"), _(u"Wynik"), _(u"Dane")], "prio": [0, 2, 1, 3],
                  "empty": _(u"brak datasetów tego zadania")}
@@ -4748,6 +4756,9 @@ class UI(object):
         if rows[c].get("past"):
             self.message = _(u"ten bieg już był -- F7 uruchamia zadanie z wiersza nadchodzącego")
             return
+        if rows[c].get("static"):
+            self.message = _(u"brak zadań -- nie ma czego uruchomić")
+            return
         r = rows[c]["item"]
         # X23 (wlasciciel 2026-10-14): wiersz REPLIKI nie niesie linii crona (powstaje z
         # list-replicas, list-jobs replik nie zwraca) -- F7 robi to samo co F7 na F6.
@@ -5707,6 +5718,8 @@ class UI(object):
                 self.window, self.scroll = ("relacja", self.rows[c]), 0
             elif self.screen == "zadania" and self.runrows[c].get("kind") != "run":
                 pass
+            elif self.screen == "zadania" and self.runrows[c].get("static"):
+                self.window, self.scroll = ("relacja", self.runrows[c]["item"]), 0
             elif self.screen == "zadania" and self.runrows[c]["item"].get("kind") == "replica":
                 # Wiersz repliki: ten sam panel co na F6 (z 'e' = zmiana repliki).
                 jr = self.runrows[c]["item"]
