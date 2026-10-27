@@ -1169,6 +1169,16 @@ Owner-authorized refreezes:
   (`grep -n guest_disk_is_live snapsend.sh` and `grep -n mirror_target
   snapsend.sh` are empty).
 
+- 2026-10-27 (snapget.sh, snapsend.sh, delsnaps.sh): **comments only -- the author's e-mail and a
+  customer VM name leave the published headers.** Owner direction in chat, 2026-10-27: "Akceptuję plan
+  z AUDYT-PUBLIKACJI-2026-10-27.md; e-mail z nagłówków skryptów usuń." -- given for exactly this
+  change (plan §3, items A3 and A6). No version bump: no executable line changes.
+  - `# Author: Wojciech Król <...>` loses the address in snapget.sh and snapsend.sh; delsnaps.sh
+    loses its `# Email:` line. snapget.sh:1187 says "the measured SQL Server guest case" instead of
+    the guest's host name.
+  - Evidence that nothing executable moved: `git diff -w` of the three files touches only `#` lines.
+  twin: both twins changed identically (line 5).
+
 ## How it is enforced
 
 `./test/impact.sh --verify` compares each frozen file's **index entry** — mode
