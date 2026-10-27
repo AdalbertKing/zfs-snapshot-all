@@ -1981,10 +1981,18 @@ def run_label_of(item):
 
 
 def run_jobs(r):
-    """Zadania (sekcje list-jobs) jednego biegu."""
-    if r.get("jobs") is not None:
-        return r["jobs"]
-    return [j for it in r["items"] for j in (it.get("jobs") or ([it["job"]] if it.get("job") else []))]
+    """Zadania (sekcje list-jobs) jednego biegu, po jednym na zakres: linia GFS
+    przycina WSZYSTKIE szczeble jednego datasetu (pve10: cztery sekcje [prune:]
+    keep_hourly..yearly, jedna linia crona) -- to jeden dataset, nie cztery."""
+    jobs = r["jobs"] if r.get("jobs") is not None else \
+        [j for it in r["items"] for j in (it.get("jobs") or ([it["job"]] if it.get("job") else []))]
+    out, seen = [], set()
+    for j in jobs:
+        k = j.get("scope") or id(j)
+        if k not in seen:
+            seen.add(k)
+            out.append(j)
+    return out
 
 
 def job_id_cell(its, jobs=None):
