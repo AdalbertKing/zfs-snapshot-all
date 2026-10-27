@@ -686,7 +686,7 @@ fi
 #   written 2048   o koncu biegu (NOW-3600)              -- wchodzi
 # Dane drugiego biegu = 1024 + 2048 = 3072 B = 3.0K (hbytes_short).
 UWD="$(mktemp -d)"
-UWT="$("$PY" - "$GJ" "$UWD" "$NOW" <<'PYEOF'
+UWT="$("$PY" - "$FIX/jobs-group.json" "$UWD" "$NOW" <<'PYEOF'
 import datetime, json, sys, time
 gj, d, now = sys.argv[1], sys.argv[2], int(sys.argv[3])
 j = json.load(open(gj, encoding="utf-8"))
@@ -712,7 +712,7 @@ PYEOF
 )"
 UWT="$(printf '%s\n' "$UWT" | tr -d '\r')"
 UWT0="$(printf '%s\n' "$UWT" | sed -n 2p)"; UWT="$(printf '%s\n' "$UWT" | sed -n 1p)"
-UWA="--status $GS --jobs $UWD/jobs.json --monitors $GM --stats $UWD/stats.json"
+UWA="--status $FIX/status-group.json --jobs $UWD/jobs.json --monitors $FIX/monitors-group.json --stats $UWD/stats.json"
 UWR="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $UWA --screen zadania --width 200 --height 400 2>&1)"
 UWL="$(lst "$UWR")"
 # (a) kolumna Dane: wykonany bieg = suma written migawek rodziny na celu miedzy biegami (3.0K); stara
