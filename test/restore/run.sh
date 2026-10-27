@@ -2858,29 +2858,59 @@ else
     bad "live datasets guard" "root=[$g1]" "running ct=[$g2]" "stopped=[$g3]" "running vm=[$g4]" "plain=[$g5]" "$(cat "$LG/calls" 2>/dev/null)" "$be"
 fi
 
-# BUSY and IN PLACE (owner 2026-10-26): a mounted file system a process holds is refused for
-# an in-place mode, with who holds it; 'create' (beside) is not checked. --in-place-live-root
-# lets the running root through on THIS host only.
-lg2_run() {   # <dataset> <mode> <fuser pids> <in-place flag> [mountpoint] -> "rc|verdict"
-    LG_MP="${5:-/srv/data}" LG_PIDS="$3" RESTORE_IN_PLACE_LIVE_ROOT="$4" bash -c "$lg_fns
+# BUSY, FAIL CLOSED (owner 2026-10-26; REV-20261027-176). The ACTUAL restore_live_guard, with
+# EXECUTABLE stubs on a constrained PATH: zfs (answers the mount, records every call), fuser
+# (four behaviours, measured on pve9: idle rc1 silent / busy rc0 PIDs / error rc1 + message),
+# ps -- and a second PATH with NO fuser at all. Every case asserts the return code, the
+# refusal words and that zfs was only ever READ.
+FZ="$WORK/fz"; mkdir -p "$FZ/with" "$FZ/without"
+for t in tr grep sort head mktemp rm cat sed printf; do
+    p="$(command -v "$t" 2>/dev/null)"; [ -n "$p" ] && [ "${p#/}" != "$p" ] && { ln -sf "$p" "$FZ/with/$t"; ln -sf "$p" "$FZ/without/$t"; }
+done
+for d in with without; do
+    printf '#!/bin/sh\necho "$*" >> "%s/zfs-calls"\nprintf "%%s\\n%%s\\n" "$FZ_MP" yes\n' "$FZ" > "$FZ/$d/zfs"
+    printf '#!/bin/sh\necho smbd\n' > "$FZ/$d/ps"
+    printf '#!/bin/sh\ncase "$*" in *"zfs get"*) printf "%%s\\n%%s\\n" "$FZ_MP" yes ;; *pgrep*) exit 1 ;; esac\n' > "$FZ/$d/ssh"
+    chmod +x "$FZ/$d/zfs" "$FZ/$d/ps" "$FZ/$d/ssh"
+done
+cat > "$FZ/with/fuser" <<'FUS'
+#!/bin/sh
+case "$FZ_FUSER" in
+  idle)  exit 1 ;;
+  busy)  printf ' 1234'; printf '%s:c\n' "$2" >&2; exit 0 ;;
+  error) printf 'Cannot stat file %s: Permission denied\n' "$2" >&2; exit 1 ;;
+  weird) exit 2 ;;
+esac
+FUS
+chmod +x "$FZ/with/fuser"
+fz_run() {   # <PATH dir> <dataset> <mode> <fuser behaviour> [in-place flag] [mountpoint] -> "rc|verdict"
+    : > "$FZ/zfs-calls"
+    FZ_MP="${6:-/srv/data}" FZ_FUSER="$4" RESTORE_IN_PLACE_LIVE_ROOT="${5:-0}" PATH="$FZ/$1" \
+        "$BASH" -c "$lg_fns
 log() { :; }
-zfs() { printf '%s\n%s\n' \"\$LG_MP\" yes; }
-fuser() { [ -n \"\$LG_PIDS\" ] && echo \" \$LG_PIDS\"; return 0; }
-ssh() { printf '%s\n%s\n' \"\$LG_MP\" yes; }
-ps() { echo smbd; }
 RESTORE_ONE_VERDICT=''
-restore_live_guard \"$1\" \"$2\"; echo \"\$?|\$RESTORE_ONE_VERDICT\"" 2>&1
+restore_live_guard \"$2\" \"$3\"; echo \"\$?|\$RESTORE_ONE_VERDICT\"" 2>&1
 }
-b1=$(lg2_run hdd/data rewind "1234" 0)
-b2=$(lg2_run hdd/data create "1234" 0)
-b3=$(lg2_run hdd/data rewind "" 0)
-b4=$(lg2_run rpool/ROOT/pve-1 rewind "" 1 /)
-b5=$(lg2_run host:rpool/ROOT/pve-1 rewind "" 1 /)
-if [ "${b1%%|*}" = 1 ] && printf '%s' "$b1" | grep -q 'IN USE -- smbd(1234)' && [ "${b2%%|*}" = 0 ] && [ "${b3%%|*}" = 0 ] \
-   && [ "${b4%%|*}" = 0 ] && [ "${b5%%|*}" = 3 ]; then
-    ok "busy / in place: a held file system is refused for rewind with its holder, not for create; --in-place-live-root lets the running root through on this host only"
+fz_ro() { ! grep -qvE '^get ' "$FZ/zfs-calls"; }   # zfs was only read
+c1=$(fz_run without hdd/data rewind idle);  c1ro=$(fz_ro && echo ro)
+c2=$(fz_run with hdd/data rewind error);    c2ro=$(fz_ro && echo ro)
+c3=$(fz_run with hdd/data replace weird)
+c4=$(fz_run with hdd/data rewind busy);     c4ro=$(fz_ro && echo ro)
+c5=$(fz_run with hdd/data rewind idle)
+c6=$(fz_run without hdd/data create idle)
+c7=$(fz_run without host:hdd/data rewind idle)
+c8=$(fz_run with rpool/ROOT/pve-1 rewind idle 1 /)
+c9=$(fz_run with host:rpool/ROOT/pve-1 rewind idle 1 /)
+if [ "${c1%%|*}" = 1 ] && printf '%s' "$c1" | grep -q 'fuser is not installed' && [ "$c1ro" = ro ] \
+   && [ "${c2%%|*}" = 1 ] && printf '%s' "$c2" | grep -q 'cannot verify .* rc=1 (Cannot stat' && [ "$c2ro" = ro ] \
+   && [ "${c3%%|*}" = 1 ] && printf '%s' "$c3" | grep -q 'rc=2' \
+   && [ "${c4%%|*}" = 1 ] && printf '%s' "$c4" | grep -q 'IN USE -- smbd(1234)' && [ "$c4ro" = ro ] \
+   && [ "${c5%%|*}" = 0 ] && [ "${c6%%|*}" = 0 ] \
+   && [ "${c7%%|*}" = 1 ] && printf '%s' "$c7" | grep -q 'MOUNTED on' \
+   && [ "${c8%%|*}" = 0 ] && [ "${c9%%|*}" = 3 ]; then
+    ok "busy, fail closed: missing fuser / a failing or odd probe refuse, a holder is named, only a cleanly idle file system passes; create is not checked; remote mounted refused; --in-place-live-root local only -- zfs only read"
 else
-    bad "busy / in place guard" "busy rewind=[$b1]" "busy create=[$b2]" "free=[$b3]" "root+flag local=[$b4]" "root+flag remote=[$b5]"
+    bad "busy guard (REV-176)" "no fuser=[$c1] $c1ro" "error=[$c2] $c2ro" "rc2=[$c3]" "busy=[$c4] $c4ro" "idle=[$c5]" "create=[$c6]" "remote=[$c7]" "root+flag=[$c8]" "remote root+flag=[$c9]"
 fi
 
 # REMOTE TARGET (owner 2026-10-26: collector pve2, restore onto pve1). The delegated account

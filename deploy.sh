@@ -4847,6 +4847,9 @@ check_dep awk      gawk             required    "snapshot list parsing"
 # Owner 2026-10-26: browsing a copy (GUI: Przeglądaj) opens it in mc; without mc it falls
 # back to a plain shell in the copy directory. Installed with the package, not required.
 check_dep mc       mc               optional    "browsing a copy in the GUI (without it a plain shell)"
+# REV-20261027-176: restore proves a mounted file system idle with fuser before an in-place
+# restore, and refuses without it. Installed here; the refusal stays as the runtime guard.
+check_dep fuser    psmisc           optional    "restore: proving a mounted file system idle (without it an in-place restore is refused)"
 
 # zstd is the DEFAULT compressor since 2026-07-22 -- it measured better than pigz
 # on BOTH ratio and throughput (see the benchmark table in snapsend.sh's header).
