@@ -2866,9 +2866,7 @@ lg2_run() {   # <dataset> <mode> <fuser pids> <in-place flag> [mountpoint] -> "r
 log() { :; }
 zfs() { printf '%s\n%s\n' \"\$LG_MP\" yes; }
 fuser() { [ -n \"\$LG_PIDS\" ] && echo \" \$LG_PIDS\"; return 0; }
-ssh() { printf '%s
-%s
-' \"\$LG_MP\" yes; }
+ssh() { printf '%s\n%s\n' \"\$LG_MP\" yes; }
 ps() { echo smbd; }
 RESTORE_ONE_VERDICT=''
 restore_live_guard \"$1\" \"$2\"; echo \"\$?|\$RESTORE_ONE_VERDICT\"" 2>&1
