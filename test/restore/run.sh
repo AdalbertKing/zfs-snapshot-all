@@ -2860,7 +2860,7 @@ fi
 
 # BUSY, FAIL CLOSED (owner 2026-10-26; REV-20261027-176). The ACTUAL restore_live_guard, with
 # EXECUTABLE stubs on a constrained PATH: zfs (answers the mount, records every call), fuser
-# (four behaviours, measured on pve9: idle rc1 silent / busy rc0 PIDs / error rc1 + message),
+# (idle rc1 silent / busy rc0 PIDs / error rc1 + message, measured on pve9; plus an odd rc 2),
 # ps -- and a second PATH with NO fuser at all. Every case asserts the return code, the
 # refusal words and that zfs was only ever READ.
 FZ="$WORK/fz"; mkdir -p "$FZ/with" "$FZ/without"
