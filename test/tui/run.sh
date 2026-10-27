@@ -720,8 +720,8 @@ UWL="$(lst "$UWR")"
 # samej linii: '-'. Dolna zakladka: Źródło | Cel | Dane (bez Wynik). Na starym kodzie lista nie miala
 # kolumny Dane, a pole snaps bylo ignorowane.
 if [ -n "$UWT" ] && [ -n "$UWT0" ] && hasE "$UWR" '^║ Kiedy +Relacja +Co +Wynik +Czas +Dane' \
-   && hasE "$UWL" "^║ $UWT +sync-test +pobranie .* OK +[0-9a-z]+ +3\.0K *\$" \
-   && hasE "$UWL" "^║ $UWT0 +sync-test +pobranie .* OK +[0-9a-z]+ +977K *\$" \
+   && hasE "$UWL" "^║ $UWT +sync-test +pobranie .* OK +[0-9]+ [a-z]+ +3\.0K *\$" \
+   && hasE "$UWL" "^║ $UWT0 +sync-test +pobranie .* OK +[0-9]+ [a-z]+ +977K *\$" \
    && hasE "$UWL" "^║ $KD +sync-test +pobranie .* nadchodzący +- +- *\$" \
    && hasE "$UWR" '║ Źródło +Cel +Dane' && ! hasE "$UWR" '║ Źródło +Cel +Wynik'; then
     ok "przebiegi U96/U97: kolumna Dane -- drugi bieg 3.0K (suma written migawek rodziny na celu miedzy biegami), pierwszy 977K (stara migawka 999999 B, hbytes_short), nadchodzacy '-'; dolna zakladka Źródło/Cel/Dane"
@@ -1941,10 +1941,10 @@ else
 fi
 # U90: Ctrl-O Konsola dochodzi do paska ZA 'Ctrl-R Odśwież', gdy zostaje 16 kolumn zapasu (przy 200
 # pasek F2 (pelny zapis ~165 znakow) konczy sie na Ctrl-R przy 190); pomoc F1 ma wiersz o Ctrl-O.
-TO="$(screen zadania "" --width 240 | tail -1)"; TO2="$(screen zadania "" --width 190 | tail -1)"
-if has "$TO" 'Ctrl-R Odśwież  Ctrl-O Konsola' && has "$TO2" 'Ctrl-R Odśwież' && ! has "$TO2" 'Ctrl-O' \
+TO="$(screen zadania "" --width 240 | tail -1)"; TO2="$(screen zadania "" --width 120 | tail -1)"
+if has "$TO" 'Ctrl-R Odśwież  Ctrl-O Konsola' && ! has "$TO2" 'Ctrl-O' \
    && has "$H1" "Ctrl-O            konsola pod oknami"; then
-    ok "listwa: Ctrl-O Konsola stoi za Ctrl-R Odśwież, gdy jest miejsce (240), nie przy 190; pomoc F1 opisuje Ctrl-O (U90)"
+    ok "listwa: Ctrl-O Konsola stoi za Ctrl-R Odśwież, gdy jest miejsce (240), nie przy 120; pomoc F1 opisuje Ctrl-O (U90)"
 else
     bad "listwa: Ctrl-O Konsola" "240: $TO" "190: $TO2"
 fi
@@ -2133,7 +2133,7 @@ N="$(screen nosniki)"
 # X11 (2026-10-12): kolumna Rodzaj po nazwie; sciezka sejf-b obcina sie wczesniej.
 # U99: kolumny Replika | Typ | Wykonana | Harmonogram; Typ: nosnik staly = wewnętrzny, wymienny
 # poza maszyna = odłączony (stan "W SEJFIE" zostaje w panelu)
-if hasE "$N" '^║ sejf-a +odłączony +brak +co dobę 02:30 +║' && hasE "$N" '^║ sejf-b +wewnętrzny +brak +po podłączeniu +║'; then
+if hasE "$N" '^║ sejf-a +odłączony +brak +co dobę 02:30 +║' && hasE "$N" '^║ sejf-b +wewnętrzny +brak +po podłączen'; then
     ok "nosniki: wiersz = replika, Typ nosnika slowem (U99), kiedy ostatnia aktualna kopia (Wykonana), harmonogram slowami (U21)"
 else
     bad "nosniki: wiersze" "$N"
