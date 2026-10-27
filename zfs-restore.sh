@@ -3608,6 +3608,15 @@ restore_live_guard() {   # <destination> [mode] -> 0 fine | 1 refused (RESTORE_O
         RESTORE_ONE_VERDICT="the RUNNING SYSTEM of ${host:-this host} (mounted at /) -- never rolled back in place; restore it as a new boot environment: the same command with --source=$ds --as-boot-env"
         return 3
     fi
+    # A REMOTE file system mounted for an in-place restore (owner 2026-10-26: collector pve2,
+    # restore onto pve1): the delegated account cannot unmount it on Linux, and a write on it
+    # after the rollback makes the engine refuse -- CHANGED AND UNFINISHED. Refused before
+    # anything is touched, with the one root command (the same answer 'replace' gives).
+    if [ -n "$host" ] && [ "$mo" = yes ] && [ -n "$mp" ] && [ "$mp" != - ] && [ "$mp" != none ] && [ "$mp" != legacy ] \
+       && case "$mode" in rewind|replace) true ;; *) false ;; esac; then
+        RESTORE_ONE_VERDICT="'$ds' is MOUNTED on ${host#*@} -- the relationship's account cannot unmount it. As root on ${host#*@}: zfs unmount $ds  (stop what uses it first), run this again, then: zfs mount $ds"
+        return 1
+    fi
     # BUSY (owner 2026-10-26): a file system that a process holds open cannot be unmounted
     # for the run, and a write on it makes the engine refuse after the rollback -- CHANGED
     # AND UNFINISHED. Who holds it is read (fuser -m) and the run refuses BEFORE anything is
@@ -3628,7 +3637,18 @@ restore_live_guard() {   # <destination> [mode] -> 0 fine | 1 refused (RESTORE_O
     esac
     case "$id" in ''|*[!0-9]*) return 0 ;; esac
     if [ -n "$host" ]; then
-        st="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$host" "$kind status $id" 2>/dev/null)"
+        # qm/pct are root-only and not in the delegated account's PATH (measured pve1 from
+        # pve2, 2026-10-26); the process list is readable by everyone and matched qm/pct
+        # exactly there: kvm -id N for a VM, lxc-start -F -n N for a container.
+        local _pat _prc
+        case "$kind" in qm) _pat="kvm -id $id( |\$)" ;; *) _pat="lxc-start -F -n $id( |\$)" ;; esac
+        ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$host" "pgrep -f '$_pat' >/dev/null" 2>/dev/null; _prc=$?
+        case "$_prc" in
+            0) st="status: running" ;;
+            1) st="status: stopped" ;;
+            *) RESTORE_ONE_VERDICT="could not check whether guest $id is running on '${host#*@}' (pgrep rc=$_prc) -- refused rather than guessed"
+               return 1 ;;
+        esac
     else
         st="$(command -v "$kind" >/dev/null 2>&1 && "$kind" status "$id" 2>/dev/null)"
     fi

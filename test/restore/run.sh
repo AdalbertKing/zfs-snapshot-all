@@ -2883,6 +2883,30 @@ else
     bad "busy / in place guard" "busy rewind=[$b1]" "busy create=[$b2]" "free=[$b3]" "root+flag local=[$b4]" "root+flag remote=[$b5]"
 fi
 
+# REMOTE TARGET (owner 2026-10-26: collector pve2, restore onto pve1). The delegated account
+# has no qm/pct: a running guest is read from the process list (pgrep rc 0 running, 1 not,
+# anything else refused); a remote file system mounted for an in-place mode is refused with
+# the root command to unmount it.
+lr_run() {   # <dataset> <mode> <mountpoint> <mounted> <pgrep rc> -> "rc|verdict"
+    LG_MP="$3" LG_MO="$4" LG_PRC="$5" bash -c "$lg_fns
+log() { :; }
+ssh() { case \"\$*\" in *'zfs get'*) printf '%s\n%s\n' \"\$LG_MP\" \"\$LG_MO\" ;; *pgrep*) return \"\$LG_PRC\" ;; esac; }
+RESTORE_ONE_VERDICT=''
+restore_live_guard \"$1\" \"$2\"; echo \"\$?|\$RESTORE_ONE_VERDICT\"" 2>&1
+}
+r1=$(lr_run zfsbackup-pve2@10.0.0.9:rpool/data/vm-102-disk-0 rewind - - 0)
+r2=$(lr_run zfsbackup-pve2@10.0.0.9:rpool/data/vm-100-disk-0 rewind - - 1)
+r3=$(lr_run zfsbackup-pve2@10.0.0.9:rpool/data/vm-100-disk-0 rewind - - 255)
+r4=$(lr_run zfsbackup-pve2@10.0.0.9:hdd/vm-disks/subvol-990-disk-0 rewind /hdd/vm-disks/subvol-990-disk-0 yes 1)
+r5=$(lr_run zfsbackup-pve2@10.0.0.9:hdd/vm-disks/subvol-990-disk-0 create /hdd/vm-disks/subvol-990-disk-0 yes 1)
+if [ "${r1%%|*}" = 1 ] && printf '%s' "$r1" | grep -q 'guest 102 is RUNNING' && [ "${r2%%|*}" = 0 ] \
+   && [ "${r3%%|*}" = 1 ] && printf '%s' "$r3" | grep -q 'could not check' \
+   && [ "${r4%%|*}" = 1 ] && printf '%s' "$r4" | grep -q 'zfs unmount hdd/vm-disks/subvol-990-disk-0' && [ "${r5%%|*}" = 0 ]; then
+    ok "remote target: a running guest is read from the process list (unknown = refused), a mounted file system for an in-place mode is refused with the root unmount, create is not"
+else
+    bad "remote target guards" "running=[$r1]" "stopped=[$r2]" "unknown=[$r3]" "mounted rewind=[$r4]" "mounted create=[$r5]"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
