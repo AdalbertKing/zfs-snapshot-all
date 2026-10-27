@@ -635,5 +635,8 @@
 "  $n: migawki automated_*: $f": "  $n: automated_* snapshots: $f",
 "0 = po skopiowaniu nic z tego szczebla u źródła (baza kopii to inne szczeble).": "0 = nothing of this tier kept at the source after the copy (the copy base comes from the other tiers).",
 " System hosta (…/ROOT/…) domyślnie odznaczony: wybrany sam odtwarza się jako nowe środowisko startowe.": " The host's system (…/ROOT/…) starts unticked: chosen alone it is restored as a new boot environment.",
-"zajmuje $su, zmian $sw": "uses $su, changed $sw"
+"zajmuje $su, zmian $sw": "uses $su, changed $sw",
+"=== NIE WYSZŁO (rc=$RC) -- komunikat polecenia powyżej. Enter = powrót do GUI, p + Enter = sprawdź ponownie (to samo polecenie)": "=== FAILED (rc=$RC) -- see the command's message above. Enter = back to the GUI, p + Enter = check again (the same command)",
+"Jako nowe środowisko startowe na $TARGET -- działa po restarcie, obecny system zostaje obok": "As a new boot environment on $TARGET -- takes effect after a reboot, the current system stays beside it",
+"Przywrócenie w miejscu, pod działającym systemem: tylko z linii poleceń (zfs-backup.sh restore ... --in-place-live-root).": "Restoring in place, under the running system: command line only (zfs-backup.sh restore ... --in-place-live-root)."
 }
