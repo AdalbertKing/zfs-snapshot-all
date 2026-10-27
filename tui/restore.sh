@@ -49,8 +49,14 @@ run_cmd() {
     # Napis zwykłym echo, jak w delete-relation.sh: podpowiedź `read -p` idzie na stderr,
     # a `2>/dev/null` ją chowało -- okno czekało na Enter bez słowa (właściciel, P1 10-15).
     if [ "$RC" -eq 0 ]; then echo "$(T '=== GOTOWE (rc=0). Enter = powrót do GUI')"
-    else echo "$(Tv '=== NIE WYSZŁO (rc=$RC) -- komunikat polecenia powyżej. Enter = powrót do GUI' '$RC' "$RC")"; fi
-    read -r _ </dev/tty 2>/dev/null || true
+    else
+        # Sprawdź ponownie (właściciel 2026-10-26): odmowa przed zmianą (zajęty dataset, działający
+        # gość) zwykle znika po zatrzymaniu usługi -- to samo polecenie jeszcze raz, bez wracania.
+        echo "$(Tv '=== NIE WYSZŁO (rc=$RC) -- komunikat polecenia powyżej. Enter = powrót do GUI, p + Enter = sprawdź ponownie (to samo polecenie)' '$RC' "$RC")"
+        local _a=""; read -r _a </dev/tty 2>/dev/null || true
+        case "$_a" in p|P) run_cmd ;; esac
+    fi
+    [ "$RC" -eq 0 ] && { read -r _ </dev/tty 2>/dev/null || true; }
     exit "$RC"
 }
 
@@ -449,10 +455,19 @@ PYEOF
         step=2 ;;
     2)  # ---- DOKĄD? ----------------------------------------------------------------------
         geom
+        # System hosta (źródło w <pula>/ROOT/) wybrany sam: zamiast "na miejsce" -- nowe środowisko
+        # startowe (właściciel 2026-10-26). W miejscu, pod działającym systemem: tylko z linii poleceń.
+        _sys=1; for o in "${ORIG[@]}"; do case "${o#*:}" in */ROOT/*) ;; *) _sys=0 ;; esac; done
+        [ "${#ORIG[@]}" -gt 0 ] || _sys=0
+        if [ "$_sys" = 1 ]; then
+            _m2=(srodowisko "$(Tv 'Jako nowe środowisko startowe na $TARGET -- działa po restarcie, obecny system zostaje obok' '$TARGET' "$TARGET_DISP")")
+        else
+            _m2=(miejsce "$(Tv 'Na miejsce na $TARGET -- NADPISUJE obecne dane' '$TARGET' "$TARGET_DISP")")
+        fi
         wt --title "$(Tv 'Przywróć $REL: dokąd?' '$REL' "$REL")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags \
            --default-item obok --menu "$(T 'Gdzie odtworzyć wybrane datasety?')" "$(fit 5)" "$W" "$(lhfit 2 1)" \
            obok "$(Tv 'Obok oryginału na $TARGET -- nic nie nadpisuje' '$TARGET' "$TARGET_DISP")" \
-           miejsce "$(Tv 'Na miejsce na $TARGET -- NADPISUJE obecne dane' '$TARGET' "$TARGET_DISP")" || { step=1; continue; }
+           "${_m2[@]}" || { step=1; continue; }
         DEST="$WT_OUT"
         ONTO=()
         if [ "$DEST" = obok ]; then
@@ -538,8 +553,7 @@ PYEOF
             CMD+=("$REL" "--source=$(join_by_comma "${SEL[@]}")" "--onto=$(join_by_comma "${ONTO[@]}")")
         elif [ "$WHOLE" != 1 ]; then
             CMD+=("--source=$(join_by_comma "${SEL[@]}")")
-            _sys=1; for o in "${ORIG[@]}"; do case "${o#*:}" in */ROOT/*) ;; *) _sys=0 ;; esac; done
-            [ "${#ORIG[@]}" -gt 0 ] && [ "$_sys" = 1 ] && CMD+=("--as-boot-env")
+            [ "$DEST" = srodowisko ] && CMD+=("--as-boot-env")
         fi
         [ -n "$AT" ] && CMD+=("--at=$AT")
         CMD+=("--config=$CFG")
@@ -572,6 +586,7 @@ PYEOF
             fi
             [ "$TARGET" = "ten host" ] || echo "$(Tv '($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)' '$GRANT_LABEL' "$GRANT_LABEL" '$TARGET' "$TARGET")"
             echo "$(T 'Po <Uruchom> polecenie pokaże plan i samo zapyta, zanim cokolwiek nadpisze.')"
+            [ "$DEST" = srodowisko ] && echo "$(T 'Przywrócenie w miejscu, pod działającym systemem: tylko z linii poleceń (zfs-backup.sh restore ... --in-place-live-root).')"
         } >"$TMPD/summary.txt"
         yesno_text "$TMPD/summary.txt" "$(Tv 'Przywróć $REL: sprawdź' '$REL' "$REL")" "$(T Uruchom)" "$(T Wstecz)" --defaultno || { step=3; continue; }
         run_cmd ;;

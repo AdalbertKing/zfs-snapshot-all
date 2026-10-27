@@ -2858,6 +2858,30 @@ else
     bad "live datasets guard" "root=[$g1]" "running ct=[$g2]" "stopped=[$g3]" "running vm=[$g4]" "plain=[$g5]" "$(cat "$LG/calls" 2>/dev/null)" "$be"
 fi
 
+# BUSY and IN PLACE (owner 2026-10-26): a mounted file system a process holds is refused for
+# an in-place mode, with who holds it; 'create' (beside) is not checked. --in-place-live-root
+# lets the running root through on THIS host only.
+lg2_run() {   # <dataset> <mode> <fuser pids> <in-place flag> [mountpoint] -> "rc|verdict"
+    LG_MP="${5:-/srv/data}" LG_PIDS="$3" RESTORE_IN_PLACE_LIVE_ROOT="$4" bash -c "$lg_fns
+log() { :; }
+zfs() { printf '%s\n%s\n' \"\$LG_MP\" yes; }
+fuser() { [ -n \"\$LG_PIDS\" ] && echo \" \$LG_PIDS\"; return 0; }
+ps() { echo smbd; }
+RESTORE_ONE_VERDICT=''
+restore_live_guard \"$1\" \"$2\"; echo \"\$?|\$RESTORE_ONE_VERDICT\"" 2>&1
+}
+b1=$(lg2_run hdd/data rewind "1234" 0)
+b2=$(lg2_run hdd/data create "1234" 0)
+b3=$(lg2_run hdd/data rewind "" 0)
+b4=$(lg2_run rpool/ROOT/pve-1 rewind "" 1 /)
+b5=$(lg2_run host:rpool/ROOT/pve-1 rewind "" 1 /)
+if [ "${b1%%|*}" = 1 ] && printf '%s' "$b1" | grep -q 'IN USE -- smbd(1234)' && [ "${b2%%|*}" = 0 ] && [ "${b3%%|*}" = 0 ] \
+   && [ "${b4%%|*}" = 0 ] && [ "${b5%%|*}" = 3 ]; then
+    ok "busy / in place: a held file system is refused for rewind with its holder, not for create; --in-place-live-root lets the running root through on this host only"
+else
+    bad "busy / in place guard" "busy rewind=[$b1]" "busy create=[$b2]" "free=[$b3]" "root+flag local=[$b4]" "root+flag remote=[$b5]"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

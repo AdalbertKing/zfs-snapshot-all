@@ -2536,7 +2536,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     # LIVE DATASETS (restore_live_guard): the running system and a running guest's disk are
     # refused here, with the other refusals -- the pre-flight and the real pass alike.
     local _lg
-    restore_live_guard "$src"; _lg=$?
+    restore_live_guard "$src" "$mode"; _lg=$?
     if [ "$_lg" -ne 0 ]; then
         [ "$_lg" -eq 3 ] && RESTORE_ONE_VERDICT="$RESTORE_ONE_VERDICT -- from $point"
         log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
@@ -3591,8 +3591,9 @@ restore_one_isolated() {   # <copy dataset> <destination> -> 0 | 1 untouched | 2
 #      would pull the floor from under it.
 # Read-only checks, run in the pre-flight before anything is touched.
 RESTORE_AS_BOOT_ENV="${RESTORE_AS_BOOT_ENV:-0}"
-restore_live_guard() {   # <destination> -> 0 fine | 1 refused (RESTORE_ONE_VERDICT) | 3 the mounted root
-    local d="$1" ds host="" q mp mo base id kind st
+RESTORE_IN_PLACE_LIVE_ROOT="${RESTORE_IN_PLACE_LIVE_ROOT:-0}"
+restore_live_guard() {   # <destination> [mode] -> 0 fine | 1 refused (RESTORE_ONE_VERDICT) | 3 the mounted root
+    local d="$1" mode="${2:-}" ds host="" q mp mo base id kind st pids
     case "$d" in *:*) host="${d%%:*}"; ds="${d#*:}" ;; *) ds="$d" ;; esac
     if [ -n "$host" ]; then
         q="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$host" "zfs get -H -o value mountpoint,mounted '$ds'" 2>/dev/null)"
@@ -3601,8 +3602,23 @@ restore_live_guard() {   # <destination> -> 0 fine | 1 refused (RESTORE_ONE_VERD
     fi
     mp="$(printf '%s\n' "$q" | sed -n 1p)"; mo="$(printf '%s\n' "$q" | sed -n 2p)"
     if [ "$mp" = / ] && [ "$mo" = yes ]; then
+        # --in-place-live-root (owner 2026-10-26, CLI only): the operator takes the running
+        # system back in place, knowingly -- confirmed by the host's name in restore_run_scope.
+        if [ "${RESTORE_IN_PLACE_LIVE_ROOT:-0}" = 1 ] && [ -z "$host" ]; then return 0; fi
         RESTORE_ONE_VERDICT="the RUNNING SYSTEM of ${host:-this host} (mounted at /) -- never rolled back in place; restore it as a new boot environment: the same command with --source=$ds --as-boot-env"
         return 3
+    fi
+    # BUSY (owner 2026-10-26): a file system that a process holds open cannot be unmounted
+    # for the run, and a write on it makes the engine refuse after the rollback -- CHANGED
+    # AND UNFINISHED. Who holds it is read (fuser -m) and the run refuses BEFORE anything is
+    # touched. This host only: a delegated account on a remote one cannot see that.
+    if [ -z "$host" ] && [ "$mo" = yes ] && [ -n "$mp" ] && [ "$mp" != - ] && [ "$mp" != none ] && [ "$mp" != legacy ] \
+       && case "$mode" in rewind|replace) true ;; *) false ;; esac && command -v fuser >/dev/null 2>&1; then
+        pids="$(fuser -m "$mp" 2>/dev/null | tr -s ' \t' '\n' | grep -E '^[0-9]+$' | sort -u)"
+        if [ -n "$pids" ]; then
+            RESTORE_ONE_VERDICT="'$ds' (mounted at $mp) is IN USE -- $(for q in $pids; do printf '%s(%s) ' "$(ps -o comm= -p "$q" 2>/dev/null || echo '?')" "$q"; done)-- stop them, then run this again"
+            return 1
+        fi
     fi
     base="${ds##*/}"
     case "$base" in
@@ -3760,6 +3776,47 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
         return 2
     fi
 
+    # --in-place-live-root: the running system restored where it stands (owner 2026-10-26,
+    # CLI only). Typed confirmation (the host's name, even with --yes), a FULL copy of the
+    # system as it is now beside it -- `zfs rollback -r` destroys every snapshot newer than
+    # the point, so a snapshot alone would not survive -- and the cluster warning.
+    if [ "${RESTORE_IN_PLACE_LIVE_ROOT:-0}" = 1 ]; then
+        local _lr _lrlist="" _host _typed _keep _ts
+        _host="$(hostname -s 2>/dev/null || hostname)"
+        for (( _pf_i=0; _pf_i<n; _pf_i++ )); do
+            _lr="${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}"
+            case "$_lr" in *:*) continue ;; esac
+            [ "$(zfs get -H -o value mountpoint,mounted -- "$_lr" 2>/dev/null | paste -sd' ' -)" = "/ yes" ] && _lrlist="$_lrlist $_lr"
+        done
+        if [ -n "$_lrlist" ]; then
+            log 0 "restore: --in-place-live-root: the RUNNING SYSTEM of $_host ($_lrlist ) is rolled back IN PLACE. Every running program keeps its old files until a reboot; reboot right after."
+            if [ -d /etc/pve/nodes ]; then
+                log 0 "restore: this host is a Proxmox node: the cluster's configuration database (/var/lib/pve-cluster/config.db) is on this system and goes back too. In a cluster, stop it for the run (systemctl stop pve-cluster) or the node may disagree with the others until it rejoins."
+            fi
+            _typed=""
+            read -rp "Type the host name ($_host) to roll its running system back in place: " _typed </dev/tty || _typed=""
+            if [ "$_typed" != "$_host" ]; then
+                log 0 "restore: not confirmed -- nothing was changed."
+                restore_pause_release
+                return 1
+            fi
+            _ts="$(date '+%Y%m%d-%H%M')"
+            for _lr in $_lrlist; do
+                _keep="${_lr}-before-restore-${_ts}"
+                log 0 "restore: keeping the system as it is now: $_lr -> $_keep (a full copy, not mounted -- the way back)"
+                if ! { zfs snapshot "$_lr@zb-before-restore-$_ts" \
+                        && zfs send "$_lr@zb-before-restore-$_ts" | zfs recv -u -o canmount=noauto -o mountpoint=/ "$_keep"; }; then
+                    zfs destroy "$_lr@zb-before-restore-$_ts" 2>/dev/null || :
+                    log 0 "restore: the copy of today's system failed -- nothing was rolled back."
+                    restore_pause_release
+                    return 1
+                fi
+                zfs destroy "$_lr@zb-before-restore-$_ts" 2>/dev/null || :
+            done
+            RESTORE_LIVE_ROOT_DONE="$_lrlist"
+        fi
+    fi
+
     # --as-boot-env takes the running system ALONE: mixed with ordinary datasets the run would
     # be half a boot environment and half an overwrite, under one answer.
     if [ "${RESTORE_AS_BOOT_ENV:-0}" = 1 ]; then
@@ -3844,6 +3901,11 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     restore_report_backup_cost
 
     restore_pause_release
+
+    if [ -n "${RESTORE_LIVE_ROOT_DONE:-}" ]; then
+        log 0 "restore: the running system ($RESTORE_LIVE_ROOT_DONE ) was restored IN PLACE -- REBOOT NOW: running programs still hold the old files."
+        log 0 "restore: the system as it was before is kept beside it as <name>-before-restore-<time> (zfs list -r -o name ${RESTORE_LIVE_ROOT_DONE%%/*}); boot it as a boot environment to go back."
+    fi
 
     # THE ONE THAT NEEDS A HUMAN WINS. A dataset left half-destroyed outranks an
     # ordinary failure in the exit status, because burying it in a count is the
@@ -4874,6 +4936,7 @@ cmd_restore() {
             --key-file=*) RESTORE_KEY_FILE="${a#*=}" ;;
             --with-history) RESTORE_WITH_HISTORY=1 ;;
             --as-boot-env) RESTORE_AS_BOOT_ENV=1 ;;
+            --in-place-live-root) RESTORE_IN_PLACE_LIVE_ROOT=1 ;;
             --*) die "restore: unknown option $a" ;;
             *)
                 # Positional tokens: the public addresses. Resolved AFTER the
