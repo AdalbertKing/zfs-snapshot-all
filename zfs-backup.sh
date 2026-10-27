@@ -22393,11 +22393,20 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         browse)
             # "Przegladaj kopie" (owner 2026-10-18): windows only, like restore --ask --
             # nothing here but the hand-off; the mount/mc/umount lives in tui/browse.sh.
-            [ "${3:-}" = "--ask" ] && [ -n "${2:-}" ] || die "usage: zfs-backup.sh browse NAME --ask | browse --any --ask"
+            [ "${3:-}" = "--ask" ] && [ -n "${2:-}" ] || die "usage: zfs-backup.sh browse NAME --ask [--dataset=DS] [--at=EPOCH] | browse --any --ask"
             [ "${2#-}" = "$2" ] && snaponly_refuse restore "$2"
             _bw="$SCRIPT_DIR/tui/browse.sh"
             [ -f "$_bw" ] || die "browse: $_bw is missing -- incomplete checkout"
-            ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$_bw" "$2"
+            # --dataset= / --at= (GUI F4 Kopie from a run or a dataset, 2026-10-27): start on
+            # that copy and that moment; the windows still let the operator choose otherwise.
+            _bwa=()
+            for _x in "${@:4}"; do
+                case "$_x" in
+                    --dataset=*|--at=*) _bwa+=("$_x") ;;
+                    *) die "browse: unknown option '$_x' (only --dataset=DS and --at=EPOCH)" ;;
+                esac
+            done
+            ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$_bw" "$2" "${_bwa[@]}"
             exit $? ;;
         restore)
             [ -n "${2:-}" ] && [ "${2#-}" = "$2" ] && snaponly_refuse restore "$2"
