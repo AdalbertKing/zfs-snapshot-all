@@ -144,6 +144,19 @@ MEDIA_STATES = {
     "unknown":      ("?", 4, u"brama nośnika (zfs-media-gate.sh) nie odpowiedziała -- stan nieznany, nie 'brak'"),
 }
 
+def replica_type_word(r):
+    """U99 (wlasciciel 2026-10-27): kolumna Typ -- nosnik staly to "wewnętrzny";
+    wymienny: podłączony / odłączony (stany niepewne slowami bramy)."""
+    if (r.get("media") or "") == "fixed":
+        return _(u"wewnętrzny")
+    p = r.get("present") or "unknown"
+    if p in ("here", "available"):
+        return _(u"podłączony")
+    if p == "away":
+        return _(u"odłączony")
+    return _(MEDIA_STATES.get(p, MEDIA_STATES["unknown"])[0])
+
+
 def media_state_line(r, st):
     """Stan nosnika w panelu repliki (uwaga 17, 2026-10-08). Dysk w maszynie mowi tez,
     czy kopia na nim jest aktualna -- "w slocie" samo nie mowilo nic o kopii."""
@@ -848,6 +861,9 @@ def cron_words(spec):
         return _(u"co dobę %s") % hm
     if dom == "*" and mon == "*" and dow.isdigit():
         return _(u"co tydzień %s %s") % (dow_word(int(dow)), hm)
+    if dom == "*" and mon == "*" and re.match(r"^[0-7](-[0-7])?(,[0-7](-[0-7])?)*$", dow):
+        days = u", ".join(u"-".join(dow_word(int(x)) for x in part.split("-")) for part in dow.split(","))
+        return _(u"w dni %s %s") % (days, hm)
     if dom.isdigit() and mon == "*" and dow == "*":
         return _(u"co miesiąc %s. dnia %s") % (dom, hm)
     if dom.isdigit() and mon.isdigit():
@@ -1905,7 +1921,8 @@ def render_tabbed(data, width, height, now, ch, screen, title, heads, cells, cur
     else:
         # Lista nie traci, dopoki dol ma choc tercje ekranu (F5: 17 szablonow
         # zostawialo szczeblom jedna linie).
-        need_child = max(1, len(items)) + 4
+        # "rows" (U97): dol o stalej wysokosci -- wiecej pozycji przewija sie po Tab.
+        need_child = (child.get("rows") or max(1, len(items))) + 4
         top_h = max(len(cells) + 4, 7, min(panel_need, avail - need_child))
         top_h = min(top_h, avail - min(need_child, max(5, avail // 3)))
     inner = lbw - 4
@@ -2077,6 +2094,8 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False):
     runs_by = {}
     for x in (data.stats or {}).get("runs") or []:
         runs_by.setdefault(x.get("label") or "", []).append(x)
+    for lst_ in runs_by.values():
+        lst_.sort(key=lambda x: x.get("end") or x.get("start") or "")
     groups, idx, static = [], {}, []
     for it in jobrows or []:
         if it.get("kind") not in ("job", "replica"):
@@ -2108,13 +2127,16 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False):
         # pobranie hourly i daily w jednym snapget) nie dostaja go po razie (zmierzone 10-27).
         if show_done and lbl and lbl not in shown:
             shown.add(lbl)
+            prev = None
             for x in runs_by.get(lbl, []):
                 st, en = iso_epoch(x.get("start") or ""), iso_epoch(x.get("end") or "")
                 at = en or st
+                p_end, prev = prev, (en or st)
                 if at is None or at < now - PRZ_PAST_H * 3600:
                     continue
                 r = dict(base)
-                r.update({"past": True, "at": at, "start": st, "end": en, "rc": x.get("rc"), "err": x.get("error") or ""})
+                r.update({"past": True, "at": at, "start": st, "end": en, "rc": x.get("rc"), "err": x.get("error") or "",
+                          "prev_end": p_end})
                 out.append(r)
         t, n = it0.get("next_epoch"), 0
         sched = it0.get("schedule") or ""
@@ -2154,6 +2176,71 @@ def insert_now(rows, now, show_done):
         if not r["past"]:
             return rows[:i] + [{"kind": "now", "name": r["name"], "at": now}] + rows[i:]
     return rows + [{"kind": "now", "name": rows[-1]["name"], "at": now}]
+
+
+def run_window_row(r):
+    """U92 (wlasciciel 2026-10-27): Enter na biegu = okno TEGO biegu -- jego datasety,
+    sekcje configu tych zakresow i TYLKO linia crona z jego etykieta. Calosc (wszystkie
+    sekcje, caly cron) jest w oknie relacji na F3."""
+    one = dict(r["item"])
+    jobs = run_jobs(r) or one.get("jobs") or [one["job"]]
+    lbl = r.get("label") or ""
+    if lbl:
+        tag = u' %s"' % lbl
+        cut = []
+        for j in jobs:
+            own = [l for l in (j.get("cron_lines") or []) if tag in l]
+            cut.append(dict(j, cron_lines=own) if own else j)
+        jobs = cut
+    one["jobs"], one["job"] = jobs, jobs[0]
+    return one
+
+
+def snaps_index(data):
+    """{dataset: [(creation, written, nazwa migawki)]} z job-stats --runs (U96)."""
+    st = data.stats or {}
+    idx = st.get("_snaps_idx")
+    if idx is None:
+        idx = {}
+        for x in st.get("snaps") or []:
+            ds, _at, sn = (x.get("name") or "").partition("@")
+            if sn:
+                idx.setdefault(ds, []).append((int(x.get("creation") or 0), int(x.get("written") or 0), sn))
+        st["_snaps_idx"] = idx
+    return idx
+
+
+def run_dataset_bytes(r, j, data):
+    """Ile wniosl bieg r dla zadania j: suma `written` migawek jego rodziny na zbiorze,
+    na ktorym laduja (cel; przy samych migawkach -- zrodlo), powstalych po poprzednim
+    biegu tej linii i nie pozniej niz koniec tego. None = nie wiadomo (brak danych)."""
+    if not r.get("past") or "snaps" not in (data.stats or {}):
+        return None
+    src, dst = job_src_dst(j)
+    where = dst if j.get("direction") not in ("snaponly",) else src
+    where = (where or "").rsplit(":", 1)[-1] if "@" in (where or "") else (where or "")
+    if not where or where in ("-", "?"):
+        return None
+    fam = family_of(j) or ""
+    hi = (r.get("end") or r["at"]) + 60
+    lo = r.get("prev_end") or ((r.get("start") or r["at"]) - 3600)
+    tot, hit = 0, False
+    for ds, lst_ in snaps_index(data).items():
+        if ds != where and not ds.startswith(where + "/"):
+            continue
+        for cr, wr, sn in lst_:
+            if lo < cr <= hi and (not fam or fam == "-" or sn.startswith(fam)):
+                tot += wr
+                hit = True
+    return tot if hit else 0
+
+
+def run_bytes(r, data):
+    if r.get("kind") != "run" or r.get("static") or not r.get("past"):
+        return None
+    vals = [run_dataset_bytes(r, j, data) for j in run_jobs(r)]
+    vals = [v for v in vals if v is not None]
+    return sum(vals) if vals else None
 
 
 def run_result(r):
@@ -2216,8 +2303,8 @@ def run_children(r, data, now, ch):
                     if lo <= st_ <= hi and (ds_of(x.get("dataset")) == s_ or (x.get("target") or "") == d_):
                         t = x
                         break
-            res = transfer_word(t, now)[0] if t else (u"-" if r.get("past") else _(u"czeka"))
-            items.append({"cells": [src or u"-", dst or u"-", res, transfer_data_cell(t) if t else u"-"],
+            b = run_dataset_bytes(r, j, data)
+            items.append({"cells": [src or u"-", dst or u"-", hbytes_short(b) if b is not None else u"-"],
                           "pairs": transfer_detail_pairs(t, now, ch, data) if t else [(_(u"Źródło"), src or u"-"), (_(u"Cel"), dst or u"-")],
                           "title": u"%s -- %s" % (r["name"], s_ or d_)})
     return {"items": items}
@@ -2606,10 +2693,10 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
     cells = []
     for r in rows:
         if r["kind"] == "now":
-            cells.append([(u"-- " if ch.ascii else u"\u2500\u2500 ") + _(u"teraz %s") % time.strftime("%H:%M", time.localtime(r["at"])), u" ", u" ", u" ", u" "])
+            cells.append([(u"-- " if ch.ascii else u"\u2500\u2500 ") + _(u"teraz %s") % time.strftime("%H:%M", time.localtime(r["at"])), u" ", u" ", u" ", u" ", u" "])
         elif r["kind"] == "grp":
             it = r["item"]
-            cells.append([(u"> " if ch.ascii else u"\u25b8 ") + r["name"], it.get("dir") or u" ", u" ", _(u"błąd biegu") if r["bad"] else u" ", u" "])
+            cells.append([(u"> " if ch.ascii else u"\u25b8 ") + r["name"], it.get("dir") or u" ", u" ", _(u"błąd biegu") if r["bad"] else u" ", u" ", u" "])
         else:
             it = r["item"]
             # Na jednej osi czasu Co mowi tez, KTORYCH datasetow (pve10: dwa 'ab lokalny prune
@@ -2618,9 +2705,10 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
                 (_(u"replika") if it.get("kind") == "replica" else (it.get("task") or u"-"))
             czas = fmt_dur(r["end"] - r["start"]) if r.get("past") and r.get("start") and r.get("end") else u"-"
             when = run_when(r["at"])
-            cells.append([(u"  %s " % bar + when) if grouped and not r.get("static") else when,
+            rb = run_bytes(r, data)
+            cells.append([(u"    %s " % bar + when) if grouped and not r.get("static") else when,
                           job_id_cell(r["items"], r.get("jobs")) if grouped and not r.get("static") else r["name"],
-                          co, run_result(r), czas])
+                          co, run_result(r), czas, hbytes_short(rb) if rb is not None else u"-"])
     n_runs = len([r for r in rows if r["kind"] == "run"])
     title = _(u"Przebiegi na %s -- %s%s") % (
         host, _(u"wykonane %dh i nadchodzące %dh") % (PRZ_PAST_H, PRZ_AHEAD_H) if show_done else _(u"tylko nadchodzące"),
@@ -2646,14 +2734,14 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
             det = run_pairs(r, now, ch) + job_panel_pairs(one, data, now, ch)
         kids = run_children(r, data, now, ch) if not r.get("static") else {"items": []}
         child = {"name": det_title, "tabs": TABS["zadania"], "ti": 0, "items": kids["items"],
-                 "heads": [_(u"Źródło"), _(u"Cel"), _(u"Wynik"), _(u"Dane")], "prio": [0, 2, 1, 3],
+                 "heads": [_(u"Źródło"), _(u"Cel"), _(u"Dane")], "prio": [0, 1, 2], "rows": 5,
                  "empty": _(u"brak datasetów tego zadania")}
     empty = [_(u"Brak zadań zfs-backup na tym hoście (nie ma relacji albo jej config jest nieczytelny)."),
              _(u"Nową relację zakładasz na F3 Relacje: Ins.")]
     foot = (_(u"Enter pełne okno zadania   Tab do źródło → cel")) if n_runs else ""
     return render_tabbed(data, width, height, now, ch, "zadania", title,
-                         [_(u"Kiedy"), _(u"Zadanie") if grouped else _(u"Relacja"), _(u"Co"), _(u"Wynik"), _(u"Czas")], cells, cursor, foot,
-                         det_title, det, child, focus, pair_cursor, acts, empty, prio=[0, 1, 3, 2, 4], flex=1)
+                         [_(u"Kiedy"), _(u"Zadanie") if grouped else _(u"Relacja"), _(u"Co"), _(u"Wynik"), _(u"Czas"), _(u"Dane")], cells, cursor, foot,
+                         det_title, det, child, focus, pair_cursor, acts, empty, prio=[0, 1, 3, 2, 5, 4], flex=1)
 
 
 def summarize(rows):
@@ -2796,7 +2884,7 @@ def screen_actions(active, hide_gone=False, paused=False, show_done=True, groupe
                 ("F9", u"Eksport/Import", u"Plik")]
     if active == "odzysk":
         # KOPIE (U82): Enter przeglada (migawka RO + mc), F9 przywraca -- ten sam wybor zrodla.
-        return [("F9", u"Przywróć", u"Przywróć")]
+        return [("F7", u"Przeglądaj", u"Przeglądaj"), ("F9", u"Przywróć", u"Przywróć")]
     if active == "nosniki":
         # Krótkie (3. pole) tylko, gdy pasek się nie mieści: przy 80 kolumnach F9 wypychał F10.
         # "Przywróć z dysku" przeszedł na F11 Odzysk (właściciel 2026-10-18).
@@ -2893,7 +2981,10 @@ def detail_kv(ch, pairs, width):
             out.append("")
             continue
         if k == "":
-            # NAGLOWEK GRUPY (U21): "-- Teraz", "-- Przebiegi (7 dni)" -- grupy zamiast pustych linii.
+            # NAGLOWEK GRUPY (U21): "-- Teraz", "-- Przebiegi (7 dni)". U98 (wlasciciel 2026-10-27:
+            # "panele naćpane, już raz rozdzielaliśmy pustymi wierszami"): pusta linia przed grupa.
+            if out and out[-1] != "":
+                out.append("")
             out.append(u"%s %s" % ((ch.sh if ch else "-") * 2, v))
             continue
         chunks = wrap(u"%s" % v, max(10, width - kw - 2)) or [""]
@@ -3905,8 +3996,8 @@ def replica_kind(r, ascii_=False):
     if r.get("prefix") == "-":
         return _(u"historia"), _(u"historia kolektora -- dysk dostaje migawki, które już tam są")
     n = replica_keep_n(r)
-    return (_(u"zdjęcia %s%d") % ("x" if ascii_ else u"×", n),
-            _(u"własne zdjęcia -- replika przy każdym biegu robi zdjęcie %s") % (r.get("prefix") or "replica_"))
+    return (_(u"migawki %s%d") % ("x" if ascii_ else u"×", n),
+            _(u"własne migawki -- replika przy każdym biegu robi migawkę %s") % (r.get("prefix") or "replica_"))
 
 
 def replica_disk_words(r):
@@ -3928,11 +4019,11 @@ def replica_disk_words(r):
         elif f[1] != "*" and "/" not in f[1] and "," not in f[1]:
             span = _(u" = ok. %d dni wstecz") % n
     if n == 1:
-        words = _(u"ostatnie zdjęcie")
+        words = _(u"ostatnia migawka")
     elif 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
-        words = _(u"ostatnie zdjęcia")
+        words = _(u"ostatnie migawki")
     else:
-        words = _(u"ostatnich zdjęć")
+        words = _(u"ostatnich migawek")
     return u"%d %s%s%s" % (n, words, span, _(u" (jak kolektor)") if not str(r.get("keep") or "").strip() else u"")
 
 
@@ -3991,7 +4082,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
     for r in reps:
         st = MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"])
         s = r.get("schedule") or "?"
-        cells.append([r.get("name") or "?", _(st[0]), (r.get("last_current") or _(u"brak"))[:16],
+        cells.append([r.get("name") or "?", replica_type_word(r), (r.get("last_current") or _(u"brak"))[:16],
                       _(u"po podłączeniu") if s == "on-insert" else cron_words(s) + (_(u" + po podłączeniu") if r.get("on_insert") == "yes" else "")])
     det_title, det, child = u"", [], None
     if reps and 0 <= cursor < len(reps):
@@ -4009,7 +4100,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
         det_title = _(u"stany nośnika")
         det = [(_(MEDIA_STATES[k][0]), _(MEDIA_STATES[k][2])) for k in ("here", "available", "away", "wrong_medium")]
     return render_tabbed(data, width, height, now, ch, "nosniki", _(u"Repliki backupu kolektora (%d)") % len(reps),
-                         [_(u"Replika"), _(u"Nośnik"), _(u"Kopia z"), _(u"Kiedy")], cells, cursor,
+                         [_(u"Replika"), _(u"Typ"), _(u"Wykonana"), _(u"Harmonogram")], cells, cursor,
                          (_(u"Enter szczegóły   Ins nowa   Del usuń   Tab do datasetów")) if reps else _(u"Ins nowa replika"),
                          det_title, det, child, focus, pair_cursor, screen_actions("nosniki"), empty, prio=[0, 1, 2, 3], flex=3)
 
@@ -4106,12 +4197,9 @@ def odzysk_detail(row, copies=()):
     return [group(None, _(u"Kopie")),
             (_(u"Ścieżka"), path),
             (_(u"Kierunek"), row.get("dir") or "?"),
-            group(None, _(u"Zgody")),
-            (_(u"Na źródło"), _(u"sprawdza to okno Przywróć -- źródło musi wydać zgodę na dostęp (deploy.sh --allow-restore)")),
-            (_(u"Na bok"), _(u"tak -- do nowego datasetu obok, oryginał nietknięty")),
-            (_(u"Przeglądanie"), _(u"Enter: migawka tylko do odczytu, mc, potem odmontowanie")),
-            (_(u"Przywracanie"), _(u"F9: okna Przywróć -- dataset, cel, migawka, plan, WYKONAJ")),
-            (_(u"Uwaga"), _(u"odzysk może nadpisać albo dołożyć dane -- nic się nie zmieni, dopóki nie wybierzesz WYKONAJ"))]
+            group(None, _(u"Odzysk")),
+            (_(u"Na źródło"), _(u"wymaga zgody źródła (deploy.sh --allow-restore)")),
+            (_(u"Na bok"), _(u"do nowego datasetu obok, oryginał nietknięty"))]
 
 
 def render_odzysk(data, rows, cursor, width, height, now, ch, message="", focus="list", pair_cursor=0, ti=0, ctx=None):
@@ -4130,7 +4218,7 @@ def render_odzysk(data, rows, cursor, width, height, now, ch, message="", focus=
         child.update({"name": x["name"], "tabs": TABS["odzysk"], "ti": 0})
     host = (data.jobs or {}).get("host") or ""
     return render_tabbed(data, width, height, now, ch, "odzysk", (_(u"Kopie na %s") % host).strip(),
-                         [_(u"Skąd"), _(u"Rodzaj"), _(u"Najnowsza kopia")], cells, cursor, _(u"Enter przeglądaj   F9 przywróć   Tab do datasetów"),
+                         [_(u"Skąd"), _(u"Rodzaj"), _(u"Najnowsza kopia")], cells, cursor, _(u"Enter przeglądaj   Tab do datasetów"),
                          det_title, det, child, focus, pair_cursor, screen_actions("odzysk"))
 
 
@@ -5746,6 +5834,9 @@ class UI(object):
             return self.action(k) or "stay"
         elif k in ("F7", "F8", "F9", "del", "ins") and self.screen == "nosniki":
             return self.replica_action(k) or "stay"
+        elif k == "F7" and n and self.screen == "odzysk":
+            self.cursor["odzysk"] = c
+            return self.browse_action(odzysk_rows(self.rows)[c]) or "stay"
         elif k == "F9" and n and self.screen == "odzysk":
             self.cursor["odzysk"] = c
             return self.restore_action(odzysk_rows(self.rows)[c]) or "stay"
@@ -5766,7 +5857,7 @@ class UI(object):
                     "kind": "panel", "name": _(u"replika %s") % jr["name"], "replica": jr["name"],
                     "pairs": replica_detail_pairs(jr["replica"], self.ch, jr["srow"], self.data.failed("stats"))}), 0
             elif self.screen == "zadania":
-                self.window, self.scroll = ("relacja", self.runrows[c]["item"]), 0
+                self.window, self.scroll = ("relacja", run_window_row(self.runrows[c])), 0
             else:
                 # Pozostale ekrany maja panel szczegolow; Enter otwiera go jako
                 # okno, zeby dlugie wartosci nie byly ucinane.
