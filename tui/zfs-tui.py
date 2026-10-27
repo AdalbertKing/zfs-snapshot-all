@@ -1578,7 +1578,11 @@ def build_jobs(data, now):
                     break
                 pnxt = cron_next(psched, now)
                 pit = dict(items[-1])
-                pit.update({"task": _(u"lokalny prune"), "keep": keep_cell(ret), "schedule": psched, "czas": "-", "gb": "-",
+                # Etykieta WLASNEJ linii delsnaps (Przebiegi czytaja biegi po etykiecie) --
+                # nie etykieta transferu, z ktorego wiersz jest skopiowany.
+                _pm = re.search(r'zfs-job\.sh "([^"]+)"', cl)
+                _pl = (_pm.group(1).split(" ", 1) + [""])[1] if _pm else ""
+                pit.update({"task": _(u"lokalny prune"), "keep": keep_cell(ret), "schedule": psched, "czas": "-", "gb": "-", "clabel": _pl,
                             "vol": None, "srow": None, "next_epoch": pnxt,
                             "next": fmt_when(pnxt, now) if pnxt else "?", "jobs": [j],
                             "verdict": v0, "vword": _(VERDICTS.get(v0, (v0, 0))[0]),

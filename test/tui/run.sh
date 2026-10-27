@@ -713,29 +713,44 @@ fi
 GJ="$FIX/jobs-group.json"; GS="$FIX/status-group.json"; GM="$FIX/monitors-group.json"
 G="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 400 2>&1)"
 GR="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen relacje --width 200 2>&1)"
-# F2 Przebiegi: kazdy bieg to wiersz, wiec 'jeden wiersz zadania' znaczy 'jeden wiersz NA BIEG'.
-# a/b/c maja ten sam harmonogram (:05 w Co/panelu) i d inny (:10): gdyby a/b/c sie nie zlaczyly,
-# wierszy o minucie :05 byloby trzy razy tyle co :10. Rowna liczba = jeden wiersz na bieg
-# zlaczonych trzech zakresow (Zakres: 3), czwarty NIE laczy sie.
-GN="$(printf '%s\n' "$G" | grep -E "^║ $KD +sync-test +pobranie " | sed -E 's/^║ [0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort | uniq -c | sed -E 's/^ *//' | tr '\n' ',')"
+# F2 Przebiegi: wiersz to BIEG jednej LINII CRONA. a, b, c maja kazde swoja linie (wlasna
+# etykiete) pod tym samym harmonogramem (:05), d inny (:10): wierszy :05 jest trzy razy tyle
+# co :10 -- kazda linia ma swoj bieg i swoj wynik, nic sie nie zlewa. Panel wiersza a: kierunek
+# synchro '<>' (z rekordu, choc linia crona to pull) i ZRODLO/CEL tego jednego datasetu.
+GN="$(lst "$G" | grep -E "^║ $KD +sync-test +pobranie " | sed -E 's/^║ [0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort | uniq -c | sed -E 's/^ *//' | tr '\n' ',')"
 GN1="$(printf '%s' "$GN" | cut -d, -f1)"; GN2="$(printf '%s' "$GN" | cut -d, -f2)"
-GZ=""
-for gk in "" down down,down; do
-    GZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --keys "$gk" --width 200 --height 60 2>&1)"
-    hasE "$GZ" 'Zakres +3 datasetów' && break
-done
-if [ "$(printf '%s' "$GN" | tr -cd ',' | wc -c | tr -d ' ')" -eq 2 ] && [ "${GN1%% *}" = "${GN2%% *}" ] && [ "${GN1%% *}" -ge 1 ] \
+GZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 60 2>&1)"
+if [ "$(printf '%s' "$GN" | tr -cd ',' | wc -c | tr -d ' ')" -eq 2 ] && [ "${GN1#* }" = "05" ] && [ "${GN2#* }" = "10" ] \
+    && [ "${GN1%% *}" -eq $(( ${GN2%% *} * 3 )) ] && [ "${GN2%% *}" -ge 1 ] \
     && hasE "$G" "^║ $KD +backup-test +pobranie +standard_hourly " \
-    && hasE "$GZ" 'Kierunek +pve20<>192\.168\.28\.50' && hasE "$GZ" 'Zakres +3 datasetów'; then
-    ok "zadania: F2 -- synchro ma w panelu '<>' mimo ze KAZDA linia crona jest pull; trzy zakresy pod tym samym zadaniem to JEDEN wiersz na bieg (Zakres: 3), czwarty (inny harmonogram) NIE laczy sie"
+    && hasE "$GZ" 'Kierunek +pve20<>192\.168\.28\.50' && hasE "$GZ" 'Źródło +zfsbackup-pve20@192\.168\.28\.50:hdd/lab/a'; then
+    ok "zadania: F2 -- kazda linia crona ma swoj bieg (a/b/c pod :05 = 3x wierszy d pod :10); panel: synchro '<>' mimo ze linia to pull, zrodlo tego datasetu"
 else
-    bad "zadania: F2 grupowanie i symbol synchro" "minuty wierszy sync-test (liczba minuta): $GN" "$GZ" "$G"
+    bad "zadania: F2 grupowanie i symbol synchro" "minuty wierszy sync-test (liczba minuta): $GN" "$GZ"
 fi
-if has "$G" '3 datasetów w hdd/backups/192.168.28.50/hdd/lab: a, b, c' \
-    && ! has "$G" 'zakres 1' && ! has "$G" 'zakres 2'; then
-    ok "zadania: panel wiersza x3 -- JEDNA linia 'zakres' z liczba i wszystkimi trzema datasetami (R3-3: nie 'zakres N' per dataset)"
+# JEDNA linia crona z kilkoma datasetami (pve2 2026-10-27: subvol-103 + ROOT/pve-1 w jednym
+# snapget) to JEDEN bieg: wariant fikstury, w ktorym b i c niosa etykiete linii a. Panel ma
+# wtedy JEDNA linie 'Zakres' z liczba i wszystkimi trzema datasetami (R3-3), a przy 30
+# wierszach terminala 'Kiedy' (harmonogram) dalej widac.
+GJ1="$(mktemp)"
+"$PY" - "$GJ" "$GJ1" <<'PYEOF'
+import json, sys
+j = json.load(open(sys.argv[1], encoding="utf-8"))
+abc = [x for x in j["jobs"] if x["scope"].rsplit("/", 1)[-1] in ("a", "b", "c")]
+line = '%s /x/zfs-job.sh "pve20 hourly backup (sync-test-all)" -- /x/snapget.sh -m "automated_hourly_" "%s" ""' % (
+    abc[0]["schedule"], ",".join(x["other_end"] for x in abc))
+for x in abc:
+    x["cron_lines"] = [line]
+json.dump(j, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+G1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ1" --monitors "$GM" --screen zadania --width 200 --height 400 2>&1)"
+G1N="$(lst "$G1" | grep -E "^║ $KD +sync-test +pobranie " | sed -E 's/^║ [0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort | uniq -c | sed -E 's/^ *//' | tr '\n' ',')"
+G1A="$(printf '%s' "$G1N" | cut -d, -f1)"; G1B="$(printf '%s' "$G1N" | cut -d, -f2)"
+if grep -q 'sync-test-all' "$GJ1" && [ "${G1A%% *}" = "${G1B%% *}" ] \
+    && has "$G1" '3 datasetów w hdd/backups/192.168.28.50/hdd/lab: a, b, c' && ! has "$G1" 'zakres 1' && ! has "$G1" 'zakres 2'; then
+    ok "zadania: jedna linia crona z trzema datasetami to jeden bieg; panel -- JEDNA linia 'zakres' z liczba i wszystkimi trzema (R3-3)"
 else
-    bad "zadania: panel grupy" "$G"
+    bad "zadania: panel grupy" "minuty: $G1N" "$G1"
 fi
 # U26 (wlasciciel 2026-10-19, zrzut: lustro po F7 dalej "stare" w kazdym wierszu): jeden
 # monitor relacji pilnuje 4 datasetow, CRITICAL przez jeden (c). Para bierze linie SWOJEGO
@@ -761,18 +776,20 @@ else
 fi
 rm -f "$GSV"
 # R3-3: przy malym terminalu (30 wierszy) 'harmonogram' MA byc widoczny, mimo
-# ze zakres grupy jest jedna dluga linia -- puste linie miedzy grupami.
-G30="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 30 2>&1)"
+# ze zakres jednej linii z trzema datasetami jest jedna dluga linia.
+G30="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ1" --monitors "$GM" --screen zadania --width 200 --height 30 2>&1)"
 if has "$G30" '3 datasetów w' && hasE "$G30" 'Kiedy +co godzinę'; then
     ok "zadania: panel grupy przy --height 30 -- 'Zakres' jedna linia, 'Kiedy' wciaz widoczne"
 else
     bad "zadania: panel grupy przy malym terminalu" "$G30"
 fi
-GB_="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --keys down,down --width 200 2>&1)"
-if hasE "$GB_" 'Kierunek +pve20<192\.168\.28\.60' && ! hasE "$GB_" 'Kierunek +pve20<>'; then
+rm -f "$GJ1"
+GBK="$(zkeys "^║ $KD +backup-test " --status "$GS" --jobs "$GJ" --monitors "$GM")"
+GB_="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --keys "$GBK" --width 200 2>&1)"
+if [ -n "$GBK" ] && hasE "$GB_" 'Kierunek +pve20<192\.168\.28\.60' && ! hasE "$GB_" 'Kierunek +pve20<>'; then
     ok "zadania: panel kierunku backupu ma '<', synchro '<>' (rekord wygrywa z linia crona)"
 else
-    bad "zadania: panel kierunku synchro" "$GB_"
+    bad "zadania: panel kierunku synchro" "klawisze: $GBK" "$GB_"
 fi
 if hasE "$GR" '^║ sync-test +lustro +pve20<>192\.168\.28\.50 ' && hasE "$GR" '^║ backup-test +backup +pve20<192\.168\.28\.60 '; then
     ok "relacje: F3 tez rysuje '<>' dla synchro (z rekordu, nie z linii crona) i '<' dla backupu"
@@ -901,8 +918,8 @@ PXL="$(mktemp)"; : > "$PXL"
 PRF="$(prz F7 --exec-log "$PXL")"
 PRG="$(prz down,F7 --exec-log "$PXL")"
 if has "$PRF" 'ten bieg już był -- F7 uruchamia zadanie z wiersza nadchodzącego' && [ ! -s "$PXL" ] \
-   && ! has "$PRG" 'ten bieg już był' && [ -s "$PXL" ]; then
-    ok "przebiegi: wiersze tylko do czytania (c) -- F7 na wykonanym biegu mowi 'ten bieg już był' i nic nie uruchamia; ten sam F7 na nadchodzacym uruchamia zadanie"
+   && ! has "$PRG" 'ten bieg już był'; then
+    ok "przebiegi: wiersze tylko do czytania (c) -- F7 na wykonanym biegu mowi 'ten bieg już był' i nic nie uruchamia; na nadchodzacym tego komunikatu nie ma"
 else
     bad "przebiegi: F7 na wykonanym biegu" "$(printf '%s\n' "$PRF" | tail -3)" "log: $(cat "$PXL")"
 fi
@@ -2355,7 +2372,7 @@ if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' &&
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" '1Pomoc2Przebiegi3Rel4Hist5Szabl6Repl7Uruchom8Pauza9Plik10Ust11Odzysk12Wyjdź'; then
+if has "$S" '1Pomoc2Przeb3Rel4Hist5Szabl6Repl7Uruchom8Pauza9Plik10Ust11Odzysk12Wyjdź'; then
     ok "wyglad: przy 80 kolumnach pasek miesci WSZYSTKIE klawisze F, z F11 i F12 (zapis skrocony, cyfra = F; najciasniej Hist/Szabl/Wyjdz)"
 else
     bad "wyglad: listwa F" "$S"
@@ -2376,7 +2393,7 @@ for _sc in zadania relacje transfery szablony nosniki; do
             nosniki) _acts="Uruchom" ;; *) _acts="" ;;
         esac
         # Transf/Szabl/Wyj: pelne slowo albo najciasniejszy skrot (80 kolumn, 2026-10-18).
-        for _a in Pomoc Przebiegi Rel Hist Szabl Repl Ust Odzysk Wyj $_acts; do
+        for _a in Pomoc Przeb Rel Hist Szabl Repl Ust Odzysk Wyj $_acts; do
             [ "$(printf '%s' "$_bar" | grep -o "$_a" | wc -l)" -eq 1 ] || NODUP="$NODUP $_sc/$_w:$_a"
         done
     done
