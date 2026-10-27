@@ -46,7 +46,8 @@ server console.
 | see whether the copies are up to date | F3 Relacje (relations) — the "Kopie" (copies) column |
 | change datasets, schedule, retention | F3, Enter on the relation, `e` |
 | pause a relation (e.g. server maintenance) | F3, Enter, F8 Pauza (pause) |
-| restore data | F11 Odzysk (restore) |
+| restore data | F4 Kopie (copies), F9 Przywróć (restore) |
+| browse files in a snapshot | F4 Kopie, Enter (or F4 on a run in F2) |
 | add a replica on a disk | F6 Replika (replica), Ins |
 | do the same from the command line | [COMMANDS.md](COMMANDS.md) |
 

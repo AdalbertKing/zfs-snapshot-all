@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1d9715eca37be918 -->
+<!-- status-covers-digest: c5aaf2405c3dd87b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -28,6 +28,16 @@
     <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
   - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
     `update-control` jako „not clean”.
+- **F4 Kopie: przeglądanie i odzysk w jednym oknie (2026-10-27, `gui/kopie`, U74/U76/U78/U82/U83).** F4 to
+  lista źródeł kopii (relacje z kopiami i „z innego dysku”, czyli nośnik repliki): Enter przegląda (migawka tylko
+  do odczytu, mc, dysk VM przez partycję), F9 przywraca (okna Przywróć bez zmian). Dawne F4 Historia weszło w F2
+  Przebiegi, F11 Odzysk w F4; F11 jest wolne. F4 z wiersza biegu na F2 albo z datasetu relacji na F3 ustawia
+  kursor na tej relacji i zapamiętuje dataset, a dla biegu wykonanego także jego koniec: Enter woła `browse NAZWA --ask --dataset=DS
+  --at=EPOKA`, okno pomija drzewo i stawia kursor na najnowszej migawce nie późniejszej niż koniec biegu.
+  Rozmiary migawek mają stałą szerokość, drzewo otwiera gałęzie nad kandydatami. Na żywo pve10: z biegu
+  `cb 07:58` F4, Enter, od razu migawki `hdd/lab`; po wyjściu 0 montowań. Suity na pve9: `tui` 424/0,
+  `browse` 35/0 (na starym `browse.sh`: 29/6, nowe przypadki padają).
+
 - **F2 Przebiegi zamiast Zadań (2026-10-27, `gui/przebiegi`, U77/U79/U80).** Jeden wiersz to jeden bieg
   jednej linii crona: nad kreską „teraz” biegi z ostatnich 12 h (z dziennika, `job-stats --runs=HOURS`:
   start, koniec, rc, linia błędu), pod nią nadchodzące z najbliższych 6 h (co najmniej jeden na zadanie).
@@ -35,7 +45,7 @@
   nadchodzący), Czas. F8 chowa i pokazuje wykonane, F9 grupuje po relacji (w grupie chronologicznie, kolumna
   Zadanie). Panel: ten bieg (powód błędu) i ustawienia zadania z przebiegami z 7 dni, dół: źródło → cel. F7
   uruchamia z wiersza nadchodzącego. Wiersze bez zadania w cronie (strażnik bez zadania, nieczytelny config)
-  zostają na górze. F4 Historia zostaje do czasu okna Kopie (U82). Na żywo pve10: 12 h biegów 5 relacji,
+  zostają na górze. Na żywo pve10: 12 h biegów 5 relacji,
   błąd `cb zdalny prune` widoczny jako BŁĄD rc=1. Suity na pve9: `tui` 426/0; `zfsbackup` 1051/7, te same 6 błędów
   co na main na pve9 plus `preparesource: bundle fallback` (sieć).
 
