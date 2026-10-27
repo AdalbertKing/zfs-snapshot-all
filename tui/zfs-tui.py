@@ -1976,15 +1976,23 @@ def run_label_of(item):
     return item.get("clabel") or ""
 
 
-def job_id_cell(its):
+def run_jobs(r):
+    """Zadania (sekcje list-jobs) jednego biegu."""
+    if r.get("jobs") is not None:
+        return r["jobs"]
+    return [j for it in r["items"] for j in (it.get("jobs") or ([it["job"]] if it.get("job") else []))]
+
+
+def job_id_cell(its, jobs=None):
     """Kolumna Zadanie w grupie relacji: szczebel + krotkie nazwy datasetow linii."""
     names = []
-    for it in its:
-        for j in it.get("jobs") or ([it["job"]] if it.get("job") else []):
-            for x in (j.get("scope") or "").rsplit(":", 1)[-1].split(","):
-                x = x.rsplit("/", 1)[-1]
-                if x and x not in names:
-                    names.append(x)
+    if jobs is None:
+        jobs = [j for it in its for j in (it.get("jobs") or ([it["job"]] if it.get("job") else []))]
+    for j in jobs:
+        for x in (j.get("scope") or "").rsplit(":", 1)[-1].split(","):
+            x = x.rsplit("/", 1)[-1]
+            if x and x not in names:
+                names.append(x)
     it0 = its[0]
     if it0.get("kind") == "replica":
         return _(u"replika %s") % it0["name"]
@@ -2006,17 +2014,28 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False):
         if it.get("kind") not in ("job", "replica"):
             static.append({"kind": "run", "static": True, "past": False, "at": None, "item": it, "items": [it], "name": it.get("name") or u"?"})
             continue
-        lbl = run_label_of(it)
-        key = (lbl, it.get("schedule") or "") if lbl else ("\0", id(it))
-        if key in idx:
-            groups[idx[key]][1].append(it)
-            continue
-        idx[key] = len(groups)
-        groups.append((lbl, [it]))
+        if it.get("kind") == "replica":
+            parts = [(run_label_of(it), None)]
+        else:
+            parts = []
+            for j in it.get("jobs") or [it["job"]]:
+                lb = it.get("clabel") if len(it.get("jobs") or [1]) == 1 else job_cron_label(j)
+                parts.append((lb or "", j))
+        for lbl, j in parts:
+            key = (lbl, it.get("schedule") or "") if lbl else ("\0", id(it), id(j))
+            if key in idx:
+                g = groups[idx[key]]
+                if it not in g[1]:
+                    g[1].append(it)
+                if j is not None and all(x is not j for x in g[2]):
+                    g[2].append(j)
+                continue
+            idx[key] = len(groups)
+            groups.append((lbl, [it], [j] if j is not None else None))
     out = []
-    for lbl, its in groups:
+    for lbl, its, gjobs in groups:
         it0 = its[0]
-        base = {"kind": "run", "item": it0, "items": its, "name": it0["name"]}
+        base = {"kind": "run", "item": it0, "items": its, "jobs": gjobs, "name": it0["name"], "label": lbl}
         if show_done and lbl:
             for x in runs_by.get(lbl, []):
                 st, en = iso_epoch(x.get("start") or ""), iso_epoch(x.get("end") or "")
@@ -2110,8 +2129,8 @@ def run_children(r, data, now, ch):
         return {"items": []}
     items, seen = [], set()
     prog = (data.progress or {}).get("jobs") or []
-    for it in r["items"]:
-        for j in it.get("jobs") or ([it["job"]] if it.get("job") else []):
+    for j in run_jobs(r):
+        if True:
             src, dst = job_src_dst(j)
             key = (src, dst)
             if key in seen:
@@ -2527,7 +2546,7 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
             czas = fmt_dur(r["end"] - r["start"]) if r.get("past") and r.get("start") and r.get("end") else u"-"
             when = run_when(r["at"])
             cells.append([(u"  %s " % bar + when) if grouped and not r.get("static") else when,
-                          job_id_cell(r["items"]) if grouped and not r.get("static") else r["name"],
+                          job_id_cell(r["items"], r.get("jobs")) if grouped and not r.get("static") else r["name"],
                           co, run_result(r), czas])
     n_runs = len([r for r in rows if r["kind"] == "run"])
     title = _(u"Przebiegi na %s -- %s%s") % (
@@ -2537,7 +2556,7 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
     if rows and 0 <= cursor < len(rows) and rows[cursor]["kind"] == "run":
         r = rows[cursor]
         it = r["item"]
-        det_title = u"%s -- %s" % (r["name"], job_id_cell(r["items"]))
+        det_title = u"%s -- %s" % (r["name"], job_id_cell(r["items"], r.get("jobs")))
         if r.get("static"):
             det_title = u"%s -- %s" % (r["name"], it.get("task") or u"")
             det = rel_detail_pairs(it, data, now, ch)
@@ -2545,7 +2564,12 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
             det = run_pairs(r, now, ch) + replica_detail_pairs(it["replica"], ch, it["srow"], data.failed("stats"))
         else:
             one = dict(it)
-            one["jobs"] = [j for x in r["items"] for j in (x.get("jobs") or [x["job"]])]
+            one["jobs"] = run_jobs(r)
+            one["job"] = one["jobs"][0]
+            if r.get("label") and r["label"] != it.get("clabel"):
+                # panel liczy przebiegi TEJ linii crona, nie pierwszej z wiersza zadania
+                srow, vol = job_stats_for(data, one["job"], r["label"])
+                one.update({"clabel": r["label"], "srow": srow, "srows": [srow] if srow else [], "vol": vol, "fails": [], "discards": []})
             det = run_pairs(r, now, ch) + job_panel_pairs(one, data, now, ch)
         kids = run_children(r, data, now, ch) if not r.get("static") else {"items": []}
         child = {"name": det_title, "tabs": TABS["zadania"], "ti": 0, "items": kids["items"],
@@ -2732,9 +2756,9 @@ def key_bar_parts(active, width, actions=()):
     # Listwa to dolny wiersz ekranu, a curses nie pisze w jego ostatnia kolumne (prawy dolny
     # rog) -- pasek musi sie zmiescic w width - 1 (kampania 3: F4 ucinal "Ctrl-R Odświe").
     room = width - 1
-    tight = {"F4": u"Hist", "F5": u"Szabl", "F10": u"Ust", "F12": u"Wyjdź", "F6": u"Repl", "F3": u"Rel"}
+    tight = {"F2": u"Przeb", "F4": u"Hist", "F5": u"Szabl", "F10": u"Ust", "F12": u"Wyjdź", "F6": u"Repl", "F3": u"Rel"}
     if LANG_CAT:
-        tight = {"F4": u"Hist", "F5": u"Tmpl", "F10": u"Set", "F12": u"Quit", "F6": u"Repl", "F3": u"Rel"}
+        tight = {"F2": u"Runs", "F4": u"Hist", "F5": u"Tmpl", "F10": u"Set", "F12": u"Quit", "F6": u"Repl", "F3": u"Rel"}
     items = [(fk, _(label), key) for fk, label, key in items]
     short = dict((k, _(v)) for k, v in short.items())
     for compact, sep, brief in ((False, u" ", False), (True, u" ", False), (True, u"", False), (True, u"", True),
