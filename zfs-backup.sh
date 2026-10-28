@@ -7454,7 +7454,7 @@ tiers_apply_ops() {   # <config working copy> <name> <ops...> -> TIERS_CHANGES; 
                 [ -n "$key" ] || fail "'$op' names no tier -- put --tier=T (or --src-tier=T) before it"
                 case "$op" in
                     --keep=*)
-                        # 0 AT THE SOURCE (owner 2026-10-26, A-TASSA: a 60 GB conversion day filled a
+                        # 0 AT THE SOURCE (owner 2026-10-26, a customer host: a 60 GB conversion day filled a
                         # small source while its snapshots were long copied): keep none of this tier
                         # there after the copy. The incremental base is the newest COMMON snapshot of
                         # ANY family (snapget find_common_snapshot), so the other tiers carry it. On

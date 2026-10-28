@@ -148,7 +148,7 @@ while IFS=$'\t' read -r rank sev cnt msg first_ep last_ep detail; do
     # THE DATE, whenever the row is not from the day this digest is sent.
     # This runs at 07:00 and reports what was queued SINCE THE LAST RUN, so a
     # digest almost always carries yesterday's events -- and printing bare
-    # times made them read as today's. Measured 2026-09-02 on pve1.kancelaria:
+    # times made them read as today's. Measured 2026-09-02 on a production pve1:
     # a DEGRADED pool repaired at 17:45 the previous day was reported as
     # '(07:01 - 16:01)' under a header stamped with the SEND date, and the
     # owner reasonably concluded the pool was still broken. It was not: the
@@ -295,7 +295,7 @@ fi
 # run table below.
 #
 # Durations come from SECONDS-OF-DAY arithmetic, not mktime: every host here
-# runs mawk (measured 2026-09-02 on pve1.kancelaria, pve9 and pve2) and mawk
+# runs mawk (measured 2026-09-02 on a production pve1, pve9 and pve2) and mawk
 # has no mktime. A gawk-ism would have failed silently across the estate. The
 # timezone offset in the stamp cancels between the two ends of a pair, so a
 # duration is right regardless of it; only a job spanning midnight needs the
@@ -485,7 +485,7 @@ fi
 #   1 * * * * echo "... ZFS-JOB BEGIN pve0 hourly backup (...)" >>/…/cron.log; …
 #
 # On those nothing matched and EVERY job was reported as gone -- seen by the
-# owner on pve0.kancelaria.net minutes after v11 shipped. The lesson is the one
+# owner on a production pve0 minutes after v11 shipped. The lesson is the one
 # this project keeps relearning: a format read off ONE host is not the estate's
 # format. Both spellings are matched now, and both yield "<host> <label>", whose
 # first word is dropped to match the log.
@@ -960,7 +960,7 @@ if {
     # $TODAY` was the send date, and since this runs at 07:00 over a queue
     # filled the day before, it stamped yesterday's events with today's date.
     # A reader cannot tell a live problem from a repaired one that way.
-    # Measured 2026-09-02 on pve1.kancelaria.net: a pool repaired at 17:45
+    # Measured 2026-09-02 on a production pve1: a pool repaired at 17:45
     # the previous day was read as broken this morning, and it was not.
     if [ -n "$MIN_EP" ]; then
         p1=$(date -d "@$MIN_EP" '+%Y-%m-%d %H:%M')
