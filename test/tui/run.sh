@@ -3933,9 +3933,12 @@ esac
 exit 9
 EOF
 chmod +x "$NR/bin/zb-set3"
-SD="$NR/sd3"; rm -rf "$SD"; mkdir -p "$SD"
+SD="$NR/sd3"; rm -rf "$SD"; mkdir -p "$SD/bin"
 printf '1\t\n' > "$SD/answers"
-SOUT=$( export NR_DIR="$SD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-set3" COLUMNS=150 LINES=40
+# Terminal 150x40 przez atrape tput: COLUMNS/LINES nie wystarcza -- tput na runnerze CI (bez
+# terminala) ich nie czyta i dawal 80x24 (#967).
+printf '#!/bin/bash\ncase "$1" in cols) echo 150 ;; lines) echo 40 ;; *) exit 1 ;; esac\n' > "$SD/bin/tput"; chmod +x "$SD/bin/tput"
+SOUT=$( export NR_DIR="$SD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-set3" PATH="$SD/bin:$PATH"
         bash "$REPO/tui/settings.sh" ) 2>"$SD/err" </dev/null
 SMENU="$(grep -F -- '--menu' "$SD/wt.log" | head -1)"
 if has "$SMENU" 'jawnego wzorca retencji KONIEC' && has "$SMENU" ' ~ 146 ~ '; then
