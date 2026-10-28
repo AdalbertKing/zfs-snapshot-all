@@ -376,8 +376,12 @@ fi
 mount_ro() {
     local dev="$1" fs="$2" opts="ro"
     # U87: nazwa katalogu montazu mowi host, dataset i migawke -- to widac w naglowku mc.
-    local tag
-    tag="$(hostname -s 2>/dev/null || hostname)_$(printf '%s' "${DS:-x}@${SNAP:-x}" | tr '/ ' '~_')"
+    # U102: z datasetu tylko dwa ostatnie czlony (hdd/backups/h/hdd/data/vm1 -> data~vm1):
+    # pelna sciezka kopii zjadala naglowek mc, a migawka -- jedyne, co odroznia dwa
+    # montaze tego samego datasetu -- wypadala za krawedz. Pelna nazwa jest w oknie przed montazem.
+    local tag ds2="${DS:-x}"
+    case "$ds2" in */*/*) ds2="${ds2%/*}"; ds2="${ds2##*/}/${DS##*/}" ;; esac
+    tag="$(hostname -s 2>/dev/null || hostname)_$(printf '%s' "${ds2}@${SNAP:-x}" | tr '/ ' '~_')"
     mkdir -p "$BROOT" && MNT="$(mktemp -d "$BROOT/${tag:0:150}.XXXXXX")" || { MNT=""; echo "$(Tv 'nie mogę utworzyć katalogu w $BROOT' '$BROOT' "$BROOT")" >"$TMPD/mount.err"; return 1; }
     case "$fs" in
         ntfs)
