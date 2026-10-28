@@ -2915,7 +2915,9 @@ def guard_states(settings_file=None, confs=None):
 def guard_label(states):
     pl = {"on": _(u"wł."), "off": _(u"wył.")}
     cap, gro = states
-    return _(u"ochrona: bezpiecznik %s · przyrost %s") % (pl.get(cap, u"?"), pl.get(gro, u"?"))
+    # U119: "ochrona: bezpiecznik · przyrost" bylo zargonem -- slowa mowia, co strażnik
+    # ROBI (kasuje przy pelnej puli / alarmuje przy skoku danych), jak sekcje F10.
+    return _(u"kasowanie przy pełnej puli: %s · alarm przyrostu: %s") % (pl.get(cap, u"?"), pl.get(gro, u"?"))
 
 
 def top_bar(data, width, now, ascii_only, err_count):
@@ -4609,9 +4611,9 @@ HELP = [
     u"                 (adres, tryb, godzina maila, mail 'wszystko OK'), próg pojemności,",
     u"                 strażnik, szablon nowej relacji, aktualizacja, język GUI; wysłanie",
     u"                 maila testowego. Zapis: najpierw lista zmian, potem WYKONAJ.",
-    u"                 Pasek u góry: „ochrona” -- czy na tym hoście działa bezpiecznik",
-    u"                 pojemności (pełna pula) i strażnik nagłego przyrostu danych;",
-    u"                 włączasz je w F10.",
+    u"                 Pasek u góry: „kasowanie przy pełnej puli” i „alarm przyrostu”",
+    u"                 -- czy na tym hoście działa strażnik pojemności i strażnik",
+    u"                 nagłego przyrostu danych; włączasz je w F10.",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local = na tym hoście",
     "",
