@@ -1074,9 +1074,23 @@ def load_datasets(repo, files, data, host="", port=""):
     return data.datasets[key]
 
 
+_ZTREE_LOCK = None
+
+
 def load_ztree(repo, files, data, roots):
-    """zfs-tree --json ROOT... (F4 Kopie): datasety pod korzeniami kopii, z liczba migawek."""
+    """zfs-tree --json ROOT... (F4 Kopie): datasety pod korzeniami kopii, z liczba migawek.
+    Jeden naraz (blokada): wczytanie w tle po odczycie (prefetch_kopie) i F4 nie pytaja ZFS
+    dwa razy o to samo -- F4 czeka na tlo i bierze jego wynik."""
+    global _ZTREE_LOCK
+    if _ZTREE_LOCK is None:
+        import threading
+        _ZTREE_LOCK = threading.Lock()
     key = tuple(roots)
+    with _ZTREE_LOCK:
+        return _load_ztree_locked(repo, files, data, roots, key)
+
+
+def _load_ztree_locked(repo, files, data, roots, key):
     if key in data.ztree:
         return data.ztree[key]
     if files.get("zfs_tree"):
@@ -4754,6 +4768,7 @@ class UI(object):
         # F2 otwiera sie PRZY "teraz" (najblizszy nadchodzacy bieg), nie na najstarszym
         # biegu sprzed 12 h (przejscie GUI pve10, 2026-10-28). Home = gora listy.
         self.cursor["zadania"] = self.run_cursor_for(None)
+        self.prefetch_kopie()
 
     def now(self):
         return self.now_fixed if self.now_fixed is not None else int(time.time())
@@ -5045,6 +5060,32 @@ class UI(object):
         self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group)
         for k in self.cursor:
             self.cursor[k] = min(self.cursor[k], max(0, self.count(k) - 1))
+        if full:
+            self.prefetch_kopie()
+
+    def prefetch_kopie(self):
+        """Kampania 2026-10-28: pierwsze F4 stalo 5,5 s z zamrozonym ekranem (pve10: zfs-tree
+        po migawkach kazdego korzenia kopii). Po kazdym pelnym odczycie drzewo kopii czyta sie
+        w tle, na zywo z ZFS jak dotad; F4 bierze gotowe albo czeka na tlo (load_ztree)."""
+        if self.files.get("offline") or self.exec_log:
+            return
+        import threading
+
+        def _run(ui=self, data=self.data):
+            try:
+                groups = kopie_groups(ui.rows, data, ui.now(), ui.ch)
+                roots = []
+                for g in groups:
+                    for r in g["roots"]:
+                        if r not in roots:
+                            roots.append(r)
+                if roots:
+                    load_ztree(ui.repo, ui.files, data, roots)
+            except Exception:
+                pass   # F4 i tak wczyta sam
+        t = threading.Thread(target=_run)
+        t.daemon = True
+        t.start()
 
     def run_cursor_for(self, old):
         """Po przebudowie Przebiegow: ten sam bieg (zadanie i chwila), inaczej
