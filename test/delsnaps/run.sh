@@ -573,6 +573,7 @@ check "a dataset value shaped like a flag fails loudly, not silent success" \
 # --- -G, creation time unreadable: fail closed (REV-20261028-182) -------------
 # A shim zfs first on PATH breaks `get -H -p -o value creation` for ONE named
 # snapshot (fails / empty / not a number / negative) and passes every other call
+# (SHIM_* names: delsnaps.sh sets its own GFS_MODE, which shadowed GFS_MODE here)
 # to the real zfs, recording each destroy. Every case: nonzero, the snapshot named
 # on stderr, no destroy at all, all snapshots still there -- even the ones whose
 # creation was readable (no partial ladder). The real ladder cases above stay.
@@ -581,8 +582,8 @@ cat > "$GSHIM/zfs" <<SHIM
 #!/bin/bash
 if [ "\$1" = destroy ]; then echo "destroy \$*" >> "$GSHIM/destroys"; fi
 last="\${!#}"   # the name is the LAST argument: run_zfs puts -- before it
-if [ "\$1 \$2 \$3 \$4 \$5 \$6" = "get -H -p -o value creation" ] && [ -n "\${GFS_BAD:-}" ] && [ "\${last##*@}" = "\$GFS_BAD" ]; then
-    case "\$GFS_MODE" in
+if [ "\$1 \$2 \$3 \$4 \$5 \$6" = "get -H -p -o value creation" ] && [ -n "\${SHIM_BAD:-}" ] && [ "\${last##*@}" = "\$SHIM_BAD" ]; then
+    case "\$SHIM_MODE" in
         fail)  echo "cannot open '\$last': permission denied" >&2; exit 1 ;;
         empty) exit 0 ;;
         text)  echo "-"; exit 0 ;;
@@ -595,7 +596,7 @@ chmod +x "$GSHIM/zfs"
 gfs_bad_case() {   # <dataset> <bad snapshot> <mode> -> "rc|destroys|snaps|named"
     : > "$GSHIM/destroys"
     local err
-    err=$(GFS_BAD="$2" GFS_MODE="$3" GFS_NOW=$(( $(date +%s) + 3600 )) PATH="$GSHIM:$PATH" "$DELSNAPS" -G "$POOL/$1" "auto_" -H24 2>&1 >/dev/null); RC=$?
+    err=$(SHIM_BAD="$2" SHIM_MODE="$3" GFS_NOW=$(( $(date +%s) + 3600 )) PATH="$GSHIM:$PATH" "$DELSNAPS" -G "$POOL/$1" "auto_" -H24 2>&1 >/dev/null); RC=$?
     printf '%s|%s|%s|%s' "$RC" "$(grep -c . "$GSHIM/destroys")" "$(snaps_of "$1")" \
         "$(printf '%s' "$err" | grep -c "creation time unreadable for $POOL/$1@$2")"
 }
