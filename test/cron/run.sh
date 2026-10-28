@@ -1377,6 +1377,13 @@ rm_conf wk "30 3 * * 0" "" ""
 fo=$(for_run)
 check "RMON1 a FIXED weekly replica is watched by check-snap-age on the copy, 9d/14d from its schedule" "1" \
       "$(printf '%s\n' "$fo" | grep -c '^\*/15 \* \* \* \* d=\$(/R/check-snap-age\.sh -L wk "usb/rep/tank/a,usb/rep/tank/b" "replica_" 9d 14d ')"
+# A RECURSIVE fixed replica is watched with -R: a source that is a container
+# (hdd/backups) holds no snapshot of its own and, read as a leaf, was CRITICAL
+# on every run however current the copy (pve10 lab, 2026-10-28).
+rm_conf wr "30 3 * * 0" "" "	recursive = yes"
+fo=$(for_run)
+check "RMON1b a RECURSIVE fixed replica is watched with check-snap-age -R" "1" \
+      "$(printf '%s\n' "$fo" | grep -c '^\*/15 \* \* \* \* d=\$(/R/check-snap-age\.sh -R -L wr "usb/rep/tank/a,usb/rep/tank/b" "replica_" 9d 14d ')"
 rm_conf mo "30 4 1 * *" "	media    = removable" ""
 fo=$(for_run)
 check "RMON2 a REMOVABLE monthly one by the gate's age, 35d/45d" "1" \
