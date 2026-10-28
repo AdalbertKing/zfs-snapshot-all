@@ -161,7 +161,7 @@ set -o pipefail
 #   ./delsnaps.sh -n -G -R "hdd/backups" "" -H24 -D7 -W4 -M12 -Y3
 # (drop -n to actually delete once the dry-run output looks right)
 
-VERSION='v1.29'
+VERSION='v1.30'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -676,11 +676,31 @@ delete_snapshots() {
         # full design. Creation times are fetched up front (one call per
         # snapshot, same convention as age mode below) so every bucket
         # comparison afterward is a plain integer test, no repeated zfs calls.
+        #
+        # FAIL CLOSED (REV-20261028-182): a creation time that could not be read
+        # -- the get failed, came back empty, or is not a plain non-negative
+        # integer -- used to fail every bucket comparison, so that snapshot was
+        # never a survivor and fell through to destroy, and the run said
+        # success. The ladder needs EVERY input: one unusable value refuses the
+        # whole dataset before the first destroy, names each snapshot, and fails
+        # the run -- the same shape as the failed `zfs list` above. No partial
+        # ladder over the readable subset.
         local -a gfs_times=()
-        local snapshot
+        local snapshot gfs_c gfs_bad=""
         for snapshot in "${filtered[@]}"; do
-            gfs_times+=("$(run_zfs "$ruser" "$rhost" get -H -p -o value creation "${snapshot}")")
+            gfs_c=$(run_zfs "$ruser" "$rhost" get -H -p -o value creation "${snapshot}") || gfs_c=""
+            gfs_c="${gfs_c%$'\r'}"
+            case "$gfs_c" in
+                ''|*[!0-9]*) gfs_bad="${gfs_bad:+$gfs_bad, }${snapshot} (creation '${gfs_c}')" ;;
+            esac
+            gfs_times+=("$gfs_c")
         done
+        if [ -n "$gfs_bad" ]; then
+            echo "Error: GFS on $ds_label: creation time unreadable for ${gfs_bad} -- the ladder cannot be computed; nothing was deleted on this dataset" >&2
+            emit_stats "$ds_label" "$pat" "failed" "$(( $(date +%s) - ds_start ))" 0 0
+            EXIT_CODE=1
+            return 1
+        fi
 
         # Which snapshot (if any) survives each bucket, and its label (e.g.
         # "H#3") for the log line -- built tier by tier, cascading: each
