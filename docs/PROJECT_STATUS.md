@@ -57,6 +57,11 @@
   **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
   ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **Zmiana szablonu relacji bez słowa „seed” (2026-10-28, U116 część).** Okno „użyj szablonu” mówi teraz
+  „Dane nie są przenoszone, pełna kopia od nowa nie jest potrzebna”. Polecenie `seed NAZWA` się nie zmienia.
+  `relacja-pve11-src` na liście szablonów pve10 to nie błąd listy: lista ukrywa szablony z
+  oznaczeniem `hidden` i nazwy z `-src-`. Ta nazwa kończy się na `-src` (bez myślnika po nim), a oznaczenie
+  `hidden` istnieje od 2026-10-09, więc to pewnie szablon starszej relacji. Do sprawdzenia na hoście.
 - **Anulowanie okna bez przeładowania (2026-10-28, przejście GUI na pve10).** Esc w edycji relacji, w odzysku,
   w replice, w szablonie i w ustawieniach kosztował 3-6 s pełnego odświeżenia, choć nic się nie zmieniło. Okna
   kończą teraz takie wyjście przez `wt_end_nochange`: ten sam komunikat i znacznik `nochange` w pliku
