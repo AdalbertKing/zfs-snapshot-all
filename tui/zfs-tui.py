@@ -3356,6 +3356,14 @@ def compact_paths(paths):
     return "%s: %s" % ("/".join(common), ", ".join("/".join(x[len(common):]) for x in parts))
 
 
+def host_port_words(rel):
+    """U114: "Peer X   endpoint X:22" -> "X, ssh port 22" (adres, ktorym relacja chodzi TERAZ)."""
+    ep = rel.get("active_endpoint") or ""
+    h, _s, port = ep.rpartition(":") if ":" in ep else (ep, "", "")
+    h = h or rel.get("peer_host") or "?"
+    return _(u"%s, ssh port %s") % (h, port) if port else h
+
+
 def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     """Zakladka Opis: co/jak dlugo trzyma/czy dziala/komendy, grupami po
     pytaniu operatora, PUSTA LINIA miedzy grupami, bez linii-linijek."""
@@ -3366,8 +3374,8 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
         (_("Kierunek"), row.get("dir") or "?"),
         (_(u"Źródło"), _(u"%s   cel %s") % (", ".join(rel.get("sources") or []) or "?", rel.get("client_target") or _(SNAP_TARGET)))
         if rel.get("mode") == "local" else
-        ("Peer", "%s   endpoint %s%s" % (rel.get("peer_host") or "?", rel.get("active_endpoint") or "?",
-                                          (_("   w cronie: %s") % rel.get("installed_endpoint")) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")),
+        (_("Drugi host"), host_port_words(rel) +
+         ((_("   w cronie: %s") % rel.get("installed_endpoint")) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")),
         (_("Historia"), "  ".join(x for x in [
             _(u"utworzona %s") % rel["created_at"] if rel.get("created_at") else "",
             _(u"pełna kopia %s") % rel["seed_completed_at"] if rel.get("seed_completed_at") else "",
@@ -3449,7 +3457,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                     sched = _tf("send_schedule", u) or f.get("send_schedule") or t.get("send_schedule") or "?"
                     pref = f.get("prefix") or t.get("prefix") or "?"
                     _ret = f.get("retain") or f.get("keep") or t.get("retain") or t.get("keep") or ""
-                    key = (_w, _(u"co: %s   stempel %s%s") % (cron_words(sched), pref, (_(u"   trzyma %s") % keep_cell(_ret)) if _ret else ""))
+                    key = (_w, _(u"co: %s   migawki %s*%s") % (cron_words(sched), pref, (_(u"   trzyma %s") % keep_cell(_ret)) if _ret else ""))
                     pol.setdefault(key, []).append(sec.get("name") or "?")
                     if key not in order:
                         order.append(key)
@@ -3537,10 +3545,8 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
         out.extend(detail_kv(ch, [(_(u"Ostatni transfer"), txt)], w))
     else:
         out.extend(detail_kv(ch, [(_(u"Ostatni transfer"), _(u"brak zapisu w historii"))], w))
-    out.append("")
-    out.append(_(u"komendy"))
-    for v in verbs_for(rel):
-        out.append("  " + v)
+    # U114 (symulacja A, 2026-10-28): bez sekcji "komendy" -- te same czynnosci sa pod
+    # klawiszami na ramce, a okno potwierdzenia pokazuje polecenie przed WYKONAJ.
     return out
 
 
@@ -3649,7 +3655,10 @@ def section_header(ch, title, w):
     return (ch.dash * 2 + " " + title + " " + ch.dash * max(0, w - len(title) - 4))[:w]
 
 
-def relation_window_lines(row, data, now, ch, width, repo=None, files=None):
+RELATION_TABS = (u"Opis", u"Config")
+
+
+def relation_window_lines(row, data, now, ch, width, repo=None, files=None, tab=None):
     """Tresc okna szczegolow, jako linie; okno przewija sie, wiec bez limitu.
 
     JEDEN UKLAD dla relacji (Enter na F3), zadania (Enter na F2) i pary (Enter
@@ -3658,6 +3667,18 @@ def relation_window_lines(row, data, now, ch, width, repo=None, files=None):
     zniknely: to byla ukryta funkcja (trzeba bylo wiedziec o Tab), a okno
     zadania mialo W CRONIE bez configu."""
     w = width - 4
+    if row["kind"] == "relation" and tab is not None:
+        # U114 (wlasciciel 2026-10-28, symulacja A): okno relacji ma dwie zakladki, Opis i
+        # Config (config + cron), przelaczane strzalkami lewo/prawo podpisanymi na ramce.
+        # Zakladki z R3-2 zdjete 2026-09-24, bo byly ukryte (trzeba bylo wiedziec o Tab);
+        # te sa na ramce. Okno zadania (F2) zostaje jednym przewijaniem.
+        if tab == 0:
+            return _relation_opis_lines(row, data, now, ch, w, repo, files)
+        out = [section_header(ch, "CONFIG", w)]
+        out.extend(_relation_config_lines(row, data, ch, w, repo, files))
+        out.extend(["", section_header(ch, "CRON", w)])
+        out.extend(_relation_cron_lines(row, ch, w))
+        return out
     if row["kind"] == "relation":
         out = _relation_opis_lines(row, data, now, ch, w, repo, files)
     else:
@@ -6083,6 +6104,10 @@ class UI(object):
                 n = self.window[1]["name"]
                 self.window, self.scroll = None, 0
                 return self.run_dialog([self.zb(), "edit-relation", n, "--ask"]) or "stay"
+            elif k in ("left", "right") and self.window[0] == "relacja" and self.window[1].get("kind") == "relation":
+                ob = self.window[1]
+                ob["tab"] = (ob.get("tab", 0) + (1 if k == "right" else -1)) % len(RELATION_TABS)
+                self.scroll = 0
             elif k in ("down", "j"):
                 self.scroll += 1
             elif k in ("up", "k"):
@@ -6372,7 +6397,8 @@ class UI(object):
 def relation_window_lines_dispatch(ui, obj, width):
     if obj.get("kind") == "panel":
         return detail_kv(ui.ch, obj["pairs"], width - 4)
-    return relation_window_lines(obj, ui.data, ui.now(), ui.ch, width, ui.repo, ui.files)
+    return relation_window_lines(obj, ui.data, ui.now(), ui.ch, width, ui.repo, ui.files,
+                                 tab=obj.get("tab", 0) if obj.get("kind") == "relation" else None)
 
 
 # render() w UI korzysta z tej wersji, zeby okno-panel i okno-relacja szly ta sama droga.
@@ -6483,11 +6509,13 @@ def _ui_render(self, width, height):
             if obj.get("template"):
                 foot = _(u"e zmienia szablon   Esc zamyka   strzałki/PgUp/PgDn przewijają")
             if obj.get("kind") == "relation":
-                title = _(u"Relacja %s") % obj["name"]
+                _t = obj.get("tab", 0)
+                title = (_(u"Relacja %s") % obj["name"]) + u": " + u"  ".join(
+                    (u"[%s]" % _(n)) if i == _t else _(n) for i, n in enumerate(RELATION_TABS))
                 # Odzysk przeszedł na F11 (właściciel 2026-10-18) -- tu tylko zmiana.
-                foot = _(u"e zmienia   s jako szablon   c edycja ręczna   Esc zamyka")
+                foot = _(u"←/→ zakładka   e zmienia   s jako szablon   c edycja ręczna   Esc zamyka")
                 if finish_argv(obj.get("rel") or {}):
-                    foot = _(u"d dokańcza   e zmienia   s jako szablon   c edycja ręczna   Esc zamyka")
+                    foot = _(u"←/→ zakładka   d dokańcza   e zmienia   s jako szablon   c edycja ręczna   Esc zamyka")
             elif obj.get("kind") == "job":
                 title = _(u"Zadanie: %s  %s  %s") % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:
