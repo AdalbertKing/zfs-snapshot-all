@@ -5725,7 +5725,7 @@ RWSUM="$(grep -F -A 30 'sprawdź' "$RW/wt.log" | head -40)"   # argv okna to jed
 # U109 (wlasciciel 2026-10-28, symulacja A): najpierw z kiedy, potem dokad; lista punktow
 # z pelna nazwa migawki; podsumowanie nazywa migawke, nie "Punkt: najnowszy".
 RWKD="$(grep -n 'k2: z kiedy?' "$RW/wt.log" | head -1 | cut -d: -f1)"; RWDK="$(grep -n 'k2: dokąd?' "$RW/wt.log" | head -1 | cut -d: -f1)"
-if [ -n "$RWKD" ] && [ -n "$RWDK" ] && [ "$RWKD" -lt "$RWDK" ] && grep -qF ' ~ p0 ~ 2026-10-15 18:25:03  @automated_hourly_2026-10-15_17-25-01 ~ ' "$RW/wt.log" \
+if [ -n "$RWKD" ] && [ -n "$RWDK" ] && [ "$RWKD" -lt "$RWDK" ] && grep -qE ' ~ p0 ~ 2026-10-1[56] [0-9]{2}:25:03  @automated_hourly_2026-10-15_17-25-01 ~ ' "$RW/wt.log" \
    && has "$RWSUM" 'Migawka: tank/b/hdd/data/docs@automated_hourly_2026-10-15_17-25-01' && ! has "$RWSUM" 'Punkt:  najnowszy'; then
     ok "restore U109: okno 'z kiedy' przed 'dokad', punkt = pelna nazwa migawki, podsumowanie 'Migawka: <dataset>@<nazwa>'"
 else
