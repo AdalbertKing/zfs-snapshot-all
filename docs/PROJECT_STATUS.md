@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ec2909a369caed8b -->
+<!-- status-covers-digest: 4af6a030820e6e1c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -57,6 +57,12 @@
   **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
   ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **F3 okno relacji: zakładki Opis i Config (2026-10-28, U114, symulacja A przyjęta).** Okno ma dwie zakładki,
+  przełączane strzałkami ←/→, a klawisz jest podpisany na ramce. Opis zawiera stan, kierunek, „Drugi host
+  <adres>, ssh port N” (zamiast „Peer … endpoint …”), to, co obejmuje, jak długo trzyma („migawki
+  automated_hourly_*” zamiast „stempel”) i czy działa. Config to sekcje configu, a pod nimi linie crona. Sekcja
+  „komendy” zniknęła: te czynności są pod klawiszami na ramce. Okno zadania (Enter na F2) zostaje jednym
+  przewijaniem. Zakładki z 2026-09-24 zdjęto, bo nie było ich widać; te mają klawisz na ramce.
 - **Zmiana szablonu relacji bez słowa „seed” (2026-10-28, U116 część).** Okno „użyj szablonu” mówi teraz
   „Dane nie są przenoszone, pełna kopia od nowa nie jest potrzebna”. Polecenie `seed NAZWA` się nie zmienia.
   `relacja-pve11-src` na liście szablonów pve10 to nie błąd listy: lista ukrywa szablony z
@@ -3632,6 +3638,8 @@
   - Enter na relacji (F3), na zadaniu (F2) i na parze (panel par F3) otwiera okno
     **jednego układu**: szczegóły, pod nimi sekcja **CONFIG**, potem **CRON**, przewijane.
     Zakładki Opis/Config/Cron z R3-2 zniknęły (Tab w oknie nic nie robi).
+    **Od 2026-10-28 (U114) okno relacji znów ma zakładki Opis i Config (←/→, podpisane na ramce);
+    okno zadania i pary zostaje jednym przewijaniem.**
   - Okno zadania i pary pokazuje config zawężony: tylko sekcja tego zakresu i szablon
     tego szczebla. Zadanie bez relacji mówi, że show-config pokazuje tylko relacje.
   - Enter na parze **nie skacze już na F2** (mylące, bez powrotu); Esc wraca na panel par.

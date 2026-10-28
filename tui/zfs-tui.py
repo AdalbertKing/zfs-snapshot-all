@@ -3665,7 +3665,8 @@ def relation_window_lines(row, data, now, ch, width, repo=None, files=None, tab=
     na parze w F3) -- R4-6/R4-7, wlasciciel 2026-09-24: najpierw szczegoly,
     pod nimi sekcja CONFIG, potem CRON. Zakladki Opis/Config/Cron z R3-2
     zniknely: to byla ukryta funkcja (trzeba bylo wiedziec o Tab), a okno
-    zadania mialo W CRONIE bez configu."""
+    zadania mialo W CRONIE bez configu. U114 (2026-10-28): okno RELACJI (tab != None)
+    znow ma dwie zakladki, Opis i Config, z klawiszem lewo/prawo na ramce."""
     w = width - 4
     if row["kind"] == "relation" and tab is not None:
         # U114 (wlasciciel 2026-10-28, symulacja A): okno relacji ma dwie zakladki, Opis i
