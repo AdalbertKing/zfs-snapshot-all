@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 6bd0c5c2fd4af3b1 -->
+<!-- status-covers-digest: e2c3aa47680ea08b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -28,6 +28,10 @@
     <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
   - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
     `update-control` jako „not clean”.
+- **Rollback z nieudanym ponownym wdrożeniem = błąd (2026-10-28, REV-20261028-181).** `--rollback`, gdy checkout
+  się cofnął, ale `deploy.sh` na starej rewizji padł: rc 1, blokada aktualizacji zostaje z opisem `INCOMPLETE`, komunikat
+  rozdziela checkout od hosta („This host is a mixture”) i podaje log oraz polecenie ręcznego wdrożenia; nic nie ponawia.
+  Wcześniej: ostrzeżenie, „rolled back” i rc 0. Ta sama zmiana w kopii `do_rollback` w `deploy.sh`.
 - **Uwagi z testu właściciela na pve10 (2026-10-27, `gui/uwagi-1027`, U84-U99).** Przebiegi: kolumna Dane
   biegu (suma `written` migawek rodziny zadania na celu od poprzedniego biegu tej linii; `job-stats --runs` podaje
   listę migawek z okna biegów i doby przed nim; porządki i cele zdalne „-”), dół Źródło | Cel | Dane na 5 wierszy z
