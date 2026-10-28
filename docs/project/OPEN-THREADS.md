@@ -6,7 +6,7 @@ Do not edit. Owner decisions that are not reviews live in
 
 | REV | State | Whose move | Next action |
 |---|---|---|---|
-| REV-20261028-178 | OPEN | Claude | implement and respond |
+| REV-20261028-178 | IMPLEMENTED | Reviewer | verify the submitted implementation |
 | REV-20261028-179 | OPEN | Claude | implement and respond |
 | REV-20261028-180 | OPEN | Claude | implement and respond |
 

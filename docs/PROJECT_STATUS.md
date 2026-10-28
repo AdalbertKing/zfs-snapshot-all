@@ -28,6 +28,10 @@
     <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
   - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
     `update-control` jako „not clean”.
+- **Przeglądanie kopii szyfrowanej: zdejmowany każdy załadowany klucz (2026-10-28, REV-20261028-178).** `browse.sh` trzyma
+  listę wszystkich korzeni szyfrowania, które sam załadował. Nieudany montaż zdejmuje klucz od razu. Nieudane
+  `unload-key` nazywa każdy pozostały korzeń z poleceniem ręcznym, ponawia przy wyjściu i kończy rc≠0. Klucz załadowany
+  przed startem nie jest ruszany. Wcześniej druga kopia pod innym korzeniem nadpisywała jedyny zapis i pierwszy klucz zostawał.
 - **Uwagi z testu właściciela na pve10 (2026-10-27, `gui/uwagi-1027`, U84-U99).** Przebiegi: kolumna Dane
   biegu (suma `written` migawek rodziny zadania na celu od poprzedniego biegu tej linii; `job-stats --runs` podaje
   listę migawek z okna biegów i doby przed nim; porządki i cele zdalne „-”), dół Źródło | Cel | Dane na 5 wierszy z
