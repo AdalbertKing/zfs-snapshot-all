@@ -6224,6 +6224,41 @@ else
     bad "język okien (P0)" "$lc_out" "pl=[$bar_pl]" "en=[$bar_en]" "set=[$bar_set]" "t_pl=[$t_pl] t_en=[$t_en] t_set=[$t_set]"
 fi
 
+# NAZWY BEZ DEFINICJI (wlasciciel 2026-10-28, pve10: F2 na dole listy -> NameError
+# 'transfer_detail_pairs'). #928 usunal funkcje razem z F4 Historia, a Przebiegi wolaly ja
+# dalej -- tylko dla biegu z zapisem transferu, czego zaden test nie renderowal. Python
+# zglasza taka nazwe dopiero w chwili wywolania; ten test czyta kazdy plik tui/*.py (AST) i
+# odrzuca kazde odwolanie do nazwy, ktora nigdzie w pliku nie jest zdefiniowana,
+# zaimportowana ani wbudowana (__file__ to globalna modulu).
+undef="$("$PY" - "$REPO"/tui/*.py <<'PYU'
+import ast, builtins, sys
+for path in sys.argv[1:]:
+    tree = ast.parse(open(path, encoding='utf-8').read())
+    known = set(dir(builtins)) | {'__file__'}
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            known.add(n.name)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            known.update((a.asname or a.name).split('.')[0] for a in n.names)
+        elif isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load):
+            known.add(n.id)
+        elif isinstance(n, ast.arg):
+            known.add(n.arg)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            known.add(n.name)
+        elif isinstance(n, ast.Global):
+            known.update(n.names)
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id not in known:
+            print('%s:%d %s' % (path.rsplit('/', 1)[-1], n.lineno, n.id))
+PYU
+)"
+if [ -z "$undef" ]; then
+    ok "tui/*.py: kazda wolana nazwa jest gdzies zdefiniowana (AST) -- brak NameError czekajacego na rzadka galaz"
+else
+    bad "tui/*.py: nazwy bez definicji" "$undef"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

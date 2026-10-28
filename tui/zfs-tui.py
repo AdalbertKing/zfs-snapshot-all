@@ -2315,6 +2315,44 @@ def run_pairs(r, now, ch):
         time.strftime("%Y-%m-%d %H:%M", time.localtime(r["at"])), _(u"za %s") % fmt_dur(max(0, r["at"] - now))))]
 
 
+def transfer_detail_pairs(t, now, ch, data=None):
+    """Panel transferu (przebiegi F2/F6), U21: bez Relacji, Trybu i Stanu (sa w
+    liscie); "Poprzednia" zamiast "od @" (wlasciciel 2026-10-19). Zostal po F4
+    Historia (#928), bo bieg z zapisem transferu pokazuje go na dole F2."""
+    wd, note = transfer_word(t, now)
+    snap = t.get("dataset", "?")
+    pairs = [(_(u"Migawka"), snap.split("@", 1)[-1] if "@" in snap else snap),
+             (_(u"Poprzednia"), t["base"].split("@", 1)[-1] if t.get("base") else _(u"brak -- pełna kopia"))]
+    src = ds_of(snap)
+    tgt = t.get("target", "?")
+    peer = t.get("peer") or ""
+    if peer == "local":
+        peer = ""
+    if t.get("direction") == "pull" and peer:
+        src = u"%s:%s" % (peer, src)
+    elif t.get("direction") == "push" and peer:
+        tgt = u"%s:%s" % (peer, tgt)
+    pairs += [(_(u"Źródło"), src), (_(u"Cel"), tgt)]
+    tot, dn, wire = int(t.get("total_bytes") or 0), int(t.get("done_bytes") or 0), int(t.get("wire_bytes") or -1)
+    if t.get("state") == "running":
+        rate, eta = int(t.get("rate_bps") or 0), int(t.get("eta_seconds") or -1)
+        prog = u"%s z %s" % (human_bytes(dn), human_bytes(tot) if tot > 0 else _(u"nieznanej wielkości"))
+        if tot > 0:
+            prog += u" (%d%%)" % (dn * 100 // tot)
+        prog += _(u", %s/s, zostało %s") % (human_bytes(rate), fmt_dur(eta) if eta >= 0 else "?")
+        pairs.append((_(u"Postęp"), prog))
+    else:
+        pairs.append((_(u"Dane"), human_bytes(tot) if tot > 0 else (human_bytes(dn) if dn > 0 else _(u"0 B -- nic się nie zmieniło"))))
+    if wire >= 0:
+        pairs.append((_(u"Na łączu"), human_bytes(wire)))
+    st, fin, upd = int(t.get("started_epoch") or 0), int(t.get("finished_epoch") or 0), int(t.get("updated_epoch") or 0)
+    pairs.append((_(u"Start / koniec"), u"%s / %s" % (fmt_full(st), fmt_full(fin) if fin else (u"trwa, aktualizacja %s" % fmt_ago(upd, now)))))
+    if note:
+        pairs.append((_(u"Uwaga"), note))
+    pairs.append((_(u"Proces"), u"pid %s" % t.get("pid", "?")))
+    return pairs
+
+
 def run_children(r, data, now, ch):
     """Dol PRZEBIEGOW: zrodlo -> cel kazdego datasetu biegu i, dla wykonanego, to,
     co historia transferow zapisala w jego czasie (stan, dane)."""

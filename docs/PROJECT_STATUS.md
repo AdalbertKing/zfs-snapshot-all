@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a5f4a16a9ed27b35 -->
+<!-- status-covers-digest: 7e28a14d3dfcdb6b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -30,6 +30,12 @@
     `update-control` jako „not clean”.
 - **Stan gościa przy odzysku: odmowa przy nieznanym (2026-10-28, REV-20261028-180).** Przed `rewind`/`replace`
   dysku gościa na tym hoście (`vm-*-disk-*`, `subvol-*-disk-*`) `restore_live_guard` przepuszcza tylko
+  `status: stopped` oraz gościa, którego nie ma (`qm`/`pct status` rc 2 „Configuration file ... does not exist”,
+  pomiar pve10) -- dysk usuniętej maszyny da się odzyskać. Brak `qm`/`pct`, błąd, pusta albo inna odpowiedź = odmowa
+  z ID gościa i poleceniem; wcześniej przechodziły. Zdalna gałąź (`pgrep`) bez zmian.
+- **F2: szczegół biegu bez NameError (2026-10-28, test właściciela na pve10).** Kursor na biegu, który ma zapis w
+  historii transferów, wołał `transfer_detail_pairs` usunięte w #928 razem z F4 Historia -- GUI padało. Funkcja
+  wróciła. `test/tui` sprawdza teraz AST każdego `tui/*.py`: nazwa wołana, a nigdzie niezdefiniowana = FAIL.
   `status: stopped`. Brak `qm`/`pct`, błąd, pusta albo inna odpowiedź = odmowa z ID gościa i poleceniem; wcześniej
   przechodziły. Także gość, którego tu nie ma (rc 2 „Configuration file ... does not exist”, pomiar pve10; runda 2
   recenzji): gdy `/etc/pve/nodes` pokazuje go na innym węźle, odmowa mówi, że dysk tu jest repliką pvesr i trzeba
