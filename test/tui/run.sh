@@ -5370,10 +5370,10 @@ print("B", zt.guard_states(si, [cf]))
 print("C", zt.guard_states(os.path.join(d, "brak.ini"), [os.path.join(d, "brak.conf")]))
 class D: pass
 x = D(); x.jobs = {"host": "pve10", "jobs": [{"account": "root"}]}; x.read_at = 0; x.host_ip = None; x.guards = ("on", "off")
-print("WIDE", u"ochrona: bezpiecznik wł. · przyrost wył." in zt.top_bar(x, 140, 0, False, 0))
-print("NARROW", u"ochrona" not in zt.top_bar(x, 70, 0, False, 0), len(zt.top_bar(x, 70, 0, False, 0)) <= 70)
+print("WIDE", u"kasowanie przy pełnej puli: wł. · alarm przyrostu: wył." in zt.top_bar(x, 140, 0, False, 0))
+print("NARROW", u"pełnej puli" not in zt.top_bar(x, 70, 0, False, 0), len(zt.top_bar(x, 70, 0, False, 0)) <= 70)
 w = zt.top_bar(x, 200, 0, False, 0)
-print("CREDIT", u"by Wojciech Król (Adalbert King)" in w and u"ochrona" in w and len(w) <= 200, u"Król" not in zt.top_bar(x, 80, 0, False, 0))
+print("CREDIT", u"by Wojciech Król (Adalbert King)" in w and u"pełnej puli" in w and len(w) <= 200, u"Król" not in zt.top_bar(x, 80, 0, False, 0))
 PYEOF
 )"
 if has "$GT" "A ('on', 'on')" && has "$GT" "B ('off', 'off')" && has "$GT" "C ('off', 'off')" && has "$GT" 'WIDE True' && has "$GT" 'NARROW True True' && has "$GT" 'CREDIT True True'; then

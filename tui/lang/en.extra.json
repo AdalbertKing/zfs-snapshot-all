@@ -746,5 +746,9 @@
 "  prawy panel: $ODZ -- jedyne miejsce zapisu; reszta systemu tylko do odczytu.": "  right panel: $ODZ -- the only writable place; the rest of the system is read-only.",
 "Nie udało się zbudować przestrzeni tylko do odczytu (unshare/mount) -- mc nie zostanie uruchomiony.": "Could not build the read-only namespace (unshare/mount) -- mc will not be started.",
 "Skopiowane pliki: $ODZ": "Copied files: $ODZ",
-"Migawki $SNAPN nie ma w $SNAPDS -- wybierz z listy.": "Snapshot $SNAPN is not in $SNAPDS -- pick one from the list."
+"Migawki $SNAPN nie ma w $SNAPDS -- wybierz z listy.": "Snapshot $SNAPN is not in $SNAPDS -- pick one from the list.",
+"kasowanie przy pełnej puli: %s · alarm przyrostu: %s": "delete when pool is full: %s · growth alarm: %s",
+"                 Pasek u góry: „kasowanie przy pełnej puli” i „alarm przyrostu”": "                 Top bar: \"delete when pool is full\" and \"growth alarm\"",
+"                 -- czy na tym hoście działa strażnik pojemności i strażnik": "                 -- whether this host runs the capacity guard and the sudden",
+"                 nagłego przyrostu danych; włączasz je w F10.": "                 data growth monitor; you turn them on in F10."
 }
