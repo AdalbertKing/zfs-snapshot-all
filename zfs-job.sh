@@ -57,7 +57,7 @@
 # ------------------------------------------------------------------------------
 set -u
 
-VERSION='v1.1'
+VERSION='v1.2'
 
 usage() {
     cat >&2 <<'EOF'
@@ -75,6 +75,12 @@ Usage: zfs-job.sh <label> [--log=FILE] [--notify=SCRIPT] [--detail=N] -- <comman
             previous run still holds the lock), INSTEAD of --notify
             (default: notify-warn.sh beside the --notify script)
   --detail  how many trailing stderr lines the notification carries (default 8)
+  --pve-guests=HOST:ID[,ID...]
+            the command snapshots or prunes the live disks of these Proxmox
+            guests, which must run on HOST ("" = this host). When the host is a
+            member of a PVE cluster and a guest's config is under another node,
+            the command is NOT run: END rc=76 and the notify script is called
+            (the disk here is a pvesr replication target). Written by gen-cron.sh.
 
   Exits 0 whatever the command returned -- see the header for why. The
   command's own status is recorded in the END marker and is what decides
@@ -90,7 +96,7 @@ EOF
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _base="$(dirname "$_here")"
 
-LABEL=""; LOG="$_base/cron.log"; NOTIFY="$_base/notify-fail.sh"; WARN=""; DETAIL=8
+LABEL=""; LOG="$_base/cron.log"; NOTIFY="$_base/notify-fail.sh"; WARN=""; DETAIL=8; GUESTS=""
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -100,6 +106,7 @@ while [ "$#" -gt 0 ]; do
         --notify=*)   NOTIFY="${1#--notify=}"; shift ;;
         --warn=*)     WARN="${1#--warn=}"; shift ;;
         --detail=*)   DETAIL="${1#--detail=}"; shift ;;
+        --pve-guests=*) GUESTS="${1#--pve-guests=}"; shift ;;
         --)           shift; break ;;
         -*)           echo "zfs-job: unknown option: $1" >&2; usage ;;
         *)            if [ -z "$LABEL" ]; then LABEL="$1"; shift
@@ -119,8 +126,62 @@ e=$(mktemp 2>/dev/null) || e="$LOG.err.$$"
 
 printf '%s ZFS-JOB BEGIN %s\n' "$(date -Is)" "$LABEL" >>"$LOG" 2>/dev/null
 
-"$@" 2>"$e"
-rc=$?
+# PVE GUEST GUARD (owner 2026-10-28; gen-cron.sh job_cron_line has the why).
+# Where a guest runs is a fact of the cluster file system: its config sits under
+# /etc/pve/nodes/<node>/{qemu-server,lxc}/<id>.conf. Those directories are
+# world-searchable, so a delegated account can test the file's EXISTENCE without
+# reading it (measured on pve2 as zfsbackup, 2026-10-28; .members and
+# storage.cfg are not readable). The host the line expects is mapped to a node
+# by name -- this fleet's hostname == node name -- or, for an address, by
+# getent. Nothing is decided where the answer is not known: not a cluster
+# member, a host that is no node of this cluster (another cluster's guest ids
+# mean nothing here), or a guest defined nowhere (a destroyed guest's disk).
+PVE_NODES="${ZFS_JOB_PVE_NODES:-/etc/pve/nodes}"
+pve_node_of() {   # <host, "" = this one> -> its node name in this cluster
+    local h="${1#*@}" n r
+    if [ -z "$h" ]; then
+        n="$(readlink "${ZFS_JOB_PVE_LOCAL:-/etc/pve/local}" 2>/dev/null)"; n="${n##*/}"
+        [ -n "$n" ] || n="$(hostname -s 2>/dev/null)"
+        [ -n "$n" ] && [ -d "$PVE_NODES/$n" ] && { printf '%s' "$n"; return 0; }
+        return 1
+    fi
+    for n in "$h" "${h%%.*}"; do
+        [ -d "$PVE_NODES/$n" ] && { printf '%s' "$n"; return 0; }
+    done
+    r="$(getent hosts "$h" 2>/dev/null | awk '{print $2; exit}')"; r="${r%%.*}"
+    [ -n "$r" ] && [ -d "$PVE_NODES/$r" ] && { printf '%s' "$r"; return 0; }
+    return 1
+}
+guest_moved="" guest_unsure="" want=""
+if [ -n "$GUESTS" ] && [ -d "$PVE_NODES" ]; then
+    want="$(pve_node_of "${GUESTS%%:*}")" || want=""
+    _ids="${GUESTS#*:}"
+    for _id in ${_ids//,/ }; do
+        case "$_id" in ''|*[!0-9]*) continue ;; esac
+        for _d in "$PVE_NODES"/*/; do
+            _n="${_d%/}"; _n="${_n##*/}"
+            if [ -f "$_d/qemu-server/$_id.conf" ] || [ -f "$_d/lxc/$_id.conf" ]; then
+                if [ -z "$want" ]; then
+                    # The guest IS in this cluster, but the line's host could not be
+                    # told apart as a node: run as before, and say so -- a silent
+                    # "not decided" is the gap this guard exists to close.
+                    guest_unsure="${guest_unsure:+$guest_unsure, }guest $_id (on $_n)"
+                elif [ "$_n" != "$want" ]; then
+                    guest_moved="${guest_moved:+$guest_moved, }guest $_id runs on $_n"
+                fi
+            fi
+        done
+    done
+fi
+
+if [ -n "$guest_moved" ]; then
+    printf 'zfs-job: NOT RUN -- %s, not on %s: the disk there is a replication target (pvesr), and our snapshots or prunes on it would be undone or would break replication. Back this guest up where it runs, or move it back. (pve_guest_guard = no turns this check off.)\n' \
+        "$guest_moved" "$want" >"$e"
+    rc=76
+else
+    "$@" 2>"$e"
+    rc=$?
+fi
 
 cat "$e" >>"$LOG" 2>/dev/null
 printf '%s ZFS-JOB END %s rc=%s\n' "$(date -Is)" "$LABEL" "$rc" >>"$LOG" 2>/dev/null
@@ -135,6 +196,10 @@ if [ "$rc" -eq 75 ]; then
         "$(tail -n "$DETAIL" "$e" 2>/dev/null)" 2>>"$LOG"
 elif [ "$rc" -ne 0 ] && [ -x "$NOTIFY" ]; then
     "$NOTIFY" "$LABEL" "$(tail -n "$DETAIL" "$e" 2>/dev/null)" 2>>"$LOG"
+elif [ -n "$guest_unsure" ]; then
+    _u="zfs-job: guest guard: cannot tell which PVE node '${GUESTS%%:*}' is, so where $guest_unsure runs was not checked -- set pve_node = <node> in the section (or pve_guest_guard = no)"
+    printf '%s\n' "$_u" >>"$LOG" 2>/dev/null
+    [ -x "$WARN" ] && "$WARN" "$LABEL -- guest guard not checked" "$_u" 2>>"$LOG"
 fi
 
 rm -f "$e"

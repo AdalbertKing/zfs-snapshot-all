@@ -2858,6 +2858,72 @@ else
     bad "live datasets guard" "root=[$g1]" "running ct=[$g2]" "stopped=[$g3]" "running vm=[$g4]" "plain=[$g5]" "$(cat "$LG/calls" 2>/dev/null)" "$be"
 fi
 
+# GUEST STATE, FAIL CLOSED (REV-20261028-180). A zvol has no mountpoint, so the qm/pct probe is
+# the only guard before rewind/replace of a guest's disk. The ACTUAL restore_live_guard, with
+# EXECUTABLE stubs on a constrained PATH (zfs records every call; qm/pct answer as measured on
+# pve10 2026-10-28) and a second PATH with no qm/pct at all. Only "status: stopped" passes;
+# missing, failing, empty, unknown and "does not exist" answers refuse; zfs only read.
+GS="$WORK/gs"; mkdir -p "$GS/with" "$GS/without"
+for t in sed; do
+    p="$(command -v "$t" 2>/dev/null)"; [ -n "$p" ] && [ "${p#/}" != "$p" ] && { ln -sf "$p" "$GS/with/$t"; ln -sf "$p" "$GS/without/$t"; }
+done
+for d in with without; do
+    printf '#!/bin/sh\necho "$*" >> "%s/zfs-calls"\nprintf "%%s\\n%%s\\n" - -\n' "$GS" > "$GS/$d/zfs"
+    chmod +x "$GS/$d/zfs"
+done
+for k in qm pct; do
+    printf '#!/bin/sh\necho "%s $*" >> "%s/probe-calls"\n' "$k" "$GS" > "$GS/with/$k"
+    cat >> "$GS/with/$k" <<'GST'
+case "$GS_ST" in
+  running) echo 'status: running' ;;
+  stopped) echo 'status: stopped' ;;
+  empty)   : ;;
+  unknown) echo 'status: paused' ;;
+  error)   echo 'ipcc_send_rec[1] failed: Connection refused' >&2; exit 255 ;;
+  absent)  [ "$0" != "${0%qm}" ] && d=qemu-server || d=lxc
+           echo "Configuration file 'nodes/pve10/$d/$2.conf' does not exist" >&2; exit 2 ;;
+esac
+GST
+    chmod +x "$GS/with/$k"
+done
+gs_run() {   # <PATH dir> <dataset> <qm/pct behaviour> -> "rc|verdict"
+    : > "$GS/zfs-calls"
+    GS_ST="$3" RESTORE_PVE_NODES_DIR="${GS_NODES:-$GS/no-cluster}" PATH="$GS/$1" "$BASH" -c "$lg_fns
+log() { :; }
+RESTORE_ONE_VERDICT=''
+restore_live_guard \"$2\" rewind; echo \"\$?|\$RESTORE_ONE_VERDICT\"" 2>&1
+}
+gs_ro() { ! grep -qvE '^get ' "$GS/zfs-calls"; }
+gs_fail="" gs_n=0
+gs_case() {   # <PATH dir> <dataset> <behaviour> <want rc> <verdict words or ->
+    local out; out=$(gs_run "$1" "$2" "$3"); gs_n=$((gs_n + 1))
+    if [ "${out%%|*}" != "$4" ] || ! gs_ro \
+       || { [ "$5" != - ] && ! printf '%s' "$out" | grep -qF -- "$5"; } \
+       || { [ "$5" = - ] && [ -n "${out#*|}" ]; }; then
+        gs_fail="$gs_fail [$1 $2 $3 -> $out]"
+    fi
+}
+for k in qm pct; do
+    case "$k" in qm) ds=rpool/data/vm-106-disk-0; id=106 ;; *) ds=rpool/data/subvol-107-disk-0; id=107 ;; esac
+    gs_case without "$ds" stopped 1 "'$k' is not available here"
+    gs_case with "$ds" error   1 "'$k status $id' failed (rc=255"
+    gs_case with "$ds" empty   1 "answered 'nothing'"
+    gs_case with "$ds" unknown 1 "answered 'status: paused'"
+    gs_case with "$ds" running 1 "guest $id is RUNNING"
+    gs_case with "$ds" stopped 0 -
+    # REV-180 round 2: "does not exist" refuses too -- and in a cluster names the node
+    # the guest runs on (the disk here is then its pvesr replica).
+    gs_case with "$ds" absent  1 "guest $id is not defined on this host ('$k status $id': rc=2)"
+    mkdir -p "$GS/nodes/pveX/qemu-server" "$GS/nodes/pveX/lxc"; : > "$GS/nodes/pveX/qemu-server/106.conf"; : > "$GS/nodes/pveX/lxc/107.conf"
+    GS_NODES="$GS/nodes" gs_case with "$ds" absent 1 "guest $id runs on node pveX, not here"
+done
+gs_case without hdd/data stopped 0 -
+if [ -z "$gs_fail" ] && [ "$gs_n" = 17 ] && grep -q '^qm status 106$' "$GS/probe-calls" && grep -q '^pct status 107$' "$GS/probe-calls"; then
+    ok "guest state, fail closed (REV-180): no qm/pct, a failing, empty or unknown answer refuse; running refuses; a guest not defined here refuses (and names its node in a cluster); only stopped passes; an ordinary dataset is not asked -- zfs only read"
+else
+    bad "guest state guard (REV-180)" "cases=$gs_n" "$gs_fail"
+fi
+
 # BUSY, FAIL CLOSED (owner 2026-10-26; REV-20261027-176). The ACTUAL restore_live_guard, with
 # EXECUTABLE stubs on a constrained PATH: zfs (answers the mount, records every call), fuser
 # (idle rc1 silent / busy rc0 PIDs / error rc1 + message, measured on pve9; plus an odd rc 2),

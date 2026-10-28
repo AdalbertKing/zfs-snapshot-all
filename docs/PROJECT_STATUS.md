@@ -32,6 +32,48 @@
   się cofnął, ale `deploy.sh` na starej rewizji padł: rc 1, blokada aktualizacji zostaje z opisem `INCOMPLETE`, komunikat
   rozdziela checkout od hosta („This host is a mixture”) i podaje log oraz polecenie ręcznego wdrożenia; nic nie ponawia.
   Wcześniej: ostrzeżenie, „rolled back” i rc 0. Ta sama zmiana w kopii `do_rollback` w `deploy.sh`.
+- **Przeglądanie kopii szyfrowanej: zdejmowany każdy załadowany klucz (2026-10-28, REV-20261028-178).** `browse.sh` trzyma
+  listę wszystkich korzeni szyfrowania, które sam załadował. Nieudany montaż zdejmuje klucz od razu. Nieudane
+  `unload-key` nazywa każdy pozostały korzeń z poleceniem ręcznym, ponawia przy wyjściu i kończy rc≠0. Klucz załadowany
+  przed startem nie jest ruszany. Wcześniej druga kopia pod innym korzeniem nadpisywała jedyny zapis i pierwszy klucz zostawał.
+- **Kanał wydań przy checkoucie bez `origin` (2026-10-28, REV-20261028-179).** `deploy.sh` i `prepare-source` przy
+  checkoucie bez `origin` (archiwum, skopiowane drzewo) klonują `AdalbertKing/zfsbackup`, a nie repo dev; ścieżka
+  z paczką (bundle) dostaje ten sam `origin`. `origin` forka nadal ma pierwszeństwo, w `deploy.sh` także jawny `REPO_URL`.
+  `test/release` odrzuca linię kodu (poza komentarzem) w `*.sh`/`*.py` wydania z `AdalbertKing/zfs-snapshot-all`.
+- **Stan gościa przy odzysku: odmowa przy nieznanym (2026-10-28, REV-20261028-180).** Przed `rewind`/`replace`
+  dysku gościa na tym hoście (`vm-*-disk-*`, `subvol-*-disk-*`) `restore_live_guard` przepuszcza tylko
+  `status: stopped` oraz gościa, którego nie ma (`qm`/`pct status` rc 2 „Configuration file ... does not exist”,
+  pomiar pve10) -- dysk usuniętej maszyny da się odzyskać. Brak `qm`/`pct`, błąd, pusta albo inna odpowiedź = odmowa
+  z ID gościa i poleceniem; wcześniej przechodziły. Zdalna gałąź (`pgrep`) bez zmian.
+- **Strażnik gościa PVE: migawki tylko tam, gdzie gość stoi (2026-10-28, gałąź `feat/pve-guest-node-guard`).**
+  Pomysł z klastra a-tassa, decyzja właściciela: 1.0.x, włączony sam, `pve_guest_guard = no` wyłącza.
+  `gen-cron` oznacza linie, które robią albo przycinają migawki na dysku gościa u źródła (wysyłka bez `-e`, pobranie,
+  `[snaponly:]` i przycinanie tych datasetów): `--pve-guests=<host>:<id>`; dyski różnych strzeżonych gości nie dzielą linii.
+  `zfs-job.sh` v1.2 sprawdza `/etc/pve/nodes/*/{qemu-server,lxc}/<id>.conf`: gość na innym węźle -> polecenie nie
+  rusza, `rc=76`, alarm. Poza klastrem, host spoza klastra albo gość nigdzie -> jak dotąd. Host podany adresem nie
+  daje się przypisać do węzła z konta delegowanego (pve2: `corosync.conf` i `.members` nieczytelne, DNS z wildcardem)
+  -> zadanie rusza, a gdy gość jest w tym klastrze, z ostrzeżeniem; `pve_node = <węzeł>` w sekcji to rozstrzyga. Na żywo pve2 jako `zfsbackup`
+  (polecenie `true`, bez maila): `:990` -> rc 76 („guest 990 runs on pve1, not on pve2”), `pve1:990` -> 0.
+  **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
+  ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
+  PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **F2: szczegół biegu bez NameError (2026-10-28, test właściciela na pve10).** Kursor na biegu, który ma zapis w
+  historii transferów, wołał `transfer_detail_pairs` usunięte w #928 razem z F4 Historia -- GUI padało. Funkcja
+  wróciła. `test/tui` sprawdza teraz AST każdego `tui/*.py`: nazwa wołana, a nigdzie niezdefiniowana = FAIL.
+  `status: stopped`. Brak `qm`/`pct`, błąd, pusta albo inna odpowiedź = odmowa z ID gościa i poleceniem; wcześniej
+  przechodziły. Także gość, którego tu nie ma (rc 2 „Configuration file ... does not exist”, pomiar pve10; runda 2
+  recenzji): gdy `/etc/pve/nodes` pokazuje go na innym węźle, odmowa mówi, że dysk tu jest repliką pvesr i trzeba
+  odzyskać na tamtym węźle; dysk usuniętego gościa -- pod nazwą, która nie jest dyskiem gościa. Zdalna gałąź (`pgrep`) bez zmian.
+- **F4 Kopie na dwóch panelach (2026-10-28, test właściciela na pve10, U100-U105).** Lewy panel: datasety kopii
+  pogrupowane po relacji i replice (wspólny początek ścieżki raz w nagłówku grupy, dzieci z wcięciem, liczba migawek,
+  najnowsza). Prawy panel: migawki zaznaczonego datasetu z `zfs list -t snapshot -d1` (czytane przy wejściu na dataset, potem
+  z cache do odświeżenia), kolumny NAME (`@migawka`, pełna nazwa w tytule i w Szczegółach), USED, REFER, CREATION --
+  zasada właściciela: admin widzi prawdę z dysku. Enter/F7 na migawce: montowanie tylko do
+  odczytu bez okien wyboru (`browse --snapshot=`); F9: okna Przywróć od razu na tej kopii i migawce
+  (`restore --dataset= --snapshot=`, drzewo i menu migawek pominięte raz). mc biegnie we własnej przestrzeni montowań:
+  wszystko tylko do odczytu poza `~/odzysk/<kopia>` (prawy panel, pusty znika) -- zmierzone na pve10: zapis do /root,
+  /hdd, /tmp, /etc odrzucony, do katalogu odzysku przechodzi, host po wyjściu zapisywalny. Powrót z przeglądania bez
+  pełnego przeładowania (109 ms na pve10, wcześniej 3-6 s). Nowe czytniki: `zfs-backup.sh zfs-tree` / `zfs-snapshots --json`.
 - **Uwagi z testu właściciela na pve10 (2026-10-27, `gui/uwagi-1027`, U84-U99).** Przebiegi: kolumna Dane
   biegu (suma `written` migawek rodziny zadania na celu od poprzedniego biegu tej linii; `job-stats --runs` podaje
   listę migawek z okna biegów i doby przed nim; porządki i cele zdalne „-”), dół Źródło | Cel | Dane na 5 wierszy z
@@ -49,8 +91,8 @@
   do `zfsbackup` także `README.pl.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `docs/tutorial/`,
   `.github/FUNDING.yml` i szablony issue/PR (bez `.github/workflows/`); `test/release` sprawdza ich obecność
   i to, że każdy względny link w README, CHANGELOG, CONTRIBUTING i SECURITY prowadzi do pliku wydania. Licencja MIT zostaje (decyzja właściciela).
-  Konto Buy Me a Coffee jeszcze nie istnieje: w `FUNDING.yml` i obu README jest tylko komentarz z miejscem
-  na link. Audyt danych prywatnych: `docs/project/AUDYT-PUBLIKACJI-2026-10-27.md`, plan przyjęty przez
+  Wsparcie: Buy Me a Coffee `tel4891350z` w `FUNDING.yml` (przycisk Sponsor) i link w obu README
+  (2026-10-28). Audyt danych prywatnych: `docs/project/AUDYT-PUBLIKACJI-2026-10-27.md`, plan przyjęty przez
   właściciela 2026-10-27 i wykonany: `scrub.sed` przepisuje też `site-a.net` i 10.99.0.x, `publish.sh`
   i `test/release` odrzucają eksport z `kancelaria`, `a-tassa`, `vsql2` i adresem e-mail autora;
   komentarze w pakiecie mają nazwy neutralne, e-mail zniknął z nagłówków silników (wpis w ENGINE-FREEZE).

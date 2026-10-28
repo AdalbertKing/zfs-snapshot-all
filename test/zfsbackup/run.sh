@@ -13284,6 +13284,54 @@ if ! ld_run 'peer;rm -rf /' --json >/dev/null && grep -q 'HOST looks wrong' "$LD
 else
     bad "listdatasets: host validation" "$(cat "$LD/err")" "$(cat "$LD/ssh.argv" 2>/dev/null)"
 fi
+# zfs-tree --json ROOT / zfs-snapshots --json DS (F4 Kopie, 2026-10-28): to, co trzyma dysk, z DWOCH
+# wywolan `zfs list` (zfs-tree: datasety + migawki; liczba migawek i najnowsza liczone w awk).
+# Atrapa zfs odpowiada tylko na te ksztalty argv; inny ksztalt = rc 1 (verb nie ma prawa pytac o co innego).
+# Migawki w atrapie leca NIEPOSORTOWANE (s1, s2, s0): "newest" ma byc maksimum, nie ostatnia linia.
+ZT="$WORK/zfstree"; rm -rf "$ZT"; mkdir -p "$ZT/bin"
+cat > "$ZT/bin/zfs" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${ZT_ARGS:?}/zfs.argv"
+case "$*" in
+    "list -H -p -o name,type -r -t filesystem,volume -- "*)
+        printf 'tank/c\tfilesystem\ntank/c/a\tfilesystem\ntank/c/vm\tvolume\ntank/c/empty\tfilesystem\n' ;;
+    "list -H -p -o name,creation -r -t snapshot -- "*)
+        printf 'tank/c/a@s1\t1000\ntank/c/a@s2\t3000\ntank/c/a@s0\t500\ntank/c/vm@z1\t2000\ntank/c@r1\t100\n' ;;
+    "list -H -p -o name,used,refer,written,creation -t snapshot -d 1 -s creation -- "*)
+        printf 'tank/c/a@s0\t0\t10\t0\t500\ntank/c/a@s1\t4096\t20\t5\t1000\ntank/c/a@s2\t0\t30\t7\t3000\n' ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod +x "$ZT/bin/zfs"
+zt_run() { ( PATH="$ZT/bin:$PATH" ZT_ARGS="$ZT" bash "$ZFSBACKUP" "$@" ) 2>"$ZT/err"; }
+ZTOUT=$(zt_run zfs-tree --json tank/c)
+got=$(printf '%s' "$ZTOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print([(x["name"], x["type"], x["snapshots"], x["newest"]) for x in d["datasets"]])' 2>/dev/null | tr -d '\r')
+if [ "$got" = "[('tank/c', 'filesystem', 1, 100), ('tank/c/a', 'filesystem', 3, 3000), ('tank/c/vm', 'volume', 1, 2000), ('tank/c/empty', 'filesystem', 0, 0)]" ] \
+        && grep -q -- '-t filesystem,volume -- tank/c$' "$ZT/zfs.argv" && grep -q -- '-t snapshot -- tank/c$' "$ZT/zfs.argv"; then
+    ok "zfstree: zfs-tree --json ROOT = datasets in zfs's order with type, snapshot count and NEWEST creation (a max over unsorted snapshots, 0/0 for a dataset with none), from two zfs list calls"
+else
+    bad "zfstree: zfs-tree" "got=$got" "$ZTOUT" "$(cat "$ZT/zfs.argv" 2>/dev/null)" "$(cat "$ZT/err")"
+fi
+rm -f "$ZT/zfs.argv"
+ZTOUT=$(zt_run zfs-snapshots --json tank/c/a)
+got=$(printf '%s' "$ZTOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["dataset"], [(s["name"], s["used"], s["refer"], s["written"], s["creation"]) for s in d["snapshots"]])' 2>/dev/null | tr -d '\r')
+if [ "$got" = "tank/c/a [('tank/c/a@s2', 0, 30, 7, 3000), ('tank/c/a@s1', 4096, 20, 5, 1000), ('tank/c/a@s0', 0, 10, 0, 500)]" ] \
+        && grep -q -- '-t snapshot -d 1 -s creation -- tank/c/a$' "$ZT/zfs.argv"; then
+    ok "zfstree: zfs-snapshots --json DS = this dataset's own snapshots (-d 1), NEWEST FIRST (zfs list sorts ascending; the verb reverses), with used/refer/written/creation"
+else
+    bad "zfstree: zfs-snapshots" "got=$got" "$ZTOUT" "$(cat "$ZT/zfs.argv" 2>/dev/null)" "$(cat "$ZT/err")"
+fi
+rm -f "$ZT/zfs.argv"
+if ! zt_run zfs-tree --json 'tank/c;touch x' >"$ZT/out" && grep -q 'not a dataset name' "$ZT/err" && [ ! -s "$ZT/out" ] && [ ! -e "$ZT/zfs.argv" ]; then
+    ok "zfstree: a ROOT with ';' dies before any zfs call (the name is never interpolated into a shell)"
+else
+    bad "zfstree: zfs-tree name validation" "$(cat "$ZT/err")" "$(cat "$ZT/out" 2>/dev/null)" "$(cat "$ZT/zfs.argv" 2>/dev/null)"
+fi
+if ! zt_run zfs-snapshots --json 'tank/c/a;touch x' >"$ZT/out" && grep -q 'not a dataset name' "$ZT/err" && [ ! -s "$ZT/out" ] && [ ! -e "$ZT/zfs.argv" ]; then
+    ok "zfstree: a DATASET with ';' dies in zfs-snapshots before any zfs call"
+else
+    bad "zfstree: zfs-snapshots name validation" "$(cat "$ZT/err")" "$(cat "$ZT/out" 2>/dev/null)" "$(cat "$ZT/zfs.argv" 2>/dev/null)"
+fi
 fi   # --- koniec sekcji listdatasets ---
 
 if want preparesource; then
@@ -13362,6 +13410,41 @@ if ps_run prepare-source nogh --yes >"$PS/out" && grep -q 'sending a bundle of t
     ok "preparesource: when the clone cannot reach origin, a bundle of HEAD (detached checkout too) goes over scp with timeouts, is unpacked as a named branch and origin is added"
 else
     bad "preparesource: bundle fallback" "$(cat "$PS/out")" "$(cat "$PS/err")" "$(cat "$PS/scp.argv" 2>/dev/null)" "$(cat "$PS/ssh.argv")"
+fi
+# RELEASE CHANNEL (REV-20261028-179): a checkout with no origin (archive, copied tree) must not
+# enrol a host in the development repository. prepare-source through the real entry point, with
+# this checkout's git replaced (GIT_DIR) by a repo with no origin and then by a fork; the clone
+# and the bundle's origin both carry the URL. deploy.sh's own REPO_URL resolution is run as the
+# exact block from the file, in a directory with no origin / a fork / an explicit REPO_URL.
+REL_URL='https://github.com/AdalbertKing/zfsbackup.git'
+CH="$WORK/channel"; rm -rf "$CH"; mkdir -p "$CH"
+git init -q "$CH/noorigin" && git -C "$CH/noorigin" -c user.name=t -c user.email=t@t commit -q --allow-empty -m t
+git init -q "$CH/fork" && git -C "$CH/fork" -c user.name=t -c user.email=t@t commit -q --allow-empty -m t \
+    && git -C "$CH/fork" remote add origin https://example.invalid/someone/zfsbackup-fork.git
+ch_ps() {   # <git dir> <host> -> ssh argv in $PS/ssh.argv
+    rm -f "$PS/ssh.argv" "$PS/scp.argv" "$PS"/installed-*
+    GIT_DIR="$1/.git" ps_run prepare-source "$2" --yes >"$PS/out"
+}
+ch_ps "$CH/noorigin" fresh; c1=$(grep -c "git clone -q '$REL_URL' '/root/scripts/zfs-snapshot-all'" "$PS/ssh.argv")
+ch_ps "$CH/noorigin" nogh;  c2=$(grep -c "remote add origin '$REL_URL'" "$PS/ssh.argv")
+ch_ps "$CH/fork" fresh;     c3=$(grep -c "git clone -q 'https://example.invalid/someone/zfsbackup-fork.git' " "$PS/ssh.argv")
+ch_ps "$CH/fork" nogh;      c4=$(grep -c "remote add origin 'https://example.invalid/someone/zfsbackup-fork.git'" "$PS/ssh.argv")
+dev_left=$(grep -c 'AdalbertKing/zfs-snapshot-all' "$PS/ssh.argv")
+if [ "$c1$c2$c3$c4" = 1111 ] && [ "$dev_left" = 0 ]; then
+    ok "release channel: prepare-source with no origin clones (and a bundle gets origin) zfsbackup; a fork's origin wins in both paths"
+else
+    bad "release channel: prepare-source" "noorigin clone=$c1 bundle=$c2 fork clone=$c3 bundle=$c4 dev=$dev_left" "$(cat "$PS/ssh.argv")" "$(cat "$PS/err")"
+fi
+dep_block=$(sed -n '/^_DEPLOY_DIR=/,/^fi$/p' "$REPO/deploy.sh")
+dep_url() {   # <dir> [REPO_URL] -> the URL deploy.sh would clone
+    ( cd "$1" && REPO_URL="${2:-}" bash -c "$dep_block"'
+printf "%s\n" "$REPO_URL"' )
+}
+d1=$(dep_url "$CH/noorigin"); d2=$(dep_url "$CH/fork"); d3=$(dep_url "$CH/noorigin" https://example.invalid/x.git)
+if [ -n "$dep_block" ] && [ "$d1" = "$REL_URL" ] && [ "$d2" = https://example.invalid/someone/zfsbackup-fork.git ] && [ "$d3" = https://example.invalid/x.git ]; then
+    ok "release channel: deploy.sh with no origin clones zfsbackup; a fork's origin and an explicit REPO_URL win"
+else
+    bad "release channel: deploy.sh REPO_URL" "noorigin=$d1" "fork=$d2" "explicit=$d3"
 fi
 rm -f "$PS/ssh.argv" "$PS/scp.argv"
 if ps_run prepare-source withpkg --yes >"$PS/out" && grep -q 'already there: /root/scripts/zfs-snapshot-all (rev abc1234). Nothing to do.' "$PS/out" && ! grep -q 'git clone' "$PS/ssh.argv"; then

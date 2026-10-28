@@ -3669,13 +3669,49 @@ restore_live_guard() {   # <destination> [mode] -> 0 fine | 1 refused (RESTORE_O
                return 1 ;;
         esac
     else
-        st="$(command -v "$kind" >/dev/null 2>&1 && "$kind" status "$id" 2>/dev/null)"
+        # FAIL CLOSED (REV-20261028-180): a zvol has no mountpoint, so this probe is the only
+        # guard between rewind/replace and a running guest's disk. Unknown is not stopped:
+        # no qm/pct, a failing call or an answer other than the two below refuse. Measured on
+        # pve10 (2026-10-28): "status: stopped"/"status: running" rc 0; a guest that does not
+        # exist rc 2 "Configuration file 'nodes/<node>/qemu-server/<id>.conf' does not exist"
+        # (lxc/ for pct). That one refuses too (REV-20261028-180, round 2): a config missing
+        # HERE is not proof that nothing uses the disk -- in a cluster it is exactly what the
+        # node holding a pvesr REPLICA answers, and a rollback there fights replication. The
+        # verdict says where the guest is, when the cluster file system shows it.
+        local _qrc=0 _n _where=""
+        if ! command -v "$kind" >/dev/null 2>&1; then
+            RESTORE_ONE_VERDICT="cannot check whether guest $id is running: '$kind' is not available here -- run this as root on the Proxmox host that owns the guest; refused rather than assumed stopped"
+            return 1
+        fi
+        st="$("$kind" status "$id" 2>&1)" || _qrc=$?
+        if [ "$_qrc" -ne 0 ]; then
+            case "$st" in
+                "Configuration file '"*"/$id.conf' does not exist"*)
+                    for _n in "${RESTORE_PVE_NODES_DIR:-/etc/pve/nodes}"/*/; do
+                        if [ -f "$_n/qemu-server/$id.conf" ] || [ -f "$_n/lxc/$id.conf" ]; then
+                            _n="${_n%/}"; _where="${_n##*/}"
+                        fi
+                    done
+                    if [ -n "$_where" ]; then
+                        RESTORE_ONE_VERDICT="guest $id runs on node $_where, not here -- '$ds' here is its replication target (pvesr); restore it on $_where. Refused."
+                    else
+                        RESTORE_ONE_VERDICT="guest $id is not defined on this host ('$kind status $id': rc=$_qrc) -- that does not prove nothing uses '$ds'. If the guest was destroyed, restore the disk under a name that is not a guest disk (not vm-N-disk-M / subvol-N-disk-M), or recreate the guest and stop it; refused rather than assumed unused"
+                    fi
+                    return 1 ;;
+            esac
+            RESTORE_ONE_VERDICT="cannot check whether guest $id is running: '$kind status $id' failed (rc=$_qrc${st:+: ${st%%$'\n'*}}) -- check it as root ($kind status $id), stop the guest, then run this again; refused rather than assumed stopped"
+            return 1
+        fi
+        st="${st%%$'\n'*}"; st="${st%"${st##*[![:space:]]}"}"
     fi
     case "$st" in
-        *running*)
+        "status: running")
             RESTORE_ONE_VERDICT="guest $id is RUNNING on ${host:-this host} -- stop it first ($kind stop $id), then run this again"
             return 1 ;;
-        "") [ -n "$host" ] && log 1 "restore: could not read the state of guest $id on '$host' -- make sure it is stopped" ;;
+        "status: stopped") ;;
+        *)
+            RESTORE_ONE_VERDICT="cannot check whether guest $id is running: '$kind status $id' answered '${st:-nothing}' -- stop the guest ($kind stop $id), then run this again; refused rather than assumed stopped"
+            return 1 ;;
     esac
     return 0
 }

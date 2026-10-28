@@ -131,6 +131,14 @@ set -o pipefail
 #                                          # fields will eventually want.
 #       autotune     = yes|no              # default yes; 'no' suppresses the
 #                                          # automatic -A described below
+#       pve_guest_guard = yes|no           # default yes ([defaults], [dataset:],
+#                                          # [snaponly:]). A guest disk's lines run
+#                                          # only where the guest runs (zfs-job.sh
+#                                          # --pve-guests, see job_cron_line); no
+#                                          # turns the check off for this section.
+#       pve_node     = <name>              # [dataset:] pull / [snaponly:]: the PVE
+#                                          # node name of a source host given by
+#                                          # address (the guard cannot map it).
 #       prune_foreign = yes|no             # default no. yes: FOREIGN snapshots on
 #                                          # this path (any family no prune line
 #                                          # here names -- a manual one, another
@@ -1496,7 +1504,7 @@ DEFAULTS_POLICY_FIELDS="send_schedule prune_schedule prefix pattern
                         dst src autotune quiesce monitor_schedule gfs_pattern"
 # shellcheck disable=SC2086
 _allow_fields defaults  host_label repo_dir notify_script warn_script \
-                        digest_script cron_log $DEFAULTS_POLICY_FIELDS
+                        digest_script cron_log pve_guest_guard $DEFAULTS_POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields template  $POLICY_FIELDS
 # media = removable  -- THIS TARGET IS A DISK THAT GETS UNPLUGGED.
@@ -1574,7 +1582,7 @@ PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
 # which no layer above the section knows. exclude_child_<n> is numbered and therefore
 # not listable here; validate_field_names carries its pattern.
 # shellcheck disable=SC2086
-_allow_fields dataset   use_template relation side pair_label recursive media \
+_allow_fields dataset   use_template relation side pair_label recursive media pve_guest_guard pve_node \
                         bandwidth compression cipher history raw \
                         passive exclude_family prune_foreign $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
@@ -1624,7 +1632,7 @@ _allow_fields excluded  keep
 # tier_label, notify_word, monitor_*). ssh_flags: the same five options as
 # [prune:]. Retention of the source lives in its own [prune:<scope>]
 # (side = source), as for any remote source; this section never prunes.
-_allow_fields snaponly  use_template pair_label recursive notify notify_raw ssh_flags
+_allow_fields snaponly  use_template pair_label recursive notify notify_raw ssh_flags pve_guest_guard pve_node
 
 # The single most useful thing to say about a rejected field is "you put it in
 # the wrong kind of section", which is a different mistake from "you misspelled
@@ -2608,6 +2616,12 @@ build_dataset() {
             # which one it is for emit_send. Kept in the SAME slot rather than
             # adding a parallel field so group_send's existing key shape needs only
             # one addition (direction itself) instead of two.
+            # PVE guest guard (see job_cron_line): push marks its own source, pull the remote one.
+            if [ "$direction" = pull ]; then
+                pve_guard_mark "${remote_spec%%:*}" "${remote_spec#*:}" "$flags" "$ds" "$tmpl"
+            else
+                pve_guard_mark "" "$ds_path" "$flags" "$ds" "$tmpl"
+            fi
             SEND_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${send_schedule}${SEP}${remote_spec}${SEP}${prefix}${SEP}${flags}${SEP}${notify}${SEP}${label}${SEP}${direction}${SEP}${media}${SEP}${pair_label}")
         fi
 
@@ -2825,6 +2839,7 @@ build_snaponly_section() {
             raw_notify="$(resolve_field notify_raw "$sec" "$tmpl" "")" || raw_notify=""
             word="$(resolve_field notify_word "" "$tmpl" "")" || word="snapshot"
             if [ -n "$raw_notify" ]; then notify="$raw_notify"; else notify="$(notify_text "$host_label" "$ntier" "$word" "$label")"; fi
+            pve_guard_mark "$rhost" "$rds" "$flags" "$sec" "$tmpl"
             SNAPONLY_ENTITIES+=("${scope}${SEP}${tier}${SEP}${send_schedule}${SEP}${prefix}${SEP}${flags}${SEP}${notify}")
             emitted=1
         fi
@@ -3487,7 +3502,9 @@ group_send() {
         # line, so a removable target merged with an ordinary one would either
         # export a pool the other job still needs, or skip that other job every
         # time the disk is out. They are different lines by construction.
-        key="${schedule}${SEP}${dst}${SEP}${prefix}${SEP}${flags}${SEP}${direction}${SEP}${media}${SEP}${plabel}"
+        # The PVE guest guard skips a WHOLE line when a guest moved, so disks of two
+        # different guests never share one: a migration of one would stop the other.
+        key="${schedule}${SEP}${dst}${SEP}${prefix}${SEP}${flags}${SEP}${direction}${SEP}${media}${SEP}${plabel}${SEP}$(pve_guard_key "$ds")"
         [ -z "${SEND_GROUPS[$key]+x}" ] && SEND_GROUP_ORDER+=("$key")
         SEND_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -3535,7 +3552,8 @@ group_inline_prune() {
         # buckets were asked for, or the reverse -- while the config still read
         # correctly. That is the exact shape of the merge defects this key has
         # already been widened for twice.
-        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}${SEP}${notify}${SEP}${pairlbl}${SEP}${gfs}${SEP}${fprot}"
+        # 'pve_guard_key': one guest per line, as in group_send.
+        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}${SEP}${notify}${SEP}${pairlbl}${SEP}${gfs}${SEP}${fprot}${SEP}$(pve_guard_key "$ds")"
         [ -z "${INLINE_PRUNE_GROUPS[$key]+x}" ] && INLINE_PRUNE_GROUP_ORDER+=("$key")
         INLINE_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -3759,7 +3777,7 @@ emit_send() {
             cmd="$cmd \"$dst\""
             [ -n "$local_base" ] && cmd="$cmd \"$local_base\""
             cmd="$(media_bracket "$media" "$local_base" "${plabel:-$label}" "$cmd")"
-            JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
+            JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify" "$(pve_guard_spec "${dst%%:*}" "${dst#*:}")")")
             continue
         fi
 
@@ -3847,7 +3865,9 @@ emit_send() {
         _mb_target="$dst"
         cmd="$(media_bracket "$media" "$_mb_target" "${plabel:-$label}" "$cmd")"
 
-        JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify_out")")
+        local -a _gds=()
+        IFS=, read -ra _gds <<< "$src"
+        JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify_out" "$(pve_guard_spec "" "${_gds[@]}")")")
     done
 }
 
@@ -4026,13 +4046,87 @@ emit_snaponly() {
         cmd="$REPO_DIR/snapget.sh -s -m \"$prefix\""
         [ -n "$flags" ] && cmd="$cmd $flags"
         cmd="$cmd \"$scope\""
-        JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
+        JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify" "$(pve_guard_spec "${scope%%:*}" "${scope#*:}")")")
     done
 }
 
 job_cron_line() {
-    local schedule="$1" cmd="$2" notify="$3"
-    printf '%s %s/zfs-job.sh "%s" --log=%s --notify=%s --detail=%s -- %s'         "$schedule" "$REPO_DIR" "$notify" "$CRON_LOG" "$NOTIFY_SCRIPT"         "$DETAIL_LINES" "$cmd"
+    local schedule="$1" cmd="$2" notify="$3" guard="${4:-}"
+    printf '%s %s/zfs-job.sh "%s" --log=%s --notify=%s --detail=%s%s -- %s'         "$schedule" "$REPO_DIR" "$notify" "$CRON_LOG" "$NOTIFY_SCRIPT"         "$DETAIL_LINES" "${guard:+ --pve-guests=$guard}" "$cmd"
+}
+
+# PVE GUEST GUARD (owner 2026-10-28, from another cluster's notes; 1.0.x). A guest's
+# disk is snapshotted and pruned only where the guest RUNS. After a migration the
+# old node holds a pvesr replica: our snapshots there are destroyed by pvesr's
+# `recv -F` a second later while the job logs success (measured, CT 990,
+# 2026-10-16), and a prune there fights pvesr. The generator cannot know where a
+# guest is at run time; it marks WHICH datasets of a line are live guest disks
+# and on WHICH host they must live, and zfs-job.sh checks /etc/pve/nodes before
+# the engine runs (skip + alarm).
+#
+# Only datasets this config itself treats as a live SOURCE are marked: a push
+# source (not passive -e), a pull source, a snaponly scope -- and a prune of
+# exactly such a dataset. A backup target named vm-N-disk-M is never marked, and
+# neither is a passive copy, which reads a replica on purpose. A recursive scope
+# counts only when its own path is a guest disk (its descendants are that
+# guest's); a parent like rpool/data names no guest and is not marked.
+# `pve_guest_guard = no` ([defaults] or the section) turns it off.
+declare -gA GUARD_SCOPES=()
+pve_guest_id() {   # <dataset> -> the guest id of vm-N-disk-M / subvol-N-disk-M
+    local b="${1##*/}" id
+    case "$b" in
+        vm-*-disk-*)     id="${b#vm-}" ;;
+        subvol-*-disk-*) id="${b#subvol-}" ;;
+        *) return 1 ;;
+    esac
+    id="${id%%-*}"
+    case "$id" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s' "$id"
+}
+pve_guard_mark() {   # <host, "" = this one> <dataset> <engine flags> <section> <template>
+    local host="${1#*@}" ds="$2" raw
+    case " $3 " in *" -e "*) return 0 ;; esac
+    pve_guest_id "$ds" >/dev/null || return 0
+    if raw="$(resolve_field pve_guest_guard "$4" "$5" defaults)"; then
+        case "$(trim "$raw" | tr '[:upper:]' '[:lower:]')" in
+            no)  return 0 ;;
+            yes) ;;
+            *)   die "[$4]: pve_guest_guard = '$raw' -- expected 'yes' or 'no'" ;;
+        esac
+    fi
+    # pve_node: the PVE node name of a REMOTE host given by address. A delegated
+    # account cannot map an address to a node (corosync.conf and .members are not
+    # readable to it, measured on pve2 2026-10-28, and the DNS there answered
+    # 'pve1' with a wildcard), so a collector that reaches pve1 by its address
+    # names the node here; the line then carries the node instead of the address.
+    local node=""
+    if [ -n "$host" ] && node="$(resolve_field pve_node "$4" "$5" "")"; then
+        node="$(trim "$node")"
+        [[ "$node" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || die "[$4]: pve_node = '$node' is not a node name"
+    fi
+    GUARD_SCOPES["$host|$ds"]="${node:-$host}"
+}
+pve_guard_spec() {   # <host, "" = this one> <dataset>... -> "node-or-host:id,id" for the marked ones, or nothing
+    local host="${1#*@}" d id ids="" where=""
+    shift
+    for d in "$@"; do
+        [ -n "${GUARD_SCOPES["$host|$d"]+x}" ] || continue
+        id="$(pve_guest_id "$d")" || continue
+        where="${GUARD_SCOPES["$host|$d"]}"
+        case ",$ids," in *",$id,"*) ;; *) ids="${ids:+$ids,}$id" ;; esac
+    done
+    [ -n "$ids" ] && printf '%s:%s' "$where" "$ids"
+    return 0
+}
+prune_guard_spec() {   # <prune scope [user@]host:path or path>
+    case "$1" in
+        *:*) pve_guard_spec "${1%%:*}" "${1#*:}" ;;
+        *)   pve_guard_spec "" "$1" ;;
+    esac
+}
+pve_guard_key() {   # <dataset> -> its guest id when marked as a local source (a grouping key part)
+    [ -n "${GUARD_SCOPES["|$1"]+x}" ] && pve_guest_id "$1"
+    return 0
 }
 
 # Inline prune: one delsnaps line per (schedule,pattern,retain,recursive) group,
@@ -4174,7 +4268,7 @@ emit_inline_prune() {
         [ "$gfs" = "1" ] && gflag="-G "
         [ -n "$pairlbl" ] && lflag="-L $pairlbl "
         local cmd="$REPO_DIR/delsnaps.sh ${gflag}${rflag}${lflag}${fprot}${PROTECT_FLAGS}\"$joined\" \"$(delsnaps_pattern "$pattern")\" $retain"
-        RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
+        RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify" "$(pve_guard_spec "" "${targets[@]}")")")
     done
 }
 
@@ -4191,7 +4285,7 @@ emit_prune_sections() {
         [ -n "$sshflags" ] && sflag="$sshflags "
         [ -n "$pairlbl" ] && lflag="-L $pairlbl "
         local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}${lflag}${sflag}${fprot}${PROTECT_FLAGS}\"$scope\" \"$(delsnaps_pattern "$pattern")\" $retain"
-        RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
+        RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify" "$(prune_guard_spec "$scope")")")
     done
 }
 
@@ -4207,7 +4301,7 @@ emit_gfs_prune_sections() {
         [ -n "$sshflags" ] && sflag="$sshflags "
         [ -n "$pairlbl" ] && lflag="-L $pairlbl "
         local cmd="$REPO_DIR/delsnaps.sh -G ${flag}${fflag}${lflag}${sflag}${fprot}${PROTECT_FLAGS}\"$scope\" \"$(delsnaps_pattern "$pattern")\" $retain"
-        RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
+        RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify" "$(prune_guard_spec "$scope")")")
     done
 }
 

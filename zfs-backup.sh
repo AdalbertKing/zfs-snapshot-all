@@ -417,6 +417,10 @@ front end never edits the config file:
                                     first run: zpool create POOL <device> and
                                     zfs create POOL/BASE. That dataset is what tells
                                     the gate the RIGHT disk is in the slot.
+  zfs-backup.sh zfs-tree --json ROOT...   /   zfs-snapshots --json DATASET
+                                    What the disk holds under ROOT (snapshot count, newest)
+                                    and one dataset's snapshots as `zfs list -t snapshot -d1`
+                                    (name, used, refer, written, creation). Read-only (F4 Kopie).
   zfs-backup.sh list-replicas [--json]
                                     Inventory plus live medium state: here (imported),
                                     available (in the slot, not imported), away (in a
@@ -8185,6 +8189,53 @@ REPEOF
 }
 
 
+# zfs-tree --json ROOT... / zfs-snapshots --json DATASET -- what the disk holds, for F4 Kopie
+# (owner 2026-10-28: the operator sees the ZFS truth, `zfs list -t snapshot`, not labels).
+# Read-only, local, one `zfs list` each. Names are checked as dataset names and are never
+# interpolated into a shell; a root that does not exist is simply absent from the answer.
+zfs_list_name_ok() { case "$1" in ''|*[!A-Za-z0-9_.:/@-]*) return 1 ;; esac; return 0; }
+
+cmd_zfs_tree() {
+    local a; local -a roots=()
+    for a in "$@"; do
+        case "$a" in
+            --json) ;;
+            -*)     die "zfs-tree: unknown option '$a'" ;;
+            *)      zfs_list_name_ok "$a" || die "zfs-tree: not a dataset name: '$a'"; roots+=("$a") ;;
+        esac
+    done
+    [ "${#roots[@]}" -gt 0 ] || die "zfs-tree: name at least one dataset"
+    { zfs list -H -p -o name,type -r -t filesystem,volume -- "${roots[@]}" 2>/dev/null | sed 's/^/D\t/'
+      zfs list -H -p -o name,creation -r -t snapshot -- "${roots[@]}" 2>/dev/null | sed 's/^/S\t/'
+    } | awk -F'\t' '
+        $1 == "D" { if (!($2 in typ)) ord[++n] = $2; typ[$2] = $3; next }
+        $1 == "S" { i = index($2, "@"); d = substr($2, 1, i - 1); c[d]++; if ($3 + 0 > nw[d] + 0) nw[d] = $3; next }
+        END {
+            printf "{\"datasets\":["
+            for (i = 1; i <= n; i++) {
+                d = ord[i]
+                printf "%s{\"name\":\"%s\",\"type\":\"%s\",\"snapshots\":%d,\"newest\":%d}", (i > 1 ? "," : ""), d, typ[d], c[d] + 0, nw[d] + 0
+            }
+            print "]}"
+        }'
+}
+
+cmd_zfs_snapshots() {
+    local a ds=""
+    for a in "$@"; do
+        case "$a" in
+            --json) ;;
+            -*)     die "zfs-snapshots: unknown option '$a'" ;;
+            *)      [ -z "$ds" ] || die "zfs-snapshots: takes one dataset"
+                    zfs_list_name_ok "$a" || die "zfs-snapshots: not a dataset name: '$a'"; ds="$a" ;;
+        esac
+    done
+    [ -n "$ds" ] || die "zfs-snapshots: name a dataset"
+    zfs list -H -p -o name,used,refer,written,creation -t snapshot -d 1 -s creation -- "$ds" 2>/dev/null | awk -F'\t' '
+        { r[++n] = sprintf("{\"name\":\"%s\",\"used\":%d,\"refer\":%d,\"written\":%d,\"creation\":%d}", $1, $2, $3, $4, $5) }
+        END { printf "{\"dataset\":\"%s\",\"snapshots\":[", ds; for (i = n; i >= 1; i--) printf "%s%s", (i < n ? "," : ""), r[i]; print "]}" }' ds="$ds"
+}
+
 # list-replicas [--json] -- the inventory, plus whether each medium is HERE.
 #
 # --json is the product, not a convenience, for the same reason it is on
@@ -14864,8 +14915,11 @@ cmd_source_pruners() {
 
 cmd_prepare_source() {
     source_host_args prepare-source "$@"
+    # No origin (an archive or copied tree): the RELEASE repository, never the
+    # development one -- the source host's hourly self-update follows this URL,
+    # for the clone and for the origin a bundle gets (REV-20261028-179).
     local url; url=$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null)
-    [ -n "$url" ] || url="https://github.com/AdalbertKing/zfs-snapshot-all.git"
+    [ -n "$url" ] || url="https://github.com/AdalbertKing/zfsbackup.git"
     if ! source_probe "$SRC_HOST" "$SRC_PORT"; then
         die "prepare-source: no root SSH channel to $SRC_HOST (BatchMode, root's own key and known_hosts): $PROBE_SSH_ERR. Establish it first, e.g. ssh-copy-id root@$SRC_HOST -- that is the operator's decision, not this verb's. Nothing was changed anywhere."
     fi
@@ -22393,6 +22447,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         local-backup)     shift; cmd_local_backup "$@" ;;
         add-replica)      shift; cmd_add_replica "$@" ;;
         list-replicas)    shift; cmd_list_replicas "$@" ;;
+        zfs-tree)         shift; cmd_zfs_tree "$@" ;;
+        zfs-snapshots)    shift; cmd_zfs_snapshots "$@" ;;
         remove-replica)   shift; cmd_remove_replica "$@" ;;
         show-tiers)       shift; cmd_show_tiers "$@" ;;
         set-tiers)        shift; cmd_set_tiers "$@" ;;
@@ -22410,7 +22466,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         browse)
             # "Przegladaj kopie" (owner 2026-10-18): windows only, like restore --ask --
             # nothing here but the hand-off; the mount/mc/umount lives in tui/browse.sh.
-            [ "${3:-}" = "--ask" ] && [ -n "${2:-}" ] || die "usage: zfs-backup.sh browse NAME --ask [--dataset=DS] [--at=EPOCH] | browse --any --ask"
+            [ "${3:-}" = "--ask" ] && [ -n "${2:-}" ] || die "usage: zfs-backup.sh browse NAME --ask [--dataset=DS] [--at=EPOCH] [--snapshot=DS@SNAP] | browse --any --ask [--snapshot=DS@SNAP]"
             [ "${2#-}" = "$2" ] && snaponly_refuse restore "$2"
             _bw="$SCRIPT_DIR/tui/browse.sh"
             [ -f "$_bw" ] || die "browse: $_bw is missing -- incomplete checkout"
@@ -22419,8 +22475,10 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             _bwa=()
             for _x in "${@:4}"; do
                 case "$_x" in
-                    --dataset=*|--at=*) _bwa+=("$_x") ;;
-                    *) die "browse: unknown option '$_x' (only --dataset=DS and --at=EPOCH)" ;;
+                    # --snapshot= (F4 Kopie on two panes, 2026-10-28): the snapshot the operator
+                    # chose in the right pane -- both menus are skipped.
+                    --dataset=*|--at=*|--snapshot=*) _bwa+=("$_x") ;;
+                    *) die "browse: unknown option '$_x' (only --dataset=DS, --at=EPOCH and --snapshot=DS@SNAP)" ;;
                 esac
             done
             ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$_bw" "$2" "${_bwa[@]}"
@@ -22435,10 +22493,25 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             if [ "${3:-}" = "--ask" ] && [ -n "${2:-}" ]; then
                 _rw="$SCRIPT_DIR/tui/restore.sh"
                 [ -f "$_rw" ] || die "restore: $_rw is missing -- incomplete checkout"
-                if [ "$2" = "--from-copy" ]; then
-                    ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$_rw" --from-copy ${4:+"$4"}
+                # --dataset= / --snapshot= (GUI F4 Kopie, 2026-10-28): the copy and the snapshot
+                # the operator already chose; the window starts there and skips those two steps.
+                # Positions 4+ (for --from-copy: after the optional DATASET); anything else dies.
+                _rwa=()
+                if [ "$2" = "--from-copy" ] && [ -n "${4:-}" ] && [ "${4#-}" = "$4" ]; then
+                    _rwa+=("$4"); set -- "$1" "$2" "$3" "${@:5}"
                 else
-                    ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$_rw" "$2"
+                    set -- "$1" "$2" "$3" "${@:4}"
+                fi
+                for _x in "${@:4}"; do
+                    case "$_x" in
+                        --dataset=*|--snapshot=*) _rwa+=("$_x") ;;
+                        *) die "restore: unknown option '$_x'" ;;
+                    esac
+                done
+                if [ "$2" = "--from-copy" ]; then
+                    ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$_rw" --from-copy ${_rwa[@]+"${_rwa[@]}"}
+                else
+                    ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$_rw" "$2" ${_rwa[@]+"${_rwa[@]}"}
                 fi
                 exit $?
             fi
