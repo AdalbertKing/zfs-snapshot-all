@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a7eb9b98056f373a -->
+<!-- status-covers-digest: f580292c56e77d5f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -57,6 +57,11 @@
   **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
   ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **Nagłówek i ustawienia prostszym językiem (2026-10-28, U119/U120).** Pasek u góry mówi teraz, co strażniki
+  robią: „kasowanie przy pełnej puli: wł./wył. · alarm przyrostu: wł./wył.” zamiast „ochrona: bezpiecznik ·
+  przyrost”. Gdy brakuje miejsca, ten napis znika pierwszy, jak dotąd. Napis jest dłuższy o 15 znaków (41 -> 56 przy obu „wył.”), więc
+  przy 100 kolumnach już się nie mieści. Okno F10 bierze pełną szerokość terminala (do 160 kolumn zamiast 100),
+  więc opis klucza nie urywa się w pół słowa. Klucze zostają nazwami z `settings.ini`.
 - **Anulowanie okna bez przeładowania (2026-10-28, przejście GUI na pve10).** Esc w edycji relacji, w odzysku,
   w replice, w szablonie i w ustawieniach kosztował 3-6 s pełnego odświeżenia, choć nic się nie zmieniło. Okna
   kończą teraz takie wyjście przez `wt_end_nochange`: ten sam komunikat i znacznik `nochange` w pliku
