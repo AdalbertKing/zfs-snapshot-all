@@ -4097,7 +4097,7 @@ pve_guard_mark() {   # <host, "" = this one> <dataset> <engine flags> <section> 
     # pve_node: the PVE node name of a REMOTE host given by address. A delegated
     # account cannot map an address to a node (corosync.conf and .members are not
     # readable to it, measured on pve2 2026-10-28, and the DNS there answered
-    # 'pve1' with a wildcard), so a collector that reaches pve1 as 192.168.28.9
+    # 'pve1' with a wildcard), so a collector that reaches pve1 by its address
     # names the node here; the line then carries the node instead of the address.
     local node=""
     if [ -n "$host" ] && node="$(resolve_field pve_node "$4" "$5" "")"; then
