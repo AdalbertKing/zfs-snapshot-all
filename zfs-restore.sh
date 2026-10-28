@@ -3669,13 +3669,37 @@ restore_live_guard() {   # <destination> [mode] -> 0 fine | 1 refused (RESTORE_O
                return 1 ;;
         esac
     else
-        st="$(command -v "$kind" >/dev/null 2>&1 && "$kind" status "$id" 2>/dev/null)"
+        # FAIL CLOSED (REV-20261028-180): a zvol has no mountpoint, so this probe is the only
+        # guard between rewind/replace and a running guest's disk. Unknown is not stopped:
+        # no qm/pct, a failing call or an answer other than the two below refuse. Measured on
+        # pve10 (2026-10-28): "status: stopped"/"status: running" rc 0; a guest that does not
+        # exist rc 2 "Configuration file 'nodes/<node>/qemu-server/<id>.conf' does not exist"
+        # (lxc/ for pct) -- no guest, nothing running: the disk of a destroyed guest restores.
+        local _qrc=0
+        if ! command -v "$kind" >/dev/null 2>&1; then
+            RESTORE_ONE_VERDICT="cannot check whether guest $id is running: '$kind' is not available here -- run this as root on the Proxmox host that owns the guest; refused rather than assumed stopped"
+            return 1
+        fi
+        st="$("$kind" status "$id" 2>&1)" || _qrc=$?
+        if [ "$_qrc" -ne 0 ]; then
+            case "$st" in
+                "Configuration file '"*"/$id.conf' does not exist"*)
+                    log 1 "restore: guest $id is not defined on this host -- its disk is not in use"
+                    return 0 ;;
+            esac
+            RESTORE_ONE_VERDICT="cannot check whether guest $id is running: '$kind status $id' failed (rc=$_qrc${st:+: ${st%%$'\n'*}}) -- check it as root ($kind status $id), stop the guest, then run this again; refused rather than assumed stopped"
+            return 1
+        fi
+        st="${st%%$'\n'*}"; st="${st%"${st##*[![:space:]]}"}"
     fi
     case "$st" in
-        *running*)
+        "status: running")
             RESTORE_ONE_VERDICT="guest $id is RUNNING on ${host:-this host} -- stop it first ($kind stop $id), then run this again"
             return 1 ;;
-        "") [ -n "$host" ] && log 1 "restore: could not read the state of guest $id on '$host' -- make sure it is stopped" ;;
+        "status: stopped") ;;
+        *)
+            RESTORE_ONE_VERDICT="cannot check whether guest $id is running: '$kind status $id' answered '${st:-nothing}' -- stop the guest ($kind stop $id), then run this again; refused rather than assumed stopped"
+            return 1 ;;
     esac
     return 0
 }

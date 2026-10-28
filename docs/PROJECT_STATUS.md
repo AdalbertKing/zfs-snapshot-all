@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ea2e3c7d94c79020 -->
+<!-- status-covers-digest: 4419693e9962a358 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -32,6 +32,11 @@
   checkoucie bez `origin` (archiwum, skopiowane drzewo) klonują `AdalbertKing/zfsbackup`, a nie repo dev; ścieżka
   z paczką (bundle) dostaje ten sam `origin`. `origin` forka nadal ma pierwszeństwo, w `deploy.sh` także jawny `REPO_URL`.
   `test/release` odrzuca linię kodu (poza komentarzem) w `*.sh`/`*.py` wydania z `AdalbertKing/zfs-snapshot-all`.
+- **Stan gościa przy odzysku: odmowa przy nieznanym (2026-10-28, REV-20261028-180).** Przed `rewind`/`replace`
+  dysku gościa na tym hoście (`vm-*-disk-*`, `subvol-*-disk-*`) `restore_live_guard` przepuszcza tylko
+  `status: stopped` oraz gościa, którego nie ma (`qm`/`pct status` rc 2 „Configuration file ... does not exist”,
+  pomiar pve10) -- dysk usuniętej maszyny da się odzyskać. Brak `qm`/`pct`, błąd, pusta albo inna odpowiedź = odmowa
+  z ID gościa i poleceniem; wcześniej przechodziły. Zdalna gałąź (`pgrep`) bez zmian.
 - **Uwagi z testu właściciela na pve10 (2026-10-27, `gui/uwagi-1027`, U84-U99).** Przebiegi: kolumna Dane
   biegu (suma `written` migawek rodziny zadania na celu od poprzedniego biegu tej linii; `job-stats --runs` podaje
   listę migawek z okna biegów i doby przed nim; porządki i cele zdalne „-”), dół Źródło | Cel | Dane na 5 wierszy z
@@ -49,8 +54,8 @@
   do `zfsbackup` także `README.pl.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `docs/tutorial/`,
   `.github/FUNDING.yml` i szablony issue/PR (bez `.github/workflows/`); `test/release` sprawdza ich obecność
   i to, że każdy względny link w README, CHANGELOG, CONTRIBUTING i SECURITY prowadzi do pliku wydania. Licencja MIT zostaje (decyzja właściciela).
-  Konto Buy Me a Coffee jeszcze nie istnieje: w `FUNDING.yml` i obu README jest tylko komentarz z miejscem
-  na link. Audyt danych prywatnych: `docs/project/AUDYT-PUBLIKACJI-2026-10-27.md`, plan przyjęty przez
+  Wsparcie: Buy Me a Coffee `tel4891350z` w `FUNDING.yml` (przycisk Sponsor) i link w obu README
+  (2026-10-28). Audyt danych prywatnych: `docs/project/AUDYT-PUBLIKACJI-2026-10-27.md`, plan przyjęty przez
   właściciela 2026-10-27 i wykonany: `scrub.sed` przepisuje też `site-a.net` i 10.99.0.x, `publish.sh`
   i `test/release` odrzucają eksport z `kancelaria`, `a-tassa`, `vsql2` i adresem e-mail autora;
   komentarze w pakiecie mają nazwy neutralne, e-mail zniknął z nagłówków silników (wpis w ENGINE-FREEZE).
