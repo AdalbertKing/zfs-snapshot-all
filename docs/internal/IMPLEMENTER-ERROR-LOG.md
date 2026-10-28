@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75, E84 (2026-10-15, the E39 shape a third time), E90, E99 (2026-10-22, the E39 shape again, after `--refreeze`), E104 (2026-10-25, commit and PR behind a printed rc=1).*
+*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75, E84 (2026-10-15, the E39 shape a third time), E90, E99 (2026-10-22, the E39 shape again, after `--refreeze`), E104 (2026-10-25, commit and PR behind a printed rc=1), E105 (2026-10-28, merged the Reviewer's #975 by a guessed PR number).*
 
 ### R5 — Do not modify state something else is reading
 
@@ -124,7 +124,7 @@ The same holds for a flag: before running a command "only to see the plan", read
 its own help or code which form plans and which executes. Leaving out `--yes` is not
 a dry run unless the command says so.
 
-*Evidence: E102, E103.*
+*Evidence: E102, E103, E106 (2026-10-28, Tab+Enter on the restore summary -- the rule known and not applied).*
 
 ### R9, R10, R11 — on running suites
 
@@ -1935,6 +1935,37 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E106 — Tab+Enter on the restore summary pressed Uruchom (2026-10-28, R14, repeat)
+**2026-10-28, live campaign on pve10 (dev main + `fix/campaign-20261028-night`).**
+
+*Genesis.* To walk back from the restore summary I sent `Tab Enter`. The window's default was
+Wstecz (`--defaultno`), so Tab moved the focus to Uruchom and Enter ran
+`zfs-backup.sh restore ... --from-copy=hdd/backups/192.168.28.99/hdd/enc --onto=hdd/enc`. The
+command asked its own `Restore? [y/N]`; my next Enter answered N, and it ended "not confirmed --
+nothing was created" (log `/root/.zfs-tui/restore-20261028-205326.log`; `hdd/enc` does not
+exist). Nothing changed, but only because of the command's own question.
+
+*Cause.* R14, word for word: Tab+Enter on a window with an executing button, no
+`capture-pane -e` before the Enter.
+
+*Rule.* R14, unchanged. Read as the rule not being applied: leave such a window with Esc.
+
+### E105 — merged someone else's PR: the wait-and-merge script had a guessed number (2026-10-28, R4)
+**2026-10-28, `docs/backlog-u109-u116`.**
+
+*Genesis.* One command pushed the branch, opened the PR and then ran
+`wait-ci.sh 975 merge` -- 975 typed in advance as "the next number". The PR got #976; #975 was the
+Reviewer's `review/rev182-reject-040e4b4a` ("review: reject incomplete REV-20261028-182
+verification"), green, and the script merged it. The ledger on `main` then showed
+REV-20261028-182 `OPEN | Claude`, on a Reviewer-owned boundary that was not mine to merge.
+
+*Cause.* R4: an irreversible step (merge) chained behind a value that was assumed, not read --
+the PR number the POST returned was printed and not used.
+
+*Rule.* R4. The merge takes the number from the creating call's own output (`number` parsed
+from the POST response) and checks `head.ref` is this branch before merging; never a number
+typed ahead.
 
 ### E104 — committed and opened a PR behind a failed --verify (2026-10-25, R4)
 **2026-10-25, `tr/cli-en` (#853).**

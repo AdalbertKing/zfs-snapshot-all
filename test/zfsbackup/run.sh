@@ -13105,6 +13105,26 @@ if ! bash "$ZFSBACKUP" job-stats --json --runs=x >/dev/null 2>"$JS/err" && grep 
 else
     bad "jobstats --runs=x" "$(cat "$JS/err")"
 fi
+# ONE SNAPSHOT LISTING (campaign 2026-10-28: job-stats was 8.4 s of the GUI's 16.9 s start on
+# pve10, two full `zfs list -t snapshot` per call). Without --vol-cache: exactly one listing,
+# --runs included. With --vol-cache (the GUI): the second call reads the cached listing (no
+# zfs at all) and gives the same JSON; a cron log that changed since -- a run wrote its END --
+# makes the next call list again.
+JC="$JS/cache"; rm -rf "$JC"; mkdir -p "$JC/bin" "$JC/run"; chmod 700 "$JC/run"
+printf '#!/bin/sh\necho x >> "%s"\nprintf "hdd/a@automated_hourly_2026-10-28_10-00-01\\t4096\\t%%s\\n" "$(( $(date +%%s) - 600 ))"\n' "$JC/calls" > "$JC/bin/zfs"
+chmod +x "$JC/bin/zfs"
+cp "$JS/runs.log" "$JC/runs.log"
+jc() { ( PATH="$JC/bin:$PATH" XDG_RUNTIME_DIR="$JC/run" ZFS_CRON_LOGS="$JC/runs.log" bash "$ZFSBACKUP" job-stats --json --runs=2 "$@" ) 2>>"$JC/err"; }
+jcn() { [ -f "$JC/calls" ] && grep -c . "$JC/calls" || echo 0; }
+: > "$JC/calls"; jc >/dev/null; JC0=$(jcn)
+: > "$JC/calls"; JCA=$(jc --vol-cache=300); JC1=$(jcn); JCB=$(jc --vol-cache=300); JC2=$(jcn)
+touch -d "@$(( $(date +%s) + 5 ))" "$JC/runs.log"; jc --vol-cache=300 >/dev/null; JC3=$(jcn)
+if [ "$JC0" = 1 ] && [ "$JC1" = 1 ] && [ "$JC2" = 1 ] && [ "$JC3" = 2 ] && [ -n "$JCA" ] && [ "$JCA" = "$JCB" ] \
+   && printf '%s' "$JCA" | grep -q 'hdd/a@automated_hourly_2026-10-28_10-00-01'; then
+    ok "jobstats: one snapshot listing per call (--runs included); --vol-cache reuses it until a cron log changes"
+else
+    bad "jobstats: snapshot listing / cache" "zfs calls: fresh=$JC0 (1) cached first=$JC1 (1) second=$JC2 (1) after log change=$JC3 (2)" "same json: $([ "$JCA" = "$JCB" ] && echo yes || echo no)" "$(cat "$JC/err" 2>/dev/null | head -5)"
+fi
 # the NUMBERS, against the capture read by hand: how many "nextcloud" runs and
 # transfers does the log hold?
 want_runs=$(grep -c 'ZFS-JOB END pve2 hourly backup (nextcloud)' "$CAP/cron-log.pve2-2days.txt")

@@ -587,7 +587,7 @@
 " [x] odtwarzane   [-] część   [ ] nie": " [x] restored   [-] partly   [ ] not",
 "Żeby go umożliwić, na $TARGET jako root:": "To enable it, on $TARGET as root:",
 "(na miejsce, gdy trzeba nadpisać: z --replace)": "(in place, when it must overwrite: with --replace)",
-"Bez zgody źródła: odtwórz kopię na TYM hoście jako nowy dataset albo przejrzyj jej pliki (ekran Odzysk, Przeglądaj kopię).": "Without the source's consent: restore the copy on THIS host as a new dataset, or browse its files (Restore screen, Browse copy).",
+"Bez zgody źródła: odtwórz kopię na TYM hoście jako nowy dataset albo przejrzyj jej pliki (F4 Kopie, F7 Przeglądaj).": "Without the source's consent: restore the copy on THIS host as a new dataset, or browse its files (F4 Copies, F7 Browse).",
 "dataset %s": "dataset %s",
 "źródło, %s": "source, %s",
 "  %s: sekcja zniknie": "  %s: section goes away",
@@ -759,7 +759,8 @@
 "         pozostałe datasety: ich najnowsza migawka": "         other datasets: their newest snapshot",
 "%s, ssh port %s": "%s, ssh port %s",
 "co: %s   migawki %s*%s": "every: %s   snapshots %s*%s",
-"OK (błędy: %d)": "OK (errors: %d)",
+"OK \u00d7%d (błędy: %d)": "OK \u00d7%d (errors: %d)",
 "Zwinięte": "Folded",
-"udane biegi: %d, od %s (ten = ostatni)": "successful runs: %d, since %s (this = the last)"
+"udane biegi: %d, od %s (ten = ostatni)": "successful runs: %d, since %s (this = the last)",
+"Migawka: $SNAP\\n\\nPrzenieść też wszystkie starsze migawki (z historią)?\\nNie = tylko ta migawka.": "Snapshot: $SNAP\\n\\nAlso move all older snapshots (with history)?\\nNo = only this snapshot."
 }

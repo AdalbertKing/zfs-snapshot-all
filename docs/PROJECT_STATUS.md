@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: dbd190ab9c1c38cb -->
+<!-- status-covers-digest: 97f8f33385c7575d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -57,6 +57,21 @@
   **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
   ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **Kampania marudnego admina na pve10, poprawki (2026-10-28 wieczór).** Mierzone na żywo w tmux:
+  - start GUI był 16,9 s, z czego job-stats 8,4 s: dwie pełne listy `zfs list -t snapshot` na wywołanie
+    (2704 migawki na HDD, samo `-o name` 3,9 s). Teraz jedna lista zasila bajty biegów i sumy wolumenu.
+    Z `--vol-cache` (tylko GUI) ta lista leży w `$XDG_RUNTIME_DIR` (albo `/run/user/<uid>`, w ostateczności
+    `/tmp`) i wraca z pamięci, dopóki jest młodsza niż TTL i żaden dziennik crona się nie zmienił; nowy bieg
+    ją unieważnia. Sumy wolumenu mają jak dotąd własną pamięć, tylko z TTL. job-stats: na zimno 13,4 -> 8,4 s,
+    na ciepło 8,5 -> 3,2 s, JSON identyczny. Start GUI: 16,9 -> 11,9 s (zimny), ~7 s (ciepły);
+  - pierwsze F4 zamrażało ekran na 5,5 s (`zfs-tree` po migawkach każdego korzenia kopii). Drzewo czyta
+    się teraz w tle po każdym pełnym odczycie, na żywo z ZFS; F4 sześć sekund po starcie: 0,18 s;
+  - F2 przy 80 kolumnach chowa kolumnę Co, więc zwinięty prune wyglądał jak „pve9 OK”. „×N” stoi teraz
+    w kolumnie Wynik („OK ×12”, „OK ×11 (błędy: 1)”);
+  - odzysk: Wstecz do „z kiedy” zostawia kursor na wybranej wcześniej migawce; pytanie o historię podaje
+    nazwę migawki; okno „brak zgody” odsyła do F4 Kopie / F7 Przeglądaj zamiast nieistniejącego ekranu.
+  Zostało: odświeżenie Ctrl-R ~9-11 s (czasowniki równolegle 5,8 s, reszta do zbadania); pozostałe ~3 s
+  job-stats to kilka przebiegów awk po 9,6 MB dzienniku.
 - **Kreator odzysku: najpierw z kiedy, potem dokąd (2026-10-28, U109, symulacja A przyjęta).** Kolejność
   kroków: co, z kiedy, dokąd, sprawdź, w obu trybach (relacja i „Przywróć z dysku”). To ta sama kolejność co
   z F4 Kopie, gdzie migawka jest już wybrana. Lista „z kiedy?” pokazuje czas i pełną nazwę migawki (`@automated_…`)

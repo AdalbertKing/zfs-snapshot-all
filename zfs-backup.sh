@@ -16816,7 +16816,41 @@ cmd_job_stats() {
             logs="$logs $_cl"
         done
     fi
-    local run_rows="" ds_rows="" ev_rows="" rl_rows="" rs_snaps=""
+    local run_rows="" ds_rows="" ev_rows="" rl_rows="" rs_snaps="" snap_raw="" snap_got=0
+    # ONE `zfs list` of every snapshot (name, written, creation) feeds both the runs'
+    # bytes (--runs) and the volume sums below. It was two full listings, ~5 s each on
+    # pve10's HDD pool (2704 snapshots; measured 2026-10-28: even `-o name` alone took
+    # 3.9 s), and it was the GUI's start: job-stats 8.4 s of the 16.9 s.
+    # --vol-cache=SECONDS (the GUI only): the listing is kept per user under /run and
+    # reused while it is younger than SECONDS AND no cron log changed since -- every run
+    # writes its END line, so a run that brought new snapshots invalidates it; returning
+    # from a window (nothing ran) reads it instead of asking ZFS again. Cron and the
+    # digest (no --vol-cache) always list fresh.
+    _js_snaps() {
+        [ "$snap_got" -eq 1 ] && return 0
+        snap_got=1
+        local cf="" vc="${vol_cache:-0}" newest=0 m _l
+        case "$vc" in ''|*[!0-9]*) vc=0 ;; esac
+        if [ "$vc" -gt 0 ]; then
+            cf="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+            [ -d "$cf" ] && [ -w "$cf" ] || cf="/tmp"
+            cf="$cf/zfs-snapshot-all-jobstats-snaps.$(id -u)"
+            for _l in $logs; do
+                m=$(stat -c %Y "$_l" 2>/dev/null || echo 0)
+                [ "$m" -gt "$newest" ] && newest=$m
+            done
+            if [ -f "$cf" ] && [ -O "$cf" ]; then
+                m=$(stat -c %Y "$cf" 2>/dev/null || echo 0)
+                if [ $(( $(date +%s) - m )) -lt "$vc" ] && [ "$m" -ge "$newest" ]; then
+                    snap_raw=$(cat "$cf"); return 0
+                fi
+            fi
+        fi
+        snap_raw=$(zfs list -H -p -t snapshot -o name,written,creation 2>/dev/null | tr -d '\r')
+        if [ -n "$cf" ] && [ -n "$snap_raw" ]; then
+            ( umask 077; printf '%s\n' "$snap_raw" > "$cf.$$" && mv -f "$cf.$$" "$cf" ) 2>/dev/null || rm -f "$cf.$$"
+        fi
+    }
     if [ -n "$logs" ]; then
         # --- twin: run-rows (the SAME text lives in hostscripts/alert-digest.sh; a test pins equality) ---
         run_rows=$(zcat -f $logs 2>/dev/null | awk -v dstart="$dstart" '
@@ -16932,8 +16966,9 @@ cmd_job_stats() {
             # much a run moved, ZFS does -- `written` of every snapshot created since a day
             # before the window (a run brings the snapshots that appeared since the previous
             # run of its line; the reader matches them by dataset, family and creation time).
-            rs_snaps=$(zfs list -H -p -t snapshot -o name,creation,written 2>/dev/null | tr -d '\r' \
-                | awk -F'\t' -v since="$(( $(date +%s) - runs_h * 3600 - 86400 ))" '$2 + 0 >= since + 0 { print }')
+            _js_snaps
+            rs_snaps=$(printf '%s\n' "$snap_raw" \
+                | awk -F'\t' -v since="$(( $(date +%s) - runs_h * 3600 - 86400 ))" '$1 != "" && $3 + 0 >= since + 0 { print $1 "\t" $3 "\t" $2 }')
             rl_rows=$(zcat -f $logs 2>/dev/null | awk -v since="$rsince" '
     function label(   i, l) { l = ""; for (i = 5; i <= NF; i++) { if ($i ~ /^rc=/) break; l = l (l == "" ? "" : " ") $i } return l }
     /ZFS-JOB BEGIN/ { l = label(); if (l != "") bt[l] = $1; next }
@@ -16975,7 +17010,7 @@ cmd_job_stats() {
             vol_rows=$(cat "$vol_cf")
         fi
     fi
-    [ -n "$vol_rows" ] || vol_rows=$(zfs list -H -p -t snapshot -o name,written,creation 2>/dev/null | awk -F'\t' -v since="$since_ep" '
+    [ -n "$vol_rows" ] || { _js_snaps; vol_rows=$(printf '%s\n' "$snap_raw" | awk -F'\t' -v since="$since_ep" '
         { p = index($1, "@"); if (p == 0) next; ds = substr($1, 1, p - 1); sn = substr($1, p + 1) }
         $3 + 0 < since + 0 { next }
         {
@@ -16984,7 +17019,7 @@ cmd_job_stats() {
         }
         END {
             for (k in b) { split(k, a, "\t"); printf "%s\t%s\t%.0f\n", a[1], a[2], b[k] }
-        }' | sort)
+        }' | sort); }
     if [ -n "$vol_cf" ] && [ -n "$vol_rows" ]; then
         ( umask 077; printf '%s\n' "$vol_rows" > "$vol_cf.$$" && mv -f "$vol_cf.$$" "$vol_cf" ) 2>/dev/null || rm -f "$vol_cf.$$"
     fi
