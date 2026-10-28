@@ -724,6 +724,34 @@ else
         "out_tail=$(printf '%s' "$out" | tail -2)"
 fi
 
+# --- 24b. A ROLLBACK WHOSE RE-DEPLOYMENT FAILS IS NOT A ROLLBACK -----------
+#
+# REV-20261028-181. Same scenario as 24, deploy.sh fails at the old revision:
+# the checkout is old, the installed scripts are not. rc must be nonzero, the
+# hold must stay and say INCOMPLETE, no "rolled back" success line, and the
+# next hourly run must neither retry the apply nor move the checkout.
+pair=$(mk_scenario applybackfail); ABF_ORIGIN=${pair%%|*}; ABF_CLONE=${pair#*|}
+S24b="$WORK/state-applybackfail"; mkdir -p "$S24b"; chmod 700 "$S24b"
+abf_old="$(head_of "$ABF_CLONE")"
+REPO_DIR="$ABF_CLONE" UPDATE_STATE_DIR="$S24b" bash "$DEPLOY" --self-update >/dev/null 2>&1
+abf_new="$(head_of "$ABF_CLONE")"
+rm -f "$ABF_CLONE-applied"
+out="$(REPO_DIR="$ABF_CLONE" UPDATE_STATE_DIR="$S24b" STUB_DEPLOY_RC=7 bash "$DEPLOY" --rollback 2>&1)"; rc=$?
+abf_marks=$(wc -l < "$ABF_CLONE-applied" 2>/dev/null || echo 0)
+out2="$(REPO_DIR="$ABF_CLONE" UPDATE_STATE_DIR="$S24b" bash "$DEPLOY" --self-update 2>&1)"; rc2=$?
+if [ "$rc" -ne 0 ] && [ "$abf_new" != "$abf_old" ] && [ "$(head_of "$ABF_CLONE")" = "$abf_old" ] \
+   && grep -q "^applied $(git -C "$ABF_CLONE" rev-parse --short "$abf_old") " "$ABF_CLONE-applied" \
+   && grep -q 'INCOMPLETE' "$S24b/update-hold" \
+   && printf '%s' "$out" | grep -q 'rollback INCOMPLETE' && printf '%s' "$out" | grep -q 'stay HELD' \
+   && ! printf '%s' "$out" | grep -q 'rolled back ' \
+   && [ "$abf_marks" -eq 1 ] && [ "$(wc -l < "$ABF_CLONE-applied")" -eq 1 ] && [ "$(head_of "$ABF_CLONE")" = "$abf_old" ]; then
+    ok "apply: a rollback whose re-deployment fails returns nonzero, keeps the hold (INCOMPLETE), claims no success; the next run neither retries nor pulls"
+else
+    bad "apply: a failed rollback re-deployment" \
+        "rc=$rc old=$abf_old new=$abf_new head=$(head_of "$ABF_CLONE") marks=$abf_marks/$(wc -l < "$ABF_CLONE-applied" 2>/dev/null)" \
+        "hold=$(cat "$S24b/update-hold" 2>/dev/null)" "out_tail=$(printf '%s' "$out" | tail -3)" "next rc=$rc2: $(printf '%s' "$out2" | tail -1)"
+fi
+
 # --- 25. A CRONTAB CHANGED BY THE APPLY LEAVES ITS PRE-IMAGE --------------
 #
 # This is deploy.sh running unattended as root, and this tool has wiped a
