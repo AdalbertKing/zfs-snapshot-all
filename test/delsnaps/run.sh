@@ -654,7 +654,7 @@ cat > "$RSHIM/ssh" <<SHIM
 #!/bin/bash
 cmd="\${!#}"
 printf '%s\n' "\$cmd" >> "$RSHIM/ssh.log"
-case "\$cmd" in *"'creation'"*) [ -n "\${RS_SSH_FAIL:-}" ] && { echo "ssh: connect to host shimhost port 22: Connection refused" >&2; exit 255; } ;; esac
+case "\$cmd" in *"'get'"*"'creation'"*) [ -n "\${RS_SSH_FAIL:-}" ] && { echo "ssh: connect to host shimhost port 22: Connection refused" >&2; exit 255; } ;; esac
 PATH="$RSHIM:\$PATH" exec bash -c "\$cmd"
 SHIM
 chmod +x "$RSHIM/zfs" "$RSHIM/ssh"
@@ -667,10 +667,11 @@ rs_case() {   # <dataset> <entry prefix: "" local | "root@shimhost:" remote> <ti
         "$(grep -c . "$RSHIM/ssh.log")" "$(printf '%s' "$err" | grep -c "creation time unreadable for")"
 }
 RT=$(( $(date +%s) + 7200 ))
-# Positive, single tier: three snapshots in one hour -> the newest survives, two go.
+# Positive, single tier: three snapshots in one hour bucket (faked creation, so no
+# bucket edge can split the burst) -> the newest survives, two go.
 mkds rsone
 mksnaps rsone auto_1 auto_2 auto_3
-RSONE="$(GFS_NOW=$RT rs_case rsone root@shimhost: -H24)"
+RSONE="$(RS_CRE="auto_1=$(( RT - 1820 )),auto_2=$(( RT - 1810 )),auto_3=$(( RT - 1800 ))" GFS_NOW=$RT rs_case rsone root@shimhost: -H24)"
 check "-G remote (ssh shim), single tier: keeps the newest of the burst, deletes two, all through ssh" \
       "0|2|auto_3|0" "$(printf '%s' "$RSONE" | cut -d'|' -f1-3,5)"
 [ "$(printf '%s' "$RSONE" | cut -d'|' -f4)" -gt 0 ] && rs_ssh=yes || rs_ssh=no
