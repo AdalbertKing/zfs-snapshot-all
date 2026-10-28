@@ -4055,7 +4055,7 @@ job_cron_line() {
     printf '%s %s/zfs-job.sh "%s" --log=%s --notify=%s --detail=%s%s -- %s'         "$schedule" "$REPO_DIR" "$notify" "$CRON_LOG" "$NOTIFY_SCRIPT"         "$DETAIL_LINES" "${guard:+ --pve-guests=$guard}" "$cmd"
 }
 
-# PVE GUEST GUARD (owner 2026-10-28, from the a-tassa notes; 1.0.x). A guest's
+# PVE GUEST GUARD (owner 2026-10-28, from another cluster's notes; 1.0.x). A guest's
 # disk is snapshotted and pruned only where the guest RUNS. After a migration the
 # old node holds a pvesr replica: our snapshots there are destroyed by pvesr's
 # `recv -F` a second later while the job logs success (measured, CT 990,
