@@ -220,11 +220,11 @@ replica_engine() {   # 0 = coś zmienione (ARGV zbuduje krok 6), 1 = Wstecz bez 
         geom
         items=(mig "$(T 'Migawki          ')$([ "$p_pas" = yes ] && T 'cała historia (istniejące)' || T 'tylko stan na chwilę kopii (własne replica_)')")
         # X10 (właściciel 2026-10-12/14): sprzecznych ustawień nie da się wybrać. "Cała historia"
-        # przenosi wszystkie istniejące migawki, a "N ostatnich zdjęć" -- tylko zdjęcia replica_
+        # przenosi wszystkie istniejące migawki, a "N ostatnich migawek" -- tylko migawki replica_
         # (silnik wysyła wtedy samo najnowsze: pośrednie trafiałyby na dysk bez sprzątania).
         # W obu wiersz Historia nie ma czego wybierać.
         [ "$p_pas" != yes ] && [ -z "$p_keep" ] && items+=(hist "$(T 'Historia         ')$(eng_hist_words "$p_h")$([ "$p_h" = all ] && T ' (fabryczne)')")
-        [ "$p_pas" = yes ] || items+=(disk "$(T 'Na dysku         ')$([ -n "$p_keep" ] && T '%s ostatnich zdjęć replica_ (pośrednie nie trafiają)' "$p_keep" || T 'odbicie kolektora (fabryczne)')")
+        [ "$p_pas" = yes ] || items+=(disk "$(T 'Na dysku         ')$([ -n "$p_keep" ] && T '%s ostatnich migawek replica_ (pośrednie nie trafiają)' "$p_keep" || T 'odbicie kolektora (fabryczne)')")
         [ "$RAW" = yes ] && items+=(raw "$(T 'Szyfrowane       wysyłka zaszyfrowana (raw)')")
         items+=(__done__ "$(T Gotowe)")
         wt --title "$(Tv 'Ustawienia silnika: replika $NAME' '$NAME' "$NAME")" --ok-button "$(T Wybierz)" --cancel-button "$(T Wstecz)" --notags --default-item __done__ \

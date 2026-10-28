@@ -16762,7 +16762,7 @@ cmd_job_stats() {
             logs="$logs $_cl"
         done
     fi
-    local run_rows="" ds_rows="" ev_rows="" rl_rows=""
+    local run_rows="" ds_rows="" ev_rows="" rl_rows="" rs_snaps=""
     if [ -n "$logs" ]; then
         # --- twin: run-rows (the SAME text lives in hostscripts/alert-digest.sh; a test pins equality) ---
         run_rows=$(zcat -f $logs 2>/dev/null | awk -v dstart="$dstart" '
@@ -16874,6 +16874,12 @@ cmd_job_stats() {
         if [ "$runs_h" -gt 0 ]; then
             local rsince
             rsince=$(date -Is -d "-$runs_h hours" 2>/dev/null) || rsince=""
+            # U96 (owner 2026-10-27: "ważne, ile bieg wziął danych"): the log does not say how
+            # much a run moved, ZFS does -- `written` of every snapshot created since a day
+            # before the window (a run brings the snapshots that appeared since the previous
+            # run of its line; the reader matches them by dataset, family and creation time).
+            rs_snaps=$(zfs list -H -p -t snapshot -o name,creation,written 2>/dev/null | tr -d '\r' \
+                | awk -F'\t' -v since="$(( $(date +%s) - runs_h * 3600 - 86400 ))" '$2 + 0 >= since + 0 { print }')
             rl_rows=$(zcat -f $logs 2>/dev/null | awk -v since="$rsince" '
     function label(   i, l) { l = ""; for (i = 5; i <= NF; i++) { if ($i ~ /^rc=/) break; l = l (l == "" ? "" : " ") $i } return l }
     /ZFS-JOB BEGIN/ { l = label(); if (l != "") bt[l] = $1; next }
@@ -17002,6 +17008,17 @@ VOL
         done <<RLS
 $rl_rows
 RLS
+        printf '],"snaps":['
+        first=1
+        local _sn _sc _sw
+        while IFS=$'\t' read -r _sn _sc _sw; do
+            [ -n "$_sn" ] || continue
+            [ "$first" -eq 1 ] || printf ','
+            first=0
+            printf '{"name":"%s","creation":%s,"written":%s}' "$(json_escape "$_sn")" "${_sc:-0}" "${_sw:-0}"
+        done <<RSN
+$rs_snaps
+RSN
         printf ']'
     fi
     printf '}\n'
