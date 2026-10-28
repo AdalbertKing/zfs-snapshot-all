@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8888c3c947b8346a -->
+<!-- status-covers-digest: 20111f029ccf8103 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -57,6 +57,9 @@
   **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
   ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **Katalog montażu krótszy (2026-10-28, U102).** `browse.sh` nazywa katalog montażu
+  `<host>_<dwa ostatnie człony datasetu>@<migawka>.XXXXXX` (np. `pve10_data~vm1@automated_hourly_...`), nie całą
+  ścieżką kopii -- pełna ścieżka zajmowała nagłówek mc i spychała migawkę za krawędź. Przypadek 37b w `test/browse`.
 - **F2: szczegół biegu bez NameError (2026-10-28, test właściciela na pve10).** Kursor na biegu, który ma zapis w
   historii transferów, wołał `transfer_detail_pairs` usunięte w #928 razem z F4 Historia -- GUI padało. Funkcja
   wróciła. `test/tui` sprawdza teraz AST każdego `tui/*.py`: nazwa wołana, a nigdzie niezdefiniowana = FAIL.
