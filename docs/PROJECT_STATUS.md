@@ -36,6 +36,10 @@
 - **F2: szczegół biegu bez NameError (2026-10-28, test właściciela na pve10).** Kursor na biegu, który ma zapis w
   historii transferów, wołał `transfer_detail_pairs` usunięte w #928 razem z F4 Historia -- GUI padało. Funkcja
   wróciła. `test/tui` sprawdza teraz AST każdego `tui/*.py`: nazwa wołana, a nigdzie niezdefiniowana = FAIL.
+  `status: stopped`. Brak `qm`/`pct`, błąd, pusta albo inna odpowiedź = odmowa z ID gościa i poleceniem; wcześniej
+  przechodziły. Także gość, którego tu nie ma (rc 2 „Configuration file ... does not exist”, pomiar pve10; runda 2
+  recenzji): gdy `/etc/pve/nodes` pokazuje go na innym węźle, odmowa mówi, że dysk tu jest repliką pvesr i trzeba
+  odzyskać na tamtym węźle; dysk usuniętego gościa -- pod nazwą, która nie jest dyskiem gościa. Zdalna gałąź (`pgrep`) bez zmian.
 - **Uwagi z testu właściciela na pve10 (2026-10-27, `gui/uwagi-1027`, U84-U99).** Przebiegi: kolumna Dane
   biegu (suma `written` migawek rodziny zadania na celu od poprzedniego biegu tej linii; `job-stats --runs` podaje
   listę migawek z okna biegów i doby przed nim; porządki i cele zdalne „-”), dół Źródło | Cel | Dane na 5 wierszy z
