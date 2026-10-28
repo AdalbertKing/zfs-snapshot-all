@@ -60,6 +60,14 @@ refs="$( cd "$REL" && {
     done; } )"
 [ -z "$refs" ] && ok "no shipped code line points into test/" || bad "shipped code points into test/" "$(printf '%s\n' "$refs" | head -5)"
 
+# 3b. REV-20261028-179: no shipped code line names the development repository -- an install or
+# update default pointing there would move a host off the release channel. Comments are prose.
+devrefs="$( cd "$REL" && git ls-files -- '*.sh' '*.py' | while IFS= read -r f; do
+        grep -n 'AdalbertKing/zfs-snapshot-all' "$f" | grep -vE '^[0-9]+:[[:space:]]*#' | sed "s|^|$f:|"
+    done )"
+[ -z "$devrefs" ] && ok "release channel: no shipped code line names AdalbertKing/zfs-snapshot-all" \
+                  || bad "release channel: shipped code names the development repository" "$(printf '%s\n' "$devrefs" | head -5)"
+
 # 4. the scrub: no lab/customer address or site name survives, and it did not over-reach
 left="$(grep -rIliE '192\.168\.(28|11)\.[0-9]|10\.9[89]\.0\.[0-9]|metropolis|site-a\.net|kancelaria|a-tassa|vsql2|lurk\.com\.pl' "$REL" --exclude-dir=.git || true)"
 [ -z "$left" ] && ok "scrub: no 192.168.28./192.168.11./10.98.0./10.99.0. address, no site or customer name, no author e-mail in the release" \

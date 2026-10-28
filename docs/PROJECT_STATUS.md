@@ -32,6 +32,10 @@
   listę wszystkich korzeni szyfrowania, które sam załadował. Nieudany montaż zdejmuje klucz od razu. Nieudane
   `unload-key` nazywa każdy pozostały korzeń z poleceniem ręcznym, ponawia przy wyjściu i kończy rc≠0. Klucz załadowany
   przed startem nie jest ruszany. Wcześniej druga kopia pod innym korzeniem nadpisywała jedyny zapis i pierwszy klucz zostawał.
+- **Kanał wydań przy checkoucie bez `origin` (2026-10-28, REV-20261028-179).** `deploy.sh` i `prepare-source` przy
+  checkoucie bez `origin` (archiwum, skopiowane drzewo) klonują `AdalbertKing/zfsbackup`, a nie repo dev; ścieżka
+  z paczką (bundle) dostaje ten sam `origin`. `origin` forka nadal ma pierwszeństwo, w `deploy.sh` także jawny `REPO_URL`.
+  `test/release` odrzuca linię kodu (poza komentarzem) w `*.sh`/`*.py` wydania z `AdalbertKing/zfs-snapshot-all`.
 - **Stan gościa przy odzysku: odmowa przy nieznanym (2026-10-28, REV-20261028-180).** Przed `rewind`/`replace`
   dysku gościa na tym hoście (`vm-*-disk-*`, `subvol-*-disk-*`) `restore_live_guard` przepuszcza tylko
   `status: stopped` oraz gościa, którego nie ma (`qm`/`pct status` rc 2 „Configuration file ... does not exist”,

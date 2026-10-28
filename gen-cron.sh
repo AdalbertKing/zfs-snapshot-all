@@ -4055,7 +4055,7 @@ job_cron_line() {
     printf '%s %s/zfs-job.sh "%s" --log=%s --notify=%s --detail=%s%s -- %s'         "$schedule" "$REPO_DIR" "$notify" "$CRON_LOG" "$NOTIFY_SCRIPT"         "$DETAIL_LINES" "${guard:+ --pve-guests=$guard}" "$cmd"
 }
 
-# PVE GUEST GUARD (owner 2026-10-28, from the a-tassa notes; 1.0.x). A guest's
+# PVE GUEST GUARD (owner 2026-10-28, from another cluster's notes; 1.0.x). A guest's
 # disk is snapshotted and pruned only where the guest RUNS. After a migration the
 # old node holds a pvesr replica: our snapshots there are destroyed by pvesr's
 # `recv -F` a second later while the job logs success (measured, CT 990,
@@ -4097,7 +4097,7 @@ pve_guard_mark() {   # <host, "" = this one> <dataset> <engine flags> <section> 
     # pve_node: the PVE node name of a REMOTE host given by address. A delegated
     # account cannot map an address to a node (corosync.conf and .members are not
     # readable to it, measured on pve2 2026-10-28, and the DNS there answered
-    # 'pve1' with a wildcard), so a collector that reaches pve1 as 192.168.28.9
+    # 'pve1' with a wildcard), so a collector that reaches pve1 by its address
     # names the node here; the line then carries the node instead of the address.
     local node=""
     if [ -n "$host" ] && node="$(resolve_field pve_node "$4" "$5" "")"; then
