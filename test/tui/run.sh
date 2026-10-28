@@ -833,6 +833,30 @@ if hasE "$FPS" 'Wywołania +144, błędów 1' && hasE "$FPS" 'ostatni 3s / śred
 else
     bad "zadania: statystyki wiersza 'lokalny prune'" "$FPS"
 fi
+# U112 (wlasciciel 2026-10-28, symulacja A): udane biegi jednej linii prune zwijaja sie w JEDEN
+# wiersz "x N" w miejscu ostatniego, bieg z bledem zostaje osobno, z nadchodzacych prune tylko
+# najblizszy. Transfer obok (pobranie) bez zmian: kazdy bieg osobno.
+FPF="$(mktemp)"
+"$PY" - "$FIX/stats-flatprune.json" "$NOW" > "$FPF" <<'PYEOF'
+import json, sys, time
+d = json.load(open(sys.argv[1], encoding="utf-8")); now = int(sys.argv[2])
+iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(t))
+lbl = "profile__p__flat_hourly prune (sx-a)"
+d["runs"] = [{"label": lbl, "start": iso(now - 3600 * k - 40), "end": iso(now - 3600 * k - 30), "rc": 1 if k == 5 else 0,
+              "error": "delsnaps: test" if k == 5 else ""} for k in range(11, 0, -1)]
+print(json.dumps(d))
+PYEOF
+FPZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $FPARGS --stats "$FPF" --screen zadania --keys "" --width 200 --height 200 2>&1)"
+FPZD="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $FPARGS --stats "$FPF" --screen zadania --keys "$(zkeys "lokalny prune .*×10" $FPARGS --stats "$FPF")" --width 200 --height 60 2>&1)"
+FZP="$(lst "$FPZ" | grep -cE "lokalny prune .*(OK|BŁĄD)")"; FZN="$(lst "$FPZ" | grep -cE "lokalny prune .*nadchodzący")"
+FZT="$(lst "$FPZ" | grep -cE "pobranie .*nadchodzący")"
+if [ "$FZP" = 2 ] && hasE "$FPZ" "lokalny prune .*×10 +OK, błędów 1" && hasE "$FPZ" "lokalny prune .* BŁĄD rc=1" \
+   && [ "$FZN" = 1 ] && [ "$FZT" -gt 1 ] && hasE "$FPZD" "Zwinięte +10 udanych biegów od"; then
+    ok "zadania U112: udane prune jednej linii w jednym wierszu x10 (bledy osobno), z nadchodzacych prune tylko najblizszy, pobrania bez zmian"
+else
+    bad "zadania U112: zwijanie prune" "wykonane prune: $FZP (2), nadchodzace prune: $FZN (1), nadchodzace pobrania: $FZT (>1)" "$(lst "$FPZ" | grep -E 'prune|pobranie' | head -20)"
+fi
+rm -f "$FPF"
 # Atrapa relacji: sync-test ma TRZY linie crona identyczne poza zakresem (a/b/c,
 # ten sam harmonogram) plus czwarta pod INNYM harmonogramem (d) -- ta czwarta
 # NIE ma sie zlaczyc. backup-test to relacja BEZ rekordu synchro (mode
