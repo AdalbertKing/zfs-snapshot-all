@@ -131,6 +131,11 @@ set -o pipefail
 #                                          # fields will eventually want.
 #       autotune     = yes|no              # default yes; 'no' suppresses the
 #                                          # automatic -A described below
+#       pve_guest_guard = yes|no           # default yes ([defaults], [dataset:],
+#                                          # [snaponly:]). A guest disk's lines run
+#                                          # only where the guest runs (zfs-job.sh
+#                                          # --pve-guests, see job_cron_line); no
+#                                          # turns the check off for this section.
 #       prune_foreign = yes|no             # default no. yes: FOREIGN snapshots on
 #                                          # this path (any family no prune line
 #                                          # here names -- a manual one, another
@@ -1496,7 +1501,7 @@ DEFAULTS_POLICY_FIELDS="send_schedule prune_schedule prefix pattern
                         dst src autotune quiesce monitor_schedule gfs_pattern"
 # shellcheck disable=SC2086
 _allow_fields defaults  host_label repo_dir notify_script warn_script \
-                        digest_script cron_log $DEFAULTS_POLICY_FIELDS
+                        digest_script cron_log pve_guest_guard $DEFAULTS_POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields template  $POLICY_FIELDS
 # media = removable  -- THIS TARGET IS A DISK THAT GETS UNPLUGGED.
@@ -1574,7 +1579,7 @@ PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
 # which no layer above the section knows. exclude_child_<n> is numbered and therefore
 # not listable here; validate_field_names carries its pattern.
 # shellcheck disable=SC2086
-_allow_fields dataset   use_template relation side pair_label recursive media \
+_allow_fields dataset   use_template relation side pair_label recursive media pve_guest_guard \
                         bandwidth compression cipher history raw \
                         passive exclude_family prune_foreign $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
@@ -1624,7 +1629,7 @@ _allow_fields excluded  keep
 # tier_label, notify_word, monitor_*). ssh_flags: the same five options as
 # [prune:]. Retention of the source lives in its own [prune:<scope>]
 # (side = source), as for any remote source; this section never prunes.
-_allow_fields snaponly  use_template pair_label recursive notify notify_raw ssh_flags
+_allow_fields snaponly  use_template pair_label recursive notify notify_raw ssh_flags pve_guest_guard
 
 # The single most useful thing to say about a rejected field is "you put it in
 # the wrong kind of section", which is a different mistake from "you misspelled
