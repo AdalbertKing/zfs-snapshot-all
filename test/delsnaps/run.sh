@@ -612,8 +612,12 @@ check "-G, creation negative: rc 1, named, no destroy" \
       "1|0|auto_1 auto_2 auto_3|1" "$(gfs_bad_case gfsbad auto_1 neg)"
 # Positive control through the SAME shim with nothing broken: the ladder runs and
 # deletes as the burst case above does (one survivor per hourly bucket).
+# Its own dataset: on an engine without the fix the negative cases above have
+# already destroyed snapshots of gfsbad.
+mkds gfsok
+mksnaps gfsok auto_1 auto_2 auto_3
 check "-G through the shim, nothing broken: ladder runs, keeps the newest of the burst" \
-      "0|2|auto_3|0" "$(gfs_bad_case gfsbad none fail)"
+      "0|2|auto_3|0" "$(gfs_bad_case gfsok none fail)"
 rm -rf "$GSHIM"
 
 # --- summary ----------------------------------------------------------------
