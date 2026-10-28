@@ -1,0 +1,58 @@
+{
+ "datasets": [
+  {
+   "name": "hdd/backups/192.168.28.99/hdd/lab/vm-101",
+   "type": "filesystem",
+   "snapshots": 3,
+   "newest": 1788955200
+  },
+  {
+   "name": "hdd/backups/192.168.28.99/hdd/lab/ct-201",
+   "type": "filesystem",
+   "snapshots": 3,
+   "newest": 1788955200
+  },
+  {
+   "name": "hdd/backups/192.168.28.99/hdd/lab/ct-201/data",
+   "type": "filesystem",
+   "snapshots": 3,
+   "newest": 1788955200
+  },
+  {
+   "name": "hdd/backups/192.168.28.99/hdd/lab/srv-a",
+   "type": "filesystem",
+   "snapshots": 3,
+   "newest": 1788955200
+  },
+  {
+   "name": "hdd/backups/192.168.28.99/hdd/lab/srv-b",
+   "type": "filesystem",
+   "snapshots": 0,
+   "newest": 0
+  },
+  {
+   "name": "hdd/backups/192.168.28.50/hdd/lab/a",
+   "type": "filesystem",
+   "snapshots": 3,
+   "newest": 1788955200
+  },
+  {
+   "name": "hdd/backups/192.168.28.50/hdd/lab/b",
+   "type": "filesystem",
+   "snapshots": 3,
+   "newest": 1788955200
+  },
+  {
+   "name": "hdd/backups/192.168.28.50/hdd/lab/c",
+   "type": "filesystem",
+   "snapshots": 3,
+   "newest": 1788955200
+  },
+  {
+   "name": "hdd/backups/192.168.28.50/hdd/lab/d",
+   "type": "filesystem",
+   "snapshots": 3,
+   "newest": 1788955200
+  }
+ ]
+}
