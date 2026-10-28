@@ -2861,8 +2861,8 @@ fi
 # GUEST STATE, FAIL CLOSED (REV-20261028-180). A zvol has no mountpoint, so the qm/pct probe is
 # the only guard before rewind/replace of a guest's disk. The ACTUAL restore_live_guard, with
 # EXECUTABLE stubs on a constrained PATH (zfs records every call; qm/pct answer as measured on
-# pve10 2026-10-28) and a second PATH with no qm/pct at all. Only "status: stopped" and a guest
-# that does not exist pass; missing, failing, empty and unknown answers refuse; zfs only read.
+# pve10 2026-10-28) and a second PATH with no qm/pct at all. Only "status: stopped" passes;
+# missing, failing, empty, unknown and "does not exist" answers refuse; zfs only read.
 GS="$WORK/gs"; mkdir -p "$GS/with" "$GS/without"
 for t in sed; do
     p="$(command -v "$t" 2>/dev/null)"; [ -n "$p" ] && [ "${p#/}" != "$p" ] && { ln -sf "$p" "$GS/with/$t"; ln -sf "$p" "$GS/without/$t"; }
@@ -2888,7 +2888,7 @@ GST
 done
 gs_run() {   # <PATH dir> <dataset> <qm/pct behaviour> -> "rc|verdict"
     : > "$GS/zfs-calls"
-    GS_ST="$3" PATH="$GS/$1" "$BASH" -c "$lg_fns
+    GS_ST="$3" RESTORE_PVE_NODES_DIR="${GS_NODES:-$GS/no-cluster}" PATH="$GS/$1" "$BASH" -c "$lg_fns
 log() { :; }
 RESTORE_ONE_VERDICT=''
 restore_live_guard \"$2\" rewind; echo \"\$?|\$RESTORE_ONE_VERDICT\"" 2>&1
@@ -2911,11 +2911,15 @@ for k in qm pct; do
     gs_case with "$ds" unknown 1 "answered 'status: paused'"
     gs_case with "$ds" running 1 "guest $id is RUNNING"
     gs_case with "$ds" stopped 0 -
-    gs_case with "$ds" absent  0 -
+    # REV-180 round 2: "does not exist" refuses too -- and in a cluster names the node
+    # the guest runs on (the disk here is then its pvesr replica).
+    gs_case with "$ds" absent  1 "guest $id is not defined on this host ('$k status $id': rc=2)"
+    mkdir -p "$GS/nodes/pveX/qemu-server" "$GS/nodes/pveX/lxc"; : > "$GS/nodes/pveX/qemu-server/106.conf"; : > "$GS/nodes/pveX/lxc/107.conf"
+    GS_NODES="$GS/nodes" gs_case with "$ds" absent 1 "guest $id runs on node pveX, not here"
 done
 gs_case without hdd/data stopped 0 -
-if [ -z "$gs_fail" ] && [ "$gs_n" = 15 ] && grep -q '^qm status 106$' "$GS/probe-calls" && grep -q '^pct status 107$' "$GS/probe-calls"; then
-    ok "guest state, fail closed (REV-180): no qm/pct, a failing, empty or unknown answer refuse; running refuses; only stopped and a guest that does not exist pass; an ordinary dataset is not asked -- zfs only read"
+if [ -z "$gs_fail" ] && [ "$gs_n" = 17 ] && grep -q '^qm status 106$' "$GS/probe-calls" && grep -q '^pct status 107$' "$GS/probe-calls"; then
+    ok "guest state, fail closed (REV-180): no qm/pct, a failing, empty or unknown answer refuse; running refuses; a guest not defined here refuses (and names its node in a cluster); only stopped passes; an ordinary dataset is not asked -- zfs only read"
 else
     bad "guest state guard (REV-180)" "cases=$gs_n" "$gs_fail"
 fi

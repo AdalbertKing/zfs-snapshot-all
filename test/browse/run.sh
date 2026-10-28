@@ -75,6 +75,17 @@ case "$*" in
         # $D/snaps (nazwa<TAB>creation<TAB>used<TAB>written, rosnaco po creation) = wlasne migawki testu
         if [ -e "$D/snaps" ]; then awk -F'\t' -v d="$last" '{ printf "%s@%s\t%s\t%s\t%s\n", d, $1, $2, $3, $4 }' "$D/snaps"
         else printf '%s@s1\t100\n' "$last"; fi ;;
+    # --snapshot=DS@SNAP (F4 Kopie, prawy panel): typ datasetu z $D/datasets (brak wpisu = pusto + rc 1) i
+    # istnienie migawki (s1 albo wpis w $D/snaps; inna = rc 1, czyli "juz jej nie ma").
+    "get -H -o value type -- "*)
+        t="$(awk -v x="$last" '$1 == x { print $2; exit }' "$D/datasets" 2>/dev/null)"
+        [ -n "$t" ] || exit 1
+        echo "$t" ;;
+    "list -H -o name -t snapshot -- "*)
+        s="${last#*@}"
+        [ "$s" = s1 ] && exit 0
+        [ -e "$D/snaps" ] && awk -F'\t' -v s="$s" '$1 == s { f = 1 } END { exit !f }' "$D/snaps" && exit 0
+        exit 1 ;;
     "get -H -o value snapdev "*) [ -e "$D/fail_get" ] && exit 1; cat "$SV" ;;
     "get -H -o source snapdev "*) [ -e "$D/fail_get" ] && exit 1; cat "$SS" ;;
     # U89: kopia szyfrowana. $D/enc_root = korzen szyfrowania (brak pliku = "-", czyli bez szyfrowania),
@@ -211,16 +222,26 @@ vol_case(){   # <partfs>: dysk VM, snapdev hidden/local
 run_script(){   # -> rc w $rc, stdout+stderr w $D/out
     local runner=()
     command -v setsid >/dev/null 2>&1 && runner=(setsid -w)
+    # BROWSE_RO_NS=0: przestrzen tylko-do-odczytu wymaga roota i unshare; testy ida zwyklym torem mc.
+    # BROWSE_RECOVER_DIR: prawy panel mc (2. argument) = $D/odz/<dataset@migawka>, nie ~/odzysk.
     PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" ZFS_TREE="$D/bin/tree" \
-        BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" \
+        BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" BROWSE_RO_NS=0 BROWSE_RECOVER_DIR="$D/odz" \
         "${runner[@]}" bash "$REPO/tui/browse.sh" --any </dev/null >"$D/out" 2>&1
+    rc=$?
+}
+run_any(){   # [opcje browse.sh...] -> rc w $rc, stdout+stderr w $D/out; jak run_script, ale z opcjami (np. --snapshot=DS@SNAP)
+    local runner=()
+    command -v setsid >/dev/null 2>&1 && runner=(setsid -w)
+    PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" ZFS_TREE="$D/bin/tree" \
+        BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" BROWSE_RO_NS=0 BROWSE_RECOVER_DIR="$D/odz" \
+        "${runner[@]}" bash "$REPO/tui/browse.sh" --any "$@" </dev/null >"$D/out" 2>&1
     rc=$?
 }
 run_rel(){   # [opcje browse.sh...] -> rc w $rc, stdout+stderr w $D/out; tryb RELACJI (rel1), nie --any
     local runner=()
     command -v setsid >/dev/null 2>&1 && runner=(setsid -w)
     PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" ZFS_TREE="$D/bin/tree" ZFS_BACKUP="$D/bin/zb" \
-        BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" \
+        BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" BROWSE_RO_NS=0 BROWSE_RECOVER_DIR="$D/odz" \
         "${runner[@]}" bash "$REPO/tui/browse.sh" rel1 "$@" </dev/null >"$D/out" 2>&1
     rc=$?
 }
@@ -236,7 +257,7 @@ run_bg(){   # <id> [pauza]: sesja w tle, wstrzymana po montazu (i w punkcie <pau
     local runner=()
     command -v setsid >/dev/null 2>&1 && runner=(setsid -w)
     ( BROWSE_TEST_PAUSE_AT="${2:-}" BROWSE_TEST_PAUSE="${2:+$D/p.$1}" PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" ZFS_TREE="$D/bin/tree" \
-        BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" TESTID="$1" \
+        BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" BROWSE_RO_NS=0 BROWSE_RECOVER_DIR="$D/odz" TESTID="$1" \
         "${runner[@]}" bash "$REPO/tui/browse.sh" --any </dev/null >"$D/out.$1" 2>&1
       echo $? >"$D/rc.$1" ) &
 }
@@ -584,19 +605,20 @@ fin
 # U90: po czystym odmontowaniu 'Odmontowane.' i wyjscie 0 BEZ czytania z tty. run_script ma </dev/null i
 # brak ctty, wiec `read </dev/tty` konczy sie bledem i NIE odroznia starego kodu od nowego. Tu skrypt
 # dostaje PRAWDZIWY terminal sterujacy (pty), na ktorym nikt nie pisze: stary kod wisi na `read` do limitu.
-run_pty(){   # -> rc w $rc (124 = wisi na tty, 2 = brak pty), wyjscie terminala w $D/out
+run_pty(){   # [opcje browse.sh...] -> rc w $rc (124 = wisi na tty, 2 = brak pty), wyjscie terminala w $D/out; bez opcji: --any
     PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" ZFS_TREE="$D/bin/tree" \
-        BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" \
-        python3 - "$REPO/tui/browse.sh" "$D/out" <<'P'
+        BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" BROWSE_RO_NS=0 BROWSE_RECOVER_DIR="$D/odz" \
+        python3 - "$REPO/tui/browse.sh" "$D/out" "$@" <<'P'
 import os, select, sys, time
 try:
     import pty
 except ImportError:
     sys.exit(2)
 script, outp = sys.argv[1], sys.argv[2]
+args = sys.argv[3:] or ["--any"]
 pid, fd = pty.fork()
 if pid == 0:
-    os.execvp("bash", ["bash", script, "--any"])
+    os.execvp("bash", ["bash", script] + args)
 buf, rc, t0 = b"", None, time.time()
 while time.time() - t0 < 20:
     r, _, _ = select.select([fd], [], [], 0.1)
@@ -663,6 +685,95 @@ run_script
 has msgs "Klucz nie pasuje"
 lg '^zfs load-key -L prompt -- tank/c1$'; nolg '^mount '; nolg '^zfs unload-key'
 fin
+
+# ---- F4 Kopie, dwa panele (2026-10-28): browse.sh --any|REL --snapshot=DS@SNAP ----------------
+# Migawka wybrana w prawym panelu: bez drzewa i bez menu migawek, prosto do montowania. Atrapa zfs
+# odpowiada na `get -H -o value type -- DS` i `list -H -o name -t snapshot -- DS@SNAP` (s1 albo $D/snaps).
+new_case "43 --snapshot=tank/fs@s1: montuje te migawke tylko do odczytu, bez drzewa i bez menu migawek"
+fs_case; : >"$D/answers"; run_any --snapshot=tank/fs@s1
+rc0; has out "=== Odmontowane"
+[ ! -e "$D/tree-spec.last" ] || errs+=("drzewo uruchomione mimo --snapshot=")
+[ ! -s "$D/menus" ] || errs+=("menu migawek mimo --snapshot=: $(cat "$D/menus")")
+lg '^zfs get -H -o value type -- tank/fs$'; lg '^zfs list -H -o name -t snapshot -- tank/fs@s1$'
+lg '^mount -t zfs -o ro tank/fs@s1 '; nolg '^zfs list -H -p -t snapshot'
+fin
+
+new_case "44 --snapshot=tank/vol@s1 (zvol): od razu krok partycji -- snapdev visible, mount partycji, snapdev wraca, bez drzewa i menu"
+vol_case ext4; : >"$D/answers"; run_any --snapshot=tank/vol@s1
+rc0; has out "=== Odmontowane"
+[ ! -e "$D/tree-spec.last" ] || errs+=("drzewo uruchomione mimo --snapshot=")
+[ ! -s "$D/menus" ] || errs+=("menu migawek mimo --snapshot=: $(cat "$D/menus")")
+lg '^zfs set snapdev=visible tank/vol'; lg '^mount .* /dev/zd0p1 '
+[ "$(cat "$D/snapdev_value")" = hidden ] || errs+=("snapdev po wszystkim: $(cat "$D/snapdev_value") (bylo hidden)")
+fin
+
+new_case "45 --snapshot= migawka, ktorej juz nie ma -> komunikat 'już nie ma', potem menu migawek TEGO datasetu"
+fs_case; printf 'OK p0\n' >"$D/answers"; run_any --snapshot=tank/fs@gone
+rc0; has msgs "już nie ma"; has msgs "tank/fs@gone"
+[ -s "$D/menus" ] || errs+=("brak menu migawek po komunikacie")
+has menus "s1"
+[ ! -e "$D/tree-spec.last" ] || errs+=("drzewo uruchomione, choc dataset istnieje (powinno byc menu migawek)")
+lg '^zfs list -H -o name -t snapshot -- tank/fs@gone$'
+lg '^zfs list -H -p -t snapshot -o name,creation,used,written -s creation -d 1 -- tank/fs$'; lg '^mount -t zfs -o ro tank/fs@s1 '
+fin
+
+new_case "46 --snapshot= dataset, ktorego juz nie ma -> komunikat 'już nie ma', potem drzewo wyboru datasetu"
+fs_case; run_any --snapshot=tank/gone@s1
+rc0; has msgs "już nie ma"
+[ -e "$D/tree-spec.last" ] || errs+=("drzewo nie uruchomione po komunikacie o brakujacym datasecie")
+lg '^zfs get -H -o value type -- tank/gone$'; nolg '^zfs list -H -o name -t snapshot -- tank/gone@s1$'
+lg '^mount -t zfs -o ro tank/fs@s1 '
+fin
+
+new_case "47 --snapshot=bad (bez @) -> rc 2, komunikat, nic nie zamontowane"
+fs_case; run_any --snapshot=bad
+[ "$rc" -eq 2 ] || errs+=("rc=$rc, oczekiwano 2")
+has out "takes DATASET@SNAPSHOT"; nolg '^mount '; nolg '^zfs '
+fin
+
+new_case "48 --snapshot= ze znakiem spoza nazwy migawki (;) -> rc 2, nic nie zamontowane ani nie uruchomione"
+fs_case; run_any '--snapshot=tank/fs@s1;touch'
+[ "$rc" -eq 2 ] || errs+=("rc=$rc, oczekiwano 2")
+has out "not a snapshot name"; nolg '^mount '; nolg '^zfs '
+fin
+
+# Katalog odzysku (prawy panel mc): powstaje przed mc, znika po wyjsciu, gdy pusty; z plikiem zostaje i
+# wyjscie to mowi. mc dostaje /dev/tty, wiec te dwa przypadki ida pod pty (jak 39); atrapa mc zapisuje
+# swoje argumenty i to, czy 2. argument byl katalogiem, a z MC_WRITE tworzy w nim plik.
+mc_fake(){
+    cat >"$D/bin/mc" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$1" "$2" >"$D/mcargs"
+[ -d "$2" ] && touch "$D/mc.dirthere"
+[ -n "${MC_WRITE:-}" ] && : >"$2/odzyskany.txt"
+exit 0
+EOF
+    chmod +x "$D/bin/mc"
+}
+new_case "49 katalog odzysku: powstaje dla mc (2. argument = \$D/odz/fs@s1), po wyjsciu znika razem z rodzicem, gdy pusty; bez 'Skopiowane pliki'"
+fs_case; : >"$D/answers"; mc_fake; run_pty --any --snapshot=tank/fs@s1
+if [ "$rc" -eq 2 ]; then
+    echo "SKIP 49: brak modulu pty -- katalog odzysku sprawdza CI"
+else
+    rc0; has out "=== Odmontowane."
+    [ -e "$D/mc.dirthere" ] || errs+=("2. argument mc nie byl katalogiem w chwili uruchomienia: $(cat "$D/mcargs" 2>/dev/null)")
+    [ "$(sed -n 2p "$D/mcargs" 2>/dev/null)" = "$D/odz/fs@s1" ] || errs+=("2. argument mc: '$(sed -n 2p "$D/mcargs" 2>/dev/null)' (oczekiwano $D/odz/fs@s1)")
+    case "$(sed -n 1p "$D/mcargs" 2>/dev/null)" in "$D/run/"*) ;; *) errs+=("1. argument mc: '$(sed -n 1p "$D/mcargs" 2>/dev/null)' (oczekiwano katalog pod $D/run/)") ;; esac
+    [ ! -e "$D/odz" ] || errs+=("katalog odzysku zostal mimo braku plikow: $(ls -A "$D/odz")")
+    hasnt out "Skopiowane pliki"
+    fin
+fi
+
+new_case "50 katalog odzysku: mc zapisal plik w prawym panelu -> katalog zostaje z plikiem, wyjscie mowi 'Skopiowane pliki: ...'"
+fs_case; : >"$D/answers"; mc_fake; MC_WRITE=1 run_pty --any --snapshot=tank/fs@s1
+if [ "$rc" -eq 2 ]; then
+    echo "SKIP 50: brak modulu pty -- katalog odzysku sprawdza CI"
+else
+    rc0; has out "=== Odmontowane."
+    [ -f "$D/odz/fs@s1/odzyskany.txt" ] || errs+=("plik z mc zniknal albo katalog usuniety: $(ls -AR "$D/odz" 2>&1 | head -3)")
+    has out "Skopiowane pliki: $D/odz/fs@s1"
+    fin
+fi
 
 echo "browse: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
