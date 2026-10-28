@@ -1,0 +1,4 @@
+{"window_days": 7, "since": "2026-09-05", "logs": 1, "jobs": [
+ {"label": "profile__p__flat_hourly backup (sx-a)", "runs": 168, "failures": 0, "avg_s": 9, "max_s": 20, "total_s": 1512, "last_s": 8, "last_rc": 0, "last_at": "2026-09-11 19:17"},
+ {"label": "profile__p__flat_hourly prune (sx-a)", "runs": 144, "failures": 1, "avg_s": 2, "max_s": 71, "total_s": 288, "last_s": 3, "last_rc": 0, "last_at": "2026-09-11 19:21"}
+], "events": [], "datasets": [], "volume": []}

@@ -822,6 +822,16 @@ if hasE "$FP" "^║ $KD +sx +lokalny prune " && hasE "$FPD" 'Kiedy +co godzinę 
 else
     bad "zadania: porzadki szczebla plaskiego (uwaga 4)" "minuty wierszy 'lokalny prune': '$FPMIN'" "$FP"
 fi
+# Panel wiersza 'lokalny prune' ma statystyki WLASNEJ linii delsnaps (przejscie GUI pve10,
+# 2026-10-28): wiersz byl dorabiany z srow=None i panel mowil "brak biegow w dzienniku",
+# choc lista obok pokazywala te biegi.
+FPSARGS="$FPARGS --stats $FIX/stats-flatprune.json"
+FPS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $FPSARGS --screen zadania --keys "$(zkeys "^║ $KD +sx +lokalny prune " $FPSARGS)" --width 200 --height 60 2>&1)"
+if hasE "$FPS" 'Wywołania +144, błędów 1' && hasE "$FPS" 'ostatni 3s / średni 2s / maks\. 1m11s' && ! hasE "$FPS" 'brak biegów w dzienniku'; then
+    ok "zadania: panel 'lokalny prune' liczy biegi wlasnej linii delsnaps, nie 'brak biegow w dzienniku'"
+else
+    bad "zadania: statystyki wiersza 'lokalny prune'" "$FPS"
+fi
 # Atrapa relacji: sync-test ma TRZY linie crona identyczne poza zakresem (a/b/c,
 # ten sam harmonogram) plus czwarta pod INNYM harmonogramem (d) -- ta czwarta
 # NIE ma sie zlaczyc. backup-test to relacja BEZ rekordu synchro (mode

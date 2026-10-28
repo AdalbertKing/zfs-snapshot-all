@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 69010cb0170ad57b -->
+<!-- status-covers-digest: d67ce3a4ed5528f5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -62,6 +62,14 @@
   job-stats: `OK 27.10 21:30`, `BŁĄD rc=1 …`, `pominięty …`, `-` gdy biegu nie ma. „Wykonana” mówi tylko,
   kiedy kopia była ostatnio aktualna. Replika calapula padła 4 razy z 4, a lista pokazywała tylko
   „Wykonana 22.10”. Przy 80 znakach szerokości Harmonogram ustępuje (jest w panelu).
+- **F2/F3: panel wiersza „lokalny prune” ze statystykami (2026-10-28, przejście GUI na pve10).** Wiersz
+  porządków szczebla płaskiego jest dorabiany z zadania pobrania i miał `srow` puste, więc panel mówił „brak
+  biegów w dzienniku z tego okna”, choć lista obok pokazywała te biegi. Teraz statystyki są brane z etykiety
+  własnej linii `delsnaps.sh` (czas, wywołania, błędy). Na pve10: `pve9 lokalny prune hourly: enc` -- 144
+  wywołania. Test w `test/tui` z fiksturą `stats-flatprune.json`.
+- **Katalog montażu krótszy (2026-10-28, U102).** `browse.sh` nazywa katalog montażu
+  `<host>_<dwa ostatnie człony datasetu>@<migawka>.XXXXXX` (np. `pve10_data~vm1@automated_hourly_...`), nie całą
+  ścieżką kopii -- pełna ścieżka zajmowała nagłówek mc i spychała migawkę za krawędź. Przypadek 37b w `test/browse`.
 - **Replika rekurencyjna: monitor z `-R` (2026-10-28, replika calapula na pve10).** Źródło będące kontenerem
   (`hdd/backups`) nie ma własnych migawek, więc monitor czytający je jak liść zgłaszał CRITICAL przy każdym
   biegu, choć kopia była aktualna. `gen-cron.sh` daje teraz `check-snap-age.sh -R` replice z `recursive = yes`,
