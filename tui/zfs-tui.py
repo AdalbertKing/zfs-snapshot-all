@@ -2530,7 +2530,7 @@ def odz_children(tab, item, rows, data, now, ch):
             dpairs.append((_(u"Najnowsza"), (last.get("dataset") or "?").split("@", 1)[-1]))
         dpairs.append((_(u"Najstarsza"), _(u"w oknach Przywróć (lista migawek)")))
         items.append({"cells": [copy, nw], "pairs": dpairs, "title": u"%s -- dataset %s" % (item["name"], copy),
-                      "dataset": copy})
+                      "dataset": copy, "src": pr["src"]})
     return {"heads": [_(u"Kopia"), _(u"Najnowsza")], "items": items, "empty": _(u"brak datasetów z kopią")}
 
 
@@ -4354,6 +4354,16 @@ def common_base(roots):
     return "/".join(com) + "/" if com else ""
 
 
+def kopie_copy_root(dst, src):
+    """Sciezka kopii na tym hoscie z pary relacji: pull podaje pelna sciezke (konczy sie
+    zrodlem), kopia lokalna -- baze, pod ktora kopia lezy jako baza/zrodlo."""
+    d = dst or ""
+    s_ = ((src or "").split() or [""])[0].rsplit(":", 1)[-1]
+    if d and s_ and d != s_ and not d.endswith("/" + s_):
+        d = u"%s/%s" % (d.rstrip("/"), s_)
+    return d
+
+
 def kopie_groups(rows, data, now, ch):
     """Grupy lewego panelu: relacje z kopiami na tym hoscie, potem repliki (nosnik
     podlaczony -> korzenie dst/zrodlo; odlaczony -> sama grupa z uwaga)."""
@@ -4365,6 +4375,10 @@ def kopie_groups(rows, data, now, ch):
         roots = []
         for it in kids:
             d = it.get("dataset") or ""
+            # Kopia lokalna (pve2, 2026-10-28): para podaje jako cel BAZE (hdd/backups/pve2),
+            # a kopia lezy pod baza/zrodlo -- bez tego grupa pokazywala cale drzewo bazy,
+            # z kopiami innych relacji. Pull podaje pelna sciezke (konczy sie zrodlem).
+            d = kopie_copy_root(d, it.get("src"))
             if d and ":" not in d and d not in roots:
                 roots.append(d)
         groups.append({"kind": "relation", "name": x["name"], "word": _(u"relacja %s") % x["name"],

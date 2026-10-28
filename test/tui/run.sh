@@ -6259,6 +6259,24 @@ else
     bad "tui/*.py: nazwy bez definicji" "$undef"
 fi
 
+# F4 KOPIE, KOPIA LOKALNA (pve2 po wydaniu 2026-10-28): para relacji lokalnej podaje jako cel
+# BAZE (hdd/backups/pve2), a kopia lezy pod baza/zrodlo -- grupa pokazywala cale drzewo bazy,
+# z kopiami innych relacji. kopie_copy_root: pull bez zmian, lokalna = baza/zrodlo.
+kcr="$("$PY" -c '
+import importlib.util, sys
+sp = importlib.util.spec_from_file_location("zt", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+print(m.kopie_copy_root("hdd/backups/pve2", "rpool/data/vm-106-disk-0"))
+print(m.kopie_copy_root("hdd/backups/192.168.28.99/hdd/lab/vm-101", "zbk@192.168.28.99:hdd/lab/vm-101"))
+print(m.kopie_copy_root("hdd/backups/pve2/", "hdd/vm-disks/subvol-107-disk-0 (+2)"))
+' "$TUI" 2>&1)"
+if [ "$kcr" = "hdd/backups/pve2/rpool/data/vm-106-disk-0
+hdd/backups/192.168.28.99/hdd/lab/vm-101
+hdd/backups/pve2/hdd/vm-disks/subvol-107-disk-0" ]; then
+    ok "kopie: kopia lokalna = baza/zrodlo (nie cala baza), pull bez zmian"
+else
+    bad "kopie: sciezka kopii z pary relacji" "$kcr"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

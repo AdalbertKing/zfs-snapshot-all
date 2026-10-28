@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1d65e891291b2a59 -->
+<!-- status-covers-digest: 8888c3c947b8346a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -77,7 +77,8 @@
   (`restore --dataset= --snapshot=`, drzewo i menu migawek pominięte raz). mc biegnie we własnej przestrzeni montowań:
   wszystko tylko do odczytu poza `~/odzysk/<kopia>` (prawy panel, pusty znika) -- zmierzone na pve10: zapis do /root,
   /hdd, /tmp, /etc odrzucony, do katalogu odzysku przechodzi, host po wyjściu zapisywalny. Powrót z przeglądania bez
-  pełnego przeładowania (109 ms na pve10, wcześniej 3-6 s). Nowe czytniki: `zfs-backup.sh zfs-tree` / `zfs-snapshots --json`.
+  pełnego przeładowania (109 ms na pve10, wcześniej 3-6 s). Po wydaniu na pve2: kopia relacji lokalnej to baza/źródło
+  (`kopie_copy_root`) -- wcześniej każda relacja lokalna pokazywała całe `hdd/backups/pve2`. Nowe czytniki: `zfs-backup.sh zfs-tree` / `zfs-snapshots --json`.
 - **Uwagi z testu właściciela na pve10 (2026-10-27, `gui/uwagi-1027`, U84-U99).** Przebiegi: kolumna Dane
   biegu (suma `written` migawek rodziny zadania na celu od poprzedniego biegu tej linii; `job-stats --runs` podaje
   listę migawek z okna biegów i doby przed nim; porządki i cele zdalne „-”), dół Źródło | Cel | Dane na 5 wierszy z
