@@ -91,14 +91,20 @@ case "$*" in
     # U89: kopia szyfrowana. $D/enc_root = korzen szyfrowania (brak pliku = "-", czyli bez szyfrowania),
     # $D/keystatus (domyslnie available), $D/keyformat (domyslnie passphrase). load-key czyta klucz ze STDIN
     # i zapisuje go w $D/loadkey.stdin (do porownania); unload-key zdejmuje klucz.
-    "get -H -o value encryptionroot -- "*) cat "$D/enc_root" 2>/dev/null || echo - ;;
-    "get -H -o value keystatus -- "*) cat "$D/keystatus" 2>/dev/null || echo available ;;
+    # REV-178: $D/enc_map (wiersz "dataset korzen") = kilka korzeni; stan klucza korzenia w
+    # $D/ks.<korzen z / -> %>, gdy taki plik jest (inaczej wspolny $D/keystatus); $D/unload_fail = unload-key pada.
+    "get -H -o value encryptionroot -- "*)
+        if [ -e "$D/enc_map" ]; then awk -v x="$last" '$1 == x { print $2 }' "$D/enc_map"
+        else cat "$D/enc_root" 2>/dev/null || echo -; fi ;;
+    "get -H -o value keystatus -- "*) KS="$D/ks.${last//\//%}"; [ -e "$KS" ] || KS="$D/keystatus"; cat "$KS" 2>/dev/null || echo available ;;
     "get -H -o value keyformat -- "*) cat "$D/keyformat" 2>/dev/null || echo passphrase ;;
     "load-key -L prompt -- "*)
         cat >"$D/loadkey.stdin"
         [ -e "$D/loadkey_fail" ] && { echo "Key load error: Incorrect key provided." >&2; exit 1; }
-        echo available >"$D/keystatus" ;;
-    "unload-key -- "*) echo unavailable >"$D/keystatus" ;;
+        KS="$D/ks.${last//\//%}"; [ -e "$KS" ] || KS="$D/keystatus"; echo available >"$KS" ;;
+    "unload-key -- "*)
+        [ -e "$D/unload_fail" ] && { echo "cannot unload key: dataset is busy" >&2; exit 1; }
+        KS="$D/ks.${last//\//%}"; [ -e "$KS" ] || KS="$D/keystatus"; echo unavailable >"$KS" ;;
     "set snapdev=visible "*)
         [ -e "$D/fail_set_visible" ] && exit 1
         echo visible >"$SV"
@@ -117,10 +123,13 @@ mkfake mount <<'EOF'
 #!/bin/bash
 echo "mount $*" >>"$D/log"
 dir="${@: -1}"
+# REV-178: $D/mount_fail_once = pierwszy montaz pada (plik znika), nastepny przechodzi.
+[ -e "$D/mount_fail_once" ] && { rm -f "$D/mount_fail_once"; echo "mount: unsupported state" >&2; exit 32; }
 touch "$D/mounted$(printf %s "$dir" | tr / _)"
 # TESTID ustawione = sesja stoi zamontowana (jak w mc; prawdziwe mc bez /dev/tty nie rusza), az test
 # pozwoli jej isc dalej (go.<id>).
 if [ -n "${TESTID:-}" ]; then
+    echo "$PPID" >"$D/mpid.$TESTID"   # PID browse.sh (mount_ro wola mount bez podpowloki) -- dla testu sygnalu
     touch "$D/inmc.$TESTID"
     for ((n = 0; n < 400; n++)); do [ -e "$D/go.$TESTID" ] && break; /bin/sleep 0.05 2>/dev/null || /usr/bin/sleep 0.05; done
 fi
@@ -774,6 +783,67 @@ else
     has out "Skopiowane pliki: $D/odz/fs@s1"
     fin
 fi
+
+
+# REV-20261028-178: kazdy klucz zaladowany przez ten proces zdjety, zanim proba sie skonczy --
+# takze po nieudanym montazu, przy drugim korzeniu, sygnale i nieudanym unload-key; klucz
+# zaladowany przed startem zostaje.
+cnt(){ grep -cE -- "$1" "$D/log"; }
+ksis(){ [ "$(cat "$D/$1")" = "$2" ] || errs+=("$1 = $(cat "$D/$1"), oczekiwano $2"); }
+new_case "51 REV-178: montaz pada zaraz po load-key -> unload-key od razu (raz), przed wyjsciem; klucz zdjety"
+enc_case hex "OK d0" "OK p0" "OK k1"
+touch "$D/mount_fail_once"
+run_script
+has msgs "Nie udało się zamontować"
+lg '^zfs load-key -L prompt -- tank/c1$'
+[ "$(cnt '^zfs unload-key -- tank/c1$')" = 1 ] || errs+=("unload-key tank/c1: $(cnt '^zfs unload-key -- tank/c1$') razy, oczekiwano 1")
+nm="$(grep -n '^mount -t zfs' "$D/log" | head -1 | cut -d: -f1)"; nk="$(grep -n '^zfs unload-key' "$D/log" | head -1 | cut -d: -f1)"
+{ [ -n "$nm" ] && [ -n "$nk" ] && [ "$nm" -lt "$nk" ]; } || errs+=("kolejnosc nieudany mount($nm) < unload-key($nk)")
+ksis keystatus unavailable; hasnt out "NIE wszystko"
+fin
+
+new_case "52 REV-178: po nieudanym montazu druga kopia pod INNYM korzeniem -> oba klucze zdjete (pierwszy nie ginie)"
+printf 'tank/a/c1 filesystem\ntank/b/c2 filesystem\n' >"$D/datasets"
+printf 'tank/a/c1 tank/a\ntank/b/c2 tank/b\n' >"$D/enc_map"
+printf 'unavailable\n' >"$D/ks.tank%a"; printf 'unavailable\n' >"$D/ks.tank%b"
+printf 'OK d0\nOK p0\nOK k1\nNIE\nOK d1\nOK p0\nOK k2\n' >"$D/answers"
+touch "$D/mount_fail_once"
+run_script
+rc0; has out "=== Odmontowane."
+lg '^zfs load-key -L prompt -- tank/a$'; lg '^zfs load-key -L prompt -- tank/b$'
+lg '^zfs unload-key -- tank/a$'; lg '^zfs unload-key -- tank/b$'
+ksis ks.tank%a unavailable; ksis ks.tank%b unavailable
+fin
+
+new_case "53 REV-178: klucz zaladowany PRZED startem -> ani load-key, ani unload-key; zostaje zaladowany"
+enc_case hex "OK d0" "OK p0"
+printf 'available\n' >"$D/keystatus"
+run_script
+rc0; has out "=== Odmontowane."
+nolg '^zfs load-key'; nolg '^zfs unload-key'; ksis keystatus available
+fin
+
+new_case "54 REV-178: unload-key pada po przegladaniu -> rc!=0, korzen i polecenie reczne nazwane"
+enc_case hex "OK d0" "OK p0" "OK k1"
+touch "$D/unload_fail"
+run_script
+rcnz; has out "klucz wciąż załadowany: tank/c1"; has out "zfs unload-key tank/c1"; hasnt out "=== Odmontowane."
+fin
+
+new_case "55 REV-178: montaz pada, unload-key tez -> okno z korzeniem, ponowna proba przy wyjsciu, rc!=0"
+enc_case hex "OK d0" "OK p0" "OK k1"
+touch "$D/mount_fail_once" "$D/unload_fail"
+run_script
+rcnz; has msgs "klucz wciąż załadowany: tank/c1"; has out "klucz wciąż załadowany: tank/c1"
+[ "$(cnt '^zfs unload-key -- tank/c1$')" = 2 ] || errs+=("unload-key tank/c1: $(cnt '^zfs unload-key -- tank/c1$') razy, oczekiwano 2 (od razu i przy EXIT)")
+fin
+
+new_case "56 REV-178: SIGTERM w trakcie przegladania -> EXIT odmontowuje i zdejmuje klucz, rc!=0"
+enc_case hex "OK d0" "OK p0" "OK k1"
+run_bg S; waitf "$D/inmc.S" && kill -TERM "$(cat "$D/mpid.S")"; touch "$D/go.S"; waitf "$D/rc.S"
+[ "$(cat "$D/rc.S" 2>/dev/null)" != 0 ] || errs+=("rc po SIGTERM = 0, oczekiwano != 0")
+lg '^zfs unload-key -- tank/c1$'; ksis keystatus unavailable; nomarker
+fin
 
 echo "browse: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

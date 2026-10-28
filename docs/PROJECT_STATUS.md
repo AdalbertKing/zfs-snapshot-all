@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4cb4ee973ad28e05 -->
+<!-- status-covers-digest: 24b60b3c4fefc575 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -28,6 +28,10 @@
     <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
   - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
     `update-control` jako „not clean”.
+- **Przeglądanie kopii szyfrowanej: zdejmowany każdy załadowany klucz (2026-10-28, REV-20261028-178).** `browse.sh` trzyma
+  listę wszystkich korzeni szyfrowania, które sam załadował. Nieudany montaż zdejmuje klucz od razu. Nieudane
+  `unload-key` nazywa każdy pozostały korzeń z poleceniem ręcznym, ponawia przy wyjściu i kończy rc≠0. Klucz załadowany
+  przed startem nie jest ruszany. Wcześniej druga kopia pod innym korzeniem nadpisywała jedyny zapis i pierwszy klucz zostawał.
 - **Kanał wydań przy checkoucie bez `origin` (2026-10-28, REV-20261028-179).** `deploy.sh` i `prepare-source` przy
   checkoucie bez `origin` (archiwum, skopiowane drzewo) klonują `AdalbertKing/zfsbackup`, a nie repo dev; ścieżka
   z paczką (bundle) dostaje ten sam `origin`. `origin` forka nadal ma pierwszeństwo, w `deploy.sh` także jawny `REPO_URL`.

@@ -263,15 +263,24 @@ undo_or_warn() {   # <tekst przy sukcesie> -> zawsze 0
 }
 # U89 (wlasciciel 2026-10-27, pve10: kopia szyfrowana "can not be mounted: Permission
 # denied"): klucz zaladowany TYLKO na czas przegladania -- po odmontowaniu zdjety.
+# REV-20261028-178: KEYLOADED to LISTA (wiersz na korzen) wszystkich kluczy zaladowanych przez
+# ten proces -- jedna zmienna na jeden korzen gubila pierwszy, gdy po nieudanym montazu wybrano
+# kopie pod innym korzeniem. Klucz zaladowany przed startem nie trafia na liste (need_key laduje
+# tylko "unavailable"), wiec nigdy nie jest zdejmowany.
 KEYLOADED=""
-unload_key() {   # -> 0 zdjety albo nie bylo czego; 1 nie (opis w RESIDUE)
+unload_key() {   # -> 0 zdjete wszystkie albo nie bylo czego; 1 nie (kazdy pozostaly w RESIDUE)
+    local r left="" rc=0
     [ -n "$KEYLOADED" ] || return 0
-    if zfs unload-key -- "$KEYLOADED" 2>"$TMPD/unload.err"; then
-        KEYLOADED=""; return 0
-    fi
-    RESIDUE="$RESIDUE
-  $(Tv 'klucz wciąż załadowany: $KEY  (ręcznie: zfs unload-key $KEY)' '$KEY' "$KEYLOADED")"
-    return 1
+    while IFS= read -r r; do
+        [ -n "$r" ] || continue
+        if ! zfs unload-key -- "$r" 2>"$TMPD/unload.err"; then
+            left="$left$r"$'\n'; rc=1
+            RESIDUE="$RESIDUE
+  $(Tv 'klucz wciąż załadowany: $KEY  (ręcznie: zfs unload-key $KEY)' '$KEY' "$r")"
+        fi
+    done <<< "$KEYLOADED"
+    KEYLOADED="$left"
+    return "$rc"
 }
 # Kopia szyfrowana bez zaladowanego klucza: zapytaj o klucz (nigdzie nie zapisywany),
 # zfs load-key na korzeniu szyfrowania. -> 0 mozna montowac; 1 nie (komunikat pokazany)
@@ -289,7 +298,7 @@ need_key() {   # <dataset>
     while :; do
         wt --title "$(Tv '$TITLE: klucz' '$TITLE' "$TITLE")" --passwordbox "$(Tv 'Kopia $DS jest zaszyfrowana ($ROOT, klucz: $KF).\nPodaj klucz. Nie jest nigdzie zapisywany; po wyjściu zostanie zdjęty.' '$DS' "$ds" '$ROOT' "$root" '$KF' "$kf")" 12 "$W" || return 1
         if printf '%s' "$WT_OUT" | zfs load-key -L prompt -- "$root" 2>"$TMPD/key.err"; then
-            WT_OUT=""; KEYLOADED="$root"; return 0
+            WT_OUT=""; KEYLOADED="$KEYLOADED$root"$'\n'; return 0
         fi
         WT_OUT=""
         wt --title "$TITLE" --msgbox "$(Tv 'Klucz nie pasuje:\n$ERR\nSpróbuj jeszcze raz albo Anuluj.' '$ERR' "$(head -2 "$TMPD/key.err")")" 11 "$W"
@@ -617,6 +626,9 @@ walk(d.get("blockdevices"))' | tr -d '\r' >"$TMPD/parts.tsv"
     4)  need_key "$DS" || { step=2; continue; }
         if ! mount_ro "$DS@$SNAP" zfs; then
             wt --title "$TITLE" --msgbox "$(Tv 'Nie udało się zamontować $DS@$SNAP:\n$ERR' '$DS' "$DS" '$SNAP' "$SNAP" '$ERR' "$(head -3 "$TMPD/mount.err")")" 10 "$W"
+            # REV-20261028-178: klucz tej proby zdjety od razu, nie dopiero przy wyjsciu.
+            RESIDUE=""
+            unload_key || wt --title "$TITLE" --msgbox "$(Tv 'Nie wszystko udało się posprzątać:$RESIDUE' '$RESIDUE' "$RESIDUE")" 14 "$W"
             step=2; continue
         fi
         browse_and_exit "$DS@$SNAP" ;;
