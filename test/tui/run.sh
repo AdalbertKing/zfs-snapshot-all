@@ -5617,7 +5617,7 @@ rm -rf "$ER"
 # OKNO PRZYWRÓĆ (tui/restore.sh, C2a, 2026-10-15)
 #
 # Okno nie ma logiki odzysku: sklada JEDNO polecenie `zfs-backup.sh restore` z czterech
-# odpowiedzi (co / dokad / z kiedy / sprawdz). Atrapa czasownika (zb) zapisuje argv
+# odpowiedzi (co / z kiedy / dokad / sprawdz -- U109: z czego, potem dokad). Atrapa czasownika (zb) zapisuje argv
 # kazdego wywolania innego niz --plan do RW/ran -- test porownuje dokladnie to, co
 # dostalby prawdziwy czasownik. Atrapa whiptaila = ta sama co w kreatorze (kontrakt
 # sterowania: odpowiedz na stderr, rc, znacznik musi byc na liscie). Drzewo (ZFS_TREE) to
@@ -5695,25 +5695,25 @@ rw_run() {   # <plik drzewa> -- odpowiedzi w $RW/answers; wynik: $RW/ran, $RW/wt
     rm -f "$RW/wt.n" "$RW/wt.log" "$RW/ran"
     ( export NR_DIR="$RW" WHIPTAIL="$RW/bin/whiptail" ZFS_BACKUP="$RW/bin/zb" ZFS_TREE="$RW/bin/tree" \
              ZFS_CONF_DIR="$RW/conf" PYTHON="$PY" PATH="$RW/bin:$PATH" TREE_OUT="$1"
-      bash "$REPO/tui/restore.sh" k2 ) </dev/null >"$RW/out" 2>"$RW/err"
+      timeout 60 bash "$REPO/tui/restore.sh" k2 ) </dev/null >"$RW/out" 2>"$RW/err"
     RW_RC=$?
 }
 rw_ran() { cat "$RW/ran" 2>/dev/null; }
 
 # 0b. W5 (kampania wariantow 2026-10-22): Wstecz z "Gdzie odtworzyc?" wraca do drzewa z TYM, co
 #     admin zaznaczyl (docs), nie z cala relacja. Drugie wywolanie drzewa dostaje roots = docs.
-printf '1\t\n0\tobok\n0\thdd/restore\n0\tp0\n0\t\n' > "$RW/answers"
+printf '1\t\n0\tp0\n0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-docs.json"
 if [ "$RW_RC" -eq 0 ] && grep -qF '"roots": ["tank/b/hdd/data/docs"]' "$RW/last-spec.json" 2>/dev/null \
    && has "$(rw_ran)" '--source=tank/b/hdd/data/docs '; then
-    ok "restore: Wstecz z 'Gdzie odtworzyc?' -> drzewo z ostatnim wyborem (docs), nie z cala relacja"
+    ok "restore: Wstecz z 'z kiedy?' (pierwsze okno po drzewie, U109) -> drzewo z ostatnim wyborem (docs), nie z cala relacja"
 else
     bad "restore: Wstecz z 'Gdzie' gubi wybor" "rc=$RW_RC" "spec: $(cut -c1-300 "$RW/last-spec.json" 2>/dev/null)" "ran: $(rw_ran)"
 fi
 
 # 1. obok, tylko docs: config = ten, ktory MA wiersze (jobs.h.conf jest pierwszy w kolejnosci i pusty),
 #    onto = baza/basename; bez --at (p0 = najnowszy), bez --yes. Okno podsumowania ma "Wymaga zgody" i --defaultno.
-printf '0\tobok\n0\thdd/restore\n0\tp0\n0\t\n' > "$RW/answers"
+printf '0\tp0\n0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-docs.json"
 W1="restore ~ k2 ~ k2 ~ --source=tank/b/hdd/data/docs ~ --onto=hdd/restore/docs ~ --config=$RWCFG"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W1" ] && ! has "$(rw_ran)" '--at' && ! has "$(rw_ran)" '--yes'; then
@@ -5722,6 +5722,15 @@ else
     bad "restore: obok, tylko docs" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $W1" "err: $(cut -c1-200 "$RW/err")" "wt: $(tail -n 3 "$RW/wt.log" | cut -c1-200)"
 fi
 RWSUM="$(grep -F -A 30 'sprawdź' "$RW/wt.log" | head -40)"   # argv okna to jedna wielowierszowa pozycja dziennika
+# U109 (wlasciciel 2026-10-28, symulacja A): najpierw z kiedy, potem dokad; lista punktow
+# z pelna nazwa migawki; podsumowanie nazywa migawke, nie "Punkt: najnowszy".
+RWKD="$(grep -n 'k2: z kiedy?' "$RW/wt.log" | head -1 | cut -d: -f1)"; RWDK="$(grep -n 'k2: dokąd?' "$RW/wt.log" | head -1 | cut -d: -f1)"
+if [ -n "$RWKD" ] && [ -n "$RWDK" ] && [ "$RWKD" -lt "$RWDK" ] && grep -qE ' ~ p0 ~ 2026-10-1[56] [0-9]{2}:25:03  @automated_hourly_2026-10-15_17-25-01 ~ ' "$RW/wt.log" \
+   && has "$RWSUM" 'Migawka: tank/b/hdd/data/docs@automated_hourly_2026-10-15_17-25-01' && ! has "$RWSUM" 'Punkt:  najnowszy'; then
+    ok "restore U109: okno 'z kiedy' przed 'dokad', punkt = pelna nazwa migawki, podsumowanie 'Migawka: <dataset>@<nazwa>'"
+else
+    bad "restore U109: kolejnosc i nazwa migawki" "z kiedy=$RWKD dokad=$RWDK" "$(printf '%s' "$RWSUM" | head -12)"
+fi
 # U14: zgoda jest (atrapa: create rewind) -- podsumowanie mowi, jaka, i nie straszy brakiem.
 if has "$RWSUM" 'Zgoda 10.0.0.9: create rewind' && has "$RWSUM" '--defaultno' && ! has "$RWSUM" 'Wymaga zgody' && ! grep -qF 'brak zgody' "$RW/wt.log"; then
     ok "restore: okno podsumowania ma domyslne 'Nie' (--defaultno) i mowi, jaka zgode wydal cel (U14)"
@@ -5741,7 +5750,7 @@ if grep -qF 'brak zgody na 10.0.0.9' "$RW/wt.log" && grep -qF 'deploy.sh --allow
 else
     bad "restore: brak zgody -- okno i 'na tym hoscie'" "rc=$RW_RC" "ran: $(rw_ran)" "wt: $(grep -c 'brak zgody' "$RW/wt.log") allow: $(grep -c 'allow-restore=pve9' "$RW/wt.log")" "roots: $(grep -o '"roots": [^]]*]' "$RW/last-spec.json" 2>/dev/null)" "err: $(cut -c1-200 "$RW/err")"
 fi
-printf '0\tdalej\n0\tobok\n0\thdd/restore\n0\tp0\n0\t\n' > "$RW/answers"
+printf '0\tdalej\n0\tp0\n0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
 STUB_GRANT_OUT='HOST=10.0.0.9\nLABEL=pve9\nGRANT=none' STUB_GRANT_RC=1 rw_run "$RW/t-docs.json"
 RWSUM_N="$(grep -F -A 30 'sprawdź' "$RW/wt.log" | head -40)"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W1" ] && has "$RWSUM_N" 'Wymaga zgody na 10.0.0.9: deploy.sh --allow-restore=pve9'; then
@@ -5762,7 +5771,7 @@ fi
 #     restore jej dla celu na tym samym hoscie nie pyta. Kontrola: wariant zdalny wyzej ma "Wymaga zgody".
 cp "$RW/plan.json" "$RW/plan.remote.json"
 sed 's|"source":"acct@10.0.0.9:hdd/data"|"source":"hdd/data"|' "$RW/plan.remote.json" > "$RW/plan.json"
-printf '0\tobok\n0\thdd/restore\n0\tp0\n0\t\n' > "$RW/answers"
+printf '0\tp0\n0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-docs.json"
 RWSUM_L="$(grep -F -A 30 'sprawdź' "$RW/wt.log" | head -40)"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W1" ] && has "$RWSUM_L" 'Relacja lokalna' && ! has "$RWSUM_L" 'Wymaga zgody'; then
@@ -5773,7 +5782,7 @@ fi
 cp "$RW/plan.remote.json" "$RW/plan.json"
 
 # 2. miejsce, cala relacja, punkt p1 (starszy): bez --source (WHOLE), bez --onto, z --at
-printf '0\tmiejsce\n0\tp1\n0\t\n' > "$RW/answers"
+printf '0\tp1\n0\tmiejsce\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-whole.json"
 # --at dla punktu p1 = sekunda PRZED nowszym punktem p0 (P7, 2026-10-15): jeden bieg robi migawki
 # datasetow sekundy po sobie, wiec sekunda migawki korzenia odcinala dzieci tego samego biegu.
@@ -5786,7 +5795,7 @@ else
 fi
 
 # 3. miejsce z wylaczonym mail: nie cala relacja -> --source z lista (rodzice przed dziecmi)
-printf '0\tmiejsce\n0\tp0\n0\t\n' > "$RW/answers"
+printf '0\tp0\n0\tmiejsce\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-nomail.json"
 W3="restore ~ k2 ~ --source=tank/b/hdd/data,tank/b/hdd/data/docs ~ --config=$RWCFG"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W3" ]; then
@@ -5796,7 +5805,7 @@ else
 fi
 
 # 4. obok, cala relacja: --source i --onto w tej samej kolejnosci, onto = baza/data/...
-printf '0\tobok\n0\thdd/restore\n0\tp0\n0\t\n' > "$RW/answers"
+printf '0\tp0\n0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-whole.json"
 W4="restore ~ k2 ~ k2 ~ --source=tank/b/hdd/data,tank/b/hdd/data/docs,tank/b/hdd/data/mail ~ --onto=hdd/restore/data,hdd/restore/data/docs,hdd/restore/data/mail ~ --config=$RWCFG"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W4" ]; then
@@ -5806,10 +5815,10 @@ else
 fi
 
 # 5. Wstecz z podsumowania wraca do punktow i NIC nie uruchamia: summary rc 1, punkty znowu, summary rc 0 -> JEDNA linia ran
-printf '0\tobok\n0\thdd/restore\n0\tp0\n1\t\n0\tp0\n0\t\n' > "$RW/answers"
+printf '0\tp0\n0\tobok\n0\thdd/restore\n1\t\n0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-docs.json"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran | grep -c '')" -eq 1 ] && [ "$(grep 'sprawdź' "$RW/wt.log" | grep -c -- '--yesno')" -eq 2 ]; then
-    ok "restore: Wstecz z podsumowania nic nie uruchamia -- dwa razy okno 'sprawdz', JEDNO wywolanie czasownika"
+    ok "restore: Wstecz z podsumowania (wraca do 'dokad', U109) nic nie uruchamia -- dwa razy okno 'sprawdz', JEDNO wywolanie czasownika"
 else
     bad "restore: Wstecz z podsumowania" "rc=$RW_RC" "ran: $(rw_ran)" "sprawdz: $(grep -c 'sprawdź' "$RW/wt.log")"
 fi
@@ -5837,12 +5846,12 @@ rw_copy() {   # <plik drzewa> <argumenty restore.sh...> -- odpowiedzi w $RW/answ
     rm -f "$RW/wt.n" "$RW/wt.log" "$RW/ran" "$RW/last-spec.json"
     ( export NR_DIR="$RW" WHIPTAIL="$RW/bin/whiptail" ZFS_BACKUP="$RW/bin/zb" ZFS_TREE="$RW/bin/tree" \
              ZFS_CONF_DIR="$RW/conf" PYTHON="$PY" PATH="$RW/bin:$PATH" TREE_OUT="$t"
-      bash "$REPO/tui/restore.sh" "$@" ) </dev/null >"$RW/out" 2>"$RW/err"
+      timeout 60 bash "$REPO/tui/restore.sh" "$@" ) </dev/null >"$RW/out" 2>"$RW/err"
     RW_RC=$?
 }
 
 # c1. hdd/data ISTNIEJE -> okno nadpisania ("JUŻ ISTNIEJĄ"); Nadpisz; p0; historia Nie -> --overwrite, bez --at/--with-history
-printf '0\thdd/data\n0\t\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
+printf '0\tp0\n1\t\n0\thdd/data\n0\t\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp1.json" --from-copy "$RWCP"
 C1="restore ~ --from-copy=$RWCP ~ --onto=hdd/data ~ --overwrite"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$C1" ] && ! has "$(rw_ran)" '--yes' && ! has "$(rw_ran)" '--config' \
@@ -5859,7 +5868,7 @@ else
 fi
 
 # c2. nowa nazwa (nie istnieje -> bez okna nadpisania); starszy punkt p1; historia Tak
-printf '0\thdd/restore/data\n0\tp1\n0\t\n0\t\n' > "$RW/answers"
+printf '0\tp1\n0\t\n0\thdd/restore/data\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp1.json" --from-copy "$RWCP"
 C2="restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data ~ --at=$RWAT ~ --with-history"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$C2" ] && ! has "$(rw_ran)" '--overwrite' && ! grep -qF 'ISTNIEJ' "$RW/wt.log"; then
@@ -5869,7 +5878,7 @@ else
 fi
 
 # c3. korzen bez wzorca backups -> podpowiedz <pula>/restore/<ostatni czlon>
-printf '0\thdd/restore/bar\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
+printf '0\tp0\n1\t\n0\thdd/restore/bar\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp-bar.json" --from-copy
 C3="restore ~ --from-copy=hdd/foo/bar ~ --onto=hdd/restore/bar"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$C3" ] && grep -qF -- 'hdd/restore/bar ~' "$RW/wt.log"; then
@@ -5878,7 +5887,7 @@ else
     bad "restore --from-copy: podpowiedz dla hdd/foo/bar" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $C3" "err: $(cut -c1-200 "$RW/err")" "wt: $(tail -n 8 "$RW/wt.log" | cut -c1-300)"
 fi
 # podpowiedz dla wzorca backups: hdd/data (z usb9/backups/<host>/hdd/data) -- widac w dzienniku c1/c2 jako domyslna wartosc pola
-printf '0\thdd/restore/data\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
+printf '0\tp0\n1\t\n0\thdd/restore/data\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp1.json" --from-copy "$RWCP"
 if grep -qF -- ' ~ hdd/data ~ ' "$RW/wt.log"; then      # argv okna jest wielowierszowy (tekst ma \n) -- domyslna wartosc to ostatni argument
     ok "restore --from-copy: usb9/backups/<host>/hdd/data -> podpowiedz 'hdd/data'"
@@ -5890,10 +5899,10 @@ fi
 # <pula>/restore/<czlon>, nie na wyjmowany nosnik; pula spoza hosta (tank) -> jak dotad, na nosnik.
 printf '{"action":"next","roots":["usb9/replica/hdd/data/docs"],"excl":{},"recursion":"flat"}\n' > "$RW/t-cp-rep.json"
 printf '{"action":"next","roots":["usb9/replica/tank/x"],"excl":{},"recursion":"flat"}\n' > "$RW/t-cp-rep2.json"
-printf '0\thdd/restore/docs\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
+printf '0\tp0\n1\t\n0\thdd/restore/docs\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp-rep.json" --from-copy
 R3B="$(cat "$RW/wt.log")"   # domyslna wartosc pola stoi w wierszu PO --inputbox (tekst ma \n)
-printf '0\thdd/restore/x\n0\tp0\n1\t\n0\t\n' > "$RW/answers"   # usb9/... istnieje w atrapie (okno nadpisania) -- odpowiedz inna niz podpowiedz
+printf '0\tp0\n1\t\n0\thdd/restore/x\n0\t\n' > "$RW/answers"   # usb9/... istnieje w atrapie (okno nadpisania) -- odpowiedz inna niz podpowiedz
 rw_copy "$RW/t-cp-rep2.json" --from-copy
 R3C="$(cat "$RW/wt.log")"
 if [ "$RW_RC" -eq 0 ] && has "$R3B" ' ~ hdd/restore/docs ~' && ! has "$R3B" 'usb9/restore' && has "$R3C" ' ~ usb9/restore/x ~'; then
@@ -5903,7 +5912,7 @@ else
 fi
 
 # c4. dwa korzenie -> dwa pola 'dokad', obie listy w kolejnosci drzewa
-printf '0\thdd/restore/data\n0\thdd/restore/bar\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
+printf '0\tp0\n1\t\n0\thdd/restore/data\n0\thdd/restore/bar\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp-two.json" --from-copy
 C4="restore ~ --from-copy=$RWCP,hdd/foo/bar ~ --onto=hdd/restore/data,hdd/restore/bar"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$C4" ] && [ "$(grep -c -F inputbox "$RW/wt.log")" -eq 2 ]; then
@@ -5914,7 +5923,7 @@ fi
 
 # c6 (P5, wlasciciel 10-15): cel BEZ puli ("restore/home" -- jeden Backspace za duzo) nie
 # przechodzi do polecenia: okno "zla nazwa" i to samo pole jeszcze raz; potem poprawna nazwa.
-printf '0\trestore/home\n0\t\n0\thdd/restore/data\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
+printf '0\tp0\n1\t\n0\trestore/home\n0\t\n0\thdd/restore/data\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp1.json" --from-copy "$RWCP"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data" ] \
    && grep -q 'zła nazwa' "$RW/wt.log" && ! grep -q 'onto=restore/home' "$RW/ran"; then
@@ -5943,17 +5952,17 @@ fi
 # a) --from-copy: kopia jest na liscie kandydatow -> pierwsze okno to "dokad" (ani drzewa, ani menu
 #    "z kiedy"); migawka starsza (daily) = p1, wiec polecenie ma --at=<czas p1>.
 #    Roznica wzgledem starego kodu: stary restore.sh bral $2 = "--dataset=.." za DATASET i pokazywal drzewo.
-printf '0\thdd/restore/data\n1\t\n0\t\n' > "$RW/answers"
+printf '1\t\n0\thdd/restore/data\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp1.json" --from-copy --dataset="$RWCP" --snapshot=automated_daily_2026-10-14_01-35-01
 CA="restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data ~ --at=$RWAT"
-if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$CA" ] && head -n 1 "$RW/wt.log" | grep -qF 'dokąd?' \
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$CA" ] && head -n 1 "$RW/wt.log" | grep -qF 'historia' \
    && [ ! -e "$RW/last-spec.json" ] && ! grep -qF 'z kiedy?' "$RW/wt.log" && ! grep -qF 'skąd?' "$RW/wt.log"; then
-    ok "restore --from-copy --dataset= --snapshot=: pierwsze okno 'dokad', bez drzewa i bez menu 'z kiedy'; polecenie z --from-copy=<kopia> i --at=<czas migawki>"
+    ok "restore --from-copy --dataset= --snapshot=: pierwsze okno 'historia' (U109: migawka wybrana, potem dokad), bez drzewa i bez menu 'z kiedy'; polecenie z --from-copy=<kopia> i --at=<czas migawki>"
 else
     bad "restore --from-copy --dataset= --snapshot=" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $CA" "err: $(cut -c1-200 "$RW/err")" "wt: $(head -n 2 "$RW/wt.log" | cut -c1-200)"
 fi
 # b) migawki nie ma: msgbox "nie ma w" i menu jak dotad (p0 = najnowszy -> bez --at)
-printf '0\thdd/restore/data\n0\t\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
+printf '0\t\n0\tp0\n1\t\n0\thdd/restore/data\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp1.json" --from-copy --dataset="$RWCP" --snapshot=no_such_snap
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data" ] \
    && grep -qF "Migawki no_such_snap nie ma w $RWCP -- wybierz z listy." "$RW/wt.log" && grep -qF 'z kiedy?' "$RW/wt.log"; then

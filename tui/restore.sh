@@ -1,21 +1,24 @@
 #!/bin/bash
 # restore.sh RELACJA -- okno "Przywróć" (restore) z poziomu relacji, w whiptailu.
 #
-# NIE ma własnej logiki odzysku. Zbiera cztery odpowiedzi (co, dokąd, z kiedy, potwierdzenie),
+# NIE ma własnej logiki odzysku. Zbiera cztery odpowiedzi (co, z kiedy, dokąd, potwierdzenie),
 # składa z nich JEDNO polecenie `zfs-backup.sh restore` i uruchamia je w terminalu. Samo
 # polecenie pokazuje swój plan i samo pyta "t/n", zanim cokolwiek nadpisze -- okno nigdy
 # nie dodaje --yes ani --plan.
 #
 # Kroki (Wstecz cofa o jeden, na pierwszym wychodzi z okna):
 #   1 Co?     drzewo (tui/tree.py) kopii relacji na tym kolektorze; domyślnie cała relacja
+#   3 Z kiedy? punkt odzysku = migawka kopii (najnowsza albo wcześniejsza), pełne nazwy
 #   2 Dokąd?  "obok" oryginału (--onto, nic nie nadpisuje) albo "na miejsce" (NADPISUJE)
-#   3 Z kiedy? punkt odzysku = migawka kopii (najnowszy albo wcześniejszy)
 #   4 Sprawdź  podsumowanie + polecenie; "Uruchom" odpala je
+# U109 (właściciel 2026-10-28, symulacja A): najpierw Z CZEGO (co, z kiedy), potem DOKĄD --
+# ta sama kolejność co z F4, gdzie migawka jest już wybrana. Numery kroków zostały (1, 3, 2, 4),
+# żeby testy i komentarze dalej mówiły o tych samych krokach.
 #
 # restore.sh --from-copy [DATASET] -- drugi tryb "Przywróć z dysku": kopia leży na tym hoście
 # (np. zaimportowana pula z dysku USB), bez relacji i bez configu. Kroki: skąd (drzewo
-# wszystkich datasetów hosta; DATASET = wstępnie zaznaczony), dokąd (nazwa na tym hoście),
-# z kiedy (+ historia), sprawdź. Składa `restore --from-copy=.. --onto=.. [--at=..]
+# wszystkich datasetów hosta; DATASET = wstępnie zaznaczony), z kiedy (+ historia), dokąd
+# (nazwa na tym hoście), sprawdź. Składa `restore --from-copy=.. --onto=.. [--at=..]
 # [--with-history] [--overwrite]`; podgląd i pytanie "Restore? [y/N]" robi samo polecenie.
 #
 # Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka, ZFS_TREE =
@@ -86,21 +89,33 @@ run_cmd() {
 # samego biegu i cofało je o godzinę dalej (P7, wyłapane w podglądzie testu właściciela).
 build_points() {
     local cr nm tm tier lbl prev=""
-    PT_TIME=(); PT_AT=(); menu=()
+    PT_TIME=(); PT_AT=(); PT_NAME=(); menu=()
     while IFS=$'\t' read -r cr nm; do
         [ -n "$cr" ] || continue
         tm=$(date -d "@$cr" '+%Y-%m-%d %H:%M:%S')
         if [ -n "$prev" ]; then PT_AT+=("$(date -d "@$((prev - 1))" '+%Y-%m-%d %H:%M:%S')"); else PT_AT+=(""); fi
         prev="$cr"
-        case "$nm" in *_*) tier="${nm#*_}"; tier="${tier%%_*}" ;; *) tier="$nm" ;; esac
-        # Kampania 2026-10-22: migawka bez rodziny w nazwie (2026-10-22_08-18-21) dawała
-        # etykietę "08-18-21" -- ułomek godziny. Wtedy pełna nazwa migawki.
-        case "$tier" in ''|*[!a-z]*) tier="$nm" ;; esac
-        lbl="$tm  $tier"
-        [ "${#PT_TIME[@]}" -eq 0 ] && lbl="$lbl  $(T '(najnowszy)')"
+        # U109: pełna nazwa migawki (jak NAME w zfs list -t snapshot), nie sam szczebel --
+        # "daily" nie mówiło, KTÓRA to migawka.
+        # Bez dopisku "(najnowsza)": przy 80 kolumnach pelna nazwa go ucinala; najnowsza jest na
+        # gorze i kursor na niej stoi (mowi o tym tekst okna).
+        lbl="$tm  @$nm"
         menu+=("p${#PT_TIME[@]}" "$(clip_label "$lbl" $((W - 14)))")
-        PT_TIME+=("$tm")
+        PT_TIME+=("$tm"); PT_NAME+=("$nm")
     done <"$TMPD/points.tsv"
+}
+
+# U109: podsumowanie podaje NAZWĘ wybranej migawki, nie "Punkt: najnowszy".
+# snap_summary <dataset, z którego wzięto listę punktów>; idx/AT/PT z kroku "z kiedy".
+snap_summary() {
+    local sn="${PT_NAME[${idx:-0}]:-?}"
+    if [ -n "$AT" ]; then
+        echo "$(Tv 'Migawka: $SNAP ($PT, $TZN)' '$SNAP' "$1@$sn" '$PT' "$PT" '$TZN' "$TZN")"
+        echo "$(Tv '         pozostałe datasety: ich ostatnia migawka do $AT' '$AT' "$AT")"
+    else
+        echo "$(Tv 'Migawka: $SNAP ($PT, najnowsza)' '$SNAP' "$1@$sn" '$PT' "${PT_TIME[0]:-?}")"
+        echo "$(T '         pozostałe datasety: ich najnowsza migawka')"
+    fi
 }
 
 # --snapshot=NAME: czy NAME jest w points.tsv? Tak -> AUTO_IDX = indeks punktu (0 = najnowszy,
@@ -149,11 +164,11 @@ if [ "$REL" = --from-copy ]; then
                    --msgbox "$(T 'Na tym hoście nie widać żadnego datasetu. Podłącz dysk i zaimportuj pulę (zpool import <pula>), potem spróbuj jeszcze raz.')" 9 "$W"
                 exit 1
             fi
-            # --dataset= z GUI: kopia jest na liscie kandydatow -> start od kroku 2, jakby operator
-            # zaznaczyl tylko ja i dal Enter. Raz: Wstecz z kroku 2 pokazuje drzewo (wstepnie zaznaczone).
+            # --dataset= z GUI: kopia jest na liscie kandydatow -> start od kroku "z kiedy", jakby
+            # operator zaznaczyl tylko ja i dal Enter. Raz: Wstecz z niego pokazuje drzewo (wstepnie zaznaczone).
             if [ -n "$AUTO_DS" ]; then
                 if awk -F'\t' -v d="$AUTO_DS" '$1 == d { f = 1 } END { exit !f }' "$TMPD/ds.tsv"; then
-                    FROM=("$AUTO_DS"); ANS=(); AUTO_DS=""; step=2; continue
+                    FROM=("$AUTO_DS"); ANS=(); AUTO_DS=""; step=3; continue
                 fi
                 AUTO_DS=""
             fi
@@ -203,7 +218,7 @@ PYEOF
                 wt --title "$(T 'Przywróć z dysku')" --msgbox "$(T 'Nic nie zaznaczono.')" 7 "$W"
                 continue
             fi
-            step=2 ;;
+            step=3 ;;
         2)  # ---- DOKĄD? --------------------------------------------------------------------
             i=0; GOBACK=0
             while [ "$i" -lt "${#FROM[@]}" ]; do
@@ -233,7 +248,7 @@ $(Tv 'Pule tutaj: $POOLS' '$POOLS' "$(zpool list -H -o name 2>/dev/null | tr '\n
                     i=$((i - 1))
                 fi
             done
-            [ "$GOBACK" -eq 1 ] && { step=1; continue; }
+            [ "$GOBACK" -eq 1 ] && { step=3; continue; }
             ONTO=("${ANS[@]}")
             DUP=""
             for ((i = 0; i < ${#ONTO[@]}; i++)); do
@@ -258,7 +273,7 @@ $(Tv 'Pule tutaj: $POOLS' '$POOLS' "$(zpool list -H -o name 2>/dev/null | tr '\n
                    --yesno "$txt" "$(fit $((${#EXIST[@]} + 5)))" "$W" || continue
                 OVERWRITE=1
             fi
-            step=3 ;;
+            step=4 ;;
         3)  # ---- Z KIEDY? ------------------------------------------------------------------
             # punkty: migawki pierwszego źródła; najnowsza pierwsza, max 50
             # --snapshot= z GUI: szukamy na calej liscie, nie tylko w 50 pozycjach menu
@@ -286,8 +301,8 @@ $(Tv 'Pule tutaj: $POOLS' '$POOLS' "$(zpool list -H -o name 2>/dev/null | tr '\n
                 WT_OUT="p$AUTO_IDX"
             else
                 wt --title "$(T 'Przywróć z dysku: z kiedy?')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags \
-                   --default-item p0 --menu "$(T 'Wybierz migawkę do odzyskania.')" \
-                   "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
+                   --default-item p0 --menu "$(Tv 'Migawki $DS (zfs list -t snapshot), najnowsza na górze.' '$DS' "${FROM[0]}")" \
+                   "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=1; continue; }
             fi
             idx="${WT_OUT#p}"
             if [ "$idx" = 0 ]; then AT=""; PT=""; else AT="${PT_AT[$idx]}"; PT="${PT_TIME[$idx]}"; fi
@@ -300,7 +315,7 @@ $(Tv 'Pule tutaj: $POOLS' '$POOLS' "$(zpool list -H -o name 2>/dev/null | tr '\n
                 1) HIST=0 ;;
                 *) continue ;;           # Esc itp. -> znów lista punktów
             esac
-            step=4 ;;
+            step=2 ;;
         4)  # ---- SPRAWDŹ + POLECENIE -------------------------------------------------------
             CMD=("$ZB" restore "--from-copy=$(join_by_comma "${FROM[@]}")" "--onto=$(join_by_comma "${ONTO[@]}")")
             [ -n "$AT" ] && CMD+=("--at=$AT")
@@ -315,7 +330,7 @@ $(Tv 'Pule tutaj: $POOLS' '$POOLS' "$(zpool list -H -o name 2>/dev/null | tr '\n
                     echo "  ${FROM[$i]} -> ${ONTO[$i]}"
                     for o in ${EXIST[@]+"${EXIST[@]}"}; do [ "$o" = "${ONTO[$i]}" ] && { echo "  $(T '(NADPISUJE)')"; break; }; done
                 done
-                if [ -n "$AT" ]; then echo "$(Tv 'Punkt:  bieg z $PT ($TZN) -- każdy dataset: jego ostatnia migawka do $AT' '$PT' "$PT" '$TZN' "$TZN" '$AT' "$AT")"; else echo "$(T 'Punkt:  najnowszy')"; fi
+                snap_summary "${FROM[0]}"
                 if [ "$HIST" -eq 1 ]; then echo "$(T 'Historia: tak')"; else echo "$(T 'Historia: nie')"; fi
                 echo
                 echo "$(T 'Polecenie:')"
@@ -323,7 +338,7 @@ $(Tv 'Pule tutaj: $POOLS' '$POOLS' "$(zpool list -H -o name 2>/dev/null | tr '\n
                 echo
                 echo "$(T 'Po <Uruchom> polecenie pokaże podgląd i samo zapyta; zaszyfrowana kopia -- zapyta o klucz albo plik klucza.')"
             } >"$TMPD/summary.txt"
-            yesno_text "$TMPD/summary.txt" "$(T 'Przywróć z dysku: sprawdź')" "$(T Uruchom)" "$(T Wstecz)" --defaultno || { step=3; continue; }
+            yesno_text "$TMPD/summary.txt" "$(T 'Przywróć z dysku: sprawdź')" "$(T Uruchom)" "$(T Wstecz)" --defaultno || { step=2; continue; }
             run_cmd ;;
         esac
     done
@@ -522,7 +537,7 @@ PYEOF
             wt --title "$(Tv 'Przywróć $REL' '$REL' "$REL")" --msgbox "$(T 'Nic nie zaznaczono.')" 7 "$W"
             continue
         fi
-        step=2 ;;
+        step=3 ;;
     2)  # ---- DOKĄD? ----------------------------------------------------------------------
         geom
         # System hosta (źródło w <pula>/ROOT/) wybrany sam: zamiast "na miejsce" -- nowe środowisko
@@ -537,7 +552,7 @@ PYEOF
         wt --title "$(Tv 'Przywróć $REL: dokąd?' '$REL' "$REL")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags \
            --default-item obok --menu "$(T 'Gdzie odtworzyć wybrane datasety?')" "$(fit 5)" "$W" "$(lhfit 2 1)" \
            obok "$(Tv 'Obok oryginału na $TARGET -- nic nie nadpisuje' '$TARGET' "$TARGET_DISP")" \
-           "${_m2[@]}" || { step=1; continue; }
+           "${_m2[@]}" || { step=3; continue; }
         DEST="$WT_OUT"
         ONTO=()
         if [ "$DEST" = obok ]; then
@@ -589,7 +604,7 @@ PYEOF
             fi
             while IFS= read -r o; do [ -n "$o" ] && ONTO+=("$o"); done <"$TMPD/onto.txt"
         fi
-        step=3 ;;
+        step=4 ;;
     3)  # ---- Z KIEDY? --------------------------------------------------------------------
         # punkty: migawki wiersza, w którym leży pierwszy wybrany dataset; najnowsza pierwsza, max 50
         # --snapshot= z GUI: szukamy na calej liscie, nie tylko w 50 pozycjach menu (PT_LIM)
@@ -628,12 +643,12 @@ PYEOF
             WT_OUT="p$AUTO_IDX"
         else
             wt --title "$(Tv 'Przywróć $REL: z kiedy?' '$REL' "$REL")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags \
-               --default-item p0 --menu "$(Tv 'Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety potomne dostają swój najbliższy punkt z tej chwili lub wcześniejszy.' '$TZN' "$TZN")" \
-               "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
+               --default-item p0 --menu "$(Tv 'Migawki kopii $DS, najnowsza na górze (czas utworzenia, strefa tego hosta: $TZN). Datasety potomne dostają swoją ostatnią migawkę z tej chwili lub wcześniejszą.' '$DS' "${SEL[0]}" '$TZN' "$TZN")" \
+               "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=1; continue; }
         fi
         idx="${WT_OUT#p}"
         if [ "$idx" = 0 ]; then AT=""; PT=""; else AT="${PT_AT[$idx]}"; PT="${PT_TIME[$idx]}"; fi
-        step=4 ;;
+        step=2 ;;
     4)  # ---- SPRAWDŹ + POLECENIE ---------------------------------------------------------
         CMD=("$ZB" restore "$REL")
         if [ "$DEST" = obok ]; then
@@ -656,7 +671,7 @@ PYEOF
             else
                 echo "$(Tv 'Dokąd:  NA MIEJSCE na $TARGET -- NADPISUJE' '$TARGET' "$TARGET_DISP")"
             fi
-            if [ -n "$AT" ]; then echo "$(Tv 'Punkt:  bieg z $PT ($TZN) -- każdy dataset: jego ostatnia migawka do $AT' '$PT' "$PT" '$TZN' "$TZN" '$AT' "$AT")"; else echo "$(T 'Punkt:  najnowszy')"; fi
+            snap_summary "${SEL[0]}"
             echo
             echo "$(T 'Polecenie:')"
             echo "  $CMDTXT"
@@ -675,7 +690,7 @@ PYEOF
             echo "$(T 'Po <Uruchom> polecenie pokaże plan i samo zapyta, zanim cokolwiek nadpisze.')"
             [ "$DEST" = srodowisko ] && echo "$(T 'Przywrócenie w miejscu, pod działającym systemem: tylko z linii poleceń (zfs-backup.sh restore ... --in-place-live-root).')"
         } >"$TMPD/summary.txt"
-        yesno_text "$TMPD/summary.txt" "$(Tv 'Przywróć $REL: sprawdź' '$REL' "$REL")" "$(T Uruchom)" "$(T Wstecz)" --defaultno || { step=3; continue; }
+        yesno_text "$TMPD/summary.txt" "$(Tv 'Przywróć $REL: sprawdź' '$REL' "$REL")" "$(T Uruchom)" "$(T Wstecz)" --defaultno || { step=2; continue; }
         run_cmd ;;
     esac
 done

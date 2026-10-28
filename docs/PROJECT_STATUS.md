@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c56574d740ab67e1 -->
+<!-- status-covers-digest: dbd190ab9c1c38cb -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -57,6 +57,13 @@
   **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
   ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **Kreator odzysku: najpierw z kiedy, potem dokąd (2026-10-28, U109, symulacja A przyjęta).** Kolejność
+  kroków: co, z kiedy, dokąd, sprawdź, w obu trybach (relacja i „Przywróć z dysku”). To ta sama kolejność co
+  z F4 Kopie, gdzie migawka jest już wybrana. Lista „z kiedy?” pokazuje czas i pełną nazwę migawki (`@automated_…`)
+  zamiast samego szczebla. Podsumowanie mówi „Migawka: <dataset>@<nazwa> (czas)” i jak potraktowane będą
+  pozostałe datasety, zamiast „Punkt: najnowszy”. Wstecz z „dokąd” wraca do „z kiedy”, a z „z kiedy” do
+  drzewa. W testach każde przejście kreatora ma `timeout 60`, więc zła kolejność odpowiedzi kończy się błędem
+  testu, a nie zawieszeniem suity.
 - **F3 okno relacji: zakładki Opis i Config (2026-10-28, U114, symulacja A przyjęta).** Okno ma dwie zakładki,
   przełączane strzałkami ←/→, podpisanymi w tytule okna (na ramce). Opis zawiera stan, kierunek, „Drugi host
   <adres>, ssh port N” (zamiast „Peer … endpoint …”), to, co obejmuje, jak długo trzyma („migawki
