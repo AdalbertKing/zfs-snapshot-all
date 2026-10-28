@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ec2909a369caed8b -->
+<!-- status-covers-digest: 40daf5bbdbfc59f9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -57,6 +57,12 @@
   **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
   ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **F2: prune zwinięte (2026-10-28, U112, symulacja A przyjęta).** Godzinowe prune stanowiły dwie trzecie
+  z około 200 wierszy F2 na pve10. Udane biegi jednej linii prune są teraz jednym wierszem „lokalny prune ×N”
+  w miejscu ostatniego biegu (zwija się od dwóch udanych); gdy w oknie był też błąd, wynik zwiniętego wiersza
+  mówi „OK (błędy: K)”, a sam błędny bieg zostaje osobnym wierszem. Bieg pominięty albo trwający też zostaje osobno. Z nadchodzących prune widać tylko
+  najbliższy. Pobrania, wysyłki i migawki bez zmian: każdy bieg osobno. Panel zwiniętego wiersza:
+  „Zwinięte: udane biegi: N, od HH:MM (ten = ostatni)”.
 - **Zmiana szablonu relacji bez słowa „seed” (2026-10-28, U116 część).** Okno „użyj szablonu” mówi teraz
   „Dane nie są przenoszone, pełna kopia od nowa nie jest potrzebna”. Polecenie `seed NAZWA` się nie zmienia.
   `relacja-pve11-src` na liście szablonów pve10 to nie błąd listy: lista ukrywa szablony z
