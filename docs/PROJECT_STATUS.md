@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 20111f029ccf8103 -->
+<!-- status-covers-digest: 1e0cce62452626fd -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -60,6 +60,14 @@
 - **Katalog montażu krótszy (2026-10-28, U102).** `browse.sh` nazywa katalog montażu
   `<host>_<dwa ostatnie człony datasetu>@<migawka>.XXXXXX` (np. `pve10_data~vm1@automated_hourly_...`), nie całą
   ścieżką kopii -- pełna ścieżka zajmowała nagłówek mc i spychała migawkę za krawędź. Przypadek 37b w `test/browse`.
+- **Replika rekurencyjna: monitor z `-R` (2026-10-28, replika calapula na pve10).** Źródło będące kontenerem
+  (`hdd/backups`) nie ma własnych migawek, więc monitor czytający je jak liść zgłaszał CRITICAL przy każdym
+  biegu, choć kopia była aktualna. `gen-cron.sh` daje teraz `check-snap-age.sh -R` replice z `recursive = yes`,
+  tak jak relacji rekurencyjnej: korzeń kontenera jest pomijany, sprawdzane są prawdziwe liście (`RMON1b`).
+  Przy okazji: biegi calapula padały 4/4, bo dwa podzbiory źródła są szyfrowane bez załadowanego klucza
+  (`dataset key must be loaded`), a replika wysyłała bez `-w`. Naprawione w configu labu (`--raw`, puste cele
+  usunięte), bieg rc 0. Na ten błąd `snapget.sh` nie ma własnej podpowiedzi: drukuje tylko ogólną o odbiorze
+  z `-F` (montowanie), o `-w` nic -- silnik zamrożony, czeka na decyzję właściciela.
 - **F2: szczegół biegu bez NameError (2026-10-28, test właściciela na pve10).** Kursor na biegu, który ma zapis w
   historii transferów, wołał `transfer_detail_pairs` usunięte w #928 razem z F4 Historia -- GUI padało. Funkcja
   wróciła. `test/tui` sprawdza teraz AST każdego `tui/*.py`: nazwa wołana, a nigdzie niezdefiniowana = FAIL.

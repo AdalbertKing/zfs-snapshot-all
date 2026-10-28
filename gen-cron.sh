@@ -4527,13 +4527,18 @@ emit_replicas() {
         # machine, so its age is the gate's record of when it was last proved
         # current; a FIXED one always is, and every run stamps a new replica
         # snapshot on it, so the ordinary check-snap-age reads the copy itself.
+        # A RECURSIVE replica is watched with -R, as a recursive relation is: a
+        # source like hdd/backups is a container that never holds a snapshot
+        # of its own, so checked as a leaf it was a CRITICAL on every run
+        # however current the copy (pve10 lab, 2026-10-28); under -R the
+        # roots get the empty-container leniency and the real leaves are read.
         if [ -n "$mwarn" ]; then
             if [ "$media" = removable ]; then
                 mcmd="$REPO_DIR/zfs-media-gate.sh age \"${dst%%/*}\" \"$name\" --warn $mwarn --crit $mcrit"
             else
                 mtargets=""
                 for s in "${srcs[@]}"; do mtargets="${mtargets:+$mtargets,}$dst/$s"; done
-                mcmd="$REPO_DIR/check-snap-age.sh -L $name \"$mtargets\" \"$fam\" $mwarn $mcrit"
+                mcmd="$REPO_DIR/check-snap-age.sh$([ "$recursive" = 1 ] && printf ' -R') -L $name \"$mtargets\" \"$fam\" $mwarn $mcrit"
             fi
             MONITOR_LINES+=("$MONITOR_SCHEDULE_DEFAULT d=\$($mcmd 2>&1); rc=\$?; [ -n \"\$d\" ] && echo \"\$d\" >>$CRON_LOG; [ \$rc -eq 1 ] && $WARN_SCRIPT \"$mwarntext\" \"\$d\" 2>>$CRON_LOG; [ \$rc -eq 2 ] && $NOTIFY_SCRIPT \"$mnotify\" \"\$d\" 2>>$CRON_LOG; [ \$rc -ge 3 ] && $NOTIFY_SCRIPT \"$mbroken\" \"\$d\" 2>>$CRON_LOG")
         fi
