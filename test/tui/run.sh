@@ -848,10 +848,12 @@ print(json.dumps(d))
 PYEOF
 FPZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $FPARGS --stats "$FPF" --screen zadania --keys "" --width 200 --height 200 2>&1)"
 FPZD="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $FPARGS --stats "$FPF" --screen zadania --keys "$(zkeys "lokalny prune .*×10" $FPARGS --stats "$FPF")" --width 200 --height 60 2>&1)"
+# 80 kolumn: kolumna Co znika, "xN" stoi w Wyniku, wiec zwiniecie dalej widac (kampania 2026-10-28).
+FPZ80="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $FPARGS --stats "$FPF" --screen zadania --keys "" --width 80 --height 200 2>&1)"
 FZP="$(lst "$FPZ" | grep -cE "lokalny prune .*(OK|BŁĄD)")"; FZN="$(lst "$FPZ" | grep -cE "lokalny prune .*nadchodzący")"
 FZT="$(lst "$FPZ" | grep -cE "pobranie .*nadchodzący")"
-if [ "$FZP" = 2 ] && hasE "$FPZ" "lokalny prune .*×10 +OK \(błędy: 1\)" && hasE "$FPZ" "lokalny prune .* BŁĄD rc=1" \
-   && [ "$FZN" = 1 ] && [ "$FZT" -gt 1 ] && hasE "$FPZD" "Zwinięte +udane biegi: 10, od"; then
+if [ "$FZP" = 2 ] && hasE "$FPZ" "lokalny prune .* OK ×10 \(błędy: 1\)" && hasE "$FPZ" "lokalny prune .* BŁĄD rc=1" \
+   && [ "$FZN" = 1 ] && [ "$FZT" -gt 1 ] && hasE "$FPZD" "Zwinięte +udane biegi: 10, od" && hasE "$(lst "$FPZ80")" "OK ×10"; then
     ok "zadania U112: udane prune jednej linii w jednym wierszu x10 (bledy osobno), z nadchodzacych prune tylko najblizszy, pobrania bez zmian"
 else
     bad "zadania U112: zwijanie prune" "wykonane prune: $FZP (2), nadchodzace prune: $FZN (1), nadchodzace pobrania: $FZT (>1)" "$(lst "$FPZ" | grep -E 'prune|pobranie' | head -20)"
@@ -5780,6 +5782,17 @@ else
     bad "restore: relacja lokalna obok" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $W1" "sum: $(printf '%s' "$RWSUM_L" | grep -i -E 'zgod|lokaln' | cut -c1-200)"
 fi
 cp "$RW/plan.remote.json" "$RW/plan.json"
+
+# Kampania marudnego admina (2026-10-28): wybral starsza migawke (p1), na "dokad" dal Wstecz --
+# lista "z kiedy" wraca z kursorem na JEGO wyborze, nie na najnowszej.
+printf '0\tp1\n1\t\n0\tp1\n0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
+rw_run "$RW/t-docs.json"
+RWDI="$(grep -F 'k2: z kiedy?' "$RW/wt.log" | sed -n 2p)"
+if [ "$RW_RC" -eq 0 ] && has "$RWDI" '--default-item ~ p1 ~' && has "$(rw_ran)" '--at='; then
+    ok "restore: Wstecz z 'dokad' -> 'z kiedy' z kursorem na wybranej wczesniej migawce (p1), polecenie z --at"
+else
+    bad "restore: kursor po Wstecz" "rc=$RW_RC" "drugie okno: $(printf '%s' "$RWDI" | cut -c1-300)" "ran: $(rw_ran)"
+fi
 
 # 2. miejsce, cala relacja, punkt p1 (starszy): bez --source (WHOLE), bez --onto, z --at
 printf '0\tp1\n0\tmiejsce\n0\t\n' > "$RW/answers"

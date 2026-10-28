@@ -2315,7 +2315,12 @@ def run_result(r):
         return _(u"nadchodzący")
     rc = r.get("rc")
     if rc == 0:
-        return _(u"OK (błędy: %d)") % r["fold_bad"] if r.get("fold_bad") else u"OK"
+        # Zwiniety prune (U112): "xN" w WYNIKU, nie w Co -- przy 80 kolumnach Co znika
+        # (prio tabeli), a wiersz "pve9 OK" nie mowil, ze to 12 biegow (kampania 2026-10-28).
+        if r.get("fold_n"):
+            return (_(u"OK \u00d7%d (błędy: %d)") % (r["fold_n"], r["fold_bad"])) if r.get("fold_bad") else \
+                (u"OK \u00d7%d" % r["fold_n"])
+        return u"OK"
     if rc == 75:
         return _(u"pominięty")
     if rc == -1:
@@ -2809,8 +2814,6 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
             # hourly' o 07:15 -- vms i data -- byly nie do odroznienia); w grupie to robi Zadanie.
             co = (u"%s %s" % (it.get("task") or u"", u"" if grouped else job_id_cell(r["items"], r.get("jobs")))).strip() if it.get("kind") == "job" else \
                 (_(u"replika") if it.get("kind") == "replica" else (it.get("task") or u"-"))
-            if r.get("fold_n"):
-                co = u"%s \u00d7%d" % (co, r["fold_n"]) if not ch.ascii else u"%s x%d" % (co, r["fold_n"])
             czas = fmt_dur(r["end"] - r["start"]) if r.get("past") and r.get("start") and r.get("end") else u"-"
             when = run_when(r["at"])
             rb = run_bytes(r, data)
@@ -6562,6 +6565,7 @@ def deaccent(text):
 _DEACCENT = {ord(a): b for a, b in zip(u"ąćęłńóśźżĄĆĘŁŃÓŚŹŻ", u"acelnoszzACELNOSZZ")}
 _DEACCENT[ord(u"→")] = ">"
 _DEACCENT[ord(u"←")] = "<"
+_DEACCENT[ord(u"\u00d7")] = "x"
 for _q in u"\u201e\u201d\u201c":   # cudzyslowy „ ” “ -> "
     _DEACCENT[ord(_q)] = '"'
 

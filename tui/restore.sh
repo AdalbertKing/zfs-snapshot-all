@@ -301,14 +301,14 @@ $(Tv 'Pule tutaj: $POOLS' '$POOLS' "$(zpool list -H -o name 2>/dev/null | tr '\n
                 WT_OUT="p$AUTO_IDX"
             else
                 wt --title "$(T 'Przywróć z dysku: z kiedy?')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags \
-                   --default-item p0 --menu "$(Tv 'Migawki $DS (zfs list -t snapshot), najnowsza na górze.' '$DS' "${FROM[0]}")" \
+                   --default-item "p$(( ${idx:-0} < ${#PT_TIME[@]} ? ${idx:-0} : 0 ))" --menu "$(Tv 'Migawki $DS (zfs list -t snapshot), najnowsza na górze.' '$DS' "${FROM[0]}")" \
                    "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=1; continue; }
             fi
             idx="${WT_OUT#p}"
             if [ "$idx" = 0 ]; then AT=""; PT=""; else AT="${PT_AT[$idx]}"; PT="${PT_TIME[$idx]}"; fi
             geom
             wt --title "$(T 'Przywróć z dysku: historia')" --yes-button "$(T Tak)" --no-button "$(T Nie)" --defaultno \
-               --yesno "$(T 'Przenieść też wszystkie starsze migawki (z historią)?\nNie = tylko wybrany punkt.')" "$(fit 3)" "$W"
+               --yesno "$(Tv 'Migawka: $SNAP\n\nPrzenieść też wszystkie starsze migawki (z historią)?\nNie = tylko ta migawka.' '$SNAP' "${FROM[0]}@${PT_NAME[$idx]:-?}")" "$(fit 5)" "$W"
             hrc=$?
             case $hrc in
                 0) HIST=1 ;;
@@ -411,7 +411,7 @@ $(Tv 'Żeby go umożliwić, na $TARGET jako root:' '$TARGET' "$TARGET")
   deploy.sh --allow-restore=$GRANT_LABEL
   $(T '(na miejsce, gdy trzeba nadpisać: z --replace)')
 
-$(T 'Bez zgody źródła: odtwórz kopię na TYM hoście jako nowy dataset albo przejrzyj jej pliki (ekran Odzysk, Przeglądaj kopię).')"
+$(T 'Bez zgody źródła: odtwórz kopię na TYM hoście jako nowy dataset albo przejrzyj jej pliki (F4 Kopie, F7 Przeglądaj).')"
         geom
         wt --title "$(Tv 'Przywróć $REL: brak zgody na $TARGET' '$REL' "$REL" '$TARGET' "$TARGET")" --ok-button "$(T Wybierz)" --cancel-button "$(T Wyjdź)" --notags \
            --menu "$txt" "$(fit 13)" "$W" 2 \
@@ -643,7 +643,7 @@ PYEOF
             WT_OUT="p$AUTO_IDX"
         else
             wt --title "$(Tv 'Przywróć $REL: z kiedy?' '$REL' "$REL")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags \
-               --default-item p0 --menu "$(Tv 'Migawki kopii $DS, najnowsza na górze (czas utworzenia, strefa tego hosta: $TZN). Datasety potomne dostają swoją ostatnią migawkę z tej chwili lub wcześniejszą.' '$DS' "${SEL[0]}" '$TZN' "$TZN")" \
+               --default-item "p$(( ${idx:-0} < ${#PT_TIME[@]} ? ${idx:-0} : 0 ))" --menu "$(Tv 'Migawki kopii $DS, najnowsza na górze (czas utworzenia, strefa tego hosta: $TZN). Datasety potomne dostają swoją ostatnią migawkę z tej chwili lub wcześniejszą.' '$DS' "${SEL[0]}" '$TZN' "$TZN")" \
                "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=1; continue; }
         fi
         idx="${WT_OUT#p}"
