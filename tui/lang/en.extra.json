@@ -762,5 +762,5 @@
 "OK \u00d7%d (błędy: %d)": "OK \u00d7%d (errors: %d)",
 "Zwinięte": "Folded",
 "udane biegi: %d, od %s (ten = ostatni)": "successful runs: %d, since %s (this = the last)",
-"Migawka: $SNAP\n\nPrzenieść też wszystkie starsze migawki (z historią)?\nNie = tylko ta migawka.": "Snapshot: $SNAP\n\nAlso move all older snapshots (with history)?\nNo = only this snapshot."
+"Migawka: $SNAP\\n\\nPrzenieść też wszystkie starsze migawki (z historią)?\\nNie = tylko ta migawka.": "Snapshot: $SNAP\\n\\nAlso move all older snapshots (with history)?\\nNo = only this snapshot."
 }
