@@ -6,6 +6,6 @@ Do not edit. Owner decisions that are not reviews live in
 
 | REV | State | Whose move | Next action |
 |---|---|---|---|
-| REV-20261028-182 | IMPLEMENTED | Reviewer | verify the submitted implementation |
+| REV-20261028-182 | APPROVED | Reviewer | write the closure artifact |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
