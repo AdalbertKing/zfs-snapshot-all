@@ -2,7 +2,7 @@
 
 <!-- frozen: snapsend.sh 100755 86effb8185df5d71137ba96d3ab7270957015b27 -->
 <!-- frozen: snapget.sh 100755 abd9438b16eeb2c3d082a16bf24d5dd8514a71a0 -->
-<!-- frozen: delsnaps.sh 100755 e54651206ab482947ef452b37ab47a0efd8699d0 -->
+<!-- frozen: delsnaps.sh 100755 1a6d18267d93a188a586f92059509de836b5aeff -->
 <!-- frozen: check-snap-age.sh 100755 dfd5bdd3e3af9e8659d8e74b290f203e88159983 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
 <!-- unfreeze: - -->
@@ -1178,6 +1178,18 @@ Owner-authorized refreezes:
     the guest's host name.
   - Evidence that nothing executable moved: `git diff -w` of the three files touches only `#` lines.
   twin: both twins changed identically (line 5).
+
+- 2026-10-28 (delsnaps.sh): **GFS fails closed on an unreadable creation time --
+  REV-20261028-182 F1.** Owner direction in chat, 2026-10-28, answering "Odmrażasz delsnaps.sh
+  dla poprawki REV-182 (fail-closed przy nieczytelnym creation w GFS)?": "Tak, odmrażam". The
+  change answers the reviewer's REV-20261028-182 (P1, CHANGES-REQUIRED) and implements its
+  acceptance criteria. v1.29 -> v1.30.
+  - `delete_snapshots`, `mode=gfs`: every candidate's `creation` is read and checked (command
+    status, non-empty, digits only) before the ladder; any unusable value names the snapshot(s),
+    emits failed stats, sets `EXIT_CODE=1` and returns before the first destroy. No partial ladder.
+  - Untouched: bucket selection, reserved-prefix protection, holds, dry run, `run_zfs` (remote
+    transport), clear-cut, age and count modes.
+  twin: none -- `delsnaps.sh` has no twin; snapget/snapsend do not compute GFS ladders.
 
 ## How it is enforced
 

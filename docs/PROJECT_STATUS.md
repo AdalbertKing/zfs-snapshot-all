@@ -64,6 +64,10 @@
   przechodziły. Także gość, którego tu nie ma (rc 2 „Configuration file ... does not exist”, pomiar pve10; runda 2
   recenzji): gdy `/etc/pve/nodes` pokazuje go na innym węźle, odmowa mówi, że dysk tu jest repliką pvesr i trzeba
   odzyskać na tamtym węźle; dysk usuniętego gościa -- pod nazwą, która nie jest dyskiem gościa. Zdalna gałąź (`pgrep`) bez zmian.
+- **GFS: nieczytelny czas utworzenia = odmowa całego datasetu (2026-10-28, REV-20261028-182).** `delsnaps.sh`
+  v1.30 (odmrożony przez właściciela dla tej poprawki): każdy `creation` kandydata sprawdzany przed drabiną;
+  błąd odczytu, pusty, nieliczbowy albo ujemny -> komunikat z nazwą migawki, statystyka `failed`, rc 1, żadnego
+  `zfs destroy` na tym datasecie. Wcześniej taka migawka wypadała z drabiny i była kasowana przy rc 0.
 - **F4 Kopie na dwóch panelach (2026-10-28, test właściciela na pve10, U100-U105).** Lewy panel: datasety kopii
   pogrupowane po relacji i replice (wspólny początek ścieżki raz w nagłówku grupy, dzieci z wcięciem, liczba migawek,
   najnowsza). Prawy panel: migawki zaznaczonego datasetu z `zfs list -t snapshot -d1` (czytane przy wejściu na dataset, potem
