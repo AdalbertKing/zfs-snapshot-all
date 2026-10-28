@@ -27,11 +27,16 @@ REL="${1:-}"
 # Wejscie z miejsca, w ktorym operator stoi (F4 Kopie z Przebiegow albo z datasetu,
 # 2026-10-27): --dataset= = kopia, od ktorej zaczac (drzewo pominiete, gdy jest na
 # liscie), --at= = chwila -- kursor na najnowszej migawce nie pozniejszej od niej.
-PRE_DS=""; PRE_AT=""
+# --snapshot=DS@SNAP (F4 Kopie na dwoch panelach, 2026-10-28): migawka wybrana w prawym
+# panelu -- drzewo i menu migawek pominiete, od razu montowanie.
+PRE_DS=""; PRE_AT=""; PRE_SNAP=""
 for _a in "${@:2}"; do
     case "$_a" in
         --dataset=*) PRE_DS="${_a#*=}" ;;
         --at=*)      PRE_AT="${_a#*=}" ;;
+        --snapshot=*) PRE_SNAP="${_a#*=}"
+                     case "$PRE_SNAP" in *@*) ;; *) echo "browse.sh: --snapshot= takes DATASET@SNAPSHOT" >&2; exit 2 ;; esac
+                     case "$PRE_SNAP" in *[!A-Za-z0-9_.:/@-]*) echo "browse.sh: not a snapshot name: '$PRE_SNAP'" >&2; exit 2 ;; esac ;;
         *) echo "browse.sh: unknown option '$_a'" >&2; exit 2 ;;
     esac
 done
@@ -383,6 +388,42 @@ mount_ro() {
     return 1
 }
 
+# ---- mc TYLKO DO ODCZYTU (U103, wlasciciel 2026-10-28) ---------------------------------
+# mc dziala jako root, wiec dotad prawy panel mogl skasowac dowolny plik hosta, a lewy
+# wyjsc z kopii na zywy system. Teraz mc biegnie we wlasnej przestrzeni montowan
+# (unshare -m): kazdy punkt montowania przemontowany tylko do odczytu, zapisywalny jest
+# jeden katalog -- ~/odzysk/<kopia> (prawy panel). Przestrzen znika z mc. /proc, /sys,
+# /dev zostaja (terminal). Ustawienia mc ida do tmpfs w tej przestrzeni. Gdy przestrzeni
+# nie da sie zbudowac, mc NIE startuje (bez cichego powrotu do zapisywalnego hosta).
+mc_readonly() {   # <katalog kopii>
+    local mnt="$1" leaf odz rc=0
+    leaf="$(printf '%s' "${DS##*/}@${SNAP:-x}" | tr -c 'A-Za-z0-9._@-' '_')"
+    odz="${BROWSE_RECOVER_DIR:-${HOME:-/root}/odzysk}/${leaf:0:120}"
+    mkdir -p "$odz" "$TMPD/mcxdg" || { echo "$(Tv 'nie mogę utworzyć $DIR' '$DIR' "$odz")"; return 1; }
+    echo "$(Tv '  prawy panel: $ODZ -- jedyne miejsce zapisu; reszta systemu tylko do odczytu.' '$ODZ' "$odz")"
+    if [ "${BROWSE_RO_NS:-1}" = 1 ]; then
+        unshare -m --propagation private -- bash -c '
+            mnt="$1"; odz="$2"; xdg="$3"; mc="$4"
+            mount --bind "$odz" "$odz" || exit 97
+            awk "{print \$2}" /proc/self/mounts | sort -u | while IFS= read -r m; do
+                m="$(printf "%b" "$m")"
+                case "$m" in "$odz"|/proc|/proc/*|/sys|/sys/*|/dev|/dev/*) continue ;; esac
+                mount -o remount,bind,ro "$m" 2>/dev/null
+            done
+            mount -t tmpfs -o size=16m,mode=0700 tmpfs "$xdg" || exit 97
+            XDG_CONFIG_HOME="$xdg" XDG_DATA_HOME="$xdg" XDG_CACHE_HOME="$xdg" "$mc" "$mnt" "$odz"
+        ' _ "$mnt" "$odz" "$TMPD/mcxdg" "$MC" </dev/tty >/dev/tty 2>&1 || rc=$?
+        if [ "$rc" -eq 97 ]; then
+            echo "$(T 'Nie udało się zbudować przestrzeni tylko do odczytu (unshare/mount) -- mc nie zostanie uruchomiony.')"
+        fi
+    else
+        "$MC" "$mnt" "$odz" </dev/tty >/dev/tty 2>&1   # testy: BROWSE_RO_NS=0 (bez roota i unshare)
+    fi
+    rmdir "$odz" 2>/dev/null && rmdir "$(dirname "$odz")" 2>/dev/null
+    [ -d "$odz" ] && echo "$(Tv 'Skopiowane pliki: $ODZ' '$ODZ' "$odz")"
+    return 0
+}
+
 # ---- mc w zamontowanym katalogu, potem sprzątanie ---------------------------------------
 browse_and_exit() {
     local what="$1"
@@ -390,7 +431,7 @@ browse_and_exit() {
     echo "$(Tv 'Zamontowane TYLKO DO ODCZYTU: $what' '$what' "$what")"
     echo "$(Tv '  w $MNT -- skopiuj pliki w mc (lewy panel = kopia), F10 w mc kończy i odmontowuje.' '$MNT' "$MNT")"
     if command -v "$MC" >/dev/null 2>&1; then
-        "$MC" "$MNT" "${HOME:-/root}" </dev/tty >/dev/tty 2>&1
+        mc_readonly "$MNT"
     else
         echo
         echo "$(T 'Brak programu mc (apt install mc). Zamiast niego powłoka w katalogu kopii; exit kończy i odmontowuje.')"
@@ -415,6 +456,18 @@ step=1
 if [ -n "$PRE_DS" ]; then
     TYP="$(awk -F'\t' -v d="$PRE_DS" '$1 == d { print $2; exit }' "$TMPD/cand.tsv")"
     if [ -n "$TYP" ]; then DS="$PRE_DS"; step=2; fi
+fi
+# Wskazana migawka (--snapshot=, prawy panel F4): prosto do montowania. Migawka, ktorej juz
+# nie ma (przycieta miedzy odczytem a Enter), wraca do menu migawek jej datasetu.
+if [ -n "$PRE_SNAP" ]; then
+    DS="${PRE_SNAP%@*}"; SNAP="${PRE_SNAP#*@}"
+    TYP="$(zfs get -H -o value type -- "$DS" 2>/dev/null | tr -d '\r')"
+    if [ -n "$TYP" ] && zfs list -H -o name -t snapshot -- "$PRE_SNAP" >/dev/null 2>&1; then
+        if [ "$TYP" = volume ]; then step=3; else step=4; fi
+    else
+        wt --title "$TITLE" --msgbox "$(Tv 'Migawki $SNAP już nie ma -- wybierz z listy.' '$SNAP' "$PRE_SNAP")" 8 "$W"
+        [ -n "$TYP" ] && step=2 || { DS=""; step=1; }
+    fi
 fi
 while :; do
     case $step in

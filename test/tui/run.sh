@@ -1041,28 +1041,33 @@ else
     bad "przebiegi: F7 na wykonanym biegu" "$(printf '%s\n' "$PRF" | tail -3)" "log: $(cat "$PXL")"
 fi
 rm -f "$PXL"
-# F4 Z PRZEBIEGOW (U82): na wykonanym biegu F4 otwiera Kopie z kursorem na relacji tego biegu
-# i zapamietanym kontekstem {dataset celu, chwila = koniec biegu}; panel zaczyna od grupy
-# "Wskazane" (Dataset, Chwila), a Enter oddaje terminal oknu browse z --dataset= i --at=.
-# Fikstura: wykonany bieg konczy sie o NOW-5400 (PRS), pierwszy wiersz listy. Na biegu
-# NADCHODZACYM (down) nie ma chwili -- jest tylko dataset, wiec bez --at=.
+# F4 Z PRZEBIEGOW (U82, dwa panele): na wykonanym biegu F4 otwiera Kopie z kursorem na
+# datasecie celu tego biegu i FOKUSEM W PRAWYM PANELU na najnowszej migawce nie nowszej niz
+# koniec biegu; Enter oddaje terminal oknu browse z --snapshot=PELNA_NAZWA (bez --dataset=/--at=).
+# Fikstura: wykonany bieg konczy sie o NOW-5400 (PRS), pierwszy wiersz listy; migawki celu
+# (zfs-snapshots.json, dataset a..d pod 192.168.28.50) sa o 1788955201 (PO biegu, 11:20),
+# 1788951601 (PRZED biegiem, 10:20) i wczesniejsza -- wybrana ma byc ta z 10:20, nie najnowsza.
+# Na biegu NADCHODZACYM (down) nie ma chwili: fokus zostaje na liscie, Enter tylko go przenosi.
+PZ="--zfs-tree $P10/zfs-tree.json --zfs-snapshots $P10/zfs-snapshots.json"
 PKX="$(mktemp)"; : > "$PKX"
-PK4="$(prz F4 --exec-log "$PKX")"
-PK4E="$(prz F4,enter --exec-log "$PKX")"; PK4LOG="$(cat "$PKX")"
+PK4="$(prz F4 --exec-log "$PKX" $PZ)"
+PK4E="$(prz F4,enter --exec-log "$PKX" $PZ)"; PK4LOG="$(cat "$PKX")"
 : > "$PKX"
-PK4N="$(prz down,F4 --exec-log "$PKX")"
-PK4NE="$(prz down,F4,enter --exec-log "$PKX")"; PK4NLOG="$(cat "$PKX")"
-if has "$PK4" '╔═ Kopie na pve20' && has "$PK4" '── Wskazane' && hasE "$PK4" 'Dataset +hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]' && hasE "$PK4" 'Chwila +20[0-9]{2}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' \
-   && printf '%s\n' "$PK4LOG" | grep -Eq "zfs-backup.sh'? browse sync-test --ask --dataset=hdd/backups/192\.168\.28\.50/hdd/lab/[a-d] --at=$((NOW - 5400))\$"; then
-    ok "kopie: F4 na wykonanym biegu (F2) -- ekran Kopie z grupa 'Wskazane' (Dataset, Chwila), Enter = browse REL --ask --dataset=CEL --at=KONIEC_BIEGU"
+PK4N="$(prz down,F4 --exec-log "$PKX" $PZ)"
+PK4NE="$(prz down,F4,enter --exec-log "$PKX" $PZ)"; PK4NLOG="$(cat "$PKX")"
+if has "$PK4" '╔═ Kopie na pve20' && hasE "$PK4" 'zfs list -t snapshot hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]' \
+   && hasE "$PK4" 'Migawka +hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]@automated_hourly_2026-09-09_10-20-01' && ! has "$PK4" 'Enter/Tab do migawek' \
+   && printf '%s\n' "$PK4LOG" | grep -Eq "zfs-backup.sh'? browse sync-test --ask --snapshot=hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]@automated_hourly_2026-09-09_10-20-01\$" \
+   && ! printf '%s' "$PK4LOG" | grep -q -- '--at=' && ! printf '%s' "$PK4LOG" | grep -q -- '--dataset='; then
+    ok "kopie: F4 na wykonanym biegu (F2) -- fokus w prawym panelu na najnowszej migawce nie nowszej niz koniec biegu (10:20, nie 11:20), Enter = browse REL --ask --snapshot=PELNA_NAZWA"
 else
-    bad "kopie: F4 z wykonanego biegu" "$(printf '%s\n' "$PK4" | grep -E 'Kopie na|Wskazane|Dataset|Chwila')" "log: $PK4LOG"
+    bad "kopie: F4 z wykonanego biegu" "$(printf '%s\n' "$PK4" | grep -E 'Kopie na|zfs list|Migawka|Enter/Tab')" "log: $PK4LOG"
 fi
-if has "$PK4N" '╔═ Kopie na pve20' && has "$PK4N" '── Wskazane' && has "$PK4N" 'najnowsza migawka' && ! hasE "$PK4N" 'Chwila +20[0-9]{2}-' \
-   && printf '%s\n' "$PK4NLOG" | grep -Eq "zfs-backup.sh'? browse sync-test --ask --dataset=hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]\$" && ! printf '%s' "$PK4NLOG" | grep -q -- '--at='; then
-    ok "kopie: F4 na biegu nadchodzacym -- jest dataset, nie ma chwili ('najnowsza migawka'), Enter bez --at="
+if has "$PK4N" '╔═ Kopie na pve20' && hasE "$PK4N" 'zfs list -t snapshot hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]' && has "$PK4N" 'Enter/Tab do migawek' \
+   && ! hasE "$PK4N" 'Migawka +hdd/' && [ ! -s "$PKX" ] && [ -z "$PK4NLOG" ]; then
+    ok "kopie: F4 na biegu nadchodzacym -- kursor na datasecie celu, fokus na LISCIE (nie ma chwili), Enter tylko przenosi fokus i niczego nie uruchamia"
 else
-    bad "kopie: F4 z nadchodzacego biegu" "$(printf '%s\n' "$PK4N" | grep -E 'Kopie na|Wskazane|Dataset|Chwila')" "log: $PK4NLOG"
+    bad "kopie: F4 z nadchodzacego biegu" "$(printf '%s\n' "$PK4N" | grep -E 'Kopie na|zfs list|Migawka|Enter/Tab')" "log: $PK4NLOG"
 fi
 rm -f "$PKX"
 # F8 chowa wykonane (bez kreski), drugi F8 je przywraca; kursor zostaje na TYM SAMYM biegu
@@ -1519,27 +1524,38 @@ if grep -Eq "zfs-backup.sh'? delete-relation lab-ct201 --ask\$" "$XL"; then
 else
     bad "akcje: Del -> delete-relation --ask" "$(cat "$XL")"
 fi
-# F4 KOPIE (U82; dawny F11 Odzysk danych): ekran glowny -- nie 'p' obok 'e zmień' w oknie
-# relacji ani F9 na Replice ("ktoś może się machnąć"). Enter = PRZEGLADAJ (browse NAZWA --ask,
-# na wierszu 'z dysku' browse --any --ask), F9 = PRZYWROC (restore NAZWA --ask, na 'z dysku'
-# restore --from-copy --ask) -- te same okna whiptail. 'p' w oknie relacji niczego nie robi.
-# Ekran osiagamy KLAWISZEM F4 z F3 (kursor na pierwszej relacji, fokus na liscie: bez kontekstu).
+# F4 KOPIE (U82; dawny F11 Odzysk danych), DWA PANELE jak mc: lewy = datasety kopii w grupach
+# "▸ relacja NAZWA" i "▸ replika NAZWA" (+ wiersz 'inny dysk'), prawy = `zfs list -t snapshot DATASET`
+# (NAME USED REFER CREATION), dol = Szczegoly. Enter/F7 na MIGAWCE = PRZEGLADAJ (browse NAZWA --ask
+# --snapshot=PELNA_NAZWA), F9 = PRZYWROC (restore NAZWA --ask --dataset=DS [--snapshot=KROTKA]);
+# na 'inny dysk' stare okna wyboru (browse --any --ask, restore --from-copy --ask). 'p' w oknie
+# relacji niczego nie robi. Offline nie uruchamia czasownikow: datasety i migawki ida z fikstur
+# --zfs-tree / --zfs-snapshots. Ekran osiagamy KLAWISZEM F4 z F3 (kursor na pierwszej relacji).
+# Godziny w CREATION zaleza od TZ biegacza -- asercje nie nazywaja godziny, tylko migawke i slowo.
 od() {   # <keys po F4> -> ekran F4 Kopie; dziennik w $XL
     : > "$XL"
-    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen relacje --keys "F4${1:+,$1}" "${@:2}" 2>&1
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --zfs-tree "$P10/zfs-tree.json" --zfs-snapshots "$P10/zfs-snapshots.json" --exec-log "$XL" --screen relacje --keys "F4${1:+,$1}" --width 150 --height 30 "${@:2}" 2>&1
 }
+OZT="--zfs-tree $P10/zfs-tree.json --zfs-snapshots $P10/zfs-snapshots.json"
+VM101="hdd/backups/192.168.28.99/hdd/lab/vm-101"
+CT201="hdd/backups/192.168.28.99/hdd/lab/ct-201"
 A="$(od "")"
-if has "$A" '╔═ Kopie na pve10' && ! has "$A" 'Odzysk danych' && hasE "$A" '^║ lab-ct201 ' && hasE "$A" '^║ z innego dysku +nośnik' && has "$A" 'duplikat -- odzysk' && has "$A" '[Datasety]' \
-   && ! has "$A" '── Wskazane'; then
-    ok "odzysk: F4 Kopie -- relacje z kopia i wiersz 'z innego dysku', panel, zakladka Datasety; tytul 'Kopie na', bez grupy Wskazane (F4 z listy bez kontekstu)"
+if has "$A" '╔═ Kopie na pve10' && ! has "$A" 'Odzysk danych' && has "$A" '▸ relacja duplikat' && has "$A" '▸ relacja lab-ct201' \
+   && hasE "$A" '^║   hdd/backups/192\.168\.28\.99/hdd/lab/ ' && hasE "$A" '^║   vm-101 +3  ' \
+   && has "$A" "zfs list -t snapshot $VM101" && has "$A" '@automated_hourly_2026-09-09_11-20-01' \
+   && has "$A" 'NAME' && has "$A" 'USED' && has "$A" 'REFER' && has "$A" 'CREATION' && has "$A" 'Szczegóły' \
+   && has "$A" 'Enter/Tab do migawek'; then
+    ok "kopie: F4 -- lewy panel: grupa relacji, wspolna sciezka w drugiej linii, wiersz 'vm-101  3'; prawy: tytul 'zfs list -t snapshot DATASET', kolumny NAME USED REFER CREATION, wiersze '@migawka'; dol 'Szczegóły'"
 else
-    bad "odzysk: ekran F4 Kopie" "$A"
+    bad "kopie: ekran F4 Kopie" "$A"
 fi
 A="$(od "" --width 200 --height 50)"
-if has "$A" '── Odzysk' && has "$A" 'wymaga zgody źródła' && hasE "$A" 'Na bok +do nowego datasetu obok' && ! has "$A" 'Zgody'; then
-    ok "odzysk: panel Kopii -- grupa 'Odzysk' (na zrodlo wymaga zgody zrodla, na bok do nowego datasetu), bez grupy 'Zgody'"
+if has "$A" '▸ replika sejf-a' && has "$A" '▸ replika sejf-b' && has "$A" 'nośnik niepodłączony -- podłącz go, potem Ctrl-R' \
+   && has "$A" 'inny dysk -- pula spoza relacji i replik' \
+   && hasE "$A" "Dataset +$VM101" && hasE "$A" 'Skąd +relacja duplikat' && hasE "$A" 'Rodzaj +system plików' && ! hasE "$A" 'Migawka +hdd/'; then
+    ok "kopie: repliki z nosnikiem niepodlaczonym -- grupa z uwaga 'podłącz go, potem Ctrl-R'; ostatni wiersz 'inny dysk'; dol: Dataset/Skąd/Rodzaj, bez Migawki gdy fokus na liscie"
 else
-    bad "odzysk: panel Kopii, grupa Odzysk" "$A"
+    bad "kopie: repliki, 'inny dysk', Szczegoly" "$A"
 fi
 A="$(od "" --width 140 | tail -1)"
 if has "$A" 'F4 Kopie' && has "$A" 'F9 Przywróć' && has "$A" 'F12 Wyjście' && ! has "$A" 'F11' && ! has "$A" 'Odzysk' && ! has "$A" 'Historia' && has "$A" 'F7 Przeglądaj'; then
@@ -1548,60 +1564,92 @@ else
     bad "odzysk: pasek F4" "$A"
 fi
 A="$(od enter)"
-if grep -Eq "zfs-backup.sh'? browse [a-z0-9-]+ --ask\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
-    ok "odzysk: Enter na relacji oddaje terminal oknu 'Przeglądaj kopię' (browse NAZWA --ask)"
+if [ ! -s "$XL" ] && has "$A" 'Esc do datasetów' && ! has "$A" 'Enter/Tab do migawek' && hasE "$A" 'Migawka +hdd/backups/192\.168\.28\.99/hdd/lab/vm-101@automated_hourly_2026-09-09_11-20-01'; then
+    ok "kopie: Enter na DATASECIE tylko przenosi fokus do prawego panelu (nic nie uruchamia), kursor na najnowszej migawce; Szczegoly pokazuja Migawke"
 else
-    bad "odzysk: Enter na relacji" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+    bad "kopie: Enter na datasecie" "$(cat "$XL")" "$(printf '%s' "$A" | tail -4)"
+fi
+A="$(od tab,down,enter)"
+if grep -Eq "zfs-backup.sh'? browse duplikat --ask --snapshot=$VM101@automated_hourly_2026-09-09_10-20-01\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
+    ok "kopie: Tab, down, Enter na MIGAWCE -- browse duplikat --ask --snapshot=PELNA_NAZWA (druga migawka, nie najnowsza)"
+else
+    bad "kopie: Enter na migawce" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+fi
+A="$(od tab,down,F7)"
+if grep -Eq "zfs-backup.sh'? browse duplikat --ask --snapshot=$VM101@automated_hourly_2026-09-09_10-20-01\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
+    ok "kopie: F7 na migawce = Przeglądaj, jak Enter (U85)"
+else
+    bad "kopie: F7 na migawce" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+fi
+A="$(od enter,down,F9)"
+if grep -Eq "zfs-backup.sh'? restore duplikat --ask --dataset=$VM101 --snapshot=automated_hourly_2026-09-09_10-20-01\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
+    ok "kopie: F9 na migawce -- restore duplikat --ask --dataset=DS --snapshot=KROTKA_NAZWA (bez czesci przed @)"
+else
+    bad "kopie: F9 na migawce" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+fi
+A="$(od down,F9)"
+if grep -Eq "zfs-backup.sh'? restore lab-ct201 --ask --dataset=$CT201\$" "$XL" && ! grep -q -- '--snapshot' "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
+    ok "kopie: F9 na DATASECIE (fokus na liscie) -- restore lab-ct201 --ask --dataset=DS, bez --snapshot="
+else
+    bad "kopie: F9 na datasecie" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 A="$(od end,enter)"
 if grep -Eq "zfs-backup.sh'? browse --any --ask\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
-    ok "odzysk: Enter na 'z dysku' -- browse --any --ask (dowolny dataset tego hosta)"
+    ok "kopie: Enter na 'inny dysk' -- browse --any --ask (dowolny dataset tego hosta)"
 else
-    bad "odzysk: Enter na z dysku" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
-fi
-A="$(od F9)"
-if grep -Eq "zfs-backup.sh'? restore [a-z0-9-]+ --ask\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
-    ok "odzysk: F9 na relacji oddaje terminal oknu 'Przywróć' (restore NAZWA --ask)"
-else
-    bad "odzysk: F9 na relacji" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+    bad "kopie: Enter na inny dysk" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 A="$(od end,F9)"
 if grep -Eq "zfs-backup.sh'? restore --from-copy --ask\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
-    ok "odzysk: F9 na 'z dysku' oddaje terminal oknu 'Przywróć z dysku' (restore --from-copy --ask)"
+    ok "kopie: F9 na 'inny dysk' oddaje terminal oknu 'Przywróć z dysku' (restore --from-copy --ask)"
 else
-    bad "odzysk: F9 na z dysku" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+    bad "kopie: F9 na inny dysk" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
-A="$(od F7)"; XA="$(cat "$XL")"; B="$(od end,F7)"; XB="$(cat "$XL")"
-# U85: F7 na Kopiach = PRZEGLADAJ, to samo co Enter (browse NAZWA --ask / browse --any --ask)
-if printf '%s\n' "$XA" | grep -Eq "zfs-backup.sh'? browse [a-z0-9-]+ --ask\$" && [ "$(printf '%s\n' "$XA" | grep -c .)" = 1 ] \
-   && printf '%s\n' "$XB" | grep -Eq "zfs-backup.sh'? browse --any --ask\$" && [ "$(printf '%s\n' "$XB" | grep -c .)" = 1 ]; then
-    ok "odzysk: F7 na Kopiach = Przeglądaj, jak Enter (browse NAZWA --ask na relacji, browse --any --ask na 'z dysku')"
+A="$(od end)"
+if has "$A" 'Pula spoza relacji i replik' && has "$A" 'zpool import'; then
+    ok "kopie: kursor na 'inny dysk' -- prawy panel i Szczegoly mowia o puli spoza relacji (zpool import)"
 else
-    bad "odzysk: F7 na Kopiach" "relacja: $XA" "z dysku: $XB"
+    bad "kopie: panel 'inny dysk'" "$A"
 fi
-# F4 Z F3: kursor Kopii staje na relacji z F3; fokus na LISCIE = sama relacja (Enter bez --dataset=
-# i bez --at=); fokus w zakladce Datasety (Tab) = tez lokalny cel TEJ pary (--dataset=CEL).
+# Wybor w prawym panelu: zaznaczony wiersz lewego panelu dostaje znacznik "▸ ct-201", a dol
+# podaje migawke i slowo Czas (godzine pomijamy: zalezy od TZ).
+A="$(od down,enter,down)"
+if has "$A" "zfs list -t snapshot $CT201" && hasE "$A" '▸ ct-201 ' && hasE "$A" "Migawka +$CT201@automated_hourly_2026-09-09_10-20-01" && hasE "$A" 'Czas +20' && has "$A" 'Esc do datasetów'; then
+    ok "kopie: down, Enter, down -- prawy panel ct-201 z fokusem, lewy wiersz oznaczony '▸ ct-201', Szczegoly: Migawka (druga) i Czas"
+else
+    bad "kopie: fokus w prawym panelu" "$(printf '%s\n' "$A" | grep -E 'zfs list|▸ ct|Migawka|Czas|Esc do')"
+fi
+# Dataset BEZ migawek (srv-b): prawy panel mowi o tym wprost, Enter zostawia fokus na liscie.
+# srv-b szukany po tytule prawego panelu (kolejnosc grup zalezy od fikstur), potem Enter.
+k=""; for _i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do A="$(od "${k}enter")"; hasE "$A" 'zfs list -t snapshot .*/srv-b' && break; k="${k}down,"; done
+if hasE "$A" 'zfs list -t snapshot .*/srv-b' && has "$A" 'nie ma migawek' && has "$A" 'Enter/Tab do migawek' && ! has "$A" 'Esc do datasetów' && [ ! -s "$XL" ]; then
+    ok "kopie: dataset bez migawek (srv-b) -- 'nie ma migawek', Enter nie przenosi fokusu do pustego prawego panelu i niczego nie uruchamia"
+else
+    bad "kopie: dataset bez migawek" "$(printf '%s\n' "$A" | grep -E 'zfs list|migawek|Esc do')" "log: $(cat "$XL")"
+fi
+# F4 Z F3: kursor Kopii staje na PIERWSZYM datasecie relacji z F3, fokus na LISCIE (Enter tylko
+# przenosi fokus, niczego nie uruchamia); fokus w zakladce Datasety (Tab) = kursor na lokalnym
+# celu TEJ pary. Brak kontekstu biegu: bez wyboru migawki (to robi tylko F4 z Przebiegow).
 A="$(od enter)"
-if grep -Eq "zfs-backup.sh'? browse duplikat --ask\$" "$XL" && ! grep -q -- '--dataset' "$XL" && ! grep -q -- '--at' "$XL"; then
-    ok "kopie: F4 z wiersza relacji na F3 (fokus na liscie) -- Enter = browse REL --ask, bez --dataset= i --at="
+if [ ! -s "$XL" ] && has "$A" "zfs list -t snapshot $VM101" && has "$A" 'Esc do datasetów'; then
+    ok "kopie: F4 z wiersza relacji na F3 (fokus na liscie) -- kursor na pierwszym datasecie relacji, Enter tylko przenosi fokus (bez browse)"
 else
     bad "kopie: F4 z F3, fokus na liscie" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 : > "$XL"
-A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen relacje --keys tab,F4 --width 200 2>&1)"
-"$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen relacje --keys tab,F4,enter >/dev/null 2>&1
-if has "$A" '╔═ Kopie na pve10' && has "$A" '── Wskazane' && hasE "$A" 'Dataset +hdd/backups/192\.168\.28\.99/hdd/lab/vm-101' && has "$A" 'najnowsza migawka' \
-   && grep -Eq "zfs-backup.sh'? browse duplikat --ask --dataset=hdd/backups/192\.168\.28\.99/hdd/lab/vm-101\$" "$XL"; then
-    ok "kopie: F4 z zakladki Datasety na F3 -- 'Wskazane' z celem tej pary, Enter = browse REL --ask --dataset=CEL (bez --at=)"
+A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL $OZT --exec-log "$XL" --screen relacje --keys tab,F4 --width 200 2>&1)"
+if has "$A" '╔═ Kopie na pve10' && has "$A" "zfs list -t snapshot $VM101" && has "$A" 'Enter/Tab do migawek' && ! hasE "$A" 'Migawka +hdd/' && [ ! -s "$XL" ]; then
+    ok "kopie: F4 z zakladki Datasety na F3 -- kursor na celu tej pary (vm-101), fokus na liscie, bez --at=/--snapshot= (nic nie uruchomiono)"
 else
-    bad "kopie: F4 z F3, fokus w Datasety" "$(printf '%s\n' "$A" | grep -E 'Kopie na|Wskazane|Dataset|Chwila')" "log: $(cat "$XL")"
+    bad "kopie: F4 z F3, fokus w Datasety" "$(printf '%s\n' "$A" | grep -E 'Kopie na|zfs list|Migawka|Enter/Tab')" "log: $(cat "$XL")"
 fi
 # F4 na relacji BEZ kopii (rekord usuniety): Kopie sie otwiera, ale bez kontekstu, z komunikatem.
-A="$(act end,F4 --width 130)"
-if has "$A" '╔═ Kopie na pve10' && has "$A" 'nie ma kopii na tym hoście -- nie ma czego przeglądać' && ! has "$A" '── Wskazane' && [ ! -s "$XL" ]; then
+# Z fikstura drzewa: bez niej KAZDA relacja wygladalaby na "bez kopii" (offline nie ma drzewa).
+A="$(act end,F4 --width 130 $OZT)"
+if has "$A" '╔═ Kopie na pve10' && has "$A" 'nie ma kopii na tym hoście -- nie ma czego przeglądać' && ! has "$A" 'Esc do datasetów' && [ ! -s "$XL" ]; then
     ok "kopie: F4 na relacji bez kopii (usunieta) -- Kopie bez kontekstu i komunikat 'nie ma kopii na tym hoście'"
 else
-    bad "kopie: F4 na relacji bez kopii" "$(printf '%s\n' "$A" | grep -E 'Kopie na|Wskazane|kopii')" "log: $(cat "$XL")"
+    bad "kopie: F4 na relacji bez kopii" "$(printf '%s\n' "$A" | grep -E 'Kopie na|zfs list|kopii')" "log: $(cat "$XL")"
 fi
 if grep -q '^        browse)$' "$REPO/zfs-backup.sh" && grep -q 'tui/browse.sh' "$REPO/zfs-backup.sh" && bash -n "$REPO/tui/browse.sh" \
    && grep -q 'mount -t zfs -o ro' "$REPO/tui/browse.sh" && grep -q 'trap cleanup EXIT' "$REPO/tui/browse.sh"; then
@@ -5784,6 +5832,64 @@ if [ "$RWURC" -eq 2 ] && has "$RWU" 'usage' && has "$RWU" '--from-copy'; then
     ok "restore.sh bez argumentow -> 'usage: ... --from-copy', exit 2"
 else
     bad "restore.sh bez argumentow" "rc=$RWURC" "out: $RWU"
+fi
+
+# ---- --dataset= / --snapshot= (GUI F4 Kopie, 2026-10-28): okno startuje na wybranej kopii i migawce ----
+# a) --from-copy: kopia jest na liscie kandydatow -> pierwsze okno to "dokad" (ani drzewa, ani menu
+#    "z kiedy"); migawka starsza (daily) = p1, wiec polecenie ma --at=<czas p1>.
+#    Roznica wzgledem starego kodu: stary restore.sh bral $2 = "--dataset=.." za DATASET i pokazywal drzewo.
+printf '0\thdd/restore/data\n1\t\n0\t\n' > "$RW/answers"
+rw_copy "$RW/t-cp1.json" --from-copy --dataset="$RWCP" --snapshot=automated_daily_2026-10-14_01-35-01
+CA="restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data ~ --at=$RWAT"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$CA" ] && head -n 1 "$RW/wt.log" | grep -qF 'dokąd?' \
+   && [ ! -e "$RW/last-spec.json" ] && ! grep -qF 'z kiedy?' "$RW/wt.log" && ! grep -qF 'skąd?' "$RW/wt.log"; then
+    ok "restore --from-copy --dataset= --snapshot=: pierwsze okno 'dokad', bez drzewa i bez menu 'z kiedy'; polecenie z --from-copy=<kopia> i --at=<czas migawki>"
+else
+    bad "restore --from-copy --dataset= --snapshot=" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $CA" "err: $(cut -c1-200 "$RW/err")" "wt: $(head -n 2 "$RW/wt.log" | cut -c1-200)"
+fi
+# b) migawki nie ma: msgbox "nie ma w" i menu jak dotad (p0 = najnowszy -> bez --at)
+printf '0\thdd/restore/data\n0\t\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
+rw_copy "$RW/t-cp1.json" --from-copy --dataset="$RWCP" --snapshot=no_such_snap
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data" ] \
+   && grep -qF "Migawki no_such_snap nie ma w $RWCP -- wybierz z listy." "$RW/wt.log" && grep -qF 'z kiedy?' "$RW/wt.log"; then
+    ok "restore --from-copy --snapshot=<brak>: okno 'Migawki .. nie ma w ..' i menu 'z kiedy' jak dotad"
+else
+    bad "restore --from-copy --snapshot=<brak>" "rc=$RW_RC" "ran: $(rw_ran)" "err: $(cut -c1-200 "$RW/err")" "wt: $(cut -c1-160 "$RW/wt.log" | head -n 6)"
+fi
+# c) tryb relacji: kopia z relacji + migawka -> bez drzewa i bez menu przed "dokad"
+cp "$RW/plan.remote.json" "$RW/plan.json"      # test 7 zostawil plan bez kopii
+printf '0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
+rw_copy "$RW/t-whole.json" k2 --dataset=tank/b/hdd/data --snapshot=automated_daily_2026-10-14_01-35-01
+CC="restore ~ k2 ~ k2 ~ --source=tank/b/hdd/data,tank/b/hdd/data/docs,tank/b/hdd/data/mail ~ --onto=hdd/restore/data,hdd/restore/data/docs,hdd/restore/data/mail ~ --at=$RWAT ~ --config=$RWCFG"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$CC" ] && [ ! -e "$RW/last-spec.json" ] \
+   && grep -qF 'k2: dokąd?' "$RW/wt.log" && ! grep -qF 'z kiedy?' "$RW/wt.log"; then
+    ok "restore RELACJA --dataset= --snapshot=: bez drzewa, bez menu 'z kiedy'; pierwsze okno 'dokad', polecenie z --at=<czas migawki>"
+else
+    bad "restore RELACJA --dataset= --snapshot=" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $CC" "err: $(cut -c1-200 "$RW/err")" "wt: $(cut -c1-160 "$RW/wt.log" | head -n 6)"
+fi
+# c2) kopia spoza relacji jest ignorowana: drzewo sie pokazuje (atrapa drzewa wraca Wstecz -> rc != 0)
+: > "$RW/answers"
+rw_copy "$RW/t-back.json" k2 --dataset=tank/zzz/other
+if [ "$RW_RC" -ne 0 ] && [ -s "$RW/last-spec.json" ] && [ ! -e "$RW/ran" ]; then
+    ok "restore RELACJA --dataset=<spoza relacji>: ignorowane, krok 1 (drzewo) jak dotad"
+else
+    bad "restore RELACJA --dataset=<spoza relacji>" "rc=$RW_RC" "ran: $(rw_ran)"
+fi
+# walidacja wartosci: znak spoza listy / '/' w migawce -> blad na stderr, exit 2, zadnego okna
+rw_copy "$RW/t-cp1.json" --from-copy --dataset='x;y'
+RWV1=$RW_RC; RWE1="$(cat "$RW/err")"
+rw_copy "$RW/t-cp1.json" --from-copy --snapshot=a/b
+if [ "$RWV1" -eq 2 ] && [ "$RW_RC" -eq 2 ] && has "$RWE1" 'bad --dataset' && has "$(cat "$RW/err")" 'bad --snapshot' && [ ! -s "$RW/wt.log" ]; then
+    ok "restore.sh: --dataset= ze znakiem spoza listy i --snapshot= z '/' -> blad na stderr, exit 2, bez okna"
+else
+    bad "restore.sh: walidacja --dataset=/--snapshot=" "rc1=$RWV1 rc2=$RW_RC" "err1: $RWE1" "err2: $(cat "$RW/err")"
+fi
+# d) zfs-backup.sh restore NAME --ask --bogus -> "unknown option" (reka dochodzi do tui/restore.sh tylko z --dataset=/--snapshot=)
+RWD="$( cd "$RW" && ZFS_BACKUP="$RW/bin/zb" PYTHON="$PY" bash "$REPO/zfs-backup.sh" restore k2 --ask --bogus </dev/null 2>&1 )"; RWDRC=$?
+if [ "$RWDRC" -ne 0 ] && has "$RWD" "restore: unknown option '--bogus'"; then
+    ok "zfs-backup.sh restore NAME --ask --bogus -> 'restore: unknown option', rc != 0"
+else
+    bad "zfs-backup.sh restore --ask --bogus" "rc=$RWDRC" "out: $(printf '%s' "$RWD" | cut -c1-300)"
 fi
 rm -rf "$RW"
 

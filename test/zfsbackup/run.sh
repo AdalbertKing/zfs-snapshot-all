@@ -13284,6 +13284,54 @@ if ! ld_run 'peer;rm -rf /' --json >/dev/null && grep -q 'HOST looks wrong' "$LD
 else
     bad "listdatasets: host validation" "$(cat "$LD/err")" "$(cat "$LD/ssh.argv" 2>/dev/null)"
 fi
+# zfs-tree --json ROOT / zfs-snapshots --json DS (F4 Kopie, 2026-10-28): to, co trzyma dysk, z DWOCH
+# wywolan `zfs list` (zfs-tree: datasety + migawki; liczba migawek i najnowsza liczone w awk).
+# Atrapa zfs odpowiada tylko na te ksztalty argv; inny ksztalt = rc 1 (verb nie ma prawa pytac o co innego).
+# Migawki w atrapie leca NIEPOSORTOWANE (s1, s2, s0): "newest" ma byc maksimum, nie ostatnia linia.
+ZT="$WORK/zfstree"; rm -rf "$ZT"; mkdir -p "$ZT/bin"
+cat > "$ZT/bin/zfs" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${ZT_ARGS:?}/zfs.argv"
+case "$*" in
+    "list -H -p -o name,type -r -t filesystem,volume -- "*)
+        printf 'tank/c\tfilesystem\ntank/c/a\tfilesystem\ntank/c/vm\tvolume\ntank/c/empty\tfilesystem\n' ;;
+    "list -H -p -o name,creation -r -t snapshot -- "*)
+        printf 'tank/c/a@s1\t1000\ntank/c/a@s2\t3000\ntank/c/a@s0\t500\ntank/c/vm@z1\t2000\ntank/c@r1\t100\n' ;;
+    "list -H -p -o name,used,refer,written,creation -t snapshot -d 1 -s creation -- "*)
+        printf 'tank/c/a@s0\t0\t10\t0\t500\ntank/c/a@s1\t4096\t20\t5\t1000\ntank/c/a@s2\t0\t30\t7\t3000\n' ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod +x "$ZT/bin/zfs"
+zt_run() { ( PATH="$ZT/bin:$PATH" ZT_ARGS="$ZT" bash "$ZFSBACKUP" "$@" ) 2>"$ZT/err"; }
+ZTOUT=$(zt_run zfs-tree --json tank/c)
+got=$(printf '%s' "$ZTOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print([(x["name"], x["type"], x["snapshots"], x["newest"]) for x in d["datasets"]])' 2>/dev/null | tr -d '\r')
+if [ "$got" = "[('tank/c', 'filesystem', 1, 100), ('tank/c/a', 'filesystem', 3, 3000), ('tank/c/vm', 'volume', 1, 2000), ('tank/c/empty', 'filesystem', 0, 0)]" ] \
+        && grep -q -- '-t filesystem,volume -- tank/c$' "$ZT/zfs.argv" && grep -q -- '-t snapshot -- tank/c$' "$ZT/zfs.argv"; then
+    ok "zfstree: zfs-tree --json ROOT = datasets in zfs's order with type, snapshot count and NEWEST creation (a max over unsorted snapshots, 0/0 for a dataset with none), from two zfs list calls"
+else
+    bad "zfstree: zfs-tree" "got=$got" "$ZTOUT" "$(cat "$ZT/zfs.argv" 2>/dev/null)" "$(cat "$ZT/err")"
+fi
+rm -f "$ZT/zfs.argv"
+ZTOUT=$(zt_run zfs-snapshots --json tank/c/a)
+got=$(printf '%s' "$ZTOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["dataset"], [(s["name"], s["used"], s["refer"], s["written"], s["creation"]) for s in d["snapshots"]])' 2>/dev/null | tr -d '\r')
+if [ "$got" = "tank/c/a [('tank/c/a@s2', 0, 30, 7, 3000), ('tank/c/a@s1', 4096, 20, 5, 1000), ('tank/c/a@s0', 0, 10, 0, 500)]" ] \
+        && grep -q -- '-t snapshot -d 1 -s creation -- tank/c/a$' "$ZT/zfs.argv"; then
+    ok "zfstree: zfs-snapshots --json DS = this dataset's own snapshots (-d 1), NEWEST FIRST (zfs list sorts ascending; the verb reverses), with used/refer/written/creation"
+else
+    bad "zfstree: zfs-snapshots" "got=$got" "$ZTOUT" "$(cat "$ZT/zfs.argv" 2>/dev/null)" "$(cat "$ZT/err")"
+fi
+rm -f "$ZT/zfs.argv"
+if ! zt_run zfs-tree --json 'tank/c;touch x' >"$ZT/out" && grep -q 'not a dataset name' "$ZT/err" && [ ! -s "$ZT/out" ] && [ ! -e "$ZT/zfs.argv" ]; then
+    ok "zfstree: a ROOT with ';' dies before any zfs call (the name is never interpolated into a shell)"
+else
+    bad "zfstree: zfs-tree name validation" "$(cat "$ZT/err")" "$(cat "$ZT/out" 2>/dev/null)" "$(cat "$ZT/zfs.argv" 2>/dev/null)"
+fi
+if ! zt_run zfs-snapshots --json 'tank/c/a;touch x' >"$ZT/out" && grep -q 'not a dataset name' "$ZT/err" && [ ! -s "$ZT/out" ] && [ ! -e "$ZT/zfs.argv" ]; then
+    ok "zfstree: a DATASET with ';' dies in zfs-snapshots before any zfs call"
+else
+    bad "zfstree: zfs-snapshots name validation" "$(cat "$ZT/err")" "$(cat "$ZT/out" 2>/dev/null)" "$(cat "$ZT/zfs.argv" 2>/dev/null)"
+fi
 fi   # --- koniec sekcji listdatasets ---
 
 if want preparesource; then

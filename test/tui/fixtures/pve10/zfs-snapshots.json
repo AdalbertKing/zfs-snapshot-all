@@ -1,0 +1,188 @@
+{
+ "by_dataset": {
+  "hdd/backups/192.168.28.99/hdd/lab/vm-101": [
+   {
+    "name": "hdd/backups/192.168.28.99/hdd/lab/vm-101@automated_hourly_2026-09-09_11-20-01",
+    "used": 0,
+    "refer": 4227072,
+    "written": 0,
+    "creation": 1788955201
+   },
+   {
+    "name": "hdd/backups/192.168.28.99/hdd/lab/vm-101@automated_hourly_2026-09-09_10-20-01",
+    "used": 12288,
+    "refer": 4227072,
+    "written": 12288,
+    "creation": 1788951601
+   },
+   {
+    "name": "hdd/backups/192.168.28.99/hdd/lab/vm-101@automated_daily_2026-09-08_01-25-01",
+    "used": 1048576,
+    "refer": 4210688,
+    "written": 3145728,
+    "creation": 1788830701
+   }
+  ],
+  "hdd/backups/192.168.28.99/hdd/lab/ct-201": [
+   {
+    "name": "hdd/backups/192.168.28.99/hdd/lab/ct-201@automated_hourly_2026-09-09_11-20-01",
+    "used": 0,
+    "refer": 4227072,
+    "written": 0,
+    "creation": 1788955201
+   },
+   {
+    "name": "hdd/backups/192.168.28.99/hdd/lab/ct-201@automated_hourly_2026-09-09_10-20-01",
+    "used": 12288,
+    "refer": 4227072,
+    "written": 12288,
+    "creation": 1788951601
+   },
+   {
+    "name": "hdd/backups/192.168.28.99/hdd/lab/ct-201@automated_daily_2026-09-08_01-25-01",
+    "used": 1048576,
+    "refer": 4210688,
+    "written": 3145728,
+    "creation": 1788830701
+   }
+  ],
+  "hdd/backups/192.168.28.99/hdd/lab/ct-201/data": [
+   {
+    "name": "hdd/backups/192.168.28.99/hdd/lab/ct-201/data@automated_hourly_2026-09-09_11-20-01",
+    "used": 0,
+    "refer": 4227072,
+    "written": 0,
+    "creation": 1788955201
+   },
+   {
+    "name": "hdd/backups/192.168.28.99/hdd/lab/ct-201/data@automated_hourly_2026-09-09_10-20-01",
+    "used": 12288,
+    "refer": 4227072,
+    "written": 12288,
+    "creation": 1788951601
+   },
+   {
+    "name": "hdd/backups/192.168.28.99/hdd/lab/ct-201/data@automated_daily_2026-09-08_01-25-01",
+    "used": 1048576,
+    "refer": 4210688,
+    "written": 3145728,
+    "creation": 1788830701
+   }
+  ],
+  "hdd/backups/192.168.28.99/hdd/lab/srv-a": [
+   {
+    "name": "hdd/backups/192.168.28.99/hdd/lab/srv-a@automated_hourly_2026-09-09_11-20-01",
+    "used": 0,
+    "refer": 4227072,
+    "written": 0,
+    "creation": 1788955201
+   },
+   {
+    "name": "hdd/backups/192.168.28.99/hdd/lab/srv-a@automated_hourly_2026-09-09_10-20-01",
+    "used": 12288,
+    "refer": 4227072,
+    "written": 12288,
+    "creation": 1788951601
+   },
+   {
+    "name": "hdd/backups/192.168.28.99/hdd/lab/srv-a@automated_daily_2026-09-08_01-25-01",
+    "used": 1048576,
+    "refer": 4210688,
+    "written": 3145728,
+    "creation": 1788830701
+   }
+  ],
+  "hdd/backups/192.168.28.50/hdd/lab/a": [
+   {
+    "name": "hdd/backups/192.168.28.50/hdd/lab/a@automated_hourly_2026-09-09_11-20-01",
+    "used": 0,
+    "refer": 4227072,
+    "written": 0,
+    "creation": 1788955201
+   },
+   {
+    "name": "hdd/backups/192.168.28.50/hdd/lab/a@automated_hourly_2026-09-09_10-20-01",
+    "used": 12288,
+    "refer": 4227072,
+    "written": 12288,
+    "creation": 1788951601
+   },
+   {
+    "name": "hdd/backups/192.168.28.50/hdd/lab/a@automated_daily_2026-09-08_01-25-01",
+    "used": 1048576,
+    "refer": 4210688,
+    "written": 3145728,
+    "creation": 1788830701
+   }
+  ],
+  "hdd/backups/192.168.28.50/hdd/lab/b": [
+   {
+    "name": "hdd/backups/192.168.28.50/hdd/lab/b@automated_hourly_2026-09-09_11-20-01",
+    "used": 0,
+    "refer": 4227072,
+    "written": 0,
+    "creation": 1788955201
+   },
+   {
+    "name": "hdd/backups/192.168.28.50/hdd/lab/b@automated_hourly_2026-09-09_10-20-01",
+    "used": 12288,
+    "refer": 4227072,
+    "written": 12288,
+    "creation": 1788951601
+   },
+   {
+    "name": "hdd/backups/192.168.28.50/hdd/lab/b@automated_daily_2026-09-08_01-25-01",
+    "used": 1048576,
+    "refer": 4210688,
+    "written": 3145728,
+    "creation": 1788830701
+   }
+  ],
+  "hdd/backups/192.168.28.50/hdd/lab/c": [
+   {
+    "name": "hdd/backups/192.168.28.50/hdd/lab/c@automated_hourly_2026-09-09_11-20-01",
+    "used": 0,
+    "refer": 4227072,
+    "written": 0,
+    "creation": 1788955201
+   },
+   {
+    "name": "hdd/backups/192.168.28.50/hdd/lab/c@automated_hourly_2026-09-09_10-20-01",
+    "used": 12288,
+    "refer": 4227072,
+    "written": 12288,
+    "creation": 1788951601
+   },
+   {
+    "name": "hdd/backups/192.168.28.50/hdd/lab/c@automated_daily_2026-09-08_01-25-01",
+    "used": 1048576,
+    "refer": 4210688,
+    "written": 3145728,
+    "creation": 1788830701
+   }
+  ],
+  "hdd/backups/192.168.28.50/hdd/lab/d": [
+   {
+    "name": "hdd/backups/192.168.28.50/hdd/lab/d@automated_hourly_2026-09-09_11-20-01",
+    "used": 0,
+    "refer": 4227072,
+    "written": 0,
+    "creation": 1788955201
+   },
+   {
+    "name": "hdd/backups/192.168.28.50/hdd/lab/d@automated_hourly_2026-09-09_10-20-01",
+    "used": 12288,
+    "refer": 4227072,
+    "written": 12288,
+    "creation": 1788951601
+   },
+   {
+    "name": "hdd/backups/192.168.28.50/hdd/lab/d@automated_daily_2026-09-08_01-25-01",
+    "used": 1048576,
+    "refer": 4210688,
+    "written": 3145728,
+    "creation": 1788830701
+   }
+  ]
+ }
+}

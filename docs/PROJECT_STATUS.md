@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4d1a5f5b7c82aef9 -->
+<!-- status-covers-digest: 1e67a5ab8f4a0150 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -52,6 +52,16 @@
   przechodziły. Także gość, którego tu nie ma (rc 2 „Configuration file ... does not exist”, pomiar pve10; runda 2
   recenzji): gdy `/etc/pve/nodes` pokazuje go na innym węźle, odmowa mówi, że dysk tu jest repliką pvesr i trzeba
   odzyskać na tamtym węźle; dysk usuniętego gościa -- pod nazwą, która nie jest dyskiem gościa. Zdalna gałąź (`pgrep`) bez zmian.
+- **F4 Kopie na dwóch panelach (2026-10-28, test właściciela na pve10, U100-U105).** Lewy panel: datasety kopii
+  pogrupowane po relacji i replice (wspólny początek ścieżki raz w nagłówku grupy, dzieci z wcięciem, liczba migawek,
+  najnowsza). Prawy panel: migawki zaznaczonego datasetu z `zfs list -t snapshot -d1` (czytane przy wejściu na dataset, potem
+  z cache do odświeżenia), kolumny NAME (`@migawka`, pełna nazwa w tytule i w Szczegółach), USED, REFER, CREATION --
+  zasada właściciela: admin widzi prawdę z dysku. Enter/F7 na migawce: montowanie tylko do
+  odczytu bez okien wyboru (`browse --snapshot=`); F9: okna Przywróć od razu na tej kopii i migawce
+  (`restore --dataset= --snapshot=`, drzewo i menu migawek pominięte raz). mc biegnie we własnej przestrzeni montowań:
+  wszystko tylko do odczytu poza `~/odzysk/<kopia>` (prawy panel, pusty znika) -- zmierzone na pve10: zapis do /root,
+  /hdd, /tmp, /etc odrzucony, do katalogu odzysku przechodzi, host po wyjściu zapisywalny. Powrót z przeglądania bez
+  pełnego przeładowania (109 ms na pve10, wcześniej 3-6 s). Nowe czytniki: `zfs-backup.sh zfs-tree` / `zfs-snapshots --json`.
 - **Uwagi z testu właściciela na pve10 (2026-10-27, `gui/uwagi-1027`, U84-U99).** Przebiegi: kolumna Dane
   biegu (suma `written` migawek rodziny zadania na celu od poprzedniego biegu tej linii; `job-stats --runs` podaje
   listę migawek z okna biegów i doby przed nim; porządki i cele zdalne „-”), dół Źródło | Cel | Dane na 5 wierszy z

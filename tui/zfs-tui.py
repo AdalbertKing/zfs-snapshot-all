@@ -960,6 +960,8 @@ class Data(object):
         self.profiles = None  # list-profiles --json --no-render, na zadanie (kreator)
         self.datasets = {}    # list-datasets [HOST] --json, na zadanie (kreator: listy zamiast pisania)
         self.checks = {}      # check-source HOST --json, na zadanie (kreator: diagnoza swiezego zrodla)
+        self.ztree = {}       # zfs-tree --json ROOT..., na zadanie (F4 Kopie, lewy panel)
+        self.zsnaps = {}      # zfs-snapshots --json DS, na zadanie (F4 Kopie, prawy panel)
         self.read_at = 0
         self.host_ip = None   # R3-1: adres IP hosta do paska tytulu; None = nieznany/offline
         self.guards = None    # stan strażników hosta (U35/U50) do paska tytułu
@@ -1070,6 +1072,36 @@ def load_datasets(repo, files, data, host="", port=""):
         doc, err = run_verb(repo, args)
     data.datasets[key] = ((doc or {}).get("datasets", []), err)
     return data.datasets[key]
+
+
+def load_ztree(repo, files, data, roots):
+    """zfs-tree --json ROOT... (F4 Kopie): datasety pod korzeniami kopii, z liczba migawek."""
+    key = tuple(roots)
+    if key in data.ztree:
+        return data.ztree[key]
+    if files.get("zfs_tree"):
+        doc, err = load_file(files["zfs_tree"])
+    elif files.get("offline"):
+        doc, err = None, _(u"tryb offline: zfs-tree nie uruchomiono")
+    else:
+        doc, err = run_verb(repo, ["zfs-tree", "--json"] + list(roots))
+    data.ztree[key] = ((doc or {}).get("datasets", []), err)
+    return data.ztree[key]
+
+
+def load_zsnaps(repo, files, data, ds):
+    """zfs-snapshots --json DS (F4 Kopie, prawy panel): migawki jak `zfs list -t snapshot`."""
+    if ds in data.zsnaps:
+        return data.zsnaps[ds]
+    if files.get("zfs_snapshots"):
+        all_, err = load_file(files["zfs_snapshots"])
+        doc = {"snapshots": ((all_ or {}).get("by_dataset") or {}).get(ds, [])}
+    elif files.get("offline"):
+        doc, err = None, _(u"tryb offline: zfs-snapshots nie uruchomiono")
+    else:
+        doc, err = run_verb(repo, ["zfs-snapshots", "--json", ds])
+    data.zsnaps[ds] = (doc, err)
+    return data.zsnaps[ds]
 
 
 def load_check(repo, files, data, host, port=""):
@@ -2821,6 +2853,7 @@ class Screen(object):
 
     def __init__(self):
         self.lines, self.cursor_y, self.bars, self.titles, self.cmd_y = [], None, set(), set(), None
+        self.cursor_span = None   # (od, do): odwrocony tylko ten zakres linii (dwa panele, F4)
         self.marks = {}   # linia -> [(od, do, "active"|"key")]: pasek F (aktywne okno, cyfry)
 
 
@@ -4290,6 +4323,210 @@ def render_odzysk(data, rows, cursor, width, height, now, ch, message="", focus=
                          det_title, det, child, focus, pair_cursor, screen_actions("odzysk"))
 
 
+# --- F4 Kopie: dwa panele (wlasciciel 2026-10-28, wariant B symulacji) ------------------
+# Lewy panel to ULATWIENIE: datasety kopii tego hosta, pogrupowane po relacji i replice,
+# wspolny poczatek sciezki raz w naglowku grupy. Prawy panel to PRAWDA Z DYSKU: migawki
+# zaznaczonego datasetu czytane na zywo, kolumny jak `zfs list -t snapshot` (NAME, USED,
+# REFER, CREATION) -- widok, ktory admin zna z basha i ktoremu ufa. Enter na migawce
+# montuje ja tylko do odczytu (browse --snapshot=), F9 otwiera odzysk z niej.
+ZFS_DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+ZFS_MONS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def zfs_creation(epoch):
+    """CREATION jak w `zfs list`: 'Wed Oct 28 10:15 2026' (niezaleznie od locale)."""
+    t = time.localtime(int(epoch or 0))
+    return u"%s %s %2d %2d:%02d %d" % (ZFS_DAYS[t.tm_wday], ZFS_MONS[t.tm_mon - 1], t.tm_mday, t.tm_hour, t.tm_min, t.tm_year)
+
+
+def common_base(roots):
+    """Wspolny poczatek sciezek (pelne segmenty, z '/' na koncu), krotszy niz kazda z nich."""
+    segs = [r.split("/") for r in roots if r]
+    if not segs:
+        return ""
+    com = []
+    for parts in zip(*segs):
+        if len(set(parts)) != 1:
+            break
+        com.append(parts[0])
+    if len(com) >= min(len(s) for s in segs):
+        com = com[:-1]
+    return "/".join(com) + "/" if com else ""
+
+
+def kopie_groups(rows, data, now, ch):
+    """Grupy lewego panelu: relacje z kopiami na tym hoscie, potem repliki (nosnik
+    podlaczony -> korzenie dst/zrodlo; odlaczony -> sama grupa z uwaga)."""
+    groups = []
+    for x in odzysk_rows(rows, data, now):
+        if x.get("kind") != "relation":
+            continue
+        kids = odz_children("ds", x, rows, data, now, ch).get("items") or []
+        roots = []
+        for it in kids:
+            d = it.get("dataset") or ""
+            if d and ":" not in d and d not in roots:
+                roots.append(d)
+        groups.append({"kind": "relation", "name": x["name"], "word": _(u"relacja %s") % x["name"],
+                       "what": u"%s  %s" % (x.get("typ") or "", x.get("dir") or ""), "roots": roots, "note": ""})
+    for r in ((data.replicas or {}).get("replicas") or []) if data is not None else []:
+        here = r.get("present") == "here"
+        srcs = r.get("sources") or [s for s in (r.get("source") or "").split(",") if s]
+        roots = [u"%s/%s" % (r.get("dst", "").rstrip("/"), s) for s in srcs] if here and r.get("dst") else []
+        groups.append({"kind": "replica", "name": r.get("name") or "?", "word": _(u"replika %s") % (r.get("name") or "?"),
+                       "what": r.get("media") or "", "roots": roots,
+                       "note": u"" if here else _(u"nośnik niepodłączony -- podłącz go, potem Ctrl-R")})
+    return groups
+
+
+def kopie_items(groups, tree):
+    """Wiersze lewego panelu: naglowki grup (nie do wyboru), datasety (do wyboru) i na
+    koncu 'inny dysk' -- pula spoza relacji i replik (stare okna wyboru)."""
+    out = []
+    for g in groups:
+        base = common_base(g["roots"])
+        out.append({"hdr": True, "g": g, "base": base})
+        seen, n0 = set(), len(out)
+        for root in g["roots"]:
+            for d in tree:
+                nm = d.get("name") or ""
+                if nm in seen or not (nm == root or nm.startswith(root + "/")):
+                    continue
+                seen.add(nm)
+                depth = nm[len(root):].count("/")
+                label = nm[len(base):] if nm == root else u"  " * depth + nm.rsplit("/", 1)[-1]
+                out.append({"g": g, "ds": nm, "label": label, "snaps": int(d.get("snapshots") or 0),
+                            "newest": int(d.get("newest") or 0), "type": d.get("type") or "filesystem"})
+        if len(out) == n0:
+            out.append({"g": g, "note": g.get("note") or _(u"brak datasetów kopii na tym hoście")})
+    out.append({"any": True, "label": _(u"inny dysk -- pula spoza relacji i replik")})
+    return out
+
+
+def kopie_snap_items(doc, ds):
+    """Prawy panel: migawki datasetu (najnowsza na gorze) jako wiersze tabeli."""
+    items = []
+    for s in (doc or {}).get("snapshots") or []:
+        nm = s.get("name") or ""
+        short = nm.split("@", 1)[1] if "@" in nm else nm
+        items.append({"cells": [u"@" + short, hbytes_short(int(s.get("used") or 0)), hbytes_short(int(s.get("refer") or 0)),
+                                zfs_creation(s.get("creation"))],
+                      "name": nm if "@" in nm else u"%s@%s" % (ds, short), "creation": int(s.get("creation") or 0),
+                      "kopie": True})
+    return items
+
+
+def render_kopie(data, items, sel, focus, scur, snaps, snaps_err, width, height, now, ch, ctx=None):
+    """F4 Kopie: lewy panel datasety, prawy migawki (zfs list), dol szczegoly."""
+    scr = Screen()
+    avail = height - 2
+    bot_h = 7
+    top_h = max(8, avail - bot_h)
+    lw = max(40, min(int(width * 0.42), width - 40))
+    rw = width - lw
+    linner, rinner = lw - 4, rw - 4
+    mark = ">" if ch.ascii else u"▸"
+    # lewy panel
+    lines, cur_line = [], None
+    for i, x in enumerate(items):
+        if x.get("hdr"):
+            if lines:
+                lines.append(u"")
+            g = x["g"]
+            lines.append(fit(u"%s %s  %s" % (mark, g["word"], g["what"]), linner))
+            if x.get("base"):
+                lines.append(fit(u"  " + x["base"], linner))
+            continue
+        if x.get("note"):
+            lines.append(fit(u"    " + x["note"], linner))
+            continue
+        if x.get("any"):
+            lines.append(u"")
+            txt = u"  " + x["label"]
+        else:
+            right = u"%5d  %s" % (x["snaps"], fmt_when_short(x["newest"], now) if x["newest"] else u"-")
+            txt = fit(u"  " + x["label"], max(8, linner - len(right) - 1)) + u" " + right
+        if i == sel:
+            cur_line = len(lines)
+            if focus == "pairs":
+                txt = mark + txt[1:]
+        lines.append(fit(txt, linner))
+    body_h = top_h - 2
+    first = 0
+    if cur_line is not None and cur_line >= body_h:
+        first = cur_line - body_h + 1
+    lbody = lines[first:first + body_h]
+    while len(lbody) < body_h:
+        lbody.append(u"")
+    host = ((data.jobs or {}).get("host") or "") if data is not None else ""
+    lfoot = _(u"Enter/Tab do migawek") if focus != "pairs" else u""
+    left = box(ch, (_(u"Kopie na %s") % host).strip(), lbody, lw, footer=lfoot)
+    # prawy panel
+    cur = items[sel] if 0 <= sel < len(items) else {}
+    ds = cur.get("ds") or u""
+    rbody, rcur = [], None
+    if cur.get("any"):
+        rbody = wrap(_(u"Pula spoza relacji i replik (np. dysk przyniesiony po awarii): Enter otwiera okna wyboru zaimportowanej puli i migawki, F9 -- odzysk z niej."), rinner)
+    elif not ds:
+        rbody = wrap(cur.get("note") or u"", rinner)
+    elif snaps_err:
+        rbody = wrap(_(u"zfs-snapshots: %s") % snaps_err, rinner)
+    elif not snaps:
+        rbody = wrap(_(u"%s nie ma migawek") % ds, rinner)
+    else:
+        hdr, rl = table_fit([u"NAME", u"USED", u"REFER", u"CREATION"], [s["cells"] for s in snaps], rinner, ch, prio=(0, 3, 1, 2), flex=0)
+        rbody = [hdr, ch.dash * rinner]
+        room = top_h - 4
+        sc = min(scur, len(rl) - 1)
+        rfirst = max(0, sc - room + 1)
+        for j in range(rfirst, min(len(rl), rfirst + room)):
+            if j == sc:
+                rcur = len(rbody)
+            rbody.append(rl[j])
+    rbody = rbody[:top_h - 2]
+    while len(rbody) < top_h - 2:
+        rbody.append(u"")
+    rtitle = u"zfs list -t snapshot %s" % ds if ds else _(u"Migawki")
+    if len(rtitle) > rw - 8:
+        rtitle = u"zfs list -t snapshot ..." + ds[-max(8, rw - 32):]
+    rfoot = _(u"Enter przeglądaj   F9 przywróć   Esc do datasetów") if focus == "pairs" else u""
+    right = box(ch, rtitle, rbody, rw, double=(focus == "pairs"), footer=rfoot)
+    out = [top_bar(data, width, now, ch.ascii, len(data.errors) if data is not None else 0)]
+    out += side_by_side(left, right, width, ch)
+    if focus == "pairs" and rcur is not None:
+        scr.cursor_y, scr.cursor_span = 2 + rcur, (lw + 2, width - 2)
+    elif focus != "pairs" and cur_line is not None:
+        scr.cursor_y, scr.cursor_span = 2 + cur_line - first, (2, lw - 2)
+    # dol: szczegoly zaznaczonej pozycji
+    det = []
+    if ds:
+        g = cur["g"]
+        det.append((_(u"Dataset"), ds))
+        if focus == "pairs" and snaps:
+            s = snaps[min(scur, len(snaps) - 1)]
+            det.append((_(u"Migawka"), s["name"]))
+            det.append((_(u"Czas"), fmt_full(s["creation"])))
+        det.append((_(u"Skąd"), u"%s  %s" % (g["word"], g["what"])))
+        det.append((_(u"Rodzaj"), _(u"dysk maszyny (zvol) -- przy przeglądaniu wybierzesz partycję") if cur.get("type") == "volume"
+                    else _(u"system plików")))
+    elif cur.get("any"):
+        det.append((_(u"Inny dysk"), _(u"najpierw zaimportuj pulę (zpool import), potem Enter")))
+    pl = detail_kv(ch, det, width - 4)[:bot_h - 2]
+    while len(pl) < bot_h - 2:
+        pl.append(u"")
+    out += box(ch, _(u"Szczegóły"), pl, width, double=False)
+    scr.lines = out
+    for y, ln in enumerate(scr.lines):
+        if y and ln and ln[0] in (ch.dtl, ch.dbl, ch.stl, ch.sbl):
+            scr.titles.add(y)
+    scr.bars.add(0)
+    while len(scr.lines) < height - 1:
+        scr.lines.append(fit("", width))
+    scr.lines = scr.lines[:height - 1]
+    push_key_bar(scr, "odzysk", width, screen_actions("odzysk"))
+    return scr
+
+
 # --- Pomoc -----------------------------------------------------------------
 HELP = [
     u"To okna do obsługi zfs-snapshot-all. Każda akcja uruchamia zwykłe polecenie zfs-backup.sh, nic więcej.",
@@ -4702,6 +4939,7 @@ class UI(object):
             # a panel CONFIG pokazywal stan sprzed "Zmien relacje".
             self.data.profiles = None
             self.data.configs = {}
+            self.data.ztree, self.data.zsnaps = {}, {}
             if self.screen == "szablony":
                 self.ensure_profiles()
         self.rows = build_relations(self.data, self.now())
@@ -4749,7 +4987,7 @@ class UI(object):
         if screen == "szablony":
             return len(self.data.profiles or [])
         if screen == "odzysk":
-            return len(odzysk_rows(self.rows))
+            return len(self.kopie_state()[1])
         return len((self.data.replicas or {}).get("replicas", []))
 
     # ------------------------------------------------------------------
@@ -4944,6 +5182,54 @@ class UI(object):
         # robi dokladnie to, co nocny cron (prune tez: kasuje tylko wg retencji).
         self.run_detached(_(u"Zadanie %s -- bieg teraz (konto %s)") % (r.get("name") or "", acct), argv, logname="zadanie")
 
+    def kopie_state(self):
+        """F4 Kopie: (wiersze lewego panelu, indeksy wierszy do wyboru)."""
+        groups = kopie_groups(self.rows, self.data, self.now(), self.ch)
+        roots = []
+        for g in groups:
+            for r in g["roots"]:
+                if r not in roots:
+                    roots.append(r)
+        tree = load_ztree(self.repo, self.files, self.data, roots)[0] if roots else []
+        items = kopie_items(groups, tree)
+        return items, [i for i, x in enumerate(items) if x.get("ds") or x.get("any")]
+
+    def kopie_current(self):
+        items, selix = self.kopie_state()
+        c = self.cursor.get("odzysk", 0)
+        return items[selix[c]] if 0 <= c < len(selix) else {}
+
+    def kopie_snaps(self, it):
+        """(wiersze prawego panelu, blad) dla datasetu z lewego panelu -- na zywo, z cache."""
+        if not it or not it.get("ds"):
+            return [], None
+        doc, err = load_zsnaps(self.repo, self.files, self.data, it["ds"])
+        return kopie_snap_items(doc, it["ds"]), err
+
+    def kopie_browse(self, it, snap):
+        """Enter na migawce: zamontuj ja tylko do odczytu i otworz mc (browse --snapshot=).
+        Bez migawki ('inny dysk'): stare okna wyboru (browse --any). Po przegladaniu GUI
+        wraca bez pelnego przeladowania (U104): przegladanie niczego nie zmienia."""
+        g = (it or {}).get("g") or {}
+        who = g["name"] if g.get("kind") == "relation" else "--any"
+        argv = [self.zb(), "browse", who, "--ask"]
+        if snap:
+            argv.append("--snapshot=%s" % snap["name"])
+        self.noreload_after = True
+        return self.run_dialog(argv)
+
+    def kopie_restore(self, it, snap):
+        """F9: odzysk z tej kopii i tej migawki -- okna Przywroc startuja od 'dokad'."""
+        g = (it or {}).get("g") or {}
+        extra = []
+        if it and it.get("ds"):
+            extra.append("--dataset=%s" % it["ds"])
+        if snap:
+            extra.append("--snapshot=%s" % snap["name"].split("@", 1)[-1])
+        if g.get("kind") == "relation":
+            return self.run_dialog([self.zb(), "restore", g["name"], "--ask"] + extra)
+        return self.run_dialog([self.zb(), "restore", "--from-copy", "--ask"] + extra)
+
     def restore_action(self, row):
         """F11 ODZYSK DANYCH (właściciel 2026-10-18: odzysk nie siedzi w zmianie
         relacji ani przy zadaniach -- "ktoś może się machnąć"). Te same okna
@@ -4999,13 +5285,26 @@ class UI(object):
                             ds = dst
         if not rel:
             return
-        rows = odzysk_rows(self.rows, self.data, self.now())
-        for i, x in enumerate(rows):
-            if x.get("kind") == "relation" and x["name"] == rel:
-                self.cursor["odzysk"] = i
-                self.kopie_ctx = {"rel": rel, "dataset": ds, "at": at}
-                return
-        self.message = _(u"relacja %s nie ma kopii na tym hoście -- nie ma czego przeglądać") % rel
+        items, selix = self.kopie_state()
+        pick = None
+        for c_, i in enumerate(selix):
+            g = items[i].get("g") or {}
+            if g.get("kind") == "relation" and g.get("name") == rel:
+                if pick is None:
+                    pick = c_
+                if ds and items[i].get("ds") == ds:
+                    pick = c_
+                    break
+        if pick is None:
+            self.message = _(u"relacja %s nie ma kopii na tym hoście -- nie ma czego przeglądać") % rel
+            return
+        self.cursor["odzysk"] = pick
+        self.kopie_ctx = {"rel": rel, "dataset": ds, "at": at}
+        if at:
+            snaps = self.kopie_snaps(items[selix[pick]])[0]
+            older = [j for j, x in enumerate(snaps) if x["creation"] <= int(at)]
+            if older:
+                self.screen, self.focus, self.pair_cursor = "odzysk", "pairs", older[0]
 
     def replica_action(self, k):
         """Klawisz akcji na F6 (repliki): Ins nowa (okna whiptail), Del usun,
@@ -5873,6 +6172,10 @@ class UI(object):
         # Transfery). Pauza jest teraz na F8 (F7 = Uruchom teraz, jednolicie, 2026-10-17).
         if k == "F4" and self.screen in ("zadania", "relacje"):
             self.kopie_from_here()
+            if self.screen == "odzysk":
+                # kopie_from_here postawil kursor na migawce biegu (prawy panel) --
+                # ponizsze przelaczenie ekranu zerowaloby fokus i pozycje.
+                return "stay"
         for key, fk, _label in SCREENS:
             if k == fk:
                 self.screen, self.focus, self.pair_cursor = key, "list", 0
@@ -5903,15 +6206,22 @@ class UI(object):
             return self.action(k) or "stay"
         elif k in ("F7", "F8", "F9", "del", "ins") and self.screen == "nosniki":
             return self.replica_action(k) or "stay"
-        elif k == "F7" and n and self.screen == "odzysk":
+        elif k in ("F7", "enter", "F9") and n and self.screen == "odzysk":
             self.cursor["odzysk"] = c
-            return self.browse_action(odzysk_rows(self.rows)[c]) or "stay"
-        elif k == "F9" and n and self.screen == "odzysk":
-            self.cursor["odzysk"] = c
-            return self.restore_action(odzysk_rows(self.rows)[c]) or "stay"
-        elif k == "enter" and n and self.screen == "odzysk":
-            self.cursor["odzysk"] = c
-            return self.browse_action(odzysk_rows(self.rows)[c]) or "stay"
+            it = self.kopie_current()
+            if self.focus == "pairs":
+                snaps = self.kopie_snaps(it)[0]
+                s_ = snaps[min(self.pair_cursor, len(snaps) - 1)] if snaps else None
+                if s_ is None:
+                    return "stay"
+                return (self.kopie_restore(it, s_) if k == "F9" else self.kopie_browse(it, s_)) or "stay"
+            if k == "F9":
+                return self.kopie_restore(it, None) or "stay"
+            if it.get("any"):
+                return self.kopie_browse(it, None) or "stay"
+            if self.kopie_snaps(it)[0]:
+                self.focus, self.pair_cursor = "pairs", 0
+            return "stay"
         elif k == "enter" and n:
             if self.screen == "relacje":
                 self.window, self.scroll = ("relacja", self.rows[c]), 0
@@ -5957,8 +6267,8 @@ class UI(object):
             reps = (self.data.replicas or {}).get("replicas", [])
             return rep_children(key, reps[c], self.data, now, ch) if 0 <= c < len(reps) else None
         if sc == "odzysk":
-            items = odzysk_rows(self.rows, self.data, now)
-            return odz_children(key, items[c], self.rows, self.data, now, ch) if 0 <= c < len(items) else None
+            it = self.kopie_current()
+            return {"items": self.kopie_snaps(it)[0] if it and it.get("ds") else []}
         return None
 
     def open_snapshots(self, it):
@@ -5990,8 +6300,8 @@ class UI(object):
         if it.get("jobrow") is not None:
             self.window, self.scroll = ("relacja", it["jobrow"]), 0
             return None
-        if self.screen == "odzysk":
-            return self.restore_action(odzysk_rows(self.rows, self.data, self.now())[self.cursor["odzysk"]])
+        if self.screen == "odzysk" and it.get("kopie"):
+            return self.kopie_browse(self.kopie_current(), it)
         self.window, self.scroll = ("panel", {"kind": "panel", "name": it.get("title") or "", "pairs": it.get("pairs") or []}), 0
         return None
 
@@ -6036,8 +6346,12 @@ def _ui_render(self, width, height):
         base = render_szablony(self.data, self.cursor["szablony"], width, sh, now, self.ch, self.message, rows=self.rows,
                                focus=self.focus, pair_cursor=self.pair_cursor, ti=self.ctab.get("szablony", 0))
     elif self.screen == "odzysk":
-        base = render_odzysk(self.data, self.rows, self.cursor["odzysk"], width, sh, now, self.ch, self.message, ctx=self.kopie_ctx,
-                             focus=self.focus, pair_cursor=self.pair_cursor)
+        items, selix = self.kopie_state()
+        c = self.cursor["odzysk"]
+        it = items[selix[c]] if 0 <= c < len(selix) else {}
+        snaps, serr = self.kopie_snaps(it) if it.get("ds") else ([], None)
+        base = render_kopie(self.data, items, selix[c] if 0 <= c < len(selix) else -1, self.focus, self.pair_cursor,
+                            snaps, serr, width, sh, now, self.ch, ctx=self.kopie_ctx)
     else:
         base = render_nosniki(self.data, self.cursor["nosniki"], width, sh, now, self.ch, self.message,
                               focus=self.focus, pair_cursor=self.pair_cursor, ti=self.ctab.get("nosniki", 0))
@@ -6204,12 +6518,18 @@ def curses_loop(ui):
             base = 0
             if y in scr.bars:
                 base = curses.color_pair(6) if curses.has_colors() else curses.A_REVERSE
-            elif y == scr.cursor_y:
+            elif y == scr.cursor_y and not scr.cursor_span:
                 base = curses.A_REVERSE
             try:
                 stdscr.addstr(y, 0, line, base)
             except curses.error:
                 pass
+            if y == scr.cursor_y and scr.cursor_span:
+                a, b = scr.cursor_span
+                try:
+                    stdscr.addstr(y, a, line[a:b], curses.A_REVERSE)
+                except curses.error:
+                    pass
             # Pasek F: aktywne okno i cyfry zapisu skroconego w kolorze (bez [nawiasow]).
             for a, b, kind in scr.marks.get(y, ()):
                 if a >= len(line):
@@ -6460,8 +6780,14 @@ def curses_loop(ui):
                 # Kursor na nowej relacji -- dopiero gdy świeże dane wejdą (poll_bg).
                 ui.rel_names_before_bg = getattr(ui, "rel_names_before", None)
                 ui.rel_names_before = None
-                ui.refresh_bg()
-                ui.wait_fresh = True
+                if getattr(ui, "noreload_after", False):
+                    # U104 (wlasciciel 2026-10-28): przegladanie kopii niczego nie zmienia,
+                    # wiec bez czekania na pelne odswiezenie -- dane odswieza Ctrl-R albo
+                    # kolejne okno. Wszystkie inne okna nadal odswiezaja (decyzja 2026-10-09).
+                    ui.noreload_after = False
+                else:
+                    ui.refresh_bg()
+                    ui.wait_fresh = True
     curses.wrapper(main)
 
 
@@ -6500,6 +6826,8 @@ def main(argv):
     ap.add_argument("--datasets-local", help="czytaj list-datasets --json (ten host) z pliku (kreator)")
     ap.add_argument("--datasets-remote", help="czytaj list-datasets HOST --json (peer) z pliku (kreator)")
     ap.add_argument("--check-source", help="czytaj check-source HOST --json z pliku (kreator: diagnoza hosta)")
+    ap.add_argument("--zfs-tree", help="czytaj zfs-tree --json z pliku (F4 Kopie, lewy panel)")
+    ap.add_argument("--zfs-snapshots", help="plik {\"by_dataset\": {DS: [migawki]}} zamiast zfs-snapshots --json (F4 Kopie)")
     ap.add_argument("--offline", action="store_true", help="nie uruchamiaj czasownikow; zrodla bez pliku sa puste")
     ap.add_argument("--host-ip", help="R3-1: IP hosta w pasku tytulu (testy/offline; na zywo liczony z trasy domyslnej)")
     ap.add_argument("--lang", choices=LANGS, help="window language (default: [gui] language in settings.ini, then en)")
@@ -6511,7 +6839,7 @@ def main(argv):
     files = {"status": a.status, "jobs": a.jobs, "monitors": a.monitors, "progress": a.progress,
              "replicas": a.replicas, "stats": a.stats, "config": a.config, "profiles": a.profiles, "offline": a.offline,
              "datasets_local": a.datasets_local, "datasets_remote": a.datasets_remote, "check_source": a.check_source,
-             "host_ip": a.host_ip}
+             "zfs_tree": a.zfs_tree, "zfs_snapshots": a.zfs_snapshots, "host_ip": a.host_ip}
     ch = Chars(want_ascii(a))
     # START BEZ PUSTEGO EKRANU (kampania 2026-10-26, pve9: ~20 s czarnego terminala): pierwszy
     # odczyt danych biegnie przed curses -- terminal mówi, co się dzieje.
