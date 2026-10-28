@@ -1,7 +1,7 @@
 #!/bin/bash
 # capacity-guard.sh -- BEZPIECZNIK POJEMNOŚCI (U35, właściciel 2026-10-20).
 #
-# Wzór: a-tassa, gdzie cron przy zajętości 89 % kasuje najstarsze migawki. Tutaj tak
+# Wzór: host produkcyjny, gdzie cron przy zajętości 89 % kasuje najstarsze migawki. Tutaj tak
 # samo, ale tylko to, co bezpiecznie usunąć -- i każda niepewność oznacza NIC NIE
 # USUWAĆ (GitHub #655, audyt 2026-10-20):
 #   - WŁASNOŚĆ z linii retencji, nie z nazwy: migawka jest „nasza” tylko gdy lokalna
