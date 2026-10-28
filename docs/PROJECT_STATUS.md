@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1e0cce62452626fd -->
+<!-- status-covers-digest: f04cf34ec23fa1ad -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -57,6 +57,11 @@
   **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
   ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **F2/F3: panel wiersza „lokalny prune” ze statystykami (2026-10-28, przejście GUI na pve10).** Wiersz
+  porządków szczebla płaskiego jest dorabiany z zadania pobrania i miał `srow` puste, więc panel mówił „brak
+  biegów w dzienniku z tego okna”, choć lista obok pokazywała te biegi. Teraz statystyki są brane z etykiety
+  własnej linii `delsnaps.sh` (czas, wywołania, błędy). Na pve10: `pve9 lokalny prune hourly: enc` -- 144
+  wywołania. Test w `test/tui` z fiksturą `stats-flatprune.json`.
 - **Katalog montażu krótszy (2026-10-28, U102).** `browse.sh` nazywa katalog montażu
   `<host>_<dwa ostatnie człony datasetu>@<migawka>.XXXXXX` (np. `pve10_data~vm1@automated_hourly_...`), nie całą
   ścieżką kopii -- pełna ścieżka zajmowała nagłówek mc i spychała migawkę za krawędź. Przypadek 37b w `test/browse`.
