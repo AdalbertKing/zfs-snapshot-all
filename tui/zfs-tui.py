@@ -1967,6 +1967,10 @@ def render_tabbed(data, width, height, now, ch, screen, title, heads, cells, cur
     hdr, lines = table_fit(heads, cells, inner, ch, prio, flex)
     list_h = max(1, top_h - 4)
     first = max(0, cursor - list_h + 1)
+    # Ostatni wiersz okna zajmuje "... jeszcze N", gdy nizej sa dalsze -- kursor na nim
+    # znikal (F2 otwarte przy "teraz": panel mowil o biegu, ktorego lista nie pokazywala).
+    if list_h > 1 and cursor == first + list_h - 1 and len(lines) > first + list_h:
+        first += 1
     body = [hdr, ch.dash * inner]
     cur_y = None
     for i in range(first, min(len(lines), first + list_h)):
@@ -4679,6 +4683,9 @@ class UI(object):
         self.rows = build_relations(self.data, self.now())
         self.jobrows = sort_zad_rows(build_jobs(self.data, self.now()), self.zad_sort, self.data)
         self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group)
+        # F2 otwiera sie PRZY "teraz" (najblizszy nadchodzacy bieg), nie na najstarszym
+        # biegu sprzed 12 h (przejscie GUI pve10, 2026-10-28). Home = gora listy.
+        self.cursor["zadania"] = self.run_cursor_for(None)
 
     def now(self):
         return self.now_fixed if self.now_fixed is not None else int(time.time())

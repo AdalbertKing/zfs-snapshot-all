@@ -69,7 +69,8 @@ zkeys() {   # <wzorzec wiersza listy> [argumenty zrodel: --status/--jobs/...] ->
     dv=0
     [ "$ln" -gt 6 ] && dv=$(printf '%s\n' "$full" | sed -n "6,$((ln-1))p" | grep -cE '^║ (── teraz|▸ )')
     n=$((ln - 5 - dv))
-    for ((i=0; i<n; i++)); do keys="${keys:+$keys,}down"; done
+    keys="home"   # F2 startuje przy "teraz"; liczymy od gory listy
+    for ((i=0; i<n; i++)); do keys="$keys,down"; done
     printf '%s' "$keys"
 }
 
@@ -1016,7 +1017,8 @@ json.dump(st, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 PRARGS="--status $GS --jobs $GEJ --monitors $GM --stats $PRS"
 prz() {   # <klawisze> [extra] -> ekran F2
-    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PRARGS --screen zadania --keys "$1" --width 200 --height 60 "${@:2}" 2>&1
+    # "home": F2 startuje przy "teraz"; te przypadki licza klawisze od gory listy
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PRARGS --screen zadania --keys "home${1:+,$1}" --width 200 --height 60 "${@:2}" 2>&1
 }
 PR0="$(prz "")"
 PR0L="$(lst "$PR0")"
@@ -1041,6 +1043,37 @@ else
     bad "przebiegi: kursor na kresce" "down: $(printf '%s\n' "$PRD" | grep -E 'Ten bieg|Nadchodzący')" "down,up: $(printf '%s\n' "$PRU" | grep -E 'Ten bieg|Nadchodzący')" "down,down,up,up: $(printf '%s\n' "$PRUU" | grep -E 'Ten bieg|Nadchodzący')"
 fi
 PXL="$(mktemp)"; : > "$PXL"
+# Start BEZ klawiszy: kursor przy "teraz" -- na najblizszym nadchodzacym biegu, nie na
+# najstarszym wykonanym (przejscie GUI pve10, 2026-10-28).
+PRZS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PRARGS --screen zadania --keys "" --width 200 --height 60 2>&1)"
+if hasE "$PRZS" 'Nadchodzący bieg' && ! hasE "$PRZS" '── Ten bieg'; then
+    ok "przebiegi: F2 otwiera sie z kursorem przy 'teraz' (najblizszy nadchodzacy bieg)"
+else
+    bad "przebiegi: start kursora" "$(printf '%s\n' "$PRZS" | grep -E 'Ten bieg|Nadchodzący')"
+fi
+# Kursor na OSTATNIM wierszu okna, gdy nizej sa dalsze: wiersz byl zastepowany przez
+# "... jeszcze N" i biegu z panelu nie bylo na liscie. Niska wysokosc, kursor przy "teraz":
+# czas biegu z panelu (Kiedy RRRR-MM-DD GG:MM) musi stac na liscie.
+PRM="$(mktemp)"
+"$PY" - "$PRS" "$PRM" "$NOW" <<'PYEOF'
+import datetime, json, sys
+st = json.load(open(sys.argv[1], encoding="utf-8"))
+now = int(sys.argv[3])
+r0 = st["runs"][0]
+def iso(ts):
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone(datetime.timedelta(hours=2))).isoformat()
+# 20 wykonanych biegow co 30 min wstecz: lista dluzsza niz okno przy --height 16
+st["runs"] = [dict(r0, start=iso(now - 600 - 1800 * k - 30), end=iso(now - 600 - 1800 * k)) for k in range(20)]
+json.dump(st, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+PRZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" ${PRARGS%--stats*} --stats "$PRM" --screen zadania --keys "" --width 200 --height 16 2>&1)"
+rm -f "$PRM"
+PRZT="$(printf '%s\n' "$PRZH" | grep -oE 'Kiedy +[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1 | grep -oE '[0-9]{2}:[0-9]{2}$')"
+if [ -n "$PRZT" ] && printf '%s\n' "$PRZH" | sed 's/║│.*//' | grep -qE "^║ [0-9]{2}\.[0-9]{2} $PRZT "; then
+    ok "przebiegi: wiersz z kursorem widac na liscie i przy niskim oknie (nie zaslania go '... jeszcze N')"
+else
+    bad "przebiegi: wiersz kursora zasloniety" "czas z panelu: '$PRZT'" "$PRZH"
+fi
 PRF="$(prz F7 --exec-log "$PXL")"
 PRF_LOG="$(cat "$PXL")"
 PRG="$(prz down,F7 --exec-log "$PXL")"
