@@ -2128,6 +2128,12 @@ def job_id_cell(its, jobs=None):
     return (u"%s: %s" % (tier, short)) if tier and short else (tier or short or u"-")
 
 
+def run_is_prune(it):
+    """Bieg porzadkowy (lokalny/zdalny prune) -- ta sama proba co przy wolumenie biegu."""
+    j = it.get("job") or (it.get("jobs") or [{}])[0]
+    return j.get("section_kind") == "prune" or u"prune" in (it.get("task") or u"")
+
+
 def build_runs(data, jobrows, now, show_done=True, grouped=False):
     """Wiersze PRZEBIEGOW: bieg = (zadanie, chwila). Zadania z jedna linia crona
     (jedna etykieta) ida razem -- pve2: subvol-103 i ROOT/pve-1 w jednym snapget,
@@ -2169,7 +2175,7 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False):
         # pobranie hourly i daily w jednym snapget) nie dostaja go po razie (zmierzone 10-27).
         if show_done and lbl and lbl not in shown:
             shown.add(lbl)
-            prev = None
+            prev, mine = None, []
             for x in runs_by.get(lbl, []):
                 st, en = iso_epoch(x.get("start") or ""), iso_epoch(x.get("end") or "")
                 at = en or st
@@ -2179,10 +2185,24 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False):
                 r = dict(base)
                 r.update({"past": True, "at": at, "start": st, "end": en, "rc": x.get("rc"), "err": x.get("error") or "",
                           "prev_end": p_end})
-                out.append(r)
+                mine.append(r)
+            # U112 (wlasciciel 2026-10-28, symulacja A): godzinowe prune to byly dwie trzecie
+            # z ~200 wierszy F2 na pve10. Udane biegi jednej linii crona ida w JEDEN wiersz
+            # "x N" w miejscu ostatniego; bieg z bledem, pominiety albo trwajacy zostaje
+            # osobnym wierszem, zeby go nie przeoczyc.
+            okr = [r for r in mine if r.get("rc") == 0]
+            if run_is_prune(it0) and len(okr) > 1:
+                fold = dict(okr[-1])
+                fold.update({"fold_n": len(okr), "fold_from": okr[0]["at"],
+                             "fold_bad": len([r for r in mine if r.get("rc") not in (0, 75, -1, None)])})
+                mine = [r for r in mine if r.get("rc") != 0] + [fold]
+                mine.sort(key=lambda r: r["at"])
+            out += mine
         t, n = it0.get("next_epoch"), 0
         sched = it0.get("schedule") or ""
-        while t and n < 48 and (n == 0 or t <= now + PRZ_AHEAD_H * 3600):
+        # Z nadchodzacych prune tylko najblizszy (U112); transfery i migawki -- kazdy bieg.
+        nmax = 1 if run_is_prune(it0) else 48
+        while t and n < nmax and (n == 0 or t <= now + PRZ_AHEAD_H * 3600):
             r = dict(base)
             r.update({"past": False, "at": t})
             out.append(r)
@@ -2295,7 +2315,7 @@ def run_result(r):
         return _(u"nadchodzący")
     rc = r.get("rc")
     if rc == 0:
-        return u"OK"
+        return _(u"OK (błędy: %d)") % r["fold_bad"] if r.get("fold_bad") else u"OK"
     if rc == 75:
         return _(u"pominięty")
     if rc == -1:
@@ -2314,6 +2334,9 @@ def run_pairs(r, now, ch):
                  (_(u"Wynik"), run_result(r))]
         if r.get("start") and r.get("end"):
             pairs.append((_(u"Czas"), fmt_dur(r["end"] - r["start"])))
+        if r.get("fold_n"):
+            pairs.append((_(u"Zwinięte"), _(u"udane biegi: %d, od %s (ten = ostatni)") % (
+                r["fold_n"], time.strftime("%H:%M", time.localtime(r["fold_from"])))))
         if r.get("rc") == 75:
             pairs.append((_(u"Powód"), _(u"pominięty: trwał inny bieg tego zadania (blokada)")))
         elif r.get("err"):
@@ -2786,6 +2809,8 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
             # hourly' o 07:15 -- vms i data -- byly nie do odroznienia); w grupie to robi Zadanie.
             co = (u"%s %s" % (it.get("task") or u"", u"" if grouped else job_id_cell(r["items"], r.get("jobs")))).strip() if it.get("kind") == "job" else \
                 (_(u"replika") if it.get("kind") == "replica" else (it.get("task") or u"-"))
+            if r.get("fold_n"):
+                co = u"%s \u00d7%d" % (co, r["fold_n"]) if not ch.ascii else u"%s x%d" % (co, r["fold_n"])
             czas = fmt_dur(r["end"] - r["start"]) if r.get("past") and r.get("start") and r.get("end") else u"-"
             when = run_when(r["at"])
             rb = run_bytes(r, data)

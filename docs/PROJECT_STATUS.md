@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4af6a030820e6e1c -->
+<!-- status-covers-digest: ab483d877b4e4ea3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -63,6 +63,12 @@
   automated_hourly_*” zamiast „stempel”) i czy działa. Config to sekcje configu, a pod nimi linie crona. Sekcja
   „komendy” zniknęła: te czynności są pod klawiszami na ramce. Okno zadania (Enter na F2) zostaje jednym
   przewijaniem. Zakładki z 2026-09-24 zdjęto, bo nie było ich widać; te mają klawisz na ramce.
+- **F2: prune zwinięte (2026-10-28, U112, symulacja A przyjęta).** Godzinowe prune stanowiły dwie trzecie
+  z około 200 wierszy F2 na pve10. Udane biegi jednej linii prune są teraz jednym wierszem „lokalny prune ×N”
+  w miejscu ostatniego biegu (zwija się od dwóch udanych); gdy w oknie był też błąd, wynik zwiniętego wiersza
+  mówi „OK (błędy: K)”, a sam błędny bieg zostaje osobnym wierszem. Bieg pominięty albo trwający też zostaje osobno. Z nadchodzących prune widać tylko
+  najbliższy. Pobrania, wysyłki i migawki bez zmian: każdy bieg osobno. Panel zwiniętego wiersza:
+  „Zwinięte: udane biegi: N, od HH:MM (ten = ostatni)”.
 - **Zmiana szablonu relacji bez słowa „seed” (2026-10-28, U116 część).** Okno „użyj szablonu” mówi teraz
   „Dane nie są przenoszone, pełna kopia od nowa nie jest potrzebna”. Polecenie `seed NAZWA` się nie zmienia.
   `relacja-pve11-src` na liście szablonów pve10 to nie błąd listy: lista ukrywa szablony z

@@ -754,5 +754,8 @@
 "%s, ssh port %s": "%s, ssh port %s",
 "co: %s   migawki %s*%s": "every: %s   snapshots %s*%s",
 "←/→ zakładka   e zmienia   s jako szablon   c edycja ręczna   Esc zamyka": "←/→ tab   e change   s as template   c manual edit   Esc closes",
-"←/→ zakładka   d dokańcza   e zmienia   s jako szablon   c edycja ręczna   Esc zamyka": "←/→ tab   d finish   e change   s as template   c manual edit   Esc closes"
+"←/→ zakładka   d dokańcza   e zmienia   s jako szablon   c edycja ręczna   Esc zamyka": "←/→ tab   d finish   e change   s as template   c manual edit   Esc closes",
+"OK (błędy: %d)": "OK (errors: %d)",
+"Zwinięte": "Folded",
+"udane biegi: %d, od %s (ten = ostatni)": "successful runs: %d, since %s (this = the last)"
 }
