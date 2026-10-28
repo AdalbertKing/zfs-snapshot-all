@@ -1620,7 +1620,8 @@ else
     bad "kopie: fokus w prawym panelu" "$(printf '%s\n' "$A" | grep -E 'zfs list|▸ ct|Migawka|Czas|Esc do')"
 fi
 # Dataset BEZ migawek (srv-b): prawy panel mowi o tym wprost, Enter zostawia fokus na liscie.
-A="$(od end,up,enter)"
+# srv-b szukany po tytule prawego panelu (kolejnosc grup zalezy od fikstur), potem Enter.
+k=""; for _i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do A="$(od "${k}enter")"; hasE "$A" 'zfs list -t snapshot .*/srv-b' && break; k="${k}down,"; done
 if hasE "$A" 'zfs list -t snapshot .*/srv-b' && has "$A" 'nie ma migawek' && has "$A" 'Enter/Tab do migawek' && ! has "$A" 'Esc do datasetów' && [ ! -s "$XL" ]; then
     ok "kopie: dataset bez migawek (srv-b) -- 'nie ma migawek', Enter nie przenosi fokusu do pustego prawego panelu i niczego nie uruchamia"
 else

@@ -770,7 +770,7 @@ if [ "$rc" -eq 2 ]; then
     echo "SKIP 50: brak modulu pty -- katalog odzysku sprawdza CI"
 else
     rc0; has out "=== Odmontowane."
-    [ -f "$D/odz/fs@s1/odyskany.txt" ] || errs+=("plik z mc zniknal albo katalog usuniety: $(ls -AR "$D/odz" 2>&1 | head -3)")
+    [ -f "$D/odz/fs@s1/odzyskany.txt" ] || errs+=("plik z mc zniknal albo katalog usuniety: $(ls -AR "$D/odz" 2>&1 | head -3)")
     has out "Skopiowane pliki: $D/odz/fs@s1"
     fin
 fi
