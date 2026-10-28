@@ -3922,6 +3922,28 @@ else
     bad "F10 U53/U54" "menu: $(printf '%s' "$SMENU" | cut -c1-400)" "prof: $(printf '%s' "$SPROF" | cut -c1-400)" "argv: $(cat "$SD/argv" 2>/dev/null)" "$(cut -c1-200 "$SD/err")"
 fi
 
+# U120: opis klucza to trzecia kolumna po kluczu (16) i wartosci (26); limit 100 kolumn z wt-lib
+# ucinal go w pol slowa. Okno ustawien bierze pelna szerokosc terminala (do 160).
+cat > "$NR/bin/zb-set3" <<'EOF'
+#!/bin/bash
+[ "$1" = settings ] || exit 9
+case "$2" in
+    --tsv) printf 'capacity.guard\toff\tdefault\tenum:on,off\tpowyżej progu kasuje najstarsze migawki rodzin z jawnego wzorca retencji KONIEC\n'; exit 0 ;;
+esac
+exit 9
+EOF
+chmod +x "$NR/bin/zb-set3"
+SD="$NR/sd3"; rm -rf "$SD"; mkdir -p "$SD"
+printf '1\t\n' > "$SD/answers"
+SOUT=$( export NR_DIR="$SD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-set3" COLUMNS=150 LINES=40
+        bash "$REPO/tui/settings.sh" ) 2>"$SD/err" </dev/null
+SMENU="$(grep -F -- '--menu' "$SD/wt.log" | head -1)"
+if has "$SMENU" 'jawnego wzorca retencji KONIEC' && has "$SMENU" ' ~ 146 ~ '; then
+    ok "F10 U120: przy 150 kolumnach okno ma 146, opis klucza nie jest uciety"
+else
+    bad "F10 U120: szerokosc okna ustawien" "menu: $(printf '%s' "$SMENU" | cut -c1-400)" "$(cut -c1-200 "$SD/err")"
+fi
+
 # 3i. KROK 9 TO CHECKLISTA, NIE EDYTOR Z WIERSZEM-WYJSCIEM.
 #
 # Wlasciciel, 2026-09-20, po zobaczeniu ekranu na zywo: "krok 9/10 nie przechodzi
