@@ -5,7 +5,7 @@
 set -u
 
 TARGET_REPO="${TARGET_REPO:-.}"
-TARGET_SHA="${TARGET_SHA:-901e8e4b7ba5a2871ef59e29e6356b9762f2bb2f}"
+TARGET_SHA="${TARGET_SHA:-edba2b7917cae40778908f96f8f28c3e430a2a93}"
 
 git -C "$TARGET_REPO" cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null || {
     echo "ERROR: $TARGET_SHA is not a commit in $TARGET_REPO" >&2
