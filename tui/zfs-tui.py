@@ -1686,11 +1686,17 @@ def build_jobs(data, now):
                 # nie etykieta transferu, z ktorego wiersz jest skopiowany.
                 _pm = re.search(r'zfs-job\.sh "([^"]+)"', cl)
                 _pl = (_pm.group(1).split(" ", 1) + [""])[1] if _pm else ""
-                pit.update({"task": _(u"lokalny prune"), "keep": keep_cell(ret), "schedule": psched, "czas": "-", "gb": "-", "clabel": _pl,
-                            "vol": None, "srow": None, "next_epoch": pnxt,
+                # Statystyki TEJ linii: srow None dawal w panelu F2/F3 "brak biegow w
+                # dzienniku", choc lista obok pokazywala jej biegi (przejscie GUI pve10,
+                # 2026-10-28: pve9 lokalny prune hourly: enc, 144 wywolania w job-stats).
+                _ps = job_stats_for(data, j, _pl)[0] if _pl else None
+                _pc = ("?" if data.failed("stats") else
+                       times_cell(_ps.get("last_s"), _ps.get("avg_s"), _ps.get("max_s")) if _ps else "-")
+                pit.update({"task": _(u"lokalny prune"), "keep": keep_cell(ret), "schedule": psched, "czas": _pc, "gb": "-", "clabel": _pl,
+                            "vol": None, "srow": _ps, "next_epoch": pnxt,
                             "next": fmt_when(pnxt, now) if pnxt else "?", "jobs": [j],
                             "verdict": v0, "vword": _(VERDICTS.get(v0, (v0, 0))[0]),
-                            "reasons": list(reasons0), "fails": [], "discards": [], "srows": []})
+                            "reasons": list(reasons0), "fails": [], "discards": [], "srows": [_ps] if _ps else []})
                 items.append(pit)
                 break
     # REPLIKI NA F2 (2026-10-08, wlasciciel: "czy zadania repliki wchodza do listy
