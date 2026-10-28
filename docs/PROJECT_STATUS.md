@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 24b60b3c4fefc575 -->
+<!-- status-covers-digest: b8b4d320d234dae4 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -28,6 +28,10 @@
     <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
   - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
     `update-control` jako „not clean”.
+- **Rollback z nieudanym ponownym wdrożeniem = błąd (2026-10-28, REV-20261028-181).** `--rollback`, gdy checkout
+  się cofnął, ale `deploy.sh` na starej rewizji padł: rc 1, blokada aktualizacji zostaje z opisem `INCOMPLETE`, komunikat
+  rozdziela checkout od hosta („This host is a mixture”) i podaje log oraz polecenie ręcznego wdrożenia; nic nie ponawia.
+  Wcześniej: ostrzeżenie, „rolled back” i rc 0. Ta sama zmiana w kopii `do_rollback` w `deploy.sh`.
 - **Przeglądanie kopii szyfrowanej: zdejmowany każdy załadowany klucz (2026-10-28, REV-20261028-178).** `browse.sh` trzyma
   listę wszystkich korzeni szyfrowania, które sam załadował. Nieudany montaż zdejmuje klucz od razu. Nieudane
   `unload-key` nazywa każdy pozostały korzeń z poleceniem ręcznym, ponawia przy wyjściu i kończy rc≠0. Klucz załadowany

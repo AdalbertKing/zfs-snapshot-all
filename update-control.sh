@@ -315,8 +315,20 @@ do_rollback() {
     # alert-digest.sh (and friends) installed under a rolled-back checkout --
     # the same defect as an un-applied update, but more dangerous, because the
     # operator has just been told the host is back on the old code.
-    apply_repo_to_host "rollback" "$(printf '%.8s' "$target")" \
-        || warn "the rollback of the CHECKOUT succeeded, but re-generating the installed scripts at that revision did not -- this host is a mixture. Investigate before relying on it."
+    #
+    # REV-20261028-181: a failed re-application is NOT a rollback. It used to be
+    # a warning followed by "rolled back" and rc 0, so an operator or a script
+    # read success while the installed scripts were still (part of) the newer
+    # revision. Now: the hold stays and says so, nothing retries, rc 1.
+    if ! apply_repo_to_host "rollback" "$(printf '%.8s' "$target")"; then
+        write_state_file "$UPDATE_HOLD_FILE" \
+            "rollback $(printf '%.8s' "$from") -> $(printf '%.8s' "$target") INCOMPLETE on $(date '+%Y-%m-%d %H:%M:%S'): checkout at $(printf '%.8s' "$target"), re-deployment FAILED -- host is a mixture" \
+            || warn "could not refresh the hold message at $UPDATE_HOLD_FILE (the hold from before the reset is still in place)"
+        warn "rollback INCOMPLETE: the CHECKOUT is back at $(printf '%.8s' "$target"), but re-deploying the host at that revision FAILED -- the installed scripts may still be (partly) from $(printf '%.8s' "$from"). This host is a mixture: do not rely on it."
+        local _gd=""; [ -e "$GRANT_DATASETS_FILE" ] && _gd=$(read_state_file "$GRANT_DATASETS_FILE")
+        warn "automatic updates stay HELD and nothing retries. Read $UPDATE_STATE_DIR/last-apply.log, fix the cause, then re-deploy this revision by hand: bash ${REPO_DIR}/deploy.sh${_gd:+ --grant-datasets=$_gd}"
+        return 1
+    fi
     log "rolled back $(printf '%.8s' "$from") -> $(printf '%.8s' "$target")"
     log "AUTOMATIC UPDATES ARE NOW HELD -- without this the next hourly run would pull the same revision straight back."
     log "When the fix is on main:  $SELF --resume-updates"
