@@ -6536,12 +6536,14 @@ def _ui_render(self, width, height):
                 foot = _(u"e zmienia szablon   Esc zamyka   strzałki/PgUp/PgDn przewijają")
             if obj.get("kind") == "relation":
                 _t = obj.get("tab", 0)
+                # Podpowiedz lewo/prawo w TYTULE (tez ramka): w stopce przy 80 kolumnach wypychala
+                # licznik wierszy "1-9 z 111".
                 title = (_(u"Relacja %s") % obj["name"]) + u": " + u"  ".join(
-                    (u"[%s]" % _(n)) if i == _t else _(n) for i, n in enumerate(RELATION_TABS))
+                    (u"[%s]" % _(n)) if i == _t else _(n) for i, n in enumerate(RELATION_TABS)) + u"   ←/→"
                 # Odzysk przeszedł na F11 (właściciel 2026-10-18) -- tu tylko zmiana.
-                foot = _(u"←/→ zakładka   e zmienia   s jako szablon   c edycja ręczna   Esc zamyka")
+                foot = _(u"e zmienia   s jako szablon   c edycja ręczna   Esc zamyka")
                 if finish_argv(obj.get("rel") or {}):
-                    foot = _(u"←/→ zakładka   d dokańcza   e zmienia   s jako szablon   c edycja ręczna   Esc zamyka")
+                    foot = _(u"d dokańcza   e zmienia   s jako szablon   c edycja ręczna   Esc zamyka")
             elif obj.get("kind") == "job":
                 title = _(u"Zadanie: %s  %s  %s") % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:

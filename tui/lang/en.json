@@ -2017,8 +2017,6 @@
 "Żeby go umożliwić, na $TARGET jako root:": "To enable it, on $TARGET as root:",
 "żadna relacja na tym hoście nie używa tego szablonu": "no relation on this host uses this template",
 "…język GUI; wysłanie": "…GUI language; sending",
-"←/→ zakładka   d dokańcza   e zmienia   s jako szablon   c edycja ręczna   Esc zamyka": "←/→ tab   d finish   e change   s as template   c manual edit   Esc closes",
-"←/→ zakładka   e zmienia   s jako szablon   c edycja ręczna   Esc zamyka": "←/→ tab   e change   s as template   c manual edit   Esc closes",
 "←→ zakładki   ": "←→ tabs   ",
 "↑↓ wiersz ←→ pole spacja kratka cyfry liczba Enter dalej  Esc wraca": "↑↓ row ←→ field space box digits number Enter next  Esc back",
 "→ tutaj": "→ here"

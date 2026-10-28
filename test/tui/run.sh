@@ -733,8 +733,8 @@ fi
 # druga linie tego samego zadania ('extra backup'); okno relacji (F3) ma obie -- kontrola pozytywna.
 UWK="$(zkeys "^║ $UWT +sync-test +pobranie " $UWA)"; UWKRC=$?
 UWW="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $UWA --screen zadania --keys "${UWK:+$UWK,}enter" --width 200 --height 200 2>&1)"
-UWF="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $UWA --screen relacje --keys enter --width 200 --height 300 2>&1)
-$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $UWA --screen relacje --keys down,enter --width 200 --height 300 2>&1)"
+UWF="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $UWA --screen relacje --keys enter,right --width 200 --height 300 2>&1)
+$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $UWA --screen relacje --keys down,enter,right --width 200 --height 300 2>&1)"
 if [ "$UWKRC" -eq 0 ] && has "$UWW" '── CRON ' && has "$UWW" 'own-line' && ! has "$UWW" 'second-line' \
    && has "$UWF" 'own-line' && has "$UWF" 'second-line'; then
     ok "przebiegi U92: Enter na biegu -- okno z linia crona TEGO biegu (own-line), bez drugiej linii zadania (second-line); okno relacji na F3 ma obie"
@@ -1900,7 +1900,7 @@ else
     bad "okno: X27 rytm per szczebel" "$(printf '%s' "$WT" | grep -E 'pobranie|prune|co:' | head -8)"
 fi
 W="$(screen relacje down,enter --height 80)"
-if has "$W" '╔═ Relacja lab-ct201: [Opis]  Config ═'; then
+if has "$W" '╔═ Relacja lab-ct201: [Opis]  Config   ←/→ ═'; then
     ok "okno: Enter na wierszu otwiera okno relacji na wierzchu"
 else
     bad "okno: otwarcie" "$W"
@@ -1913,7 +1913,7 @@ else
     bad "okno: zakres/Opis" "$W"
 fi
 W2="$(screen relacje down,enter --height 60)"
-if ! has "$W2" 'zfs-backup.sh pause-client' && has "$W2" '←/→ zakładka   e zmienia'; then
+if ! has "$W2" 'zfs-backup.sh pause-client' && has "$W2" 'Relacja lab-ct201: [Opis]  Config   ←/→ ═'; then
     ok "okno: bez listy komend CLI (U114) -- czynnosci pod klawiszami na ramce, ←/→ podpisane"
 else
     bad "okno: komendy/ramka (U114)" "$W2"
@@ -1978,7 +1978,7 @@ else
     bad "okno: CONFIG -- sekcje relacji lab-vm101" "$WP"
 fi
 WS="$(screen relacje enter --height 60)"
-if has "$WS" '←/→ zakładka   d dokańcza' && ! has "$WS" '║   zfs-backup.sh activate duplikat'; then
+if has "$WS" '[Opis]  Config   ←/→' && has "$WS" 'd dokańcza   e zmienia' && ! has "$WS" '║   zfs-backup.sh activate duplikat'; then
     ok "okno: relacja w trakcie pierwszej kopii -- 'd dokańcza' na ramce, bez listy komend w opisie (U114)"
 else
     bad "okno: relacja w trakcie pierwszej kopii (U114)" "$WS"
@@ -1995,7 +1995,8 @@ if has "$WE" 'Relacje na kolektorze pve10' && ! has "$WE" '╔═ Relacja lab-ct
 else
     bad "okno: Esc" "$WE"
 fi
-if hasE "$(screen relacje down,enter)" 'Esc zamyka +[0-9]+-[0-9]+ z [0-9]+'; then
+# Zakladka Config (U114) jest dluzsza niz ekran -- tam stopka liczy wiersze.
+if hasE "$(screen relacje down,enter,right)" 'Esc zamyka +[0-9]+-[0-9]+ z [0-9]+'; then
     ok "okno: stopka mowi, jak wyjsc i ile jest do przewiniecia"
 else
     bad "okno: stopka" "$W"
