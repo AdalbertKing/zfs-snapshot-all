@@ -620,6 +620,89 @@ check "-G through the shim, nothing broken: ladder runs, keeps the newest of the
       "0|2|auto_3|0" "$(gfs_bad_case gfsok none fail)"
 rm -rf "$GSHIM"
 
+# --- -G over the REMOTE path (run_zfs -> ssh), REV-20261028-182 round 2 -------
+# The reviewer: the cases above only put a local zfs first on PATH and never take
+# the ssh branch of run_zfs. Here the dataset entry is remote (root@shimhost:...),
+# and a shim `ssh` runs the command run_zfs built -- `zfs '-H' ... -- 'name'` --
+# through bash, as the remote shell would, against a shim zfs. Status and output
+# of every call travel back exactly as over a real connection. The shim zfs can
+# fake creation times (RS_CRE "snap=epoch,...") so the ladder is exact, break the
+# creation read for a LIST of snapshots (RS_BAD, partial failure), and the shim
+# ssh can fail the transport itself (RS_SSH_FAIL: exit 255 on `get`).
+RSHIM="$(mktemp -d)"
+cat > "$RSHIM/zfs" <<SHIM
+#!/bin/bash
+if [ "\$1" = destroy ]; then echo "destroy \$*" >> "$RSHIM/destroys"; fi
+last="\${!#}"; snap="\${last##*@}"
+if [ "\$1 \$2 \$3 \$4 \$5 \$6" = "get -H -p -o value creation" ]; then
+    case ",\${RS_BAD:-}," in
+        *",\$snap,"*)
+            case "\$RS_MODE" in
+                fail)  echo "cannot open '\$last': permission denied" >&2; exit 1 ;;
+                empty) exit 0 ;;
+                text)  echo "-"; exit 0 ;;
+                neg)   echo "-5"; exit 0 ;;
+            esac ;;
+    esac
+    for kv in \${RS_CRE//,/ }; do
+        [ "\${kv%%=*}" = "\$snap" ] && { echo "\${kv#*=}"; exit 0; }
+    done
+fi
+exec "$GREAL" "\$@"
+SHIM
+cat > "$RSHIM/ssh" <<SHIM
+#!/bin/bash
+cmd="\${!#}"
+printf '%s\n' "\$cmd" >> "$RSHIM/ssh.log"
+case "\$cmd" in *"'creation'"*) [ -n "\${RS_SSH_FAIL:-}" ] && { echo "ssh: connect to host shimhost port 22: Connection refused" >&2; exit 255; } ;; esac
+PATH="$RSHIM:\$PATH" exec bash -c "\$cmd"
+SHIM
+chmod +x "$RSHIM/zfs" "$RSHIM/ssh"
+rs_case() {   # <dataset> <entry prefix: "" local | "root@shimhost:" remote> <tiers...> -> "rc|destroys|snaps|ssh calls|named"
+    local ds="$1" pre="$2"; shift 2
+    : > "$RSHIM/destroys"; : > "$RSHIM/ssh.log"
+    local err
+    err=$(PATH="$RSHIM:$PATH" "$DELSNAPS" -G "$pre$POOL/$ds" "auto_" "$@" 2>&1 >/dev/null); RC=$?
+    printf '%s|%s|%s|%s|%s' "$RC" "$(grep -c . "$RSHIM/destroys")" "$(snaps_of "$ds")" \
+        "$(grep -c . "$RSHIM/ssh.log")" "$(printf '%s' "$err" | grep -c "creation time unreadable for")"
+}
+RT=$(( $(date +%s) + 7200 ))
+# Positive, single tier: three snapshots in one hour -> the newest survives, two go.
+mkds rsone
+mksnaps rsone auto_1 auto_2 auto_3
+RSONE="$(GFS_NOW=$RT rs_case rsone root@shimhost: -H24)"
+check "-G remote (ssh shim), single tier: keeps the newest of the burst, deletes two, all through ssh" \
+      "0|2|auto_3|0" "$(printf '%s' "$RSONE" | cut -d'|' -f1-3,5)"
+[ "$(printf '%s' "$RSONE" | cut -d'|' -f4)" -gt 0 ] && rs_ssh=yes || rs_ssh=no
+check "-G remote: the calls really went through ssh" "yes" "$rs_ssh"
+# Positive, multi tier, exact ladder from faked creation times (GFS_NOW = T):
+# a1 T-40d (outside H24+D7: deleted), a2 T-3d (a daily bucket), a3 T-5h-100s and
+# a4 T-30m (two hourly buckets). Survivors a2 a3 a4, one destroy -- the same
+# remote and local.
+mkds rsmulti
+mksnaps rsmulti auto_a1 auto_a2 auto_a3 auto_a4
+RSCRE="auto_a1=$(( RT - 40*86400 )),auto_a2=$(( RT - 3*86400 )),auto_a3=$(( RT - 5*3600 - 100 )),auto_a4=$(( RT - 1800 ))"
+check "-G remote, multi tier (H24 D7): exact survivors a2 a3 a4, one destroy (a1)" \
+      "0|1|auto_a2 auto_a3 auto_a4|0" "$(RS_CRE="$RSCRE" GFS_NOW=$RT rs_case rsmulti root@shimhost: -H24 -D7 | cut -d'|' -f1-3,5)"
+mkds rsmultil
+mksnaps rsmultil auto_a1 auto_a2 auto_a3 auto_a4
+check "-G local, the same multi-tier input: the same survivors as remote" \
+      "0|1|auto_a2 auto_a3 auto_a4|0" "$(RS_CRE="$RSCRE" GFS_NOW=$RT rs_case rsmultil "" -H24 -D7 | cut -d'|' -f1-3,5)"
+# Fail closed over ssh: failed / empty / not a number / negative / partial (two of
+# four) creation reads, and a transport failure on the read. Every case: rc 1, no
+# destroy, every snapshot kept, the unreadable ones named.
+mkds rsbad
+mksnaps rsbad auto_1 auto_2 auto_3 auto_4
+for m in fail empty text neg; do
+    check "-G remote, creation read '$m' for one of four: rc 1, no destroy, all kept, named" \
+          "1|0|auto_1 auto_2 auto_3 auto_4|1" "$(RS_BAD=auto_2 RS_MODE=$m GFS_NOW=$RT rs_case rsbad root@shimhost: -H24 | cut -d'|' -f1-3,5)"
+done
+check "-G remote, partial: two of four unreadable -> rc 1, no destroy, all kept (one error line names both)" \
+      "1|0|auto_1 auto_2 auto_3 auto_4|1" "$(RS_BAD=auto_1,auto_3 RS_MODE=fail GFS_NOW=$RT rs_case rsbad root@shimhost: -H24 | cut -d'|' -f1-3,5)"
+check "-G remote, ssh transport fails on the creation read (rc 255): rc 1, no destroy, all kept" \
+      "1|0|auto_1 auto_2 auto_3 auto_4|1" "$(RS_SSH_FAIL=1 GFS_NOW=$RT rs_case rsbad root@shimhost: -H24 | cut -d'|' -f1-3,5)"
+rm -rf "$RSHIM"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"
