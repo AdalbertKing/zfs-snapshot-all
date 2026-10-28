@@ -45,6 +45,9 @@
   **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
   ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **F2: szczegół biegu bez NameError (2026-10-28, test właściciela na pve10).** Kursor na biegu, który ma zapis w
+  historii transferów, wołał `transfer_detail_pairs` usunięte w #928 razem z F4 Historia -- GUI padało. Funkcja
+  wróciła. `test/tui` sprawdza teraz AST każdego `tui/*.py`: nazwa wołana, a nigdzie niezdefiniowana = FAIL.
   `status: stopped`. Brak `qm`/`pct`, błąd, pusta albo inna odpowiedź = odmowa z ID gościa i poleceniem; wcześniej
   przechodziły. Także gość, którego tu nie ma (rc 2 „Configuration file ... does not exist”, pomiar pve10; runda 2
   recenzji): gdy `/etc/pve/nodes` pokazuje go na innym węźle, odmowa mówi, że dysk tu jest repliką pvesr i trzeba
