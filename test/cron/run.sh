@@ -1081,7 +1081,7 @@ EOF
 pg_out="$(bash "$GEN" -c "$PG/g.conf" 2>&1)"
 pg_send() { printf '%s\n' "$pg_out" | grep '^59 ' | grep -F -- "$1"; }
 pg_prune() { printf '%s\n' "$pg_out" | grep '^5 ' | grep -F -- "$1"; }
-check "PG10 two disks of guest 201 share one line, marked :201; guest 202 has its own, marked :202" "1 1 1" \
+check "PG10 two disks of guest 201 share one line, marked :201; guest 202 has its own, marked :202" "1 1 0" \
       "$(pg_send '"tank/vm-201-disk-0,tank/vm-201-disk-1"' | grep -c -- '--pve-guests=:201 ') $(pg_send '"tank/vm-202-disk-0"' | grep -c -- '--pve-guests=:202 ') $(pg_send 'vm-202' | grep -c 'vm-201')"
 check "PG11 a plain dataset, a passive -e copy and a guest with pve_guest_guard = no carry no mark" "0 0 0" \
       "$(pg_send '"tank/plain"' | grep -c -- '--pve-guests') $(pg_send 'subvol-203' | grep -c -- '--pve-guests') $(pg_send 'vm-204' | grep -c -- '--pve-guests')"
