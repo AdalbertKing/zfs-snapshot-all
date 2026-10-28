@@ -254,7 +254,7 @@
 "Szablon zapisany": "Template saved",
 "list-datasets $SRCHOST nie odpowiedział:\\n": "list-datasets $SRCHOST did not answer:\\n",
 "[obecny]": "[in use]",
-"Obecny szablon: $(cur_words)\\nSekcje relacji zostaną wygenerowane od nowa z wybranego szablonu\\n(retencja, harmonogramy). Dane nie są przenoszone, seed nie jest potrzebny.\\nTen sam szablon = odświeżenie (rozrzut minut, retencja źródła per szczebel).": "Current template: $(cur_words)\\nThe relation's sections will be generated anew from the chosen template\\n(retention, schedules). Data is not moved, no seed is needed.\\nThe same template = a refresh (minute spread, source retention per tier).",
+"Obecny szablon: $(cur_words)\\nSekcje relacji zostaną wygenerowane od nowa z wybranego szablonu\\n(retencja, harmonogramy). Dane nie są przenoszone, pełna kopia od nowa nie jest potrzebna.\\nTen sam szablon = odświeżenie (rozrzut minut, retencja źródła per szczebel).": "Current template: $(cur_words)\\nThe relation's sections will be generated anew from the chosen template\\n(retention, schedules). Data is not moved, no new full copy is needed.\\nThe same template = a refresh (minute spread, source retention per tier).",
 "Własne ustawienia relacji $NAME": "Own settings of relation $NAME",
 "(retencja źródła) albo później w 'Harmonogram i retencja'.": "(source retention) or later in 'Schedule and retention'.",
 "Zadania tej relacji po zmianie (zastępują %d dotychczasowych):": "Jobs of this relation after the change (replacing %d existing):",

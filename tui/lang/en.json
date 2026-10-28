@@ -890,7 +890,7 @@
 "ODNOWIONA": "RENEWED",
 "OK": "OK",
 "Obecny dysk nie jest zapisany": "Current disk is not recorded",
-"Obecny szablon: $(cur_words)\\nSekcje relacji zostaną wygenerowane od nowa z wybranego szablonu\\n(retencja, harmonogramy). Dane nie są przenoszone, seed nie jest potrzebny.\\nTen sam szablon = odświeżenie (rozrzut minut, retencja źródła per szczebel).": "Current template: $(cur_words)\\nThe relation's sections will be generated anew from the chosen template\\n(retention, schedules). Data is not moved, no seed is needed.\\nThe same template = refresh (minute spread, source retention per tier).",
+"Obecny szablon: $(cur_words)\\nSekcje relacji zostaną wygenerowane od nowa z wybranego szablonu\\n(retencja, harmonogramy). Dane nie są przenoszone, pełna kopia od nowa nie jest potrzebna.\\nTen sam szablon = odświeżenie (rozrzut minut, retencja źródła per szczebel).": "Current template: $(cur_words)\\nThe relation's sections will be generated anew from the chosen template\\n(retention, schedules). Data is not moved, no new full copy is needed.\\nThe same template = refresh (minute spread, source retention per tier).",
 "Obok oryginału na $TARGET -- nic nie nadpisuje": "Alongside the original on $TARGET -- overwrites nothing",
 "Odtwórz kopię na tym hoście (bez zgody źródła)": "Restore a copy on this host (without source permission)",
 "Odznacz całe %s.": "Deselect all of %s.",

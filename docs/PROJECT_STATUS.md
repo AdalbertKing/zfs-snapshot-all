@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f580292c56e77d5f -->
+<!-- status-covers-digest: ec2909a369caed8b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -57,6 +57,11 @@
   **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
   ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **Zmiana szablonu relacji bez słowa „seed” (2026-10-28, U116 część).** Okno „użyj szablonu” mówi teraz
+  „Dane nie są przenoszone, pełna kopia od nowa nie jest potrzebna”. Polecenie `seed NAZWA` się nie zmienia.
+  `relacja-pve11-src` na liście szablonów pve10 to nie błąd listy: lista ukrywa szablony z
+  oznaczeniem `hidden` i nazwy z `-src-`. Ta nazwa kończy się na `-src` (bez myślnika po nim), a oznaczenie
+  `hidden` istnieje od 2026-10-09, więc to pewnie szablon starszej relacji. Do sprawdzenia na hoście.
 - **Nagłówek i ustawienia prostszym językiem (2026-10-28, U119/U120).** Pasek u góry mówi teraz, co strażniki
   robią: „kasowanie przy pełnej puli: wł./wył. · alarm przyrostu: wł./wył.” zamiast „ochrona: bezpiecznik ·
   przyrost”. Gdy brakuje miejsca, ten napis znika pierwszy, jak dotąd. Napis jest dłuższy o 15 znaków (41 -> 56 przy obu „wył.”), więc
