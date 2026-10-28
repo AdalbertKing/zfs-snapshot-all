@@ -273,3 +273,15 @@ wt_end() {   # <tekst>
 ' "$1" >"$ZFS_TUI_STATUS" 2>/dev/null
     return 0
 }
+
+# Jak wt_end, ale okno ZAMYKA SIE BEZ ZMIAN (przerwane, wyjscie bez zapisu): druga linia
+# "nochange" mowi GUI, ze danych nie trzeba czytac od nowa -- anulowanie edycji kosztowalo
+# 3-6 s pelnego odswiezenia (przejscie GUI pve10, 2026-10-28). Znacznik, nie tekst: tekst
+# jest tlumaczony.
+wt_end_nochange() {   # <tekst>
+    echo "$1"
+    [ -n "${ZFS_TUI_STATUS:-}" ] && printf '%s
+nochange
+' "$1" >"$ZFS_TUI_STATUS" 2>/dev/null
+    return 0
+}

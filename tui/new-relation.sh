@@ -1343,7 +1343,7 @@ wz_profile() {   # szablon z podsumowania: retencja źródła zależy od szablon
     return 0
 }
 WZ_SN=""
-wz_walk 0 || { clear 2>/dev/null; wt_end "$(T 'Nowa relacja: przerwane, nic nie zmieniono')"; exit 1; }
+wz_walk 0 || { clear 2>/dev/null; wt_end_nochange "$(T 'Nowa relacja: przerwane, nic nie zmieniono')"; exit 1; }
 cur=create
 while :; do
     WZ_SN=""
@@ -1358,7 +1358,7 @@ while :; do
     miss="$(missing_fields)"
     CARD_ACT_TAGS=(create); CARD_ACT_LABELS=("$(T 'UTWÓRZ RELACJĘ -- plan, WYKONAJ')${miss:+   ($(T 'brak:') $miss)}")
     card_menu "$(T 'Nowa relacja -- podsumowanie')" "$(T 'Sprawdź. Poprawiony krok wraca tutaj, do podsumowania.')" "$cur" "$(T 'Przerwij')" \
-        || { wz_abort && { clear 2>/dev/null; wt_end "$(T 'Nowa relacja: przerwane, nic nie zmieniono')"; exit 1; }; continue; }
+        || { wz_abort && { clear 2>/dev/null; wt_end_nochange "$(T 'Nowa relacja: przerwane, nic nie zmieniono')"; exit 1; }; continue; }
     cur="$WT_OUT"
     case "$cur" in
         __sep__) cur=create; continue ;;
@@ -1387,7 +1387,7 @@ while :; do
             before="$MODE/$NOCOPY"
             run_field mode
             if [ "$before" != "$MODE/$NOCOPY" ]; then
-                wz_walk 1 || { clear 2>/dev/null; wt_end "$(T 'Nowa relacja: przerwane, nic nie zmieniono')"; exit 1; }
+                wz_walk 1 || { clear 2>/dev/null; wt_end_nochange "$(T 'Nowa relacja: przerwane, nic nie zmieniono')"; exit 1; }
                 cur=create
             fi ;;
         profile) wz_profile ;;

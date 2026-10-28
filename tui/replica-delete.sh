@@ -59,7 +59,7 @@ while :; do
     geom
     wt --title "$(Tv 'Usuń replikę $NAME' '$NAME' "$NAME")" --yes-button "$(T Dalej)" --no-button "$(T Wstecz)" \
        --yesno "$(Tv 'Replika przestanie działać: zniknie jej sekcja i zadanie z crona.\n\nDane na dyskach repliki ZOSTAJĄ ($DST).\nŻeby je skasować, sformatuj dysk: zmiana repliki -> Dodaj dysk.' '$DST' "$DST")" 12 "$W" \
-       || { clear 2>/dev/null; wt_end "$(T 'Usuń replikę: przerwane, nic nie zmieniono')"; exit 1; }
+       || { clear 2>/dev/null; wt_end_nochange "$(T 'Usuń replikę: przerwane, nic nie zmieniono')"; exit 1; }
     {
         echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione:')"
         echo

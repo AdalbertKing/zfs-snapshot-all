@@ -836,7 +836,7 @@ while :; do
                   --yesno "$(Tv 'Na liście czeka zmian: $np. Wyjść bez zapisu?' '$np' "$np")" 8 "$W"
                [ $? -ne 0 ] && continue   # Wróć albo Esc = zostań
            fi
-           clear 2>/dev/null; wt_end "$(T 'Zmień relację: przerwane, nic nie zmieniono')"; exit 1; }
+           clear 2>/dev/null; wt_end_nochange "$(T 'Zmień relację: przerwane, nic nie zmieniono')"; exit 1; }
     fi
     ACTION="$WT_OUT"; LAST_ACTION="$ACTION"
     case "$ACTION" in

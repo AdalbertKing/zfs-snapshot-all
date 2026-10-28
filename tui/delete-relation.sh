@@ -58,7 +58,7 @@ while :; do
     [ "$STATE" = removed ] && head="$(Tv 'Relacja '\''$NAME'\'' jest już usunięta -- zostało po niej to, co niżej.' '$NAME' "$NAME")"
     wt --title "$(Tv 'Usuń relację $NAME -- co jeszcze?   [Spacja zaznacza]' '$NAME' "$NAME")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --separate-output \
        --checklist "$head\n${note_src:+$note_src\n}\n${COPIES:+$(Tv 'Kopie na tym hoście: $COPIES\nKopii domyślnie NIE ruszam.' '$COPIES' "$COPIES")}" "$(fit $((${#items[@]} / 3 + 6)))" "$W" "$((${#items[@]} / 3))" \
-       "${items[@]}" || { clear 2>/dev/null; wt_end "$(T 'Usuń relację: przerwane, nic nie zmieniono')"; exit 1; }
+       "${items[@]}" || { clear 2>/dev/null; wt_end_nochange "$(T 'Usuń relację: przerwane, nic nie zmieniono')"; exit 1; }
     SRC=OFF; REC=OFF; DATA=OFF
     while IFS= read -r x; do case "$x" in src) SRC=ON ;; rec) REC=ON ;; data) DATA=ON ;; esac; done <<<"$WT_OUT"
     ARGV=("$ZB" delete-relation "$NAME")
