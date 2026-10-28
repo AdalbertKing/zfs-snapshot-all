@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9c4ad3015016c768 -->
+<!-- status-covers-digest: 4cb4ee973ad28e05 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -28,6 +28,10 @@
     <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
   - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
     `update-control` jako „not clean”.
+- **Kanał wydań przy checkoucie bez `origin` (2026-10-28, REV-20261028-179).** `deploy.sh` i `prepare-source` przy
+  checkoucie bez `origin` (archiwum, skopiowane drzewo) klonują `AdalbertKing/zfsbackup`, a nie repo dev; ścieżka
+  z paczką (bundle) dostaje ten sam `origin`. `origin` forka nadal ma pierwszeństwo, w `deploy.sh` także jawny `REPO_URL`.
+  `test/release` odrzuca linię kodu (poza komentarzem) w `*.sh`/`*.py` wydania z `AdalbertKing/zfs-snapshot-all`.
 - **Stan gościa przy odzysku: odmowa przy nieznanym (2026-10-28, REV-20261028-180).** Przed `rewind`/`replace`
   dysku gościa na tym hoście (`vm-*-disk-*`, `subvol-*-disk-*`) `restore_live_guard` przepuszcza tylko
   `status: stopped` oraz gościa, którego nie ma (`qm`/`pct status` rc 2 „Configuration file ... does not exist”,

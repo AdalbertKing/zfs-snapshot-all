@@ -13411,6 +13411,41 @@ if ps_run prepare-source nogh --yes >"$PS/out" && grep -q 'sending a bundle of t
 else
     bad "preparesource: bundle fallback" "$(cat "$PS/out")" "$(cat "$PS/err")" "$(cat "$PS/scp.argv" 2>/dev/null)" "$(cat "$PS/ssh.argv")"
 fi
+# RELEASE CHANNEL (REV-20261028-179): a checkout with no origin (archive, copied tree) must not
+# enrol a host in the development repository. prepare-source through the real entry point, with
+# this checkout's git replaced (GIT_DIR) by a repo with no origin and then by a fork; the clone
+# and the bundle's origin both carry the URL. deploy.sh's own REPO_URL resolution is run as the
+# exact block from the file, in a directory with no origin / a fork / an explicit REPO_URL.
+REL_URL='https://github.com/AdalbertKing/zfsbackup.git'
+CH="$WORK/channel"; rm -rf "$CH"; mkdir -p "$CH"
+git init -q "$CH/noorigin" && git -C "$CH/noorigin" -c user.name=t -c user.email=t@t commit -q --allow-empty -m t
+git init -q "$CH/fork" && git -C "$CH/fork" -c user.name=t -c user.email=t@t commit -q --allow-empty -m t \
+    && git -C "$CH/fork" remote add origin https://example.invalid/someone/zfsbackup-fork.git
+ch_ps() {   # <git dir> <host> -> ssh argv in $PS/ssh.argv
+    rm -f "$PS/ssh.argv" "$PS/scp.argv" "$PS"/installed-*
+    GIT_DIR="$1/.git" ps_run prepare-source "$2" --yes >"$PS/out"
+}
+ch_ps "$CH/noorigin" fresh; c1=$(grep -c "git clone -q '$REL_URL' '/root/scripts/zfs-snapshot-all'" "$PS/ssh.argv")
+ch_ps "$CH/noorigin" nogh;  c2=$(grep -c "remote add origin '$REL_URL'" "$PS/ssh.argv")
+ch_ps "$CH/fork" fresh;     c3=$(grep -c "git clone -q 'https://example.invalid/someone/zfsbackup-fork.git' " "$PS/ssh.argv")
+ch_ps "$CH/fork" nogh;      c4=$(grep -c "remote add origin 'https://example.invalid/someone/zfsbackup-fork.git'" "$PS/ssh.argv")
+dev_left=$(grep -c 'AdalbertKing/zfs-snapshot-all' "$PS/ssh.argv")
+if [ "$c1$c2$c3$c4" = 1111 ] && [ "$dev_left" = 0 ]; then
+    ok "release channel: prepare-source with no origin clones (and a bundle gets origin) zfsbackup; a fork's origin wins in both paths"
+else
+    bad "release channel: prepare-source" "noorigin clone=$c1 bundle=$c2 fork clone=$c3 bundle=$c4 dev=$dev_left" "$(cat "$PS/ssh.argv")" "$(cat "$PS/err")"
+fi
+dep_block=$(sed -n '/^_DEPLOY_DIR=/,/^fi$/p' "$REPO/deploy.sh")
+dep_url() {   # <dir> [REPO_URL] -> the URL deploy.sh would clone
+    ( cd "$1" && REPO_URL="${2:-}" bash -c "$dep_block"'
+printf "%s\n" "$REPO_URL"' )
+}
+d1=$(dep_url "$CH/noorigin"); d2=$(dep_url "$CH/fork"); d3=$(dep_url "$CH/noorigin" https://example.invalid/x.git)
+if [ -n "$dep_block" ] && [ "$d1" = "$REL_URL" ] && [ "$d2" = https://example.invalid/someone/zfsbackup-fork.git ] && [ "$d3" = https://example.invalid/x.git ]; then
+    ok "release channel: deploy.sh with no origin clones zfsbackup; a fork's origin and an explicit REPO_URL win"
+else
+    bad "release channel: deploy.sh REPO_URL" "noorigin=$d1" "fork=$d2" "explicit=$d3"
+fi
 rm -f "$PS/ssh.argv" "$PS/scp.argv"
 if ps_run prepare-source withpkg --yes >"$PS/out" && grep -q 'already there: /root/scripts/zfs-snapshot-all (rev abc1234). Nothing to do.' "$PS/out" && ! grep -q 'git clone' "$PS/ssh.argv"; then
     ok "preparesource: a host that already has the package gets 'nothing to do', no clone"

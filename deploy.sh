@@ -90,13 +90,13 @@ _DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Resolve REPO_URL now that $_DEPLOY_DIR exists (see the config block above).
 # `git remote get-url origin` on the checkout this file lives in is the only
 # answer that is right for BOTH the upstream repo and any fork of it. The
-# literal fallback is for a checkout with no origin at all -- unreachable in
-# practice, since the source() below already refuses to run outside a complete
-# checkout, but a bare URL beats an empty one that would make `git clone ""`
-# the failure the operator has to diagnose.
+# literal fallback is for a checkout with no origin at all (a GitHub archive, a
+# copied tree): it is the RELEASE repository, never the development one
+# (REV-20261028-179) -- the hourly self-update follows whatever is cloned here,
+# and a tree with no Git metadata says nothing about which channel it came from.
 if [ -z "$REPO_URL" ]; then
     REPO_URL="$(git -C "$_DEPLOY_DIR" remote get-url origin 2>/dev/null)"
-    [ -n "$REPO_URL" ] || REPO_URL="https://github.com/AdalbertKing/zfs-snapshot-all.git"
+    [ -n "$REPO_URL" ] || REPO_URL="https://github.com/AdalbertKing/zfsbackup.git"
 fi
 
 if [ -r "$_DEPLOY_DIR/lib-cron.sh" ]; then

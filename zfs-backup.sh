@@ -14915,8 +14915,11 @@ cmd_source_pruners() {
 
 cmd_prepare_source() {
     source_host_args prepare-source "$@"
+    # No origin (an archive or copied tree): the RELEASE repository, never the
+    # development one -- the source host's hourly self-update follows this URL,
+    # for the clone and for the origin a bundle gets (REV-20261028-179).
     local url; url=$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null)
-    [ -n "$url" ] || url="https://github.com/AdalbertKing/zfs-snapshot-all.git"
+    [ -n "$url" ] || url="https://github.com/AdalbertKing/zfsbackup.git"
     if ! source_probe "$SRC_HOST" "$SRC_PORT"; then
         die "prepare-source: no root SSH channel to $SRC_HOST (BatchMode, root's own key and known_hosts): $PROBE_SSH_ERR. Establish it first, e.g. ssh-copy-id root@$SRC_HOST -- that is the operator's decision, not this verb's. Nothing was changed anywhere."
     fi
