@@ -580,9 +580,10 @@ GSHIM="$(mktemp -d)"; GREAL="$(command -v zfs)"
 cat > "$GSHIM/zfs" <<SHIM
 #!/bin/bash
 if [ "\$1" = destroy ]; then echo "destroy \$*" >> "$GSHIM/destroys"; fi
-if [ "\$1 \$2 \$3 \$4 \$5 \$6" = "get -H -p -o value creation" ] && [ -n "\${GFS_BAD:-}" ] && [ "\${7##*@}" = "\$GFS_BAD" ]; then
+last="\${!#}"   # the name is the LAST argument: run_zfs puts -- before it
+if [ "\$1 \$2 \$3 \$4 \$5 \$6" = "get -H -p -o value creation" ] && [ -n "\${GFS_BAD:-}" ] && [ "\${last##*@}" = "\$GFS_BAD" ]; then
     case "\$GFS_MODE" in
-        fail)  echo "cannot open '\$7': permission denied" >&2; exit 1 ;;
+        fail)  echo "cannot open '\$last': permission denied" >&2; exit 1 ;;
         empty) exit 0 ;;
         text)  echo "-"; exit 0 ;;
         neg)   echo "-5"; exit 0 ;;
