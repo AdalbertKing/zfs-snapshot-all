@@ -152,15 +152,23 @@ pve_node_of() {   # <host, "" = this one> -> its node name in this cluster
     [ -n "$r" ] && [ -d "$PVE_NODES/$r" ] && { printf '%s' "$r"; return 0; }
     return 1
 }
-guest_moved=""
-if [ -n "$GUESTS" ] && [ -d "$PVE_NODES" ] && want="$(pve_node_of "${GUESTS%%:*}")"; then
+guest_moved="" guest_unsure="" want=""
+if [ -n "$GUESTS" ] && [ -d "$PVE_NODES" ]; then
+    want="$(pve_node_of "${GUESTS%%:*}")" || want=""
     _ids="${GUESTS#*:}"
     for _id in ${_ids//,/ }; do
         case "$_id" in ''|*[!0-9]*) continue ;; esac
         for _d in "$PVE_NODES"/*/; do
             _n="${_d%/}"; _n="${_n##*/}"
             if [ -f "$_d/qemu-server/$_id.conf" ] || [ -f "$_d/lxc/$_id.conf" ]; then
-                [ "$_n" = "$want" ] || guest_moved="${guest_moved:+$guest_moved, }guest $_id runs on $_n"
+                if [ -z "$want" ]; then
+                    # The guest IS in this cluster, but the line's host could not be
+                    # told apart as a node: run as before, and say so -- a silent
+                    # "not decided" is the gap this guard exists to close.
+                    guest_unsure="${guest_unsure:+$guest_unsure, }guest $_id (on $_n)"
+                elif [ "$_n" != "$want" ]; then
+                    guest_moved="${guest_moved:+$guest_moved, }guest $_id runs on $_n"
+                fi
             fi
         done
     done
@@ -188,6 +196,10 @@ if [ "$rc" -eq 75 ]; then
         "$(tail -n "$DETAIL" "$e" 2>/dev/null)" 2>>"$LOG"
 elif [ "$rc" -ne 0 ] && [ -x "$NOTIFY" ]; then
     "$NOTIFY" "$LABEL" "$(tail -n "$DETAIL" "$e" 2>/dev/null)" 2>>"$LOG"
+elif [ -n "$guest_unsure" ]; then
+    _u="zfs-job: guest guard: cannot tell which PVE node '${GUESTS%%:*}' is, so where $guest_unsure runs was not checked -- set pve_node = <node> in the section (or pve_guest_guard = no)"
+    printf '%s\n' "$_u" >>"$LOG" 2>/dev/null
+    [ -x "$WARN" ] && "$WARN" "$LABEL -- guest guard not checked" "$_u" 2>>"$LOG"
 fi
 
 rm -f "$e"

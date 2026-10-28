@@ -136,6 +136,9 @@ set -o pipefail
 #                                          # only where the guest runs (zfs-job.sh
 #                                          # --pve-guests, see job_cron_line); no
 #                                          # turns the check off for this section.
+#       pve_node     = <name>              # [dataset:] pull / [snaponly:]: the PVE
+#                                          # node name of a source host given by
+#                                          # address (the guard cannot map it).
 #       prune_foreign = yes|no             # default no. yes: FOREIGN snapshots on
 #                                          # this path (any family no prune line
 #                                          # here names -- a manual one, another
@@ -1579,7 +1582,7 @@ PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
 # which no layer above the section knows. exclude_child_<n> is numbered and therefore
 # not listable here; validate_field_names carries its pattern.
 # shellcheck disable=SC2086
-_allow_fields dataset   use_template relation side pair_label recursive media pve_guest_guard \
+_allow_fields dataset   use_template relation side pair_label recursive media pve_guest_guard pve_node \
                         bandwidth compression cipher history raw \
                         passive exclude_family prune_foreign $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
@@ -1629,7 +1632,7 @@ _allow_fields excluded  keep
 # tier_label, notify_word, monitor_*). ssh_flags: the same five options as
 # [prune:]. Retention of the source lives in its own [prune:<scope>]
 # (side = source), as for any remote source; this section never prunes.
-_allow_fields snaponly  use_template pair_label recursive notify notify_raw ssh_flags pve_guest_guard
+_allow_fields snaponly  use_template pair_label recursive notify notify_raw ssh_flags pve_guest_guard pve_node
 
 # The single most useful thing to say about a rejected field is "you put it in
 # the wrong kind of section", which is a different mistake from "you misspelled
@@ -4091,17 +4094,28 @@ pve_guard_mark() {   # <host, "" = this one> <dataset> <engine flags> <section> 
             *)   die "[$4]: pve_guest_guard = '$raw' -- expected 'yes' or 'no'" ;;
         esac
     fi
-    GUARD_SCOPES["$host|$ds"]=1
+    # pve_node: the PVE node name of a REMOTE host given by address. A delegated
+    # account cannot map an address to a node (corosync.conf and .members are not
+    # readable to it, measured on pve2 2026-10-28, and the DNS there answered
+    # 'pve1' with a wildcard), so a collector that reaches pve1 as 192.168.28.9
+    # names the node here; the line then carries the node instead of the address.
+    local node=""
+    if [ -n "$host" ] && node="$(resolve_field pve_node "$4" "$5" "")"; then
+        node="$(trim "$node")"
+        [[ "$node" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || die "[$4]: pve_node = '$node' is not a node name"
+    fi
+    GUARD_SCOPES["$host|$ds"]="${node:-$host}"
 }
-pve_guard_spec() {   # <host, "" = this one> <dataset>... -> "host:id,id" for the marked ones, or nothing
-    local host="${1#*@}" d id ids=""
+pve_guard_spec() {   # <host, "" = this one> <dataset>... -> "node-or-host:id,id" for the marked ones, or nothing
+    local host="${1#*@}" d id ids="" where=""
     shift
     for d in "$@"; do
         [ -n "${GUARD_SCOPES["$host|$d"]+x}" ] || continue
         id="$(pve_guest_id "$d")" || continue
+        where="${GUARD_SCOPES["$host|$d"]}"
         case ",$ids," in *",$id,"*) ;; *) ids="${ids:+$ids,}$id" ;; esac
     done
-    [ -n "$ids" ] && printf '%s:%s' "$host" "$ids"
+    [ -n "$ids" ] && printf '%s:%s' "$where" "$ids"
     return 0
 }
 prune_guard_spec() {   # <prune scope [user@]host:path or path>

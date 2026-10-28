@@ -1091,6 +1091,19 @@ check "PG13 the inline prune of a plain dataset carries no mark" "0" "$(pg_prune
 sed -i 's/pve_guest_guard = no/pve_guest_guard = maybe/' "$PG/g.conf"
 check "PG14 pve_guest_guard takes yes or no only" "1" "$(bash "$GEN" -c "$PG/g.conf" 2>&1 | grep -c "pve_guest_guard = 'maybe' -- expected 'yes' or 'no'")"
 
+# PG15/PG16: a source given by ADDRESS. A delegated account cannot map an address
+# to a node (pve2, 2026-10-28), so pve_node names it and the snapshot AND prune
+# lines carry the node; without it the guard runs the command and WARNs.
+sed '/^\[snaponly:/a\	pve_node = pveB' "$REPO/test/fixtures/snaponly-basic.conf" > "$PG/n.conf"
+pg_n="$(bash "$GEN" -c "$PG/n.conf" 2>&1)"
+check "PG15 pve_node replaces the host in the mark of the snapshot and the prune lines" "4 0" \
+      "$(printf '%s\n' "$pg_n" | grep -c -- '--pve-guests=pveB:990 ') $(printf '%s\n' "$pg_n" | grep -c -- '--pve-guests=hostA:')"
+printf '#!/bin/sh\necho "WARN|$1|$2" >> %s/calls\n' "$PG" > "$PG/notify-warn.sh"; chmod +x "$PG/notify-warn.sh"
+: > "$PG/calls"
+check "PG16 an address that is no node, guest in this cluster: runs" "0 1" "$(pg_run --pve-guests=10.9.9.9:101)"
+check "PG16b ...and WARNs that the guard was not checked, naming pve_node" "1" \
+      "$(grep -c "^WARN|lbl -- guest guard not checked|.*cannot tell which PVE node '10.9.9.9' is.*guest 101 (on pveA).*pve_node" "$PG/calls")"
+
 # ===========================================================================
 # MIR. SYNC IS A MIRROR (owner 2026-10-06). A pull tier carrying -M makes the
 # target hold what the source holds, so the generator drops that tier's own
