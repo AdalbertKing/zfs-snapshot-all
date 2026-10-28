@@ -45,6 +45,10 @@
   **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
   ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+  `status: stopped`. Brak `qm`/`pct`, błąd, pusta albo inna odpowiedź = odmowa z ID gościa i poleceniem; wcześniej
+  przechodziły. Także gość, którego tu nie ma (rc 2 „Configuration file ... does not exist”, pomiar pve10; runda 2
+  recenzji): gdy `/etc/pve/nodes` pokazuje go na innym węźle, odmowa mówi, że dysk tu jest repliką pvesr i trzeba
+  odzyskać na tamtym węźle; dysk usuniętego gościa -- pod nazwą, która nie jest dyskiem gościa. Zdalna gałąź (`pgrep`) bez zmian.
 - **Uwagi z testu właściciela na pve10 (2026-10-27, `gui/uwagi-1027`, U84-U99).** Przebiegi: kolumna Dane
   biegu (suma `written` migawek rodziny zadania na celu od poprzedniego biegu tej linii; `job-stats --runs` podaje
   listę migawek z okna biegów i doby przed nim; porządki i cele zdalne „-”), dół Źródło | Cel | Dane na 5 wierszy z
