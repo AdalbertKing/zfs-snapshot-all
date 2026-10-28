@@ -4821,6 +4821,9 @@ class UI(object):
             try:
                 with io.open(status, encoding="utf-8", errors="replace") as fh:
                     said = fh.readline().strip()
+                    # wt_end_nochange: okno zamkniete bez zmian -- bez pelnego odswiezenia
+                    if fh.readline().strip() == "nochange":
+                        self.noreload_after = True
                 os.unlink(status)
             except (IOError, OSError):
                 said = u""
@@ -6826,7 +6829,8 @@ def curses_loop(ui):
                 if getattr(ui, "noreload_after", False):
                     # U104 (wlasciciel 2026-10-28): przegladanie kopii niczego nie zmienia,
                     # wiec bez czekania na pelne odswiezenie -- dane odswieza Ctrl-R albo
-                    # kolejne okno. Wszystkie inne okna nadal odswiezaja (decyzja 2026-10-09).
+                    # kolejne okno. Tak samo okno, ktore samo powiedzialo "nic nie zmieniono"
+                    # (wt_end_nochange). Wszystkie inne okna nadal odswiezaja (decyzja 2026-10-09).
                     ui.noreload_after = False
                 else:
                     ui.refresh_bg()

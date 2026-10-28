@@ -6144,6 +6144,29 @@ then
 else
     bad "okno: komunikat po zamknieciu okna" "rc=$?"
 fi
+# Anulowanie bez zmian (przejscie GUI pve10, 2026-10-28: 3-6 s odswiezenia po Esc w edycji):
+# wt_end_nochange pisze ten sam tekst i znacznik "nochange", GUI wraca bez przeladowania;
+# zwykle wt_end (okno cos zrobilo) nadal przeladowuje.
+ZFS_TUI_STATUS="$WE/n1" WHIPTAIL="$WE_STUB" bash -c ". '$REPO/tui/wt-lib.sh' && wt_end_nochange 'Zmień relację: przerwane, nic nie zmieniono'" >/dev/null 2>&1
+ZFS_TUI_STATUS="$WE/n2" WHIPTAIL="$WE_STUB" bash -c ". '$REPO/tui/wt-lib.sh' && wt_end 'Zmień relację: zapisano'" >/dev/null 2>&1
+if "$PY" - "$REPO/tui/zfs-tui.py" "$WE" <<'PYEOF'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1]); zt = importlib.util.module_from_spec(spec); spec.loader.exec_module(zt)
+we = sys.argv[2]
+class U(object): pass
+def end(status):
+    u = U(); u.pending_title, u.pending_status_path, u.pending_log_path = u"Zmień relację", status, None
+    return zt.UI.window_end_message(u, 1), getattr(u, "noreload_after", False)
+m1, n1 = end(os.path.join(we, "n1"))
+m2, n2 = end(os.path.join(we, "n2"))
+sys.exit(0 if (m1 == u"Zmień relację: przerwane, nic nie zmieniono" and n1 is True
+               and m2 == u"Zmień relację: zapisano" and n2 is False) else 1)
+PYEOF
+then
+    ok "okno: zamkniete bez zmian (wt_end_nochange) -> GUI bez pelnego odswiezenia; zwykle wt_end odswieza"
+else
+    bad "okno: nochange po anulowaniu" "rc=$?"
+fi
 
 # Kampania 3 (2026-10-23, na zywo pve10): panel "ab -- pobranie" mowil "Trzyma -", choc zadanie
 # niesie retain -H24 -- wiersz transferu ma w kolumnie "-" (retencja stoi w wierszu porzadkow),
