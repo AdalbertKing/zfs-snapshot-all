@@ -733,8 +733,8 @@ fi
 # druga linie tego samego zadania ('extra backup'); okno relacji (F3) ma obie -- kontrola pozytywna.
 UWK="$(zkeys "^║ $UWT +sync-test +pobranie " $UWA)"; UWKRC=$?
 UWW="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $UWA --screen zadania --keys "${UWK:+$UWK,}enter" --width 200 --height 200 2>&1)"
-UWF="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $UWA --screen relacje --keys enter --width 200 --height 300 2>&1)
-$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $UWA --screen relacje --keys down,enter --width 200 --height 300 2>&1)"
+UWF="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $UWA --screen relacje --keys enter,right --width 200 --height 300 2>&1)
+$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $UWA --screen relacje --keys down,enter,right --width 200 --height 300 2>&1)"
 if [ "$UWKRC" -eq 0 ] && has "$UWW" '── CRON ' && has "$UWW" 'own-line' && ! has "$UWW" 'second-line' \
    && has "$UWF" 'own-line' && has "$UWF" 'second-line'; then
     ok "przebiegi U92: Enter na biegu -- okno z linia crona TEGO biegu (own-line), bez drugiej linii zadania (second-line); okno relacji na F3 ma obie"
@@ -1862,7 +1862,7 @@ json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 WT="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --config "$TCFG" --screen relacje --keys down,enter --height 80 --width 200 2>&1)"
 rm -f "$TCFG"
-if has "$WT" 'co: co godzinę (:56)   stempel automated_hourly_   trzyma 24' && has "$WT" 'co: co dobę 02:06   stempel automated_daily_   trzyma 7' \
+if has "$WT" 'co: co godzinę (:56)   migawki automated_hourly_*   trzyma 24' && has "$WT" 'co: co dobę 02:06   migawki automated_daily_*   trzyma 7' \
    && has "$WT" 'trzyma 12   co: co godzinę (:36)' && has "$WT" 'trzyma 3   co: co dobę 02:46' && ! has "$WT" 'co: co godzinę (:01)'; then
     ok "okno: rytm i retencja KAZDEGO szczebla, z polami szczebla sekcji (send_/prune_schedule_<szablon>) przed szablonem"
 else
@@ -1891,7 +1891,7 @@ json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 WT="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --config "$TCFG" --screen relacje --keys down,enter --height 80 --width 200 2>&1)"
 rm -f "$TCFG"
-if has "$WT" 'co: co godzinę (:13)   stempel automated_hourly_' && has "$WT" 'co: co dobę 01:23   stempel automated_daily_' \
+if has "$WT" 'co: co godzinę (:13)   migawki automated_hourly_*' && has "$WT" 'co: co dobę 01:23   migawki automated_daily_*' \
    && hasE "$WT" 'lokalny prune +trzyma 24 godz\.   co: co godzinę \(:33\)' && hasE "$WT" 'lokalny prune +trzyma 7 dni   co: co dobę 01:43' \
    && hasE "$WT" 'zdalny prune +trzyma 24 godz\.   co: co godzinę \(:21\)' && hasE "$WT" 'zdalny prune +trzyma 7 dni   co: co dobę 01:31' \
    && ! has "$WT" 'co: co godzinę (:01)'; then
@@ -1900,37 +1900,38 @@ else
     bad "okno: X27 rytm per szczebel" "$(printf '%s' "$WT" | grep -E 'pobranie|prune|co:' | head -8)"
 fi
 W="$(screen relacje down,enter --height 80)"
-if has "$W" '╔═ Relacja lab-ct201 ═'; then
+if has "$W" '╔═ Relacja lab-ct201: [Opis]  Config   ←/→ ═'; then
     ok "okno: Enter na wierszu otwiera okno relacji na wierzchu"
 else
     bad "okno: otwarcie" "$W"
 fi
 if hasE "$W" 'Cele [(]1[)] +hdd/backups/192.168.28.99/hdd/lab/ct-201' && ! has "$W" 'Lądowisk' && ! hasE "$W" '║ Cel  ' && hasE "$W" 'Źródła [(]1[)] +zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201' \
-        && has "$W" 'co obejmuje' && has "$W" 'jak długo trzyma' && has "$W" 'czy działa' && has "$W" 'komendy' \
-        && ! has "$W" 'W CRONIE' && ! has "$W" '[ Opis ]'; then
-    ok "okno: szczegoly -- zrodla z rekordu, JEDEN wiersz 'Cele (N)' (R5-3, MANAGED_DATASETS), grupy pytaniami operatora, bez zakladek (R4-7)"
+        && has "$W" 'co obejmuje' && has "$W" 'jak długo trzyma' && has "$W" 'czy działa' && ! has "$W" '║ komendy' \
+        && ! has "$W" '── CONFIG ' && ! has "$W" '── CRON ' && hasE "$W" 'Drugi host +192\.168\.28\.99, ssh port 22' && ! has "$W" 'endpoint'; then
+    ok "okno: zakladka Opis -- zrodla z rekordu, JEDEN wiersz 'Cele (N)' (R5-3), grupy pytaniami operatora, 'Drugi host', bez komend i bez configu (U114)"
 else
     bad "okno: zakres/Opis" "$W"
 fi
 W2="$(screen relacje down,enter --height 60)"
-if has "$W2" 'zfs-backup.sh pause-client lab-ct201' && ! has "$W2" 'resume-client'; then
-    ok "okno: komendy CLI dla relacji AKTYWNEJ: pause-client, bez resume-client"
+if ! has "$W2" 'zfs-backup.sh pause-client' && has "$W2" 'Relacja lab-ct201: [Opis]  Config   ←/→ ═'; then
+    ok "okno: bez listy komend CLI (U114) -- czynnosci pod klawiszami na ramce, ←/→ podpisane"
 else
-    bad "okno: komendy dla stanu active" "$W2"
+    bad "okno: komendy/ramka (U114)" "$W2"
 fi
 # JEDNO OKNO (R4-7, zamiast zakladek R3-2): szczegoly, pod nimi CONFIG, potem
 # CRON -- w tej kolejnosci. LINIE CRONA PO ETYKIECIE (linia snapget dla pobrania
 # nazywa zdalne zrodlo i RODZICA ladowiska, nigdy samo ladowisko -- dopasowanie
 # po zakresie jej nie widzialo, zmierzone na pve10 2026-09-09; klucz drugi:
 # -L <etykieta>) sa w sekcji CRON.
-WCFG="$(screen relacje down,enter --height 200)"
+WCFG="$(screen relacje down,enter,right --height 200)"
 LCFG=$(printf '%s\n' "$WCFG" | grep -n '── CONFIG ' | head -1 | cut -d: -f1)
 LCRN=$(printf '%s\n' "$WCFG" | grep -n '── CRON ' | head -1 | cut -d: -f1)
-LKOM=$(printf '%s\n' "$WCFG" | grep -n '║ komendy' | head -1 | cut -d: -f1)
-if [ -n "$LCFG" ] && [ -n "$LCRN" ] && [ -n "$LKOM" ] && [ "$LKOM" -lt "$LCFG" ] && [ "$LCFG" -lt "$LCRN" ]; then
-    ok "okno: kolejnosc sekcji -- szczegoly, CONFIG, CRON (R4-7, decyzja wlasciciela)"
+WCBK="$(screen relacje down,enter,right,right --height 200)"
+if [ -n "$LCFG" ] && [ -n "$LCRN" ] && [ "$LCFG" -lt "$LCRN" ] && has "$WCFG" 'Relacja lab-ct201: Opis  [Config]' \
+   && ! has "$WCFG" 'co obejmuje' && has "$WCBK" 'Relacja lab-ct201: [Opis]  Config' && has "$WCBK" 'co obejmuje'; then
+    ok "okno: zakladka Config (→) -- CONFIG, potem CRON, bez opisu; drugie → wraca na Opis (U114)"
 else
-    bad "okno: kolejnosc sekcji" "komendy=$LKOM config=$LCFG cron=$LCRN" "$WCFG"
+    bad "okno: zakladka Config" "config=$LCFG cron=$LCRN" "$WCFG"
 fi
 if has "$WCFG" '── CONFIG ' && has "$WCFG" '[dataset:' && has "$WCFG" 'plik: /etc/zfs-snapshot-all/jobs.pve10.conf' \
         && ! has "$WCFG" 'tylko do odczytu -- zmiana relacji'; then
@@ -1948,7 +1949,7 @@ fi
 # (keep_hourly..keep_monthly, jedna linia delsnaps) to jeden naglowek, a jej
 # delsnaps i straznik stoja pod nim -- nie pod transferem i nie we "wspolnych".
 # 160 kolumn: przy 80 naglowek grupy zawija sie w kilka linii.
-WCG="$(screen relacje down,enter --width 160 --height 300 | sed -n '/── CRON /,/konto:/p')"
+WCG="$(screen relacje down,enter,right --width 160 --height 300 | sed -n '/── CRON /,/konto:/p')"
 _lh=$(printf '%s\n' "$WCG" | grep -n '← 192.168.28.99  30 \* \* \* \*' | head -1 | cut -d: -f1)
 _ls=$(printf '%s\n' "$WCG" | grep -n 'snapget.sh -m "automated_hourly_"' | head -1 | cut -d: -f1)
 _lp=$(printf '%s\n' "$WCG" | grep -n 'prune  50 \* \* \* \*  keep_hourly -H24, keep_daily -D7, keep_weekly -W4, keep_monthly -M12' | head -1 | cut -d: -f1)
@@ -1961,13 +1962,13 @@ else
 fi
 # Relacja W ZASIEWIE (bez pliku configu) -- Config ma powiedziec to, nie
 # pokazac cudzy config z fikstury.
-WCFGSEED="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --keys enter --height 80 --width 100 2>&1)"
+WCFGSEED="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --keys enter,right --height 80 --width 100 2>&1)"
 if has "$WCFGSEED" 'configu jeszcze nie ma -- powstanie przy aktywacji' && has "$WCFGSEED" 'zfs-backup.sh activate duplikat'; then
     ok "okno: CONFIG relacji bez zainstalowanego configu (seeding) mowi to, nie zgaduje"
 else
     bad "okno: CONFIG relacji w zasiewie" "$WCFGSEED"
 fi
-WP="$(screen relacje down,down,down,down,enter --height 260)"
+WP="$(screen relacje down,down,down,down,enter,right --height 260)"
 if has "$WP" '── CONFIG ' && has "$WP" '[dataset:hdd/backups/192.168.28.99/hdd/lab/vm-101]' \
         && has "$WP" 'send_schedule = 24 * * * *' && has "$WP" 'src = zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' \
         && has "$WP" '[prune:hdd/backups/192.168.28.99/hdd/lab/vm-101]' && has "$WP" 'prune_schedule = 44 * * * *' \
@@ -1977,16 +1978,16 @@ else
     bad "okno: CONFIG -- sekcje relacji lab-vm101" "$WP"
 fi
 WS="$(screen relacje enter --height 60)"
-if has "$WS" 'zfs-backup.sh activate duplikat'; then
-    ok "okno: relacja w zasiewie nazywa 'activate' (wznawialne dokonczenie cyklu)"
+if has "$WS" '[Opis]  Config   ←/→' && has "$WS" 'd dokańcza   e zmienia' && ! has "$WS" '║   zfs-backup.sh activate duplikat'; then
+    ok "okno: relacja w trakcie pierwszej kopii -- 'd dokańcza' na ramce, bez listy komend w opisie (U114)"
 else
-    bad "okno: komendy dla stanu seeding" "$WS"
+    bad "okno: relacja w trakcie pierwszej kopii (U114)" "$WS"
 fi
 WPZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down,enter --height 120 2>&1)"
-if has "$WPZ" 'zfs-backup.sh resume-client lab-srv-b' && ! has "$WPZ" 'pause-client lab-srv-b'; then
-    ok "okno: relacja wstrzymana nazywa resume-client, nie pause-client"
+if ! has "$WPZ" 'resume-client lab-srv-b' && ! has "$WPZ" 'pause-client lab-srv-b' && has "$WPZ" 'Relacja lab-srv-b: [Opis]'; then
+    ok "okno: relacja wstrzymana -- bez listy komend w opisie (U114; wznowienie: F7 na F3)"
 else
-    bad "okno: komendy dla pauzy" "$WPZ"
+    bad "okno: relacja wstrzymana (U114)" "$WPZ"
 fi
 WE="$(screen relacje down,enter,esc)"
 if has "$WE" 'Relacje na kolektorze pve10' && ! has "$WE" '╔═ Relacja lab-ct201'; then
@@ -1994,7 +1995,8 @@ if has "$WE" 'Relacje na kolektorze pve10' && ! has "$WE" '╔═ Relacja lab-ct
 else
     bad "okno: Esc" "$WE"
 fi
-if hasE "$(screen relacje down,enter)" 'Esc zamyka +[0-9]+-[0-9]+ z [0-9]+'; then
+# Zakladka Config (U114) jest dluzsza niz ekran -- tam stopka liczy wiersze.
+if hasE "$(screen relacje down,enter,right)" 'Esc zamyka +[0-9]+-[0-9]+ z [0-9]+'; then
     ok "okno: stopka mowi, jak wyjsc i ile jest do przewiniecia"
 else
     bad "okno: stopka" "$W"

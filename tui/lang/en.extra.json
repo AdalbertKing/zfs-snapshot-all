@@ -751,6 +751,8 @@
 "                 Pasek u góry: „kasowanie przy pełnej puli” i „alarm przyrostu”": "                 Top bar: \"delete when pool is full\" and \"growth alarm\"",
 "                 -- czy na tym hoście działa strażnik pojemności i strażnik": "                 -- whether this host runs the capacity guard and the sudden",
 "                 nagłego przyrostu danych; włączasz je w F10.": "                 data growth monitor; you turn them on in F10.",
+"%s, ssh port %s": "%s, ssh port %s",
+"co: %s   migawki %s*%s": "every: %s   snapshots %s*%s",
 "OK (błędy: %d)": "OK (errors: %d)",
 "Zwinięte": "Folded",
 "udane biegi: %d, od %s (ten = ostatni)": "successful runs: %d, since %s (this = the last)"
