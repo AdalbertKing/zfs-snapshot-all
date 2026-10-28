@@ -570,6 +570,56 @@ run_del "-r" "auto_" -H3
 check "a dataset value shaped like a flag fails loudly, not silent success" \
       "1" "$RC"
 
+# --- -G, creation time unreadable: fail closed (REV-20261028-182) -------------
+# A shim zfs first on PATH breaks `get -H -p -o value creation` for ONE named
+# snapshot (fails / empty / not a number / negative) and passes every other call
+# (SHIM_* names: delsnaps.sh sets its own GFS_MODE, which shadowed GFS_MODE here)
+# to the real zfs, recording each destroy. Every case: nonzero, the snapshot named
+# on stderr, no destroy at all, all snapshots still there -- even the ones whose
+# creation was readable (no partial ladder). The real ladder cases above stay.
+GSHIM="$(mktemp -d)"; GREAL="$(command -v zfs)"
+cat > "$GSHIM/zfs" <<SHIM
+#!/bin/bash
+if [ "\$1" = destroy ]; then echo "destroy \$*" >> "$GSHIM/destroys"; fi
+last="\${!#}"   # the name is the LAST argument: run_zfs puts -- before it
+if [ "\$1 \$2 \$3 \$4 \$5 \$6" = "get -H -p -o value creation" ] && [ -n "\${SHIM_BAD:-}" ] && [ "\${last##*@}" = "\$SHIM_BAD" ]; then
+    case "\$SHIM_MODE" in
+        fail)  echo "cannot open '\$last': permission denied" >&2; exit 1 ;;
+        empty) exit 0 ;;
+        text)  echo "-"; exit 0 ;;
+        neg)   echo "-5"; exit 0 ;;
+    esac
+fi
+exec "$GREAL" "\$@"
+SHIM
+chmod +x "$GSHIM/zfs"
+gfs_bad_case() {   # <dataset> <bad snapshot> <mode> -> "rc|destroys|snaps|named"
+    : > "$GSHIM/destroys"
+    local err
+    err=$(SHIM_BAD="$2" SHIM_MODE="$3" GFS_NOW=$(( $(date +%s) + 3600 )) PATH="$GSHIM:$PATH" "$DELSNAPS" -G "$POOL/$1" "auto_" -H24 2>&1 >/dev/null); RC=$?
+    printf '%s|%s|%s|%s' "$RC" "$(grep -c . "$GSHIM/destroys")" "$(snaps_of "$1")" \
+        "$(printf '%s' "$err" | grep -c "creation time unreadable for $POOL/$1@$2")"
+}
+mkds gfsbad
+mksnaps gfsbad auto_1 auto_2 auto_3
+check "-G, creation read fails for one of three: rc 1, named, no destroy, all kept" \
+      "1|0|auto_1 auto_2 auto_3|1" "$(gfs_bad_case gfsbad auto_2 fail)"
+check "-G, creation read empty: rc 1, named, no destroy" \
+      "1|0|auto_1 auto_2 auto_3|1" "$(gfs_bad_case gfsbad auto_3 empty)"
+check "-G, creation not a number: rc 1, named, no destroy" \
+      "1|0|auto_1 auto_2 auto_3|1" "$(gfs_bad_case gfsbad auto_1 text)"
+check "-G, creation negative: rc 1, named, no destroy" \
+      "1|0|auto_1 auto_2 auto_3|1" "$(gfs_bad_case gfsbad auto_1 neg)"
+# Positive control through the SAME shim with nothing broken: the ladder runs and
+# deletes as the burst case above does (one survivor per hourly bucket).
+# Its own dataset: on an engine without the fix the negative cases above have
+# already destroyed snapshots of gfsbad.
+mkds gfsok
+mksnaps gfsok auto_1 auto_2 auto_3
+check "-G through the shim, nothing broken: ladder runs, keeps the newest of the burst" \
+      "0|2|auto_3|0" "$(gfs_bad_case gfsok none fail)"
+rm -rf "$GSHIM"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"
