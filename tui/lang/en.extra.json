@@ -756,5 +756,10 @@
 "Migawka: $SNAP ($PT, $TZN)": "Snapshot: $SNAP ($PT, $TZN)",
 "         pozostałe datasety: ich ostatnia migawka do $AT": "         other datasets: their last snapshot up to $AT",
 "Migawka: $SNAP ($PT, najnowsza)": "Snapshot: $SNAP ($PT, newest)",
-"         pozostałe datasety: ich najnowsza migawka": "         other datasets: their newest snapshot"
+"         pozostałe datasety: ich najnowsza migawka": "         other datasets: their newest snapshot",
+"%s, ssh port %s": "%s, ssh port %s",
+"co: %s   migawki %s*%s": "every: %s   snapshots %s*%s",
+"OK (błędy: %d)": "OK (errors: %d)",
+"Zwinięte": "Folded",
+"udane biegi: %d, od %s (ten = ostatni)": "successful runs: %d, since %s (this = the last)"
 }
