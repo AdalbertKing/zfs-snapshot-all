@@ -1026,7 +1026,20 @@ notify       = pulled
 - Datasets that share a resolved `(send_schedule, dst, prefix, flags)` merge into one send line,
   and datasets that share a resolved `(prune_schedule, pattern, keep/retain, recursive)` merge into
   one prune line that lists them by full path. Recursion is never inferred from a shared parent,
-  and pull datasets never merge.
+  and pull datasets never merge. Disks of two different guarded PVE guests never share a line (the guest
+  guard below).
+- **PVE guest guard (`pve_guest_guard`, `pve_node`).** A line that creates or prunes snapshots on
+  a guest's disk (`vm-N-disk-M`, `subvol-N-disk-M`) at its source (a push without `-e`, a pull, a
+  `[snaponly:]` and the prune of those same datasets) carries `--pve-guests=<host>:<id>`. Before
+  the engine runs, `zfs-job.sh` looks up `/etc/pve/nodes/<node>/{qemu-server,lxc}/<id>.conf` to see
+  where the guest runs. On another node of this cluster: the command does NOT run, END `rc=76`,
+  alarm (the disk here is a pvesr replication target). Not a PVE cluster member, or the guest is
+  defined nowhere: runs as before. A source host given by an address that cannot be mapped to a
+  node (a delegated account cannot read `corosync.conf`): runs, and WARNs when the guest is in
+  this cluster; `pve_node = <node>` in
+  the `[snaponly:]`/`[dataset:]` (pull) section settles it. On by itself; `pve_guest_guard = no`
+  in `[defaults]`, `[dataset:]` or `[snaponly:]` turns it off. Passive copies (`-e`) and backup
+  targets are not checked.
 - `recursive` drives all three generated lines from one declaration: `no` = this dataset,
   `flat` = `-R` on the transfer, `delsnaps -R`, `check-snap-age -R`; `atomic` = `-r` on the
   transfer with the same `-R` prune and monitor.
