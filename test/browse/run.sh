@@ -601,6 +601,16 @@ esac
 case "$MNTDIR" in "$D/run/"*) ;; *) errs+=("katalog montazu poza BROWSE_ROOT: '$MNTDIR'") ;; esac
 fin
 
+new_case "37b U102: gleboki dataset -> w nazwie katalogu tylko dwa ostatnie czlony"
+printf 'hdd/backups/h/data/vm1 filesystem\n' >"$D/datasets"; printf 'OK d0\nOK p0\n' >"$D/answers"; run_script
+rc0
+MNTDIR="$(grep '^mount -t zfs -o ro hdd/backups/h/data/vm1@s1 ' "$D/log" | awk '{ print $NF }')"
+case "${MNTDIR##*/}" in
+    "${HS}_data~vm1@s1."??????) ;;
+    *) errs+=("katalog montazu: '${MNTDIR:-brak wiersza mount w logu}' (oczekiwano ${HS}_data~vm1@s1.XXXXXX)") ;;
+esac
+fin
+
 new_case "38 U88: --any -> spec drzewa ma pusty expand_to (caly host zwiniety); relacja zachowuje kandydatow (test 35)"
 fs_case; run_script
 python3 - "$D/tree-spec.last" <<'P' >"$D/spec.chk" 2>&1
