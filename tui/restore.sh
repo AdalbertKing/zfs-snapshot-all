@@ -27,6 +27,24 @@ ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "restore: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 REL="${1:-}"
 [ -n "$REL" ] || { echo "usage: restore.sh RELATION | restore.sh --from-copy [DATASET]" >&2; exit 2; }
+# --dataset=DS / --snapshot=NAME (GUI F4 Kopie, 2026-10-28): kopia i migawka juz wybrane w GUI;
+# okno startuje na nich i raz pomija dwa kroki, ktore pytalyby o to samo. Wartosci to dane --
+# tylko znaki z listy, nigdy eval. Reszta argumentow (DATASET pozycyjny) bez zmian.
+OPT_DS=""; OPT_SNAP=""; POS=()
+_ARG_RE='^[A-Za-z0-9_.:/-]+$'
+for _a in "${@:2}"; do
+    case "$_a" in
+        --dataset=*)
+            OPT_DS="${_a#--dataset=}"
+            [[ "$OPT_DS" =~ $_ARG_RE ]] || { echo "restore.sh: bad --dataset value '$OPT_DS' (allowed: A-Za-z0-9_.:/-)" >&2; exit 2; } ;;
+        --snapshot=*)
+            OPT_SNAP="${_a#--snapshot=}"
+            [[ "$OPT_SNAP" =~ $_ARG_RE ]] && [ "${OPT_SNAP#*/}" = "$OPT_SNAP" ] \
+                || { echo "restore.sh: bad --snapshot value '$OPT_SNAP' (allowed: A-Za-z0-9_.:- , no '/')" >&2; exit 2; } ;;
+        *) POS+=("$_a") ;;
+    esac
+done
+AUTO_DS="$OPT_DS"; AUTO_SNAP="$OPT_SNAP"      # "raz": zerowane po uzyciu
 CONFDIR="${ZFS_CONF_DIR:-/etc/zfs-snapshot-all}"
 WT_BACKTITLE="$(Tv 'Przywracanie z relacji $REL -- $(hostname)' '$REL' "$REL" '$(hostname)' "$(hostname)")"
 TMPD="$(mktemp -d)" || exit 1
@@ -85,9 +103,22 @@ build_points() {
     done <"$TMPD/points.tsv"
 }
 
+# --snapshot=NAME: czy NAME jest w points.tsv? Tak -> AUTO_IDX = indeks punktu (0 = najnowszy,
+# jak numer w menu p0..pN), rc 0; nie -> rc 1. Dziala na calej liscie (bez limitu 50 menu).
+auto_point() {
+    AUTO_IDX="$(awk -F'\t' -v n="$1" '$2 == n { print NR - 1; exit }' "$TMPD/points.tsv" | tr -d '\r')"
+    [ -n "$AUTO_IDX" ]
+}
+# lista punktow dluzsza niz menu (po zgubionym --snapshot=): tnie do 50 i buduje menu od nowa
+points_cut() {
+    head -n 50 "$TMPD/points.tsv" >"$TMPD/points.cut" && mv "$TMPD/points.cut" "$TMPD/points.tsv"
+    build_points
+}
+
 # ================= TRYB "PRZYWRÓĆ Z DYSKU" (--from-copy) ====================================
 if [ "$REL" = --from-copy ]; then
-    PRE="${2:-}"
+    PRE="${POS[0]:-}"
+    [ -n "$OPT_DS" ] && PRE="$OPT_DS"       # --dataset= = DATASET pozycyjny (wstepne zaznaczenie)
     WT_BACKTITLE="$(Tv 'Przywracanie z dysku -- $(hostname)' '$(hostname)' "$(hostname)")"
     # podpowiedź nazwy: kopia z kolektora (<pula>/.../backups/<host>/<ścieżka>) -> <ścieżka>;
     # inaczej <pula>/restore/<ostatni człon>
@@ -117,6 +148,14 @@ if [ "$REL" = --from-copy ]; then
                 wt --title "$(T 'Przywróć z dysku')" \
                    --msgbox "$(T 'Na tym hoście nie widać żadnego datasetu. Podłącz dysk i zaimportuj pulę (zpool import <pula>), potem spróbuj jeszcze raz.')" 9 "$W"
                 exit 1
+            fi
+            # --dataset= z GUI: kopia jest na liscie kandydatow -> start od kroku 2, jakby operator
+            # zaznaczyl tylko ja i dal Enter. Raz: Wstecz z kroku 2 pokazuje drzewo (wstepnie zaznaczone).
+            if [ -n "$AUTO_DS" ]; then
+                if awk -F'\t' -v d="$AUTO_DS" '$1 == d { f = 1 } END { exit !f }' "$TMPD/ds.tsv"; then
+                    FROM=("$AUTO_DS"); ANS=(); AUTO_DS=""; step=2; continue
+                fi
+                AUTO_DS=""
             fi
             "$PY" - "$TMPD/ds.tsv" "$TMPD/tree-spec.json" "$(T 'Przywróć z dysku: skąd?')" "$(hostname)" "$PRE" <<'PYEOF' || exit 1
 import sys, json
@@ -222,17 +261,34 @@ $(Tv 'Pule tutaj: $POOLS' '$POOLS' "$(zpool list -H -o name 2>/dev/null | tr '\n
             step=3 ;;
         3)  # ---- Z KIEDY? ------------------------------------------------------------------
             # punkty: migawki pierwszego źródła; najnowsza pierwsza, max 50
+            # --snapshot= z GUI: szukamy na calej liscie, nie tylko w 50 pozycjach menu
+            LIM=50; [ -n "$AUTO_SNAP" ] && LIM=100000
             zfs list -H -p -t snapshot -o name,creation -s creation -d 1 -- "${FROM[0]}" 2>/dev/null \
-                | tr -d '\r' | awk -F'\t' '{ n = $1; sub(/^[^@]*@/, "", n); print $2 "\t" n }' | tac | head -n 50 >"$TMPD/points.tsv"
+                | tr -d '\r' | awk -F'\t' '{ n = $1; sub(/^[^@]*@/, "", n); print $2 "\t" n }' | tac | head -n "$LIM" >"$TMPD/points.tsv"
             geom
             build_points
             if [ "${#PT_TIME[@]}" -eq 0 ]; then
                 wt --title "$(T 'Przywróć z dysku')" --msgbox "$(Tv '${FROM[0]} nie ma żadnej migawki -- nie ma z czego odtworzyć.' '${FROM[0]}' "${FROM[0]}")" 8 "$W"
                 exit 1
             fi
-            wt --title "$(T 'Przywróć z dysku: z kiedy?')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags \
-               --default-item p0 --menu "$(T 'Wybierz migawkę do odzyskania.')" \
-               "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
+            # Raz: menu pomijane tylko przy pierwszym wejsciu; po Wstecz pokazuje sie normalnie.
+            SKIPMENU=0
+            if [ -n "$AUTO_SNAP" ]; then
+                if auto_point "$AUTO_SNAP"; then
+                    SKIPMENU=1
+                else
+                    wt --title "$(T 'Przywróć z dysku')" --msgbox "$(Tv 'Migawki $SNAPN nie ma w $SNAPDS -- wybierz z listy.' '$SNAPN' "$AUTO_SNAP" '$SNAPDS' "${FROM[0]}")" 8 "$W"
+                    points_cut
+                fi
+                AUTO_SNAP=""
+            fi
+            if [ "$SKIPMENU" -eq 1 ]; then
+                WT_OUT="p$AUTO_IDX"
+            else
+                wt --title "$(T 'Przywróć z dysku: z kiedy?')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags \
+                   --default-item p0 --menu "$(T 'Wybierz migawkę do odzyskania.')" \
+                   "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
+            fi
             idx="${WT_OUT#p}"
             if [ "$idx" = 0 ]; then AT=""; PT=""; else AT="${PT_AT[$idx]}"; PT="${PT_TIME[$idx]}"; fi
             geom
@@ -347,8 +403,12 @@ $(T 'Bez zgody źródła: odtwórz kopię na TYM hoście jako nowy dataset albo 
            tutaj "$(T 'Odtwórz kopię na tym hoście (bez zgody źródła)')" \
            dalej "$(T 'Mimo to dalej -- zgodę wydam przed uruchomieniem')" || abort
         if [ "$WT_OUT" = tutaj ]; then
+            # kopia i migawka wybrane w GUI jadą dalej -- tryb z kopii też startuje od nich
+            _fa=(--from-copy "${ROWC[0]}")
+            [ -n "$OPT_DS" ] && _fa+=("--dataset=$OPT_DS")
+            [ -n "$OPT_SNAP" ] && _fa+=("--snapshot=$OPT_SNAP")
             rm -rf "$TMPD"
-            exec bash "$HERE/tui/restore.sh" --from-copy "${ROWC[0]}"
+            exec bash "$HERE/tui/restore.sh" "${_fa[@]}"
         fi
     fi
 fi
@@ -406,7 +466,18 @@ PYEOF
             exit 1
         fi
         rm -f "$TMPD/tree-out.json"
-        ${ZFS_TREE:-$PY $HERE/tui/tree.py} --spec "$TMPD/tree-spec.json" --out "$TMPD/tree-out.json" || abort
+        # --dataset= z GUI: kopia z tej relacji -> bez drzewa, jakby operator zaznaczyl tylko ja i dal
+        # Enter (ta sama dalsza droga: sel.tsv). Raz: Wstecz z kroku 2 pokazuje drzewo z nia zaznaczona
+        # (tree-last.json). Kopia spoza relacji jest ignorowana.
+        _auto=0
+        if [ -n "$AUTO_DS" ]; then
+            for c in "${ROWC[@]}"; do [ "$c" = "$AUTO_DS" ] && _auto=1; done
+            [ "$_auto" -eq 1 ] && printf '{"action":"next","roots":["%s"],"excl":{},"recursion":"flat"}\n' "$AUTO_DS" >"$TMPD/tree-out.json"
+            AUTO_DS=""
+        fi
+        if [ "$_auto" -eq 0 ]; then
+            ${ZFS_TREE:-$PY $HERE/tui/tree.py} --spec "$TMPD/tree-spec.json" --out "$TMPD/tree-out.json" || abort
+        fi
         [ -s "$TMPD/tree-out.json" ] || abort
         # sel.tsv: dataset <TAB> ORIG (ścieżka u źródła); stdout: BACK | 0 | 1 (1 = cała relacja)
         FLAG=$("$PY" - "$TMPD/tree-out.json" "$TMPD/ds.tsv" "$TMPD/rows.tsv" "$TMPD/sel.tsv" <<'PYEOF' | tr -d '\r'
@@ -521,8 +592,10 @@ PYEOF
         step=3 ;;
     3)  # ---- Z KIEDY? --------------------------------------------------------------------
         # punkty: migawki wiersza, w którym leży pierwszy wybrany dataset; najnowsza pierwsza, max 50
-        "$PY" - "$TMPD/plan.json" "${SEL[0]}" <<'PYEOF' 2>/dev/null | tr -d '\r' >"$TMPD/points.tsv"
-import sys, json
+        # --snapshot= z GUI: szukamy na calej liscie, nie tylko w 50 pozycjach menu (PT_LIM)
+        PT_LIM=50; [ -n "$AUTO_SNAP" ] && PT_LIM=100000
+        PT_LIM="$PT_LIM" "$PY" - "$TMPD/plan.json" "${SEL[0]}" <<'PYEOF' 2>/dev/null | tr -d '\r' >"$TMPD/points.tsv"
+import sys, json, os
 d = json.load(open(sys.argv[1], encoding="utf-8"))
 s = sys.argv[2]
 best = None
@@ -530,7 +603,7 @@ for r in d.get("datasets") or []:
     c = r.get("copy") or ""
     if c and (s == c or s.startswith(c + "/")) and (best is None or len(c) > len(best.get("copy"))):
         best = r
-for sn in list(reversed((best or {}).get("snapshots") or []))[:50]:
+for sn in list(reversed((best or {}).get("snapshots") or []))[:int(os.environ.get("PT_LIM") or 50)]:
     print("%s\t%s" % (sn.get("creation"), sn.get("name")))
 PYEOF
         build_points
@@ -540,9 +613,24 @@ PYEOF
             exit 1
         fi
         geom
-        wt --title "$(Tv 'Przywróć $REL: z kiedy?' '$REL' "$REL")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags \
-           --default-item p0 --menu "$(Tv 'Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety potomne dostają swój najbliższy punkt z tej chwili lub wcześniejszy.' '$TZN' "$TZN")" \
-           "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
+        # Raz: menu pomijane tylko przy pierwszym wejsciu; po Wstecz pokazuje sie normalnie.
+        SKIPMENU=0
+        if [ -n "$AUTO_SNAP" ]; then
+            if auto_point "$AUTO_SNAP"; then
+                SKIPMENU=1
+            else
+                wt --title "$(Tv 'Przywróć $REL' '$REL' "$REL")" --msgbox "$(Tv 'Migawki $SNAPN nie ma w $SNAPDS -- wybierz z listy.' '$SNAPN' "$AUTO_SNAP" '$SNAPDS' "${SEL[0]}")" 8 "$W"
+                points_cut
+            fi
+            AUTO_SNAP=""
+        fi
+        if [ "$SKIPMENU" -eq 1 ]; then
+            WT_OUT="p$AUTO_IDX"
+        else
+            wt --title "$(Tv 'Przywróć $REL: z kiedy?' '$REL' "$REL")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags \
+               --default-item p0 --menu "$(Tv 'Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety potomne dostają swój najbliższy punkt z tej chwili lub wcześniejszy.' '$TZN' "$TZN")" \
+               "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
+        fi
         idx="${WT_OUT#p}"
         if [ "$idx" = 0 ]; then AT=""; PT=""; else AT="${PT_AT[$idx]}"; PT="${PT_TIME[$idx]}"; fi
         step=4 ;;
