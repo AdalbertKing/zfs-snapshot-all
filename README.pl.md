@@ -96,7 +96,8 @@ zakładaj publicznego zgłoszenia; zob. [SECURITY.md](SECURITY.md).
 
 zfsbackup jest darmowy i taki zostanie. Jeśli oszczędza ci czas albo nieprzespaną noc, możesz
 wesprzeć dalszą pracę — gwiazdka na GitHubie i dobre zgłoszenie błędu też pomagają.
-<!-- Buy Me a Coffee: dopisać link tutaj i w .github/FUNDING.yml, gdy konto powstanie. -->
+
+[☕ Postaw kawę (Buy Me a Coffee)](https://buymeacoffee.com/tel4891350z)
 
 ## Autor i licencja
 
