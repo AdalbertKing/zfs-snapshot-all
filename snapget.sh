@@ -2,7 +2,7 @@
 set -o pipefail
 # snapget.sh (run with -V for version; see git log for full changelog) - twin of snapsend.sh
 # ------------------------------------------------------------------------------
-# Author: Wojciech Król <lurk@lurk.com.pl>
+# Author: Wojciech Król
 # Refactored: March 17, 2026
 # Description: ZFS snapshot manager with force full pull
 #
@@ -1184,7 +1184,7 @@ transfer_data() {
 # live guest's disk" is checked separately from, and BEFORE, the written@
 # divergence test below -- a live guest keeps writing, so a written@=0 read
 # taken a moment earlier proves nothing about the instant `zfs recv -F`
-# actually runs (the measured pve0/pve1 vsql2 case in that document is
+# actually runs (the measured SQL Server guest case in that document is
 # exactly this race, currently caught only by ZFS's own "dataset is busy" on
 # an open zvol, which is not a safety property -- it disappears the moment
 # the guest is stopped, the target is a container subvol instead of a zvol,

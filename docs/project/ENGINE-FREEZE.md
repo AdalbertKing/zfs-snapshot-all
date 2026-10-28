@@ -1,8 +1,8 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 21d0cd686ed5fa16adb969328e27344ad6ef36f0 -->
-<!-- frozen: snapget.sh 100755 d00bd091e823fabb0f33138f7e6befa838fa1e8a -->
-<!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
+<!-- frozen: snapsend.sh 100755 86effb8185df5d71137ba96d3ab7270957015b27 -->
+<!-- frozen: snapget.sh 100755 abd9438b16eeb2c3d082a16bf24d5dd8514a71a0 -->
+<!-- frozen: delsnaps.sh 100755 e54651206ab482947ef452b37ab47a0efd8699d0 -->
 <!-- frozen: check-snap-age.sh 100755 dfd5bdd3e3af9e8659d8e74b290f203e88159983 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
 <!-- unfreeze: - -->
@@ -1168,6 +1168,16 @@ Owner-authorized refreezes:
   twin: n/a -- snapsend.sh has no live-guest receive guard and no mirror
   (`grep -n guest_disk_is_live snapsend.sh` and `grep -n mirror_target
   snapsend.sh` are empty).
+
+- 2026-10-27 (snapget.sh, snapsend.sh, delsnaps.sh): **comments only -- the author's e-mail and a
+  customer VM name leave the published headers.** Owner direction in chat, 2026-10-27: "Akceptuję plan
+  z AUDYT-PUBLIKACJI-2026-10-27.md; e-mail z nagłówków skryptów usuń." -- given for exactly this
+  change (plan §3, items A3 and A6). No version bump: no executable line changes.
+  - `# Author: Wojciech Król <...>` loses the address in snapget.sh and snapsend.sh; delsnaps.sh
+    loses its `# Email:` line. snapget.sh:1187 says "the measured SQL Server guest case" instead of
+    the guest's host name.
+  - Evidence that nothing executable moved: `git diff -w` of the three files touches only `#` lines.
+  twin: both twins changed identically (line 5).
 
 ## How it is enforced
 

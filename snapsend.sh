@@ -2,7 +2,7 @@
 set -o pipefail
 # snapsend.sh (run with -V for version; see git log for full changelog)
 # ------------------------------------------------------------------------------
-# Author: Wojciech Król <lurk@lurk.com.pl>
+# Author: Wojciech Król
 # Refactored: April 04, 2025
 # Description: ZFS snapshot manager with force full send
 #

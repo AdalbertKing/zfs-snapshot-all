@@ -62,7 +62,7 @@ Because the three datasets resolve different `-q`, they stay three separate send
 lines rather than merging. Do **not** quiesce a network gateway or anything
 whose brief stall would cut your own path to the host.
 
-## 3. Shorter local retention than the store keeps (the "Kancelaria" pattern)
+## 3. Shorter local retention than the store keeps
 
 [`examples/short-local-long-store.conf`](../examples/short-local-long-store.conf)
 

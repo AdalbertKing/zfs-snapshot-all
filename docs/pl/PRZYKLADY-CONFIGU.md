@@ -62,7 +62,7 @@ Ponieważ te trzy datasety dają różne `-q`, zostają trzema osobnymi liniami 
 i nie łączą się w jedną. **Nie** zamrażaj bramy sieciowej ani niczego, czego
 krótki przestój odcinałby ci własną drogę do hosta.
 
-## 3. Krótsza retencja lokalna niż w magazynie (wzorzec „Kancelaria")
+## 3. Krótsza retencja lokalna niż w magazynie
 
 [`examples/short-local-long-store.conf`](../examples/short-local-long-store.conf)
 
