@@ -42,8 +42,9 @@
   odzyskać na tamtym węźle; dysk usuniętego gościa -- pod nazwą, która nie jest dyskiem gościa. Zdalna gałąź (`pgrep`) bez zmian.
 - **F4 Kopie na dwóch panelach (2026-10-28, test właściciela na pve10, U100-U105).** Lewy panel: datasety kopii
   pogrupowane po relacji i replice (wspólny początek ścieżki raz w nagłówku grupy, dzieci z wcięciem, liczba migawek,
-  najnowsza). Prawy panel: migawki zaznaczonego datasetu czytane na żywo, kolumny jak `zfs list -t snapshot` (NAME,
-  USED, REFER, CREATION) -- zasada właściciela: admin widzi prawdę z dysku. Enter/F7 na migawce: montowanie tylko do
+  najnowsza). Prawy panel: migawki zaznaczonego datasetu z `zfs list -t snapshot -d1` (czytane przy wejściu na dataset, potem
+  z cache do odświeżenia), kolumny NAME (`@migawka`, pełna nazwa w tytule i w Szczegółach), USED, REFER, CREATION --
+  zasada właściciela: admin widzi prawdę z dysku. Enter/F7 na migawce: montowanie tylko do
   odczytu bez okien wyboru (`browse --snapshot=`); F9: okna Przywróć od razu na tej kopii i migawce
   (`restore --dataset= --snapshot=`, drzewo i menu migawek pominięte raz). mc biegnie we własnej przestrzeni montowań:
   wszystko tylko do odczytu poza `~/odzysk/<kopia>` (prawy panel, pusty znika) -- zmierzone na pve10: zapis do /root,
