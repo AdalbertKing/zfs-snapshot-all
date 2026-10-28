@@ -1015,6 +1015,96 @@ bash "$REPO/zfs-job.sh" "lbl" --log="$X_N/log" --notify="$X_N/notify-fail.sh" --
 check "X10 ZFS_JOB_PROPAGATE_RC=1 exits with the command's rc; unset (cron) exits 0" "3:0" "$x10:$x10c"
 
 # ===========================================================================
+# PG. PVE GUEST GUARD (owner 2026-10-28, 1.0.x). zfs-job.sh --pve-guests=HOST:IDS
+# runs the command only where the guests' configs say they run (/etc/pve/nodes);
+# a guest under another node of this cluster -> NOT RUN, END rc=76, notify-fail.sh.
+# Unknown is not decided: no cluster, a host that is no node, a guest defined
+# nowhere -> the command runs as before. The fake cluster: pveA (this host,
+# /etc/pve/local -> nodes/pveA) holds VM 101, pveB holds CT 102.
+PG="$TMPD/pveguard"; mkdir -p "$PG/nodes/pveA/qemu-server" "$PG/nodes/pveA/lxc" "$PG/nodes/pveB/qemu-server" "$PG/nodes/pveB/lxc"
+: > "$PG/nodes/pveA/qemu-server/101.conf"; : > "$PG/nodes/pveB/lxc/102.conf"
+ln -s nodes/pveA "$PG/local"
+printf '#!/bin/sh\necho "FAIL|$1|$2" >> %s/calls\n' "$PG" > "$PG/notify-fail.sh"; chmod +x "$PG/notify-fail.sh"
+pg_run() {   # [--pve-guests=...] -> "rc ran" ; the command appends to $PG/ran
+    : > "$PG/ran"
+    ZFS_JOB_PVE_NODES="${PG_NODES:-$PG/nodes}" ZFS_JOB_PVE_LOCAL="$PG/local" ZFS_JOB_PROPAGATE_RC=1 \
+        bash "$REPO/zfs-job.sh" "lbl" --log="$PG/log" --notify="$PG/notify-fail.sh" "$@" -- sh -c "echo ran >> '$PG/ran'"
+    echo "$? $(wc -l < "$PG/ran" | tr -d ' ')"
+}
+: > "$PG/calls"
+check "PG1 local guest that runs here: the command runs"            "0 1"  "$(pg_run --pve-guests=:101)"
+check "PG2 local guest that runs on another node: NOT RUN, rc 76"   "76 0" "$(pg_run --pve-guests=:102)"
+check "PG3 remote guest on the host the line names: runs"           "0 1"  "$(pg_run --pve-guests=pveB:102)"
+check "PG4 one of two guests moved (account@host spec): NOT RUN"   "76 0" "$(pg_run --pve-guests=zbk@pveB:101,102)"
+check "PG5 a guest defined nowhere (destroyed): runs"               "0 1"  "$(pg_run --pve-guests=:999)"
+check "PG6 a host that is no node of this cluster: not decided, runs" "0 1" "$(pg_run --pve-guests=other:101)"
+check "PG7 no --pve-guests: runs"                                   "0 1"  "$(pg_run)"
+check "PG8 not a cluster member (no /etc/pve/nodes): runs"          "0 1"  "$(PG_NODES="$PG/none" pg_run --pve-guests=:102)"
+check "PG9 the refusals reached notify-fail.sh, naming guest and node" "2" \
+      "$(grep -c '^FAIL|lbl|zfs-job: NOT RUN -- guest 10[12] runs on pve[AB], not on pve[AB]' "$PG/calls")"
+check "PG9b ...and the END marker records rc=76" "2" "$(grep -c 'ZFS-JOB END lbl rc=76' "$PG/log")"
+
+# PG10-PG14: the generator marks only live SOURCE guest disks. Two guests and a
+# second disk of one of them, a plain dataset, a passive (-e) copy of a replica
+# and a guest with the guard switched off; an inline prune on the same tier.
+cat > "$PG/g.conf" <<'EOF'
+[defaults]
+	host_label = pg
+	dst        = backup/pg
+[template:hourly]
+	send_schedule  = 59 * * * *
+	prefix         = automated_
+	prune_schedule = 5 * * * *
+	pattern        = automated_
+	retain         = -H24
+[dataset:tank/vm-201-disk-0]
+	use_template = hourly
+	notify       = vm201
+[dataset:tank/vm-201-disk-1]
+	use_template = hourly
+	notify       = vm201
+[dataset:tank/vm-202-disk-0]
+	use_template = hourly
+	notify       = vm202
+[dataset:tank/plain]
+	use_template = hourly
+	notify       = plain
+[dataset:tank/subvol-203-disk-0]
+	use_template = hourly
+	flags        = -e
+	notify       = ct203
+[dataset:tank/vm-204-disk-0]
+	use_template    = hourly
+	pve_guest_guard = no
+	notify          = vm204
+EOF
+pg_out="$(bash "$GEN" -c "$PG/g.conf" 2>&1)"
+pg_send() { printf '%s\n' "$pg_out" | grep '^59 ' | grep -F -- "$1"; }
+pg_prune() { printf '%s\n' "$pg_out" | grep '^5 ' | grep -F -- "$1"; }
+check "PG10 two disks of guest 201 share one line, marked :201; guest 202 has its own, marked :202" "1 1 0" \
+      "$(pg_send '"tank/vm-201-disk-0,tank/vm-201-disk-1"' | grep -c -- '--pve-guests=:201 ') $(pg_send '"tank/vm-202-disk-0"' | grep -c -- '--pve-guests=:202 ') $(pg_send 'vm-202' | grep -c 'vm-201')"
+check "PG11 a plain dataset, a passive -e copy and a guest with pve_guest_guard = no carry no mark" "0 0 0" \
+      "$(pg_send '"tank/plain"' | grep -c -- '--pve-guests') $(pg_send 'subvol-203' | grep -c -- '--pve-guests') $(pg_send 'vm-204' | grep -c -- '--pve-guests')"
+check "PG12 the inline prune of a guest's disks is marked like its send" "1 1" \
+      "$(pg_prune 'tank/vm-201-disk-0' | grep -c -- '--pve-guests=:201 ') $(pg_prune 'tank/vm-202-disk-0' | grep -c -- '--pve-guests=:202 ')"
+check "PG13 the inline prune of a plain dataset carries no mark" "0" "$(pg_prune 'tank/plain' | grep -c -- '--pve-guests')"
+sed -i 's/pve_guest_guard = no/pve_guest_guard = maybe/' "$PG/g.conf"
+check "PG14 pve_guest_guard takes yes or no only" "1" "$(bash "$GEN" -c "$PG/g.conf" 2>&1 | grep -c "pve_guest_guard = 'maybe' -- expected 'yes' or 'no'")"
+
+# PG15/PG16: a source given by ADDRESS. A delegated account cannot map an address
+# to a node (pve2, 2026-10-28), so pve_node names it and the snapshot AND prune
+# lines carry the node; without it the guard runs the command and WARNs.
+sed '/^\[snaponly:/a\	pve_node = pveB' "$REPO/test/fixtures/snaponly-basic.conf" > "$PG/n.conf"
+pg_n="$(bash "$GEN" -c "$PG/n.conf" 2>&1)"
+check "PG15 pve_node replaces the host in the mark of the snapshot and the prune lines" "4 0" \
+      "$(printf '%s\n' "$pg_n" | grep -c -- '--pve-guests=pveB:990 ') $(printf '%s\n' "$pg_n" | grep -c -- '--pve-guests=hostA:')"
+printf '#!/bin/sh\necho "WARN|$1|$2" >> %s/calls\n' "$PG" > "$PG/notify-warn.sh"; chmod +x "$PG/notify-warn.sh"
+: > "$PG/calls"
+check "PG16 an address that is no node, guest in this cluster: runs" "0 1" "$(pg_run --pve-guests=10.9.9.9:101)"
+check "PG16b ...and WARNs that the guard was not checked, naming pve_node" "1" \
+      "$(grep -c "^WARN|lbl -- guest guard not checked|.*cannot tell which PVE node '10.9.9.9' is.*guest 101 (on pveA).*pve_node" "$PG/calls")"
+
+# ===========================================================================
 # MIR. SYNC IS A MIRROR (owner 2026-10-06). A pull tier carrying -M makes the
 # target hold what the source holds, so the generator drops that tier's own
 # target prune and keeps its monitor; a [prune:] ladder with prune = no is a

@@ -33,6 +33,18 @@
   `status: stopped` oraz gościa, którego nie ma (`qm`/`pct status` rc 2 „Configuration file ... does not exist”,
   pomiar pve10) -- dysk usuniętej maszyny da się odzyskać. Brak `qm`/`pct`, błąd, pusta albo inna odpowiedź = odmowa
   z ID gościa i poleceniem; wcześniej przechodziły. Zdalna gałąź (`pgrep`) bez zmian.
+- **Strażnik gościa PVE: migawki tylko tam, gdzie gość stoi (2026-10-28, gałąź `feat/pve-guest-node-guard`).**
+  Pomysł z klastra a-tassa, decyzja właściciela: 1.0.x, włączony sam, `pve_guest_guard = no` wyłącza.
+  `gen-cron` oznacza linie, które robią albo przycinają migawki na dysku gościa u źródła (wysyłka bez `-e`, pobranie,
+  `[snaponly:]` i przycinanie tych datasetów): `--pve-guests=<host>:<id>`; dyski różnych strzeżonych gości nie dzielą linii.
+  `zfs-job.sh` v1.2 sprawdza `/etc/pve/nodes/*/{qemu-server,lxc}/<id>.conf`: gość na innym węźle -> polecenie nie
+  rusza, `rc=76`, alarm. Poza klastrem, host spoza klastra albo gość nigdzie -> jak dotąd. Host podany adresem nie
+  daje się przypisać do węzła z konta delegowanego (pve2: `corosync.conf` i `.members` nieczytelne, DNS z wildcardem)
+  -> zadanie rusza, a gdy gość jest w tym klastrze, z ostrzeżeniem; `pve_node = <węzeł>` w sekcji to rozstrzyga. Na żywo pve2 jako `zfsbackup`
+  (polecenie `true`, bez maila): `:990` -> rc 76 („guest 990 runs on pve1, not on pve2”), `pve1:990` -> 0.
+  **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
+  ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
+  PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
 - **F2: szczegół biegu bez NameError (2026-10-28, test właściciela na pve10).** Kursor na biegu, który ma zapis w
   historii transferów, wołał `transfer_detail_pairs` usunięte w #928 razem z F4 Historia -- GUI padało. Funkcja
   wróciła. `test/tui` sprawdza teraz AST każdego `tui/*.py`: nazwa wołana, a nigdzie niezdefiniowana = FAIL.
