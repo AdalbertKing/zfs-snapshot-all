@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f04cf34ec23fa1ad -->
+<!-- status-covers-digest: d67ce3a4ed5528f5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -57,6 +57,11 @@
   **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
   ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **F6 Repliki: kolumna „Ostatni bieg” (2026-10-28, przejście GUI na pve10).** Lista ma teraz
+  `Replika | Typ | Wykonana | Ostatni bieg | Harmonogram`. Nowa kolumna to wynik i czas ostatniego biegu z
+  job-stats: `OK 27.10 21:30`, `BŁĄD rc=1 …`, `pominięty …`, `-` gdy biegu nie ma. „Wykonana” mówi tylko,
+  kiedy kopia była ostatnio aktualna. Replika calapula padła 4 razy z 4, a lista pokazywała tylko
+  „Wykonana 22.10”. Przy 80 znakach szerokości Harmonogram ustępuje (jest w panelu).
 - **F2/F3: panel wiersza „lokalny prune” ze statystykami (2026-10-28, przejście GUI na pve10).** Wiersz
   porządków szczebla płaskiego jest dorabiany z zadania pobrania i miał `srow` puste, więc panel mówił „brak
   biegów w dzienniku z tego okna”, choć lista obok pokazywała te biegi. Teraz statystyki są brane z etykiety

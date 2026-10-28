@@ -4069,6 +4069,21 @@ def replica_stats_row(data, name):
     return None
 
 
+def replica_last_run(srow, stats_failed=False):
+    """Kolumna "Ostatni bieg" w F6: wynik i czas ostatniego biegu z job-stats. "Wykonana"
+    mowi tylko, kiedy kopia byla ostatnio aktualna -- na pve10 replika calapula
+    padla 4 razy z 4 (rc=1), a lista pokazywala samo "Wykonana 22.10" (2026-10-28)."""
+    if stats_failed:
+        return u"?"
+    if not srow:
+        return u"-"
+    rc = srow.get("last_rc")
+    word = u"OK" if rc == 0 else (_(u"pominięty") if rc == 75 else _(u"BŁĄD rc=%s") % rc)
+    at = srow.get("last_at") or ""
+    m = re.match(r"\d{4}-(\d{2})-(\d{2}) (\d{2}:\d{2})", at)
+    return (u"%s %s.%s %s" % (word, m.group(2), m.group(1), m.group(3))) if m else word
+
+
 def replica_when(r, long=False):
     """Harmonogram repliki słowami; '+ po podłączeniu', gdy replika rusza też po podłączeniu
     dysku (on_insert, P5 2026-10-09)."""
@@ -4190,6 +4205,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
         st = MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"])
         s = r.get("schedule") or "?"
         cells.append([r.get("name") or "?", replica_type_word(r), (r.get("last_current") or _(u"brak"))[:16],
+                      replica_last_run(replica_stats_row(data, r.get("name")), data.failed("stats")),
                       _(u"po podłączeniu") if s == "on-insert" else cron_words(s) + (_(u" + po podłączeniu") if r.get("on_insert") == "yes" else "")])
     det_title, det, child = u"", [], None
     if reps and 0 <= cursor < len(reps):
@@ -4207,9 +4223,9 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
         det_title = _(u"stany nośnika")
         det = [(_(MEDIA_STATES[k][0]), _(MEDIA_STATES[k][2])) for k in ("here", "available", "away", "wrong_medium")]
     return render_tabbed(data, width, height, now, ch, "nosniki", _(u"Repliki backupu kolektora (%d)") % len(reps),
-                         [_(u"Replika"), _(u"Typ"), _(u"Wykonana"), _(u"Harmonogram")], cells, cursor,
+                         [_(u"Replika"), _(u"Typ"), _(u"Wykonana"), _(u"Ostatni bieg"), _(u"Harmonogram")], cells, cursor,
                          (_(u"Enter szczegóły   Ins nowa   Del usuń   Tab do datasetów")) if reps else _(u"Ins nowa replika"),
-                         det_title, det, child, focus, pair_cursor, screen_actions("nosniki"), empty, prio=[0, 1, 2, 3], flex=3)
+                         det_title, det, child, focus, pair_cursor, screen_actions("nosniki"), empty, prio=[0, 3, 1, 2, 4], flex=4)
 
 
 # --- F5 Szablony (uwaga 24, 2026-10-09) ------------------------------------

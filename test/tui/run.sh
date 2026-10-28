@@ -2189,12 +2189,23 @@ rm -rf "$SOD" "$SOL"
 # ============================================================================
 N="$(screen nosniki)"
 # X11 (2026-10-12): kolumna Rodzaj po nazwie; sciezka sejf-b obcina sie wczesniej.
-# U99: kolumny Replika | Typ | Wykonana | Harmonogram; Typ: nosnik staly = wewnętrzny, wymienny
+# U99: kolumny Replika | Typ | Wykonana | Ostatni bieg | Harmonogram; Typ: nosnik staly = wewnętrzny, wymienny
 # poza maszyna = odłączony (stan "W SEJFIE" zostaje w panelu)
-if hasE "$N" '^║ sejf-a +odłączony +brak +co dobę 02:30 +║' && hasE "$N" '^║ sejf-b +wewnętrzny +brak +po podłączen'; then
+# Piec kolumn (Ostatni bieg, 2026-10-28): przy 80 znakach Harmonogram ustepuje (jest w panelu),
+# wiec wiersze czytane przy 120.
+NW="$(screen nosniki "" --width 120)"
+if hasE "$NW" '^║ sejf-a +odłączony +brak +- +co dobę 02:30 +║' && hasE "$NW" '^║ sejf-b +wewnętrzny +brak +- +po podłączen'; then
     ok "nosniki: wiersz = replika, Typ nosnika slowem (U99), kiedy ostatnia aktualna kopia (Wykonana), harmonogram slowami (U21)"
 else
-    bad "nosniki: wiersze" "$N"
+    bad "nosniki: wiersze" "$NW"
+fi
+# Ostatni bieg (przejscie GUI pve10, 2026-10-28): calapula padla 4/4 rc=1, a lista mowila
+# tylko "Wykonana 22.10". Kolumna niesie wynik i czas ostatniego biegu z job-stats.
+NF="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" ${ALL%--stats*} --stats "$FIX/stats-replica-fail.json" --screen nosniki --width 160 --height 40 2>&1)"
+if hasE "$NF" '^║ sejf-a +odłączony +brak +BŁĄD rc=1 11\.09 22:02 +co dobę' && hasE "$NF" '^║ sejf-b +wewnętrzny +brak +- +po podłączen'; then
+    ok "nosniki: kolumna Ostatni bieg -- nieudany bieg repliki widac na liscie (BŁĄD rc=1 + czas)"
+else
+    bad "nosniki: Ostatni bieg" "$NF"
 fi
 # KONTROLA CZYTELNIKA: sejf-b nie ma linii `media` (--fixed). Stary list-replicas
 # zwracal media="yes", recursive="latest" -- pola przesuniete o jedno przez
@@ -2320,7 +2331,7 @@ fi
 # kolumna Rodzaj (historia / migawki xN), panel: Rodzaj, Na dysku (z przykladem), Szyfrowane.
 # U93: "zdjecia" -> migawki; U99: kolumny listy Replika | Typ | Wykonana | Harmonogram.
 F6R="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen nosniki --width 200 --height 40 2>&1)"
-if hasE "$F6R" '║ Replika +Typ +Wykonana +Harmonogram' && hasE "$F6R" 'Rodzaj +własne migawki -- replika' \
+if hasE "$F6R" '║ Replika +Typ +Wykonana +Ostatni bieg +Harmonogram' && hasE "$F6R" 'Rodzaj +własne migawki -- replika' \
    && hasE "$F6R" 'Na dysku +2 ostatnie migawki = ok\. 2 dni wstecz' && hasE "$F6R" 'Szyfrowane +nie' && ! has "$F6R" 'zdjęc'; then
     ok "nosniki: X11 -- panel: Rodzaj, Na dysku z przykladem, Szyfrowane (U21: rodzaj w panelu, nie w liscie)"
 else
