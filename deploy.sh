@@ -2657,7 +2657,7 @@ do_rollback() {
             || warn "could not refresh the hold message at $UPDATE_HOLD_FILE (the hold from before the reset is still in place)"
         warn "rollback INCOMPLETE: the CHECKOUT is back at $(printf '%.8s' "$target"), but re-deploying the host at that revision FAILED -- the installed scripts may still be (partly) from $(printf '%.8s' "$from"). This host is a mixture: do not rely on it."
         local _gd=""; [ -e "$GRANT_DATASETS_FILE" ] && _gd=$(read_state_file "$GRANT_DATASETS_FILE")
-        warn "automatic updates stay HELD and nothing retries. Read $UPDATE_STATE_DIR/last-apply.log, fix the cause, then re-deploy this revision by hand: bash $REPO_DIR/deploy.sh${_gd:+ --grant-datasets=$_gd}"
+        warn "automatic updates stay HELD and nothing retries. Read $UPDATE_STATE_DIR/last-apply.log, fix the cause, then re-deploy this revision by hand: bash ${REPO_DIR}/deploy.sh${_gd:+ --grant-datasets=$_gd}"
         return 1
     fi
     log "rolled back $(printf '%.8s' "$from") -> $(printf '%.8s' "$target")"
