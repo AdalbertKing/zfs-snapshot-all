@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 57d66a27153eac70 -->
+<!-- status-covers-digest: a7eb9b98056f373a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -57,6 +57,11 @@
   **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
   ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **Anulowanie okna bez przeładowania (2026-10-28, przejście GUI na pve10).** Esc w edycji relacji, w odzysku,
+  w replice, w szablonie i w ustawieniach kosztował 3-6 s pełnego odświeżenia, choć nic się nie zmieniło. Okna
+  kończą teraz takie wyjście przez `wt_end_nochange`: ten sam komunikat i znacznik `nochange` w pliku
+  `ZFS_TUI_STATUS`, więc GUI wraca bez czytania danych od nowa, tak jak po przeglądaniu (U104). Okno, które
+  coś zmieniło, nadal odświeża. Na pve10, Esc w „Zmień relację ab”: znacznik „odczyt” w nagłówku bez zmian.
 - **F2 otwiera się przy „teraz” (2026-10-28, przejście GUI na pve10).** Kursor startuje na najbliższym
   nadchodzącym biegu, a nie na najstarszym sprzed 12 h; Home wraca na górę listy. Przy okazji naprawione
   przewijanie list: gdy kursor stał na ostatnim wierszu okna, a niżej były dalsze, ten wiersz zastępowało
