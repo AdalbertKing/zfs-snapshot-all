@@ -123,7 +123,8 @@ issue; see [SECURITY.md](SECURITY.md).
 
 zfsbackup is free and stays free. If it saves you time or a bad night, you can support further
 work — a star on GitHub and a good bug report help too.
-<!-- Buy Me a Coffee: add the link here and in .github/FUNDING.yml once the account exists. -->
+
+[☕ Buy me a coffee](https://buymeacoffee.com/tel4891350z)
 
 ## Author and license
 

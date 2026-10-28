@@ -45,8 +45,8 @@
   do `zfsbackup` także `README.pl.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `docs/tutorial/`,
   `.github/FUNDING.yml` i szablony issue/PR (bez `.github/workflows/`); `test/release` sprawdza ich obecność
   i to, że każdy względny link w README, CHANGELOG, CONTRIBUTING i SECURITY prowadzi do pliku wydania. Licencja MIT zostaje (decyzja właściciela).
-  Konto Buy Me a Coffee jeszcze nie istnieje: w `FUNDING.yml` i obu README jest tylko komentarz z miejscem
-  na link. Audyt danych prywatnych: `docs/project/AUDYT-PUBLIKACJI-2026-10-27.md`, plan przyjęty przez
+  Wsparcie: Buy Me a Coffee `tel4891350z` w `FUNDING.yml` (przycisk Sponsor) i link w obu README
+  (2026-10-28). Audyt danych prywatnych: `docs/project/AUDYT-PUBLIKACJI-2026-10-27.md`, plan przyjęty przez
   właściciela 2026-10-27 i wykonany: `scrub.sed` przepisuje też `site-a.net` i 10.99.0.x, `publish.sh`
   i `test/release` odrzucają eksport z `kancelaria`, `a-tassa`, `vsql2` i adresem e-mail autora;
   komentarze w pakiecie mają nazwy neutralne, e-mail zniknął z nagłówków silników (wpis w ENGINE-FREEZE).
