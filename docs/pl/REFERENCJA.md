@@ -1046,7 +1046,19 @@ notify       = pulled
   w jedną linię wysyłki, a datasety o tej samej rozwiązanej czwórce `(prune_schedule, pattern,
   keep/retain, recursive)` scalają się w jedną linię prune, która wymienia je pełnymi ścieżkami.
   Rekursja nigdy nie jest domyślana ze wspólnego rodzica, a datasety pobierane (pull) nigdy się nie
-  scalają.
+  scalają. Dyski dwóch różnych strzeżonych gości PVE nie trafiają do jednej linii (strażnik gościa niżej).
+- **Strażnik gościa PVE (`pve_guest_guard`, `pve_node`).** Linia, która robi albo przycina migawki
+  na dysku gościa (`vm-N-disk-M`, `subvol-N-disk-M`) u źródła (wysyłka bez `-e`, pobranie,
+  `[snaponly:]` i przycinanie tych samych datasetów), niesie `--pve-guests=<host>:<id>`. Przed
+  uruchomieniem silnika `zfs-job.sh` sprawdza w `/etc/pve/nodes/<węzeł>/{qemu-server,lxc}/<id>.conf`,
+  gdzie gość stoi. Gdy na innym węźle tego klastra: polecenie NIE rusza, END `rc=76`, alarm
+  (dysk tu jest celem replikacji pvesr). Gdy host nie należy do klastra PVE albo gościa nie ma
+  nigdzie: działa jak dotąd. Gdy host źródła jest adresem, którego nie da się przypisać do węzła
+  (konto delegowane nie czyta `corosync.conf`): działa, a gdy gość jest w tym klastrze, daje
+  ostrzeżenie; `pve_node = <węzeł>`
+  w sekcji `[snaponly:]`/`[dataset:]` (pobranie) to rozstrzyga. Włączony sam;
+  `pve_guest_guard = no` w `[defaults]`, `[dataset:]` albo `[snaponly:]` go wyłącza. Kopie
+  pasywne (`-e`) i cele kopii nie są sprawdzane.
 - `recursive` steruje wszystkimi trzema wygenerowanymi liniami z jednej deklaracji: `no` = ten
   dataset, `flat` = `-R` przy transferze, `delsnaps -R`, `check-snap-age -R`; `atomic` = `-r` przy
   transferze z tym samym `-R` dla prune i strażnika.
