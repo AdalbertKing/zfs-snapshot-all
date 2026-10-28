@@ -850,8 +850,8 @@ FPZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $FPARGS --stats 
 FPZD="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $FPARGS --stats "$FPF" --screen zadania --keys "$(zkeys "lokalny prune .*×10" $FPARGS --stats "$FPF")" --width 200 --height 60 2>&1)"
 FZP="$(lst "$FPZ" | grep -cE "lokalny prune .*(OK|BŁĄD)")"; FZN="$(lst "$FPZ" | grep -cE "lokalny prune .*nadchodzący")"
 FZT="$(lst "$FPZ" | grep -cE "pobranie .*nadchodzący")"
-if [ "$FZP" = 2 ] && hasE "$FPZ" "lokalny prune .*×10 +OK, błędów 1" && hasE "$FPZ" "lokalny prune .* BŁĄD rc=1" \
-   && [ "$FZN" = 1 ] && [ "$FZT" -gt 1 ] && hasE "$FPZD" "Zwinięte +10 udanych biegów od"; then
+if [ "$FZP" = 2 ] && hasE "$FPZ" "lokalny prune .*×10 +OK \(błędy: 1\)" && hasE "$FPZ" "lokalny prune .* BŁĄD rc=1" \
+   && [ "$FZN" = 1 ] && [ "$FZT" -gt 1 ] && hasE "$FPZD" "Zwinięte +udane biegi: 10, od"; then
     ok "zadania U112: udane prune jednej linii w jednym wierszu x10 (bledy osobno), z nadchodzacych prune tylko najblizszy, pobrania bez zmian"
 else
     bad "zadania U112: zwijanie prune" "wykonane prune: $FZP (2), nadchodzace prune: $FZN (1), nadchodzace pobrania: $FZT (>1)" "$(lst "$FPZ" | grep -E 'prune|pobranie' | head -20)"

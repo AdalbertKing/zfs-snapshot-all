@@ -2315,7 +2315,7 @@ def run_result(r):
         return _(u"nadchodzący")
     rc = r.get("rc")
     if rc == 0:
-        return _(u"OK, błędów %d") % r["fold_bad"] if r.get("fold_bad") else u"OK"
+        return _(u"OK (błędy: %d)") % r["fold_bad"] if r.get("fold_bad") else u"OK"
     if rc == 75:
         return _(u"pominięty")
     if rc == -1:
@@ -2335,7 +2335,7 @@ def run_pairs(r, now, ch):
         if r.get("start") and r.get("end"):
             pairs.append((_(u"Czas"), fmt_dur(r["end"] - r["start"])))
         if r.get("fold_n"):
-            pairs.append((_(u"Zwinięte"), _(u"%d udanych biegów od %s (ten = ostatni)") % (
+            pairs.append((_(u"Zwinięte"), _(u"udane biegi: %d, od %s (ten = ostatni)") % (
                 r["fold_n"], time.strftime("%H:%M", time.localtime(r["fold_from"])))))
         if r.get("rc") == 75:
             pairs.append((_(u"Powód"), _(u"pominięty: trwał inny bieg tego zadania (blokada)")))
