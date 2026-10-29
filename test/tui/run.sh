@@ -3191,6 +3191,9 @@ NRCA=$(nr_run "$(nrc_ans chain)" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCW="$(cat "$N
 # okno pytajace: tytul, menu z tagami chain/own, wiek najnowszej migawki z 4. kolumny own.tsv
 NRCQ="$NRCW"
 NRCOA=$(nr_run "$(nrc_ans own)" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCOW="$(cat "$NR/wt.log")"
+# Dwa korzenie (kampania pve10, 2026-10-29): build_argv ma `local IFS=,`, a odpowiedz byla
+# przypisana do "${B_ROOT[*]}" ze spacja -- przy dwoch datasetach --own-snapshots ginal.
+NRCO2=$(nr_run "$(nrc_ans own)" NR_FIX="$NRC" NR_TREE='goto:hdd/test-kreator,space,goto:hdd/vm-disks,space,enter')
 # sync + szablon default + odpowiedz chain: lustro bedzie PASYWNE, bez --own-snapshots
 NRCS=$(nr_run "0${T}sync
 0${T}192.168.28.98
@@ -3222,6 +3225,11 @@ if has "$NRCW" '[polecany]' && has "$NRCW" 'resztki starej relacji' && has "$NRC
     ok "new-relation: backup z magazynu kopii (nasza rodzina na zrodle) -- polecany passive-flat, UWAGA LANCUCH w podsumowaniu; reczne migawki -- bez tego"
 else
     bad "new-relation: lancuch dla backupu" "$(printf '%s' "$NRCW" | grep -E 'polecany|ŁAŃCUCH' | cut -c1-200)" "$(printf '%s' "$NRCW0" | grep -E 'polecany|ŁAŃCUCH' | cut -c1-200)" "$NRCA"
+fi
+if has "$NRCO2" 'hdd/test-kreator,hdd/vm-disks' && has "$NRCO2" ' --own-snapshots '; then
+    ok "new-relation: 'own' przy DWOCH datasetach -- komenda niesie --own-snapshots (build_argv z IFS=, nie gubi odpowiedzi)"
+else
+    bad "new-relation: own przy dwoch datasetach" "$(printf '%s' "$NRCO2" | grep -a 'CMD' | cut -c1-300)"
 fi
 if has "$NRCOA" 'CMD: ' && has "$NRCOA" ' --own-snapshots ' && has "$NRCOW" 'WŁASNE MIGAWKI' && ! has "$NRCOW" 'UWAGA ŁAŃCUCH'; then
     ok "new-relation: odpowiedz 'own' w oknie migawek rodziny -- komenda niesie --own-snapshots, podsumowanie mowi WŁASNE MIGAWKI (kontrola: 'chain' = bez flagi)"
