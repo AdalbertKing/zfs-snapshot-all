@@ -3702,7 +3702,8 @@ line_is_mirrored_target_prune() {   # <lost line> -> 0 when the mirror replaces 
 endpoint_normalized_identity() {
     sed -E -e 's/(-A "[^@"]+@)[^:"]+:/\1<ENDPOINT>:/' \
            -e 's/"([^"@ ]+@)[^:" ]+:/"\1<ENDPOINT>:/g' \
-           -e 's/ -p [0-9]+ / /g' -e 's/ -p [0-9]+$//'
+           -e 's/ -p [0-9]+ / /g' -e 's/ -p [0-9]+$//' \
+           -e 's/ --pve-guests=[^ :]+:/ --pve-guests=<ENDPOINT>:/g'
 }
 
 # REV-20260801-021 F1. The overlap guard below deliberately allows a target that
