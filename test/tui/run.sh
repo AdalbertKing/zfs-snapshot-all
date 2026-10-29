@@ -3944,6 +3944,27 @@ else
     bad "okno usuwania: drugie pytanie przy kasowaniu kopii" "wstecz: okno=$dk_back_win yes=$dk_back_yes" "skasuj: $dk_yes lista=$dk_txt" "kontrola: okno=$dk_ctl_win yes=$dk_ctl_yes"
 fi
 
+# 3j3. U116 (pve10, 2026-10-29): uwaga tabeli retencji zrodla (tui/grid.py) dluzsza niz okno
+#      ucinala sie na "(baza kopii to inne szczebl". Teraz zawija sie po slowach w ramce.
+GS="$(mktemp)"
+cat > "$GS" <<'EOF'
+{"title": "Retencja: W ŹRÓDLE KOPII", "head": ["SZCZEBEL", "TUTAJ (cel)", "U ŹRÓDŁA"],
+ "rows": [{"key": "0", "label": "godzinowe", "on": true, "value": "24", "unit": "", "ref": "24", "q": null, "family": null, "zero_ok": true}],
+ "note": ["Bez zmian = źródło jak cel. Kratka = szczebel u źródła w ogóle.",
+          "0 = po skopiowaniu nic z tego szczebla u źródła (baza kopii to inne szczeble)."]}
+EOF
+GO="$(PYTHONIOENCODING=utf-8 "$PY" "$REPO/tui/grid.py" --spec "$GS" --out "$GS.out" --keys esc --width 80 2>&1 | tr -d '\r')"
+# szerokosc w ZNAKACH (ramka to znaki wielobajtowe): kazda linia jak gorna krawedz
+glong=$(printf '%s\n' "$GO" | "$PY" -c 'import io, sys
+l = [x.rstrip("\n") for x in io.open(sys.stdin.fileno(), encoding="utf-8")]
+print(sum(1 for x in l if x and len(x) != len(l[0])))' | tr -d '\r')
+if has "$GO" 'szczeble).' && [ "$glong" = 0 ] && printf '%s\n' "$GO" | grep -q '^│ 0 = po skopiowaniu'; then
+    ok "tabela retencji: uwaga dluzsza niz okno zawija sie po slowach w ramce, nie ucina sie (U116)"
+else
+    bad "tabela retencji: dluga uwaga" "linie innej szerokosci: $glong" "$GO"
+fi
+rm -f "$GS" "$GS.out"
+
 # 3k. F10 USTAWIENIA (wlasciciel 2026-10-19): lista kluczy z `settings --tsv` w sekcjach,
 #     zmiana jednej wartosci, "Zapisz" = plan czasownika i WYKONAJ -> `settings set K=V --yes`.
 cat > "$NR/bin/zb-set" <<'EOF'
