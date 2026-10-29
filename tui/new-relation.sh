@@ -329,9 +329,9 @@ for x in d.get("datasets", []):
     n = x.get("name", "")
     if n and x.get("type", "filesystem") == "filesystem":
         fs.write(n + "\n"); info[n] = [x.get("used"), x.get("avail")]
+    if n.count("/") == 1 and n.rsplit("/", 1)[1].lower() in ("backups", "backup", "kopie"): print(n)
 # USED/AVAIL dla okna „Dokąd -- przeglądaj” (właściciel 2026-10-29, wariant A)
-json.dump(info, open(sys.argv[1] + ".info", "w", encoding="utf-8"))
-    if n.count("/") == 1 and n.rsplit("/", 1)[1].lower() in ("backups", "backup", "kopie"): print(n)' "$TMPD/fs.all" | tr -d '\r' >"$TMPD/targets.tsv"
+json.dump(info, open(sys.argv[1] + ".info", "w", encoding="utf-8"))' "$TMPD/fs.all" | tr -d '\r' >"$TMPD/targets.tsv"
     while IFS= read -r t; do
         [ -n "$t" ] || continue
         case " $seen " in *" $t "*) continue ;; esac
