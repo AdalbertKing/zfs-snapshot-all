@@ -5184,8 +5184,16 @@ class UI(object):
         self._bg = (t, box)
         if not (self.message or "").endswith(_(self.BG_NOTE)):
             self.message = (self.message or "") + _(self.BG_NOTE)
+        if slow:
+            # Drugi etap rusza dopiero PO pierwszym (poll_bg -> start_slow): pve10 ma dwa rdzenie,
+            # cztery szybkie czytniki same trwaja 0,9 s, w tloku z monitorem i job-stats 6,7 s.
+            self._slow_want = tuple(sorted(set(getattr(self, "_slow_want", ()) or ()) | set(slow)))
+
+    def start_slow(self):
+        slow, self._slow_want = getattr(self, "_slow_want", ()) or (), ()
         mon = getattr(self, "_bgslow", None)
         if slow and not (mon is not None and mon[0].is_alive()):
+            import threading
             files3 = dict(self.files)
             files3["_data"] = Data()
             mbox = {"keys": slow}
@@ -5261,6 +5269,7 @@ class UI(object):
         if (self.message or "").endswith(_(self.BG_NOTE)):
             self.message = self.message[:-len(_(self.BG_NOTE))]
         data = bg[1].get("data")
+        self.start_slow()
         if data is None:
             self.message = (self.message or "") + _(u"   odświeżenie w tle nie wyszło: %s") % bg[1].get("err", "?")
             self.bg_failed = True   # REV-172: wiersze zostają stare -- czynności czekają na Ctrl-R
