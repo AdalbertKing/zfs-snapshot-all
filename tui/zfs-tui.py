@@ -2107,8 +2107,8 @@ def render_tabbed(data, width, height, now, ch, screen, title, heads, cells, cur
             cbody.append("")
         many = len(child["tabs"]) > 1
         snaps = any(it.get("relname") and it.get("pair") is not None for it in child.get("items") or [])
-        cfoot = ((_(u"m migawki   ") if snaps else u"") + u"Enter okno   " + (_(u"←→ zakładki   ") if many else u"")
-                 + _(u"Esc wraca   Tab do linii poleceń")) if in_child else ""
+        cfoot = (child.get("foot") or ((_(u"m migawki   ") if snaps else u"") + u"Enter okno   " + (_(u"←→ zakładki   ") if many else u"")
+                 + _(u"Esc wraca   Tab do linii poleceń"))) if in_child else ""
         bottom = box(ch, tab_title(child.get("name"), child["tabs"], child.get("ti", 0)), cbody, width, footer=cfoot)
         if pcur is not None:
             scr.cursor_y = len(out) + 1 + pcur
@@ -4548,13 +4548,14 @@ def kopie_groups(rows, data, now, ch):
             if d and ":" not in d and d not in roots:
                 roots.append(d)
         groups.append({"kind": "relation", "name": x["name"], "word": _(u"relacja %s") % x["name"],
-                       "what": u"%s  %s" % (x.get("typ") or "", x.get("dir") or ""), "roots": roots, "note": ""})
+                       "what": u"%s  %s" % (x.get("typ") or "", x.get("dir") or ""), "roots": roots, "note": "",
+                       "typ": x.get("typ") or "", "dir": x.get("dir") or ""})
     for r in ((data.replicas or {}).get("replicas") or []) if data is not None else []:
         here = r.get("present") == "here"
         srcs = r.get("sources") or [s for s in (r.get("source") or "").split(",") if s]
         roots = [u"%s/%s" % (r.get("dst", "").rstrip("/"), s) for s in srcs] if here and r.get("dst") else []
         groups.append({"kind": "replica", "name": r.get("name") or "?", "word": _(u"replika %s") % (r.get("name") or "?"),
-                       "what": r.get("media") or "", "roots": roots,
+                       "what": r.get("media") or "", "roots": roots, "typ": _(u"replika"), "dir": r.get("media") or "",
                        "note": u"" if here else _(u"nośnik niepodłączony -- podłącz go, potem Ctrl-R")})
     return groups
 
@@ -4594,6 +4595,60 @@ def kopie_snap_items(doc, ds):
                       "name": nm if "@" in nm else u"%s@%s" % (ds, short), "creation": int(s.get("creation") or 0),
                       "kopie": True})
     return items
+
+
+def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, width, height, now, ch, ctx=None):
+    """F4 Kopie w UKLADZIE F2 (wlasciciel 2026-10-29: „Zrób go taki sam jak w jobs. To jest
+    eleganckie okno”; dwa panele z drzewem: „badziewne okno”). Ta sama funkcja co F2/F3
+    (render_tabbed): u gory TABELA kopii -- jeden wiersz = jeden dataset kopii -- z prawej
+    fakty o wierszu, na dole zakladka Migawki (kolumny jak `zfs list -t snapshot`). Stan i
+    klawisze bez zmian: Tab/Enter do migawek, Enter na migawce przeglada, F9 przywraca."""
+    cells, rows = [], []
+    for i in selix:
+        it = items[i]
+        rows.append(it)
+        if it.get("any"):
+            cells.append([u"", u"", _(u"inny dysk -- pula spoza relacji i replik"), u"", u""])
+            continue
+        g = it["g"]
+        cells.append([g["name"], g.get("typ") or u"", it["ds"] + (u"  (zvol)" if it.get("type") == "volume" else u""),
+                      str(it.get("snaps") or 0), fmt_when_short(it["newest"], now) if it.get("newest") else u"-"])
+    cur = rows[cursor] if 0 <= cursor < len(rows) else {}
+    det_title, det, child = u"", [], None
+    if cur.get("ds"):
+        g = cur["g"]
+        det_title = u"%s -- %s" % (g["name"], cur["ds"].rsplit("/", 1)[-1])
+        det = [group(ch, _(u"Kopia")), (_(u"Dataset"), cur["ds"]),
+               (_(u"Relacja"), u"%s  %s" % (g["name"], g.get("typ") or u"")),
+               (_(u"Kierunek"), g.get("dir") or u"-"),
+               (_(u"Migawek"), str(cur.get("snaps") or 0)),
+               (_(u"Najnowsza"), fmt_full(cur["newest"]) if cur.get("newest") else u"-")]
+        if cur.get("type") == "volume":
+            det.append((_(u"Rodzaj"), _(u"dysk maszyny (zvol) -- przy przeglądaniu wybierzesz partycję")))
+        if ctx and (ctx.get("dataset") or ctx.get("at")) and ctx.get("rel") == g["name"]:
+            det = [group(ch, _(u"Wskazane")),
+                   (_(u"Dataset"), ctx.get("dataset") or _(u"(wybierzesz w oknie)")),
+                   (_(u"Chwila"), time.strftime("%Y-%m-%d %H:%M", time.localtime(ctx["at"])) if ctx.get("at") else _(u"najnowsza migawka"))] + det
+        sitems = []
+        for x in snaps or []:
+            y = dict(x)
+            y["title"] = y.get("name") or u""
+            y["pairs"] = [group(ch, _(u"Migawka")), (_(u"Migawka"), y.get("name") or u""),
+                          (_(u"Czas"), fmt_full(y.get("creation")) if y.get("creation") else u"-"),
+                          (_(u"Dataset"), cur["ds"]), (_(u"Relacja"), g["name"])]
+            sitems.append(y)
+        child = {"name": cur["ds"], "tabs": [("snaps", _(u"Migawki"))], "ti": 0,
+                 "heads": [u"NAME", u"USED", u"REFER", u"CREATION"], "items": sitems,
+                 "empty": snaps_err or _(u"brak migawek"),
+                 "foot": _(u"Enter przeglądaj   F9 przywróć   Esc wraca   Tab do linii poleceń")}
+    elif cur.get("any"):
+        det_title = _(u"inny dysk")
+        det = [(_(u"Inny dysk"), _(u"najpierw zaimportuj pulę (zpool import), potem Enter"))]
+    host = (data.jobs or {}).get("host") if data is not None and data.jobs else ""
+    return render_tabbed(data, width, height, now, ch, "odzysk", (_(u"Kopie na %s") % (host or u"")).strip(),
+                         [_(u"Relacja"), _(u"Rodzaj"), _(u"Kopia"), _(u"Migawek"), _(u"Najnowsza")], cells, cursor,
+                         _(u"Enter/Tab do migawek"), det_title, det, child, focus, scur, screen_actions("odzysk"),
+                         prio=[0, 2, 4, 3, 1])
 
 
 def render_kopie(data, items, sel, focus, scur, snaps, snaps_err, width, height, now, ch, ctx=None):
@@ -6569,8 +6624,8 @@ def _ui_render(self, width, height):
         c = self.cursor["odzysk"]
         it = items[selix[c]] if 0 <= c < len(selix) else {}
         snaps, serr = self.kopie_snaps(it) if it.get("ds") else ([], None)
-        base = render_kopie(self.data, items, selix[c] if 0 <= c < len(selix) else -1, self.focus, self.pair_cursor,
-                            snaps, serr, width, sh, now, self.ch, ctx=self.kopie_ctx)
+        base = render_kopie_tab(self.data, items, selix, c, self.focus, self.pair_cursor,
+                                snaps, serr, width, sh, now, self.ch, ctx=self.kopie_ctx)
     else:
         base = render_nosniki(self.data, self.cursor["nosniki"], width, sh, now, self.ch, self.message,
                               focus=self.focus, pair_cursor=self.pair_cursor, ti=self.ctab.get("nosniki", 0))
