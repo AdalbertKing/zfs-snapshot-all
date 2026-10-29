@@ -13105,6 +13105,27 @@ if ! bash "$ZFSBACKUP" job-stats --json --runs=x >/dev/null 2>"$JS/err" && grep 
 else
     bad "jobstats --runs=x" "$(cat "$JS/err")"
 fi
+# A CONTROL CHARACTER IN AN ERROR LINE (pve10, 2026-10-29): ssh's "Connection reset by ...
+# port 22" reached the cron log with a trailing CR; job-stats put it raw into the JSON string,
+# json.load refused the whole document and the GUI showed "job-stats nie odpowiedział" on
+# every panel. The error is read as text with the CR turned into a space -- in --runs and in
+# the newest-failure event alike.
+cat > "$JS/cr.log" <<RLOG
+$(rt 30) ZFS-JOB BEGIN pve10 hourly backup (rn-cr)
+$(date '+%Y-%m-%d %H:%M:%S' -d '-30 minutes') - Cannot reach host over ssh (exit 255). ssh said: Connection reset by 192.0.2.7 port 22$(printf '')
+$(rt 29) ZFS-JOB END pve10 hourly backup (rn-cr) rc=1
+RLOG
+CRJ=$( ( PATH="$JS/bin:$PATH" ZFS_CRON_LOGS="$JS/cr.log" bash "$ZFSBACKUP" job-stats --json --runs=2 ) 2>"$JS/err")
+got=$(printf '%s' "$CRJ" | "$PY_OR_PYTHON" -c '
+import sys,json; d=json.load(sys.stdin)
+r=[x for x in d["runs"] if x["label"] == "hourly backup (rn-cr)"][0]
+e=[x for x in d.get("events", []) if x["label"] == "hourly backup (rn-cr)"]
+print(r["rc"], repr(r["error"].rstrip()), all("" not in x["error"] for x in e) and bool(e))' 2>&1 | tr -d '')
+if [ "$got" = "1 'Cannot reach host over ssh (exit 255). ssh said: Connection reset by 192.0.2.7 port 22' True" ]; then
+    ok "jobstats: a CR in an engine's error line (ssh) leaves the JSON valid -- runs and events carry the text, the control character as a space"
+else
+    bad "jobstats: control character in an error line" "$got" "$(printf '%s' "$CRJ" | head -c 400)"
+fi
 # ONE SNAPSHOT LISTING (campaign 2026-10-28: job-stats was 8.4 s of the GUI's 16.9 s start on
 # pve10, two full `zfs list -t snapshot` per call). Without --vol-cache: exactly one listing,
 # --runs included. With --vol-cache (the GUI): the second call reads the cached listing (no
