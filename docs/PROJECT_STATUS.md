@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 48f7c86aeb0dd7c6 -->
+<!-- status-covers-digest: 251f913c71f21ea2 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -72,6 +72,11 @@
     nazwę migawki; okno „brak zgody” odsyła do F4 Kopie / F7 Przeglądaj zamiast nieistniejącego ekranu.
   Zostało: odświeżenie Ctrl-R ~9-11 s (czasowniki równolegle 5,8 s, reszta do zbadania); pozostałe ~3 s
   job-stats to kilka przebiegów awk po 9,6 MB dzienniku.
+- **job-stats: znak sterujący w błędzie nie psuje JSON-a (2026-10-29).** Komunikat ssh „Connection reset by …
+  port 22” trafiał do dziennika crona z końcowym CR, a `job-stats --json` wstawiał go do napisu JSON bez
+  zmian. GUI odrzucało wtedy cały odczyt i we wszystkich panelach pokazywało „job-stats nie odpowiedział”
+  (pve10). Pola błędów zamieniają teraz znaki sterujące na spację; `json_escape` zostaje bez zmian, bo jest
+  przypięty do kopii w zamrożonych silnikach.
 - **Nazwy hostów zamiast adresów; relacja nazywa się jak host po drugiej stronie (2026-10-29, U111).**
   Każda strona kopii jest pokazywana jako `host:dataset` (`pve9:hdd/enc`, `pve10:hdd/backups/…`), a kierunek
   strzałką zgodną z ruchem danych: `pve9 → pve10` przy pobieraniu, `pve10 → pve9` przy wysyłce, `pve10 ↔ pve11`

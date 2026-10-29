@@ -17051,6 +17051,11 @@ RUNS
         [ -n "$_el" ] || continue
         [ "$_dat" = - ] && _dat=""; [ "$_dsc" = - ] && _dsc=""
         [ "$_eat" = - ] && _eat=""; [ "$_err" = - ] && _err=""
+        # A control character in an error text (ssh's "Connection reset by ... port 22" came
+        # with one) is invalid inside a JSON string, and json_escape -- pinned identical to
+        # the frozen engines' copy -- does not escape it: the GUI then dropped the WHOLE
+        # job-stats reading ("job-stats nie odpowiedział", pve10, 2026-10-29). A space here.
+        _err="${_err//[[:cntrl:]]/ }"; _dsc="${_dsc//[[:cntrl:]]/ }"
         [ "$first" -eq 1 ] || printf ','
         first=0
         printf '{"label":"%s","discard_at":"%s","discard":"%s","error_at":"%s","error":"%s"}' \
@@ -17090,6 +17095,7 @@ VOL
         while IFS=$'\t' read -r _rl _rb _re _rrc _rer; do
             [ -n "$_rl" ] || continue
             [ "$_rb" = - ] && _rb=""; [ "$_re" = - ] && _re=""; [ "$_rer" = - ] && _rer=""
+            _rer="${_rer//[[:cntrl:]]/ }"     # see the error field above
             [ "$first" -eq 1 ] || printf ','
             first=0
             printf '{"label":"%s","start":"%s","end":"%s","rc":%s,"error":"%s"}' \
