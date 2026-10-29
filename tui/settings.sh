@@ -105,6 +105,21 @@ save() {   # plan czasownika, potem WYKONAJ
 # szerokość terminala (do 160); klucze zostają nazwami z settings.ini -- to je admin wpisuje.
 geom_wide() { local c; geom; c=$(tput cols 2>/dev/null) || c=80; case "$c" in ''|*[!0-9]*) c=80 ;; esac
               W=$((c - 4)); [ "$W" -gt 160 ] && W=160; return 0; }
+# Właściciel 2026-10-29 (zrzut F10): „brzydkie i poucinane. Złam linię opisów i zmieść tekst
+# w 3 kolumnie. Drugą kolumnę oddal od pierwszej -- zlewa się”. Pozycja menu whiptail ma jedną
+# linię, więc dalszy ciąg opisu to osobne pozycje „+klucz” (wybór otwiera to samo ustawienie).
+# Łamanie po ZNAKACH (${#}), nie bajtach -- polskie litery mają w UTF-8 po dwa bajty.
+wrap_words() {   # <szerokość> <tekst> -> linie
+    local w="$1" line="" word; local -a ws
+    read -ra ws <<< "$2"          # bez rozwijania * w opisach jako wzorca plików
+    for word in "${ws[@]}"; do
+        if [ -z "$line" ]; then line="$word"
+        elif [ $(( ${#line} + 1 + ${#word} )) -le "$w" ]; then line="$line $word"
+        else printf '%s\n' "$line"; line="$word"; fi
+    done
+    [ -n "$line" ] && printf '%s\n' "$line"
+    return 0
+}
 LAST="${KEYS[0]}"
 while :; do
     geom_wide
@@ -122,9 +137,16 @@ while :; do
         case "${SRC[$k]}" in default) sw="$(T domyślne)" ;; *) sw="${SRC[$k]}" ;; esac
         if [ -n "${NEW[$k]+x}" ]; then v="${NEW[$k]}  ($(T było) ${VAL[$k]})"; else v="${VAL[$k]}"; [ "${SRC[$k]}" = file ] || v="$v  ($sw)"; fi
         # Wyrównanie po ZNAKACH: printf %-Ns liczy bajty, a "(domyślne)" ma polską literę.
-        c1="${k#*.}"; while [ "${#c1}" -lt 16 ]; do c1="$c1 "; done
+        c1="${k#*.}"; while [ "${#c1}" -lt 18 ]; do c1="$c1 "; done
         c2="$(clip_label "$v" 26)"; while [ "${#c2}" -lt 26 ]; do c2="$c2 "; done
-        items+=("$k" "$(clip_label "$c1 $c2 ${HELP[$k]}" $((W - 10)))")
+        pad="                                                "          # 18 + 4 + 26 = szerokość kolumn 1-2
+        dw=$(( W - 10 - 18 - 4 - 26 - 2 )); [ "$dw" -lt 20 ] && dw=20
+        first=1; i=0
+        while IFS= read -r dl; do
+            if [ "$first" = 1 ]; then items+=("$k" "$c1    $c2  $dl"); first=0
+            else i=$((i + 1)); items+=("+$i$k" "$pad  $dl"); fi
+        done < <(wrap_words "$dw" "${HELP[$k]}")
+        [ "$first" = 1 ] && items+=("$k" "$c1    $c2")
     done
     n=0; for k in "${KEYS[@]}"; do [ -n "${NEW[$k]+x}" ] && n=$((n + 1)); done
     items+=("#_" " " mail "$(T 'Wyślij mail próbny (na obecny adres)')" zapisz "$(Tv 'Zapisz zmiany ($n) -- plan, WYKONAJ' '$n' "$n")")
@@ -135,6 +157,7 @@ while :; do
     LAST="$WT_OUT"
     case "$WT_OUT" in
         \#*) ;;
+        +*) LAST="$(printf '%s' "$WT_OUT" | sed 's/^+[0-9]*//')"; edit_key "$LAST" ;;   # dalszy ciąg opisu = to samo ustawienie
         mail)
             clear 2>/dev/null
             "$ZB" settings test-mail 2>&1; echo; echo "$(T 'Enter = powrót do ustawień')"

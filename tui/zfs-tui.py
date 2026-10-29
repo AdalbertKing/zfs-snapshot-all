@@ -2107,8 +2107,8 @@ def render_tabbed(data, width, height, now, ch, screen, title, heads, cells, cur
             cbody.append("")
         many = len(child["tabs"]) > 1
         snaps = any(it.get("relname") and it.get("pair") is not None for it in child.get("items") or [])
-        cfoot = ((_(u"m migawki   ") if snaps else u"") + u"Enter okno   " + (_(u"←→ zakładki   ") if many else u"")
-                 + _(u"Esc wraca   Tab do linii poleceń")) if in_child else ""
+        cfoot = (child.get("foot") or ((_(u"m migawki   ") if snaps else u"") + u"Enter okno   " + (_(u"←→ zakładki   ") if many else u"")
+                 + _(u"Esc wraca   Tab do linii poleceń"))) if in_child else ""
         bottom = box(ch, tab_title(child.get("name"), child["tabs"], child.get("ti", 0)), cbody, width, footer=cfoot)
         if pcur is not None:
             scr.cursor_y = len(out) + 1 + pcur
@@ -3086,7 +3086,10 @@ def screen_actions(active, hide_gone=False, paused=False, show_done=True, groupe
                 ("F9", u"Eksport/Import", u"Plik")]
     if active == "odzysk":
         # KOPIE (U82): Enter przeglada (migawka RO + mc), F9 przywraca -- ten sam wybor zrodla.
-        return [("F7", u"Przeglądaj", u"Przeglądaj"), ("F9", u"Przywróć", u"Przywróć")]
+        # F8 grupuje po relacji jak F9 na F2 (wlasciciel 2026-10-29: „tak jak F2 -- wszystkie
+        # mozliwosci”); F9 zostaje Przywroc, wiec grupowanie jest tu pod F8.
+        return [("F7", u"Przeglądaj", u"Przeglądaj"), ("F8", u"Jedna lista" if grouped else u"Grupuj po relacji", u"Grupuj"),
+                ("F9", u"Przywróć", u"Przywróć")]
     if active == "nosniki":
         # Krótkie (3. pole) tylko, gdy pasek się nie mieści: przy 80 kolumnach F9 wypychał F10.
         # "Przywróć z dysku" przeszedł na F11 Odzysk (właściciel 2026-10-18).
@@ -4548,13 +4551,14 @@ def kopie_groups(rows, data, now, ch):
             if d and ":" not in d and d not in roots:
                 roots.append(d)
         groups.append({"kind": "relation", "name": x["name"], "word": _(u"relacja %s") % x["name"],
-                       "what": u"%s  %s" % (x.get("typ") or "", x.get("dir") or ""), "roots": roots, "note": ""})
+                       "what": u"%s  %s" % (x.get("typ") or "", x.get("dir") or ""), "roots": roots, "note": "",
+                       "typ": x.get("typ") or "", "dir": x.get("dir") or ""})
     for r in ((data.replicas or {}).get("replicas") or []) if data is not None else []:
         here = r.get("present") == "here"
         srcs = r.get("sources") or [s for s in (r.get("source") or "").split(",") if s]
         roots = [u"%s/%s" % (r.get("dst", "").rstrip("/"), s) for s in srcs] if here and r.get("dst") else []
         groups.append({"kind": "replica", "name": r.get("name") or "?", "word": _(u"replika %s") % (r.get("name") or "?"),
-                       "what": r.get("media") or "", "roots": roots,
+                       "what": r.get("media") or "", "roots": roots, "typ": _(u"replika"), "dir": r.get("media") or "",
                        "note": u"" if here else _(u"nośnik niepodłączony -- podłącz go, potem Ctrl-R")})
     return groups
 
@@ -4594,6 +4598,89 @@ def kopie_snap_items(doc, ds):
                       "name": nm if "@" in nm else u"%s@%s" % (ds, short), "creation": int(s.get("creation") or 0),
                       "kopie": True})
     return items
+
+
+def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, width, height, now, ch, ctx=None, grouped=False):
+    """F4 Kopie w UKLADZIE F2 (wlasciciel 2026-10-29: „Zrób go taki sam jak w jobs. To jest
+    eleganckie okno”; dwa panele z drzewem: „badziewne okno”). Ta sama funkcja co F2/F3
+    (render_tabbed): u gory TABELA kopii -- jeden wiersz = jeden dataset kopii -- z prawej
+    fakty o wierszu, na dole zakladka Migawki (kolumny jak `zfs list -t snapshot`). Stan i
+    klawisze bez zmian: Tab/Enter do migawek, Enter na migawce przeglada, F9 przywraca."""
+    cells, rows = [], []
+    bar = u"|" if ch.ascii else u"│"
+    last_g, ccur = None, 0
+    for i in selix:
+        it = items[i]
+        g = it.get("g")
+        # GRUPY jak F2 po F9: naglowek relacji z rodzajem i kierunkiem (tylko do czytania),
+        # pod nim jej kopie z wcieciem. Kursor chodzi po kopiach; ccur = jego wiersz w tabeli.
+        if grouped and g is not None and g is not last_g:
+            cells.append([(u"> " if ch.ascii else u"▸ ") + g["name"], u"%s  %s" % (g.get("typ") or u"", g.get("dir") or u""), u" ", u" "])
+            last_g = g
+        if len(rows) == cursor:
+            ccur = len(cells)
+        rows.append(it)
+        if it.get("any"):
+            cells.append([_(u"inny dysk -- pula spoza relacji i replik"), u" ", u" ", u" "] if grouped
+                         else [u" ", u" ", _(u"inny dysk -- pula spoza relacji i replik"), u" ", u" "])
+            continue
+        if it.get("note"):
+            cells.append([u"  %s %s" % (bar, it["note"]), u" ", u" ", u" "] if grouped
+                         else [g["name"], g.get("typ") or u" ", it["note"], u" ", u" "])
+            continue
+        ds = it["ds"] + (u"  (zvol)" if it.get("type") == "volume" else u"")
+        when = fmt_when_short(it["newest"], now) if it.get("newest") else u"-"
+        if grouped:
+            cells.append([u"  %s %s" % (bar, ds), u" ", str(it.get("snaps") or 0), when])
+        else:
+            cells.append([g["name"], g.get("typ") or u"", ds, str(it.get("snaps") or 0), when])
+    if not grouped:
+        ccur = cursor
+    cur = rows[cursor] if 0 <= cursor < len(rows) else {}
+    det_title, det, child = u"", [], None
+    if cur.get("ds"):
+        g = cur["g"]
+        det_title = u"%s -- %s" % (g["name"], cur["ds"].rsplit("/", 1)[-1])
+        det = [group(ch, _(u"Kopia")), (_(u"Dataset"), cur["ds"]),
+               (_(u"Relacja"), u"%s  %s" % (g["name"], g.get("typ") or u"")),
+               (_(u"Kierunek"), g.get("dir") or u"-"),
+               (_(u"Migawek"), str(cur.get("snaps") or 0)),
+               (_(u"Najnowsza"), fmt_full(cur["newest"]) if cur.get("newest") else u"-")]
+        if cur.get("type") == "volume":
+            det.append((_(u"Rodzaj"), _(u"dysk maszyny (zvol) -- przy przeglądaniu wybierzesz partycję")))
+        if ctx and (ctx.get("dataset") or ctx.get("at")) and ctx.get("rel") == g["name"]:
+            det = [group(ch, _(u"Wskazane")),
+                   (_(u"Dataset"), ctx.get("dataset") or _(u"(wybierzesz w oknie)")),
+                   (_(u"Chwila"), time.strftime("%Y-%m-%d %H:%M", time.localtime(ctx["at"])) if ctx.get("at") else _(u"najnowsza migawka"))] + det
+        sitems = []
+        for x in snaps or []:
+            y = dict(x)
+            y["title"] = y.get("name") or u""
+            # w panelu sama migawka (@...) -- pelna nazwa ds@... w waskim panelu lamala sie na dwa
+            # wiersze; dataset stoi wiersz nizej i w tytule zakladki
+            y["pairs"] = [group(ch, _(u"Migawka")), (_(u"Migawka"), u"@" + (y.get("name") or u"").split("@", 1)[-1]),
+                          (_(u"Czas"), fmt_full(y.get("creation")) if y.get("creation") else u"-"),
+                          (_(u"Dataset"), cur["ds"]), (_(u"Relacja"), g["name"])]
+            sitems.append(y)
+        child = {"name": cur["ds"], "tabs": [("snaps", _(u"Migawki"))], "ti": 0,
+                 "heads": [u"NAME", u"USED", u"REFER", u"CREATION"], "items": sitems,
+                 "empty": snaps_err or _(u"brak migawek"),
+                 "foot": _(u"Enter przeglądaj   F9 przywróć   Esc wraca   Tab do linii poleceń")}
+    elif cur.get("note"):
+        g = cur["g"]
+        det_title = g["name"]
+        det = [(_(u"Relacja"), u"%s  %s" % (g["name"], g.get("typ") or u"")), (_(u"Kierunek"), g.get("dir") or u"-"),
+               (_(u"Uwaga"), cur["note"])]
+    elif cur.get("any"):
+        det_title = _(u"inny dysk")
+        det = [(_(u"Inny dysk"), _(u"najpierw zaimportuj pulę (zpool import), potem Enter"))]
+    host = (data.jobs or {}).get("host") if data is not None and data.jobs else ""
+    title = (_(u"Kopie na %s") % (host or u"")).strip() + (_(u", po relacjach") if grouped else u"")
+    heads = ([_(u"Kopia"), _(u"Rodzaj"), _(u"Migawek"), _(u"Najnowsza")] if grouped
+             else [_(u"Relacja"), _(u"Rodzaj"), _(u"Kopia"), _(u"Migawek"), _(u"Najnowsza")])
+    return render_tabbed(data, width, height, now, ch, "odzysk", title, heads, cells, ccur,
+                         _(u"Enter/Tab do migawek"), det_title, det, child, focus, scur, screen_actions("odzysk", grouped=grouped),
+                         prio=([0, 3, 2, 1] if grouped else [0, 2, 4, 3, 1]))
 
 
 def render_kopie(data, items, sel, focus, scur, snaps, snaps_err, width, height, now, ch, ctx=None):
@@ -4827,6 +4914,7 @@ class UI(object):
         self.kopie_ctx = None   # F4 Kopie otwarte z Przebiegow/Relacji: {"rel", "dataset", "at"}
         self.zad_sort = 0   # kolejnosc zadan (F3 zakladka Zadania): relacje, w srodku wg nastepnego
         self.prz_done, self.prz_group = True, False   # F2 Przebiegi: F8 wykonane, F9 grupy
+        self.kopie_group = False                      # F4 Kopie: F8 grupy (jak F9 na F2)
         # LINIA POLECEN (wlasciciel 2026-09-11: "chcemy moc w kazdej chwili
         # pisac komendy z palca"). Styl mc: kazdy drukowalny znak leci tu,
         # Enter wykonuje NA PIERWSZYM PLANIE (curses zawieszone), historia w
@@ -5406,7 +5494,9 @@ class UI(object):
                     roots.append(r)
         tree = load_ztree(self.repo, self.files, self.data, roots)[0] if roots else []
         items = kopie_items(groups, tree)
-        return items, [i for i, x in enumerate(items) if x.get("ds") or x.get("any")]
+        # Wiersz notatki (replika bez nosnika, relacja bez kopii) tez jest w tabeli -- operator
+        # ma go widziec; akcji na nim nie ma (klawisze nizej).
+        return items, [i for i, x in enumerate(items) if x.get("ds") or x.get("any") or x.get("note")]
 
     def kopie_current(self):
         items, selix = self.kopie_state()
@@ -6278,6 +6368,9 @@ class UI(object):
         if k == "F7" and self.screen == "zadania":
             self.run_job_now()
             return "stay"
+        if k == "F8" and self.screen == "odzysk":
+            self.kopie_group = not self.kopie_group    # kursor zostaje na tej samej kopii
+            return "stay"
         if k in ("F8", "F9") and self.screen == "zadania":
             c0 = self.cursor["zadania"]
             cur_row = self.runrows[c0] if 0 <= c0 < len(self.runrows) else None
@@ -6427,6 +6520,8 @@ class UI(object):
         elif k in ("F7", "enter", "F9") and n and self.screen == "odzysk":
             self.cursor["odzysk"] = c
             it = self.kopie_current()
+            if it.get("note"):
+                return "stay"      # replika bez nosnika / relacja bez kopii: nie ma czego otworzyc
             if self.focus == "pairs":
                 snaps = self.kopie_snaps(it)[0]
                 s_ = snaps[min(self.pair_cursor, len(snaps) - 1)] if snaps else None
@@ -6569,8 +6664,8 @@ def _ui_render(self, width, height):
         c = self.cursor["odzysk"]
         it = items[selix[c]] if 0 <= c < len(selix) else {}
         snaps, serr = self.kopie_snaps(it) if it.get("ds") else ([], None)
-        base = render_kopie(self.data, items, selix[c] if 0 <= c < len(selix) else -1, self.focus, self.pair_cursor,
-                            snaps, serr, width, sh, now, self.ch, ctx=self.kopie_ctx)
+        base = render_kopie_tab(self.data, items, selix, c, self.focus, self.pair_cursor,
+                                snaps, serr, width, sh, now, self.ch, ctx=self.kopie_ctx, grouped=self.kopie_group)
     else:
         base = render_nosniki(self.data, self.cursor["nosniki"], width, sh, now, self.ch, self.message,
                               focus=self.focus, pair_cursor=self.pair_cursor, ti=self.ctab.get("nosniki", 0))
