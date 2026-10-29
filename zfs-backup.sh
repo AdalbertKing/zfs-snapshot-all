@@ -16415,10 +16415,10 @@ cmd_run_relation() {
         key=$(printf '%s' "$label" | sed -nE 's/.*\(([^)]+)\)$/\1/p')
         [ -n "$key" ] || key="${label:-$line}"
         # The LOWEST tier of the dataset, by its rank (owner 2026-10-29: "F7 najnizszy
-        # szczebel"). The tier is the word before "snapshot|backup|copy (" in the label,
-        # after the last "__" of a profile name ("... relacja-pve9b__daily snapshot (x)").
-        # It used to be "hour '*', else the first line in cron order": a relation with
-        # daily and weekly only (pve9b) could run its weekly. Equal ranks keep cron order.
+        # szczebel"). The tier is the word right before "snapshot|backup|copy (" in the
+        # label ("h hourly backup (x)", "... relacja-pve9b__daily snapshot (x)").
+        # It used to be "hour '*', else the first line in cron order": a relation with no
+        # hourly tier ran whichever line came first, e.g. its weekly. Equal ranks keep cron order.
         tier=$(printf '%s' "$label" | sed -nE 's/.*[ _]([A-Za-z0-9-]+) (snapshot|backup|copy) \(.*/\1/p')
         rank=$(tiers_cadence_rank "$tier")
         if [ -z "${fine[$key]+x}" ]; then order+=("$key"); fi
