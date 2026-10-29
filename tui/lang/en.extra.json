@@ -767,5 +767,6 @@
 "                 pve10 → pve9 wysyłam, pve10 ↔ pve9 obie strony, lokalnie = na tym hoście;": "                 pve10 → pve9 I push, pve10 ↔ pve9 both ways, local = on this host;",
 "                 nazwy hostów z /etc/hosts, adres tylko gdy nazwy tam nie ma": "                 host names from /etc/hosts, the address only when no name is there",
 "Relacja nazywa się jak host po drugiej stronie: $n.\n\nRelacja to para hostów -- jedna nazwa na F3, w cronie i w mailach.": "The relationship is named after the host on the other side: $n.\n\nA relationship is a pair of hosts -- one name on F3, in cron and in mail.",
-"lokalnie": "local"
+"lokalnie": "local",
+"Kopie trafią pod:  {cur}$lv/<dataset źródła>": "Copies will go under:  {cur}$lv/<source dataset>"
 }

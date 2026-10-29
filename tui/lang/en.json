@@ -742,6 +742,7 @@
 "Kopie na %s": "Copies on %s",
 "Kopie na tym hoście: $COPIES\\nKopii domyślnie NIE ruszam.": "Copies on this host: $COPIES\\nBy default I do NOT touch the copies.",
 "Kopie nie mają żadnej migawki -- nie ma czego przeglądać.": "The copies have no snapshot -- nothing to browse.",
+"Kopie trafią pod:  {cur}$lv/<dataset źródła>": "Copies will go under:  {cur}$lv/<source dataset>",
 "Kopie wylądują pod:  <wybrane>$lv/<dataset źródła>\\nnp.  ${first:-hdd/backups}$lv/${B_ROOT[0]}": "Copies will land under:  <chosen>$lv/<source dataset>\\ne.g.  ${first:-hdd/backups}$lv/${B_ROOT[0]}",
 "Kopiowanie atomowe (-r) nie pozwala pomijać. Zdejmij najpierw pominięte (odznaczone) datasety.": "Atomic copy (-r) does not allow skipping. First clear the excluded (deselected) datasets.",
 "Który dysk przestaje należeć do repliki? Dane na nim ZOSTAJĄ;\\npodłączony później będzie odrzucony jako obcy.": "Which disk stops belonging to the replica? Data on it STAYS;\\nif connected later it will be rejected as foreign.",

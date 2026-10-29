@@ -324,9 +324,13 @@ except Exception: sys.exit(0)
 # "Przegladaj..." (uwaga 1, 2026-10-08): wszystkie SYSTEMY PLIKOW tego hosta, do osobnego
 # pliku -- zvol nie moze byc celem.
 fs = open(sys.argv[1], "w", encoding="utf-8", newline="\n")
+info = {}
 for x in d.get("datasets", []):
     n = x.get("name", "")
-    if n and x.get("type", "filesystem") == "filesystem": fs.write(n + "\n")
+    if n and x.get("type", "filesystem") == "filesystem":
+        fs.write(n + "\n"); info[n] = [x.get("used"), x.get("avail")]
+# USED/AVAIL dla okna „Dokąd -- przeglądaj” (właściciel 2026-10-29, wariant A)
+json.dump(info, open(sys.argv[1] + ".info", "w", encoding="utf-8"))
     if n.count("/") == 1 and n.rsplit("/", 1)[1].lower() in ("backups", "backup", "kopie"): print(n)' "$TMPD/fs.all" | tr -d '\r' >"$TMPD/targets.tsv"
     while IFS= read -r t; do
         [ -n "$t" ] || continue
@@ -403,12 +407,26 @@ browse_target() {
     local lv="/$(landing)"; [ "$MODE" = local ] && lv=""
     local legend="$(Tv ' Kopie trafią pod:  <wybrany>$lv/<dataset źródła>' '$lv' "$lv")"
     [ "$hid" -gt 0 ] && legend="$legend   $(Tv '(ukryto $hid kopii innych relacji)' '$hid' "$hid")"
-    "$PY" - "$TMPD/fs.pick" "$TMPD/tree-spec.json" "$(title 5 "$(T 'Dokąd -- przeglądaj')")" "$legend" "$TARGET" <<'PYEOF' || return 1
-import sys, json
+    # Dolna linia: PRAWDZIWA ścieżka dla wiersza pod kursorem (wariant A, 2026-10-29).
+    local curl="$(Tv 'Kopie trafią pod:  {cur}$lv/<dataset źródła>' '$lv' "$lv")"
+    [ "$hid" -gt 0 ] && curl="$curl   $(Tv '(ukryto $hid kopii innych relacji)' '$hid' "$hid")"
+    "$PY" - "$TMPD/fs.pick" "$TMPD/tree-spec.json" "$(title 5 "$(T 'Dokąd -- przeglądaj')")" "$legend" "$TARGET" "$curl" "$TMPD/fs.all.info" <<'PYEOF' || return 1
+import sys, json, os
 names = [l.rstrip("\n") for l in open(sys.argv[1], encoding="utf-8") if l.strip()]
+try:
+    info = json.load(open(sys.argv[7], encoding="utf-8")) if os.path.exists(sys.argv[7]) else {}
+except ValueError:
+    info = {}
+ds = []
+for n in names:
+    if n in info:
+        ds.append({"name": n, "type": "filesystem", "used": info[n][0], "avail": info[n][1]})
+    else:
+        ds.append({"name": n, "type": "filesystem", "used": None})
 json.dump({"title": sys.argv[3], "single": True, "selectable": names, "legend": sys.argv[4],
+           "fit": True, "cursor_line": sys.argv[6],
            "roots": [sys.argv[5]] if sys.argv[5] in names else [],
-           "datasets": [{"name": n, "type": "filesystem", "used": None} for n in names]},
+           "datasets": ds},
           open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
 PYEOF
     ${ZFS_TREE:-$PY $HERE/tui/tree.py} --spec "$TMPD/tree-spec.json" --out "$TMPD/tree-out.json" || return 1
