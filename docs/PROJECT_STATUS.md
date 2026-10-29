@@ -84,6 +84,15 @@
   jak F9 na F2 (F9 zostaje Przywróć). Repliki bez nośnika i relacje bez kopii mają swój wiersz z uwagą, bez akcji.
   Stan i klawisze bez zmian (Enter/Tab do migawek, Enter przegląda, F9 przywraca). F10: większy odstęp kolumn,
   opisy łamane w trzeciej kolumnie (dalszy ciąg otwiera to samo ustawienie). Zasada na przyszłość: każde okno przeglądania w układzie F2 (backlog U121).
+- **Przeglądanie kopii: mc we własnym małym korzeniu (2026-10-29, właściciel, U126).** Dotąd mc w przestrzeni
+  montowań tylko do odczytu pozwalał przejść na obu panelach do `/` hosta i czytać wszystko (pule, `/root`, inne kopie).
+  Teraz `mc_readonly` w `tui/browse.sh` buduje w tej przestrzeni tmpfs i robi `pivot_root`. Pod `/` jest `/kopia` (ta
+  migawka, tylko do odczytu) i `/odzysk` (jedyne miejsce zapisu, na hoście `~/odzysk/<kopia>`), a do tego `usr`, `lib*`,
+  `bin`, `sbin` i `etc`, dowiązane bez podmontowań i tylko do odczytu (`/etc/pve` to pusty katalog). Do tego `/dev`
+  z kilkoma węzłami terminala, `/proc` tylko do odczytu i pusty `/tmp`. mc dostaje przez `setpriv` tylko dac_override,
+  dac_read_search, chown, fowner i fsetid (bez sys_admin i mknod), więc nie wyjdzie z korzenia. Każdy nieudany krok =
+  mc nie startuje. Na pve10: `/hdd` i `/root` nie istnieją, zapis do `/kopia` daje „Read-only file system”, `mknod`
+  „Operation not permitted”, F10 kończy z „=== Odmontowane.” i bez montaży.
 - **Kreator: pytanie o migawki na źródle zaraz po datasetach (2026-10-29, właściciel).** Okno „Migawki naszej
   rodziny już są na źródle” (łańcuch czy resztki) było po kroku „Dokąd”. Operator wybierał cel, dostawał to pytanie
   i brał je za przeszkodę w celu. Teraz kolejność to Rodzaj, Źródło, Datasety, Migawki na źródle, Cel, a okno zaczyna się
