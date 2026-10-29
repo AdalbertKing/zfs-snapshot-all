@@ -432,7 +432,12 @@ else
         # no way to say "once a month". Window and cadence stay independent: a
         # monthly mail with ZFS_DIGEST_DAYS=30 is the monthly trend, a weekly one
         # with the same window is the same data read more often.
-        _dom=$(date +%d); _dom="${_dom#0}"
+        # The day is FIXED (a stub `date` first on PATH answers +%d with 15): the cadence
+        # takes days 1-28 only, so a test that used today failed on every 29th, 30th and
+        # 31st (CI on main, 2026-10-29). Every other date call goes to the real date.
+        printf '#!/bin/sh\n[ "$1" = "+%%d" ] && { echo 15; exit 0; }\nexec /bin/date "$@"\n' > "$hb_dir/bin/date"
+        chmod +x "$hb_dir/bin/date"
+        _dom=15
         _other_dom=$(( _dom % 28 + 1 ))
 
         _q_run "$_dom"
@@ -449,6 +454,7 @@ else
             bad "quiet report: a day-of-month cadence is silent on every other day" \
                 "cadence=$_other_dom, dzis=$_dom"
         fi
+        rm -f "$hb_dir/bin/date"
 
         # On any day but the 1st the presence check alone cannot discriminate:
         # a broken `monthly` branch falls through to the unknown-value handler,
