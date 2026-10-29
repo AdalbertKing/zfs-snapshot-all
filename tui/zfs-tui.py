@@ -6365,7 +6365,11 @@ class UI(object):
                     self.window, self.scroll = obj["back_to"], 0
                     return "stay"
                 self.window, self.scroll = None, 0
-                if obj.get("proc") is not None and obj["proc"].poll() is None:
+                if obj.get("proc") is None:
+                    # Okno tylko pokazywalo (klucz nosnika F8, odmowa importu): nic nie
+                    # biegło, nic do czytania (wlasciciel 2026-10-29, Esc po F8 Klucz).
+                    return "stay"
+                if obj["proc"].poll() is None:
                     self.message = _(u"proces biegnie dalej (pid %d); wyjście: %s") % (obj["proc"].pid, obj["path"])
                 self.refresh_bg()
                 self.wait_fresh = True

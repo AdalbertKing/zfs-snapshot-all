@@ -69,7 +69,7 @@ run_cmd() {
     echo
     # Napis zwykłym echo, jak w delete-relation.sh: podpowiedź `read -p` idzie na stderr,
     # a `2>/dev/null` ją chowało -- okno czekało na Enter bez słowa (właściciel, P1 10-15).
-    if [ "$RC" -eq 0 ]; then echo "$(T '=== GOTOWE (rc=0).')"
+    if [ "$RC" -eq 0 ]; then wt_end "$(T 'Odzysk: gotowe')"
     else
         # Sprawdź ponownie (właściciel 2026-10-26): odmowa przed zmianą (zajęty dataset, działający
         # gość) zwykle znika po zatrzymaniu usługi -- to samo polecenie jeszcze raz, bez wracania.
@@ -321,6 +321,7 @@ $(Tv 'Pule tutaj: $POOLS' '$POOLS' "$(zpool list -H -o name 2>/dev/null | tr '\n
             [ -n "$AT" ] && CMD+=("--at=$AT")
             [ "$HIST" -eq 1 ] && CMD+=("--with-history")
             [ "$OVERWRITE" -eq 1 ] && CMD+=("--overwrite")
+            CMD+=("--yes")      # to okno jest jedynym "Na pewno?" (wlasciciel 2026-10-29)
             CMDTXT=""
             for w in "${CMD[@]}"; do CMDTXT+="${CMDTXT:+ }$(shq "$w")"; done
             {
@@ -336,9 +337,9 @@ $(Tv 'Pule tutaj: $POOLS' '$POOLS' "$(zpool list -H -o name 2>/dev/null | tr '\n
                 echo "$(T 'Polecenie:')"
                 echo "  $CMDTXT"
                 echo
-                echo "$(T 'Po <Uruchom> polecenie pokaże podgląd i samo zapyta; zaszyfrowana kopia -- zapyta o klucz albo plik klucza.')"
+                echo "$(T '<Wykonaj> uruchamia to od razu, bez dalszych pytań; zaszyfrowana kopia -- zapyta tylko o klucz albo plik klucza.')"
             } >"$TMPD/summary.txt"
-            yesno_text "$TMPD/summary.txt" "$(T 'Przywróć z dysku: sprawdź')" "$(T Uruchom)" "$(T Wstecz)" --defaultno || { step=2; continue; }
+            yesno_text "$TMPD/summary.txt" "$(T 'Przywróć z dysku: na pewno?')" "$(T Wykonaj)" "$(T Wstecz)" --defaultno || { step=2; continue; }
             run_cmd ;;
         esac
     done
@@ -658,7 +659,7 @@ PYEOF
             [ "$DEST" = srodowisko ] && CMD+=("--as-boot-env")
         fi
         [ -n "$AT" ] && CMD+=("--at=$AT")
-        CMD+=("--config=$CFG")
+        CMD+=("--config=$CFG" "--yes")   # to okno jest jedynym "Na pewno?" (wlasciciel 2026-10-29)
         CMDTXT=""
         for w in "${CMD[@]}"; do CMDTXT+="${CMDTXT:+ }$(shq "$w")"; done
         {
@@ -687,10 +688,10 @@ PYEOF
                 echo "$(Tv 'Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL (z --replace, gdy nie ma wspólnego punktu).' '$TARGET' "$TARGET" '$GRANT_LABEL' "$GRANT_LABEL")"
             fi
             [ "$TARGET" = "ten host" ] || echo "$(Tv '($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)' '$GRANT_LABEL' "$GRANT_LABEL" '$TARGET' "$TARGET")"
-            echo "$(T 'Po <Uruchom> polecenie pokaże plan i samo zapyta, zanim cokolwiek nadpisze.')"
+            echo "$(T '<Wykonaj> uruchamia to od razu, bez dalszych pytań.')"
             [ "$DEST" = srodowisko ] && echo "$(T 'Przywrócenie w miejscu, pod działającym systemem: tylko z linii poleceń (zfs-backup.sh restore ... --in-place-live-root).')"
         } >"$TMPD/summary.txt"
-        yesno_text "$TMPD/summary.txt" "$(Tv 'Przywróć $REL: sprawdź' '$REL' "$REL")" "$(T Uruchom)" "$(T Wstecz)" --defaultno || { step=2; continue; }
+        yesno_text "$TMPD/summary.txt" "$(Tv 'Przywróć $REL: na pewno?' '$REL' "$REL")" "$(T Wykonaj)" "$(T Wstecz)" --defaultno || { step=2; continue; }
         run_cmd ;;
     esac
 done

@@ -127,6 +127,13 @@ result_box() {   # <tytuł> <rc> <dziennik> <tekst przy rc=0> [tekst przy rc!=0]
     local t="$1" rc="$2" log="$3" okt="$4" bad="${5:-$(T 'Nie udało się.')}"
     geom
     if [ "$rc" -eq 0 ]; then
+        # GOTOWE TYLKO PRZY BLEDZIE (wlasciciel 2026-10-29: "absolutne minimum: Na pewno? i
+        # koniec"). Jednozdaniowy sukces idzie na linie komunikatu GUI (wt_end), bez okna;
+        # okno zostaje, gdy tekst ma dalsze linie -- to sa rzeczy do zrobienia recznie.
+        if [ "$(printf '%b\n' "$okt" | grep -c .)" -le 1 ]; then
+            wt_end "$(printf '%b' "$okt")"
+            return 0
+        fi
         local l; l=$(printf '%b
 ' "$okt" | fold -s -w $((W - 4)) | grep -c '')
         l=$((l + 6)); [ "$l" -gt "$H" ] && l=$H

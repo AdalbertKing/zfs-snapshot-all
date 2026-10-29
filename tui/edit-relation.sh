@@ -875,6 +875,9 @@ while :; do
             "$ZB" edit-config "$NAME"; RC=$?
             # 3 = zamkniety bez zmian: nic do czytania, wracamy od razu (uwaga 22)
             [ "$RC" -eq 3 ] && exit 0
+            # Zainstalowane (rc=0): od razu z powrotem, bez "Enter = dalej" -- pytanie
+            # "Install?" czasownika bylo jedynym potwierdzeniem (wlasciciel 2026-10-29).
+            [ "$RC" -eq 0 ] && { wt_end "$(T 'Zmień relację: config zainstalowany')"; exit 0; }
             echo "$(Tv '=== edit-config zakończony (rc=$RC). Enter = dalej' '$RC' "$RC")"
             [ -t 0 ] && read -r _
             exit "$RC" ;;

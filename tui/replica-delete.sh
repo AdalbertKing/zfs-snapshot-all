@@ -57,13 +57,11 @@ fi
 
 while :; do
     geom
-    wt --title "$(Tv 'Usuń replikę $NAME' '$NAME' "$NAME")" --yes-button "$(T Dalej)" --no-button "$(T Wstecz)" \
-       --yesno "$(Tv 'Replika przestanie działać: zniknie jej sekcja i zadanie z crona.\n\nDane na dyskach repliki ZOSTAJĄ ($DST).\nŻeby je skasować, sformatuj dysk: zmiana repliki -> Dodaj dysk.' '$DST' "$DST")" 12 "$W" \
-       || { clear 2>/dev/null; wt_end_nochange "$(T 'Usuń replikę: przerwane, nic nie zmieniono')"; exit 1; }
+    # JEDNO okno (wlasciciel 2026-10-29): bylo "Usuń replikę" Dalej, potem plan WYKONAJ --
+    # dwa razy to samo pytanie. Plan mowi, co zniknie i co zostaje.
     {
-        echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione:')"
-        echo
-        echo "$(Tv 'Replika $NAME: sekcja i zadanie z crona znikają; dane na dyskach ZOSTAJĄ.' '$NAME' "$NAME")"
+        echo "$(Tv 'Replika $NAME przestanie działać: znikną jej sekcja i zadanie z crona.' '$NAME' "$NAME")"
+        echo "$(Tv 'Dane na dyskach repliki ZOSTAJĄ ($DST). Żeby je skasować, sformatuj dysk: zmiana repliki -> Dodaj dysk.' '$DST' "$DST")"
         echo
         if [ "$UNTRIG" = yes ]; then
             echo "$(T 'Reguła udev "po podłączeniu" ZOSTANIE ZDJĘTA -- żadna inna replika z niej nie korzysta.')"
@@ -73,7 +71,8 @@ while :; do
         echo "  $(shq "$ZB") remove-replica $NAME --install --yes"
         [ "$UNTRIG" = yes ] && echo "  $(shq "$ZB") remove-media-trigger --install"
     } >"$TMPD/plan.txt"
-    yesno_text "$TMPD/plan.txt" "$(Tv 'Usuń replikę $NAME -- plan' '$NAME' "$NAME")" "$(T WYKONAJ)" "$(T Wstecz)" --defaultno || continue
+    yesno_text "$TMPD/plan.txt" "$(Tv 'Usuń replikę $NAME -- na pewno?' '$NAME' "$NAME")" "$(T WYKONAJ)" "$(T Wstecz)" --defaultno \
+        || { clear 2>/dev/null; wt_end_nochange "$(T 'Usuń replikę: przerwane, nic nie zmieniono')"; exit 1; }
     : >"$TMPD/run.log"
     RC=0; run_progress "$(Tv 'Usuń replikę $NAME' '$NAME' "$NAME")" "$TMPD/run.log" "$ZB" remove-replica "$NAME" --install --yes || RC=$?
     if [ "$RC" -eq 0 ] && [ "$UNTRIG" = yes ]; then
