@@ -5309,6 +5309,11 @@ class UI(object):
         self.jobrows = sort_zad_rows(build_jobs(self.data, self.now()), self.zad_sort, self.data)
         self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group)
         for k in self.cursor:
+            # F4 liczy wiersze z drzewa kopii (zfs-tree) -- poza F4 nie czytamy go tu w glownym
+            # watku: na pve10 to bylo 5 s zamrozonego "Wczytuję… 0 s" po KAZDYM oknie (zrzut stosu,
+            # 2026-10-29). Drzewo czyta prefetch_kopie w tle, kursor F4 przycina kopie_state.
+            if k == "odzysk" and self.screen != "odzysk":
+                continue
             self.cursor[k] = min(self.cursor[k], max(0, self.count(k) - 1))
         if full:
             self.prefetch_kopie()
@@ -6752,7 +6757,8 @@ def _ui_render(self, width, height):
                                focus=self.focus, pair_cursor=self.pair_cursor, ti=self.ctab.get("szablony", 0))
     elif self.screen == "odzysk":
         items, selix = self.kopie_state()
-        c = self.cursor["odzysk"]
+        # przyciecie tutaj, nie w apply_data (tam drzewa kopii nie czytamy poza F4)
+        c = self.cursor["odzysk"] = min(self.cursor["odzysk"], max(0, len(selix) - 1))
         it = items[selix[c]] if 0 <= c < len(selix) else {}
         snaps, serr = self.kopie_snaps(it) if it.get("ds") else ([], None)
         base = render_kopie_tab(self.data, items, selix, c, self.focus, self.pair_cursor,
