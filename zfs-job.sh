@@ -206,7 +206,11 @@ if [ "$_tree" = 1 ] && [ -d "$PVE_NODES" ] && [ -n "$want" ]; then
     for _w in "${@:2}"; do
         # a dataset or [user@]host:dataset; a leading / is a FILE (zfs list would map it
         # to its file system), a word without / or : is a prefix, a label or a value
-        case "$_w" in -*|/*|*[!A-Za-z0-9_.:/@,-]*) continue ;; */*|*:*) ;; *) continue ;; esac
+        # A dataset word has a '/' or is account@host:dataset. A bare "x:y" is an option's
+        # VALUE -- every generated prune carries -P "__replicate_:2", which used to be taken
+        # for the source, so the real tree was never listed and the prune ran over the
+        # replica disk (campaign pve10, 2026-10-29: kampcap/data with CT 902 on another node).
+        case "$_w" in -*|/*|*[!A-Za-z0-9_.:/@,-]*) continue ;; */*|*@*:*) ;; *) continue ;; esac
         # ONLY the SOURCE: the first dataset word (snapget/snapsend SOURCE DEST, delsnaps
         # DATASETS PATTERN). A copy's TARGET is full of other nodes' guest disks -- that
         # is what a backup is -- and must not be read as replicas.
