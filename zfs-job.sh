@@ -191,7 +191,7 @@ fi
 tree_out="" tree_unsure="" tree_x=()
 case ",${GUESTS#*:}," in *,tree,*) _tree=1 ;; *) _tree=0 ;; esac
 if [ "$_tree" = 1 ] && [ -d "$PVE_NODES" ] && [ -n "$want" ]; then
-    _ssh=() _w="" _p="" _rest=("${@:2}") _i=0 _pat=""
+    _ssh=() _w="" _p="" _rest=("${@:2}") _i=0 _pat="" _src_done=""
     while [ "$_i" -lt "${#_rest[@]}" ]; do
         _w="${_rest[$_i]}"; _p="${_rest[$((_i + 1))]:-}"
         case "$_w" in
@@ -207,6 +207,11 @@ if [ "$_tree" = 1 ] && [ -d "$PVE_NODES" ] && [ -n "$want" ]; then
         # a dataset or [user@]host:dataset; a leading / is a FILE (zfs list would map it
         # to its file system), a word without / or : is a prefix, a label or a value
         case "$_w" in -*|/*|*[!A-Za-z0-9_.:/@,-]*) continue ;; */*|*:*) ;; *) continue ;; esac
+        # ONLY the SOURCE: the first dataset word (snapget/snapsend SOURCE DEST, delsnaps
+        # DATASETS PATTERN). A copy's TARGET is full of other nodes' guest disks -- that
+        # is what a backup is -- and must not be read as replicas.
+        [ -n "${_src_done:-}" ] && break
+        _src_done=1
         for _t in ${_w//,/ }; do
             _h=""; _ds="$_t"
             case "$_t" in *@*:*) _h="${_t%%:*}"; _ds="${_t#*:}" ;; *:*) continue ;; esac

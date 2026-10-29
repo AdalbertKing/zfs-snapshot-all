@@ -1144,7 +1144,7 @@ check "PG18 tree holding a replica of CT 102 (runs on pveB): -R snapshot runs wi
       "0 -X ^tank/data/vm-102-disk-0(/|\$) -s -m p_ -R tank/data" "$(pg_tree snapget.sh -s -m p_ -R tank/data)"
 check "PG18b ...and WARNs naming the disk and the node" "1" \
       "$(grep -c '^WARN|lbl -- guest disks left out|.*tank/data/vm-102-disk-0 (guest 102 runs on pveB)' "$PG/calls")"
-x18="$(cut -d' ' -f3 "$PG/argv")"
+x18="$(cut -d' ' -f2 "$PG/argv")"
 check "PG18c the -X pattern takes the disk and its children, not vm-1020" "1 1 0" \
       "$(printf 'tank/data/vm-102-disk-0' | grep -cE "$x18") $(printf 'tank/data/vm-102-disk-0/x' | grep -cE "$x18") $(printf 'tank/data/vm-1020-disk-0' | grep -cE "$x18")"
 check "PG19 the same tree in a prune (delsnaps -R): NOT RUN, rc 76, notified" "76 |1" \
@@ -1154,6 +1154,8 @@ check "PG21 a REMOTE tree is listed over the line's own ssh options" "0 -X ^tank
       "$(pg_tree snapget.sh -s -m p_ -K /k/a -k /k/kh -O HostKeyAlias=h -R zb@pveA:tank/data)|$(grep -c -- '-i /k/a -o UserKnownHostsFile=/k/kh -o HostKeyAlias=h zb@pveA zfs list -H -o name -r -- .tank/data.' "$PG/ssh.log")"
 check "PG22 a remote tree that cannot be listed: runs unchanged and WARNs" "0 -s -m p_ -R zb@pveA:tank/data|1" \
       "$(PG_SSH_FAIL=1 pg_tree snapget.sh -s -m p_ -R zb@pveA:tank/data)|$(grep -c '^WARN|lbl -- guest guard not checked|.*could not list the tree zb@pveA:tank/data' "$PG/calls")"
+check "PG22b a copy's TARGET is not read: other nodes' guests under hdd/backups are copies, not replicas" "0 -s -m p_ -R tank/only tank/data|0" \
+      "$(pg_tree snapget.sh -s -m p_ -R tank/only tank/data)|$(grep -c . "$PG/calls")"
 check "PG23 key and known_hosts PATHS are not taken for trees (no zfs list of a file)" "0" \
       "$(pg_tree snapget.sh -s -m p_ -K /k/a -R tank/only >/dev/null; grep -c . "$PG/calls")"
 # gen-cron: the recursive snaponly over a PARENT is marked `tree`, snapshot and prune alike;
