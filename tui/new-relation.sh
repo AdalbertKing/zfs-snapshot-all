@@ -707,6 +707,9 @@ step_name() {
     n="$(host_rname)"
     if [ -n "$n" ]; then
         RNAME="$n"
+        # w pierwszym przejściu bez okna (nie ma o co pytać); z karty -- wyjaśnienie, czemu
+        # tej nazwy się nie zmienia
+        case "$VIS" in *" name "*) ;; *) return 0 ;; esac
         wt --title "$(title 7 "$(T 'Nazwa relacji')")" --msgbox "$(Tv 'Relacja nazywa się jak host po drugiej stronie: $n.
 
 Relacja to para hostów -- jedna nazwa na F3, w cronie i w mailach.' '$n' "$n")" 10 "$W"

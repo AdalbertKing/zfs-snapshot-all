@@ -131,7 +131,7 @@ else
     bad "relacje: licznik relacji" "$S"
 fi
 # Relacja w zasiewie: zamiast godziny -- NASTEPNY KROK slowami CLI.
-if hasE "$S200" '^║ duplikat +backup +pve9 → pve10 +1\. kopia +-- +║' && hasE "$S120" 'Następny +seed duplikat'; then
+if hasE "$S200" '^║ duplikat +backup +pve10 [?] pve9 +1\. kopia +-- +║' && hasE "$S120" 'Następny +seed duplikat'; then
     ok "relacje: relacja nieaktywna pokazuje w panelu NASTEPNY KROK CLI (seed duplikat), nie godzine z crona"
 else
     bad "relacje: nastepny krok dla relacji w zasiewie" "$S200" "$S120"
@@ -2669,7 +2669,7 @@ else
 fi
 A="$("$PY" "$TUI" --render-once --offline --ascii --now "$NOW" $ALL --screen relacje 2>&1)"
 A="$("$PY" "$TUI" --render-once --offline --ascii --now "$NOW" $ALL --screen relacje --width 120 2>&1)"
-if hasE "$A" '^\| lab-ct201 +backup +pve9 → pve10 +dzia(ł|l)a +aktualne +\|' && has "$A" 'duplikat (wg rekordu, nie crona): [Datasety]' && has "$A" 'pve9:hdd/lab/vm-101 -> hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
+if hasE "$A" '^\| lab-ct201 +backup +pve9 > pve10 +dzia(ł|l)a +aktualne +\|' && has "$A" 'duplikat (wg rekordu, nie crona): [Datasety]' && has "$A" 'pve9:hdd/lab/vm-101 -> hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
     ok "wyglad: w ASCII te same slowa (aktualne, Zrodla) -- werdykt niesie slowo, nie tylko kolor"
 else
     bad "wyglad: slowa w ASCII" "$A"
@@ -5223,7 +5223,7 @@ ERC1="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | head 
 if [ "$ERRC" -eq 0 ] && grep -qx 'activate r1 --host=10.99.0.9 --skip-final-catchup --yes' "$ER/zb.log" \
    && [ "$(grep -c '^activate' "$ER/zb.log")" -eq 1 ] && ! grep -qE '^(final-catchup|set-endpoint|verify-endpoint|activate-client)' "$ER/zb.log" \
    && has "$ERA" 'Zapisany: 192.168.28.99:22' && has "$ERA" '~ 192.168.28.99:22 ~' && has "$ERA" 'po przeniesieniu kolektora' \
-   && hasE "$ERC1" 'Źródło +192\.168\.28\.99 ~'; then
+   && hasE "$ERC1" 'Źródło +pve9 \(192\.168\.28\.99\) ~'; then
     ok "edit-relation: Adres hosta -- pole z zapisanym adresem, WYKONAJ = jedno activate --host= --skip-final-catchup --yes"
 else
     bad "edit-relation: Adres hosta" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(printf '%s' "$ERA" | cut -c1-300)" "$(printf '%s' "$ERC1" | cut -c1-300)" "$(tail -3 "$ER/err")"
@@ -5313,7 +5313,7 @@ fi
 EROUT=$(er_run "1${T}
 "); ERRC=$?
 ERC1="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | head -1)"
-if [ "$ERRC" -eq 1 ] && has "$ERC1" 'backup z 192.168.28.99   nazwa r1   konto root   cel ' \
+if [ "$ERRC" -eq 1 ] && has "$ERC1" 'backup z pve9   nazwa r1   konto root   cel ' \
    && ! has "$ERC1" ' ~ rodzaj ~ ' && ! has "$ERC1" ' ~ cel ~ ' && ! has "$ERC1" ' ~ nazwa ~ ' && ! has "$ERC1" ' ~ konto ~ ' \
    && ! has "$ERC1" ' ~ teraz ~ ' && ! has "$ERC1" ' ~ config ~ ' && ! has "$ERC1" ' ~ zapisz ~ ' \
    && has "$ERC1" ' ~ wykonaj ~ Zapisz zmiany (brak zmian)' && hasE "$ERC1" ' ~ dane ~   Datasety +'    && ! has "$ERC1" 'jak w configu' && hasE "$ERC1" 'Silnik +(fabryczne|historia|kompresja|szyfr|autodobór|raw)'    && hasE "$ERC1" 'Retencja źródła +(tyle samo co w kopii|godzinowe|dobowe|tygodniowe|miesięczne|roczne|[A-Za-z0-9])'; then

@@ -352,7 +352,7 @@ def direction_of(host, peer, dirs, mode=None):
     # a relacja zakladana przez pakiet na kolektorze POBIERA (uwaga 7, 2026-10-08).
     if mode == "backup":
         return u"%s → %s" % (peer, host)
-    return "%s?%s" % (host, peer)
+    return u"%s ? %s" % (host, peer)
 
 
 # ---------------------------------------------------------------------------
