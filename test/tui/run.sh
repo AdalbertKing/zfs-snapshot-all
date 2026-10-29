@@ -3006,7 +3006,6 @@ NRT="0${T}hdd/backups
 1${T}
 0${T}create
 0${T}
-0${T}
 "
 # Krok 4 to od X12 jedno okno-drzewo (tui/tree.py), nie lista whiptaila: w odpowiedziach
 # whiptaila nie ma po nim zadnej linii, a klawisze drzewa ida w NR_TREE (wywolania rozdziela '|').
@@ -3039,7 +3038,6 @@ w17_ans() {   # <odpowiedz checklisty "Ustawienia dodatkowe">
 1${T}
 0${T}create
 0${T}
-0${T}
 "; }
 W17A=$(nr_run "$(w17_ans 'grant|raw')" NR_FIX="$NRE" NR_TREE="$NRTK"); W17L1="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
 W17B=$(nr_run "$(w17_ans 'grant')" NR_FIX="$NRE" NR_TREE="$NRTK")
@@ -3054,7 +3052,6 @@ W17D=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}create
-0${T}
 0${T}
 " NR_FIX="$NRE" NR_TREE="$NRTK")
 # Karta przycina wartosc (szerokosc 76); na main po 'zamrażanie,' stoi 'pomijane', tu 'zaszyfrowane'.
@@ -3118,7 +3115,6 @@ nrc_ans() {   # <odpowiedz w oknie migawek: chain|own> [tryb: backup] -> odpowie
 1${T}
 0${T}create
 0${T}
-0${T}
 "; }
 NRCA=$(nr_run "$(nrc_ans chain)" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCW="$(cat "$NR/wt.log")"
 # okno pytajace: tytul, menu z tagami chain/own, wiek najnowszej migawki z 4. kolumny own.tsv
@@ -3139,7 +3135,6 @@ NRCS=$(nr_run "0${T}sync
 0${T}__done__
 1${T}
 0${T}create
-0${T}
 0${T}
 " NR_FIX="$NRC" NR_TREE="$NRTK"); NRCSW="$(cat "$NR/wt.log")"
 "$PY" - "$NRC/list-datasets-pve9b.json" <<'PYEOF'
@@ -3186,7 +3181,6 @@ SOW="0${T}snaponly
 0${T}pve9b
 0${T}create
 0${T}
-0${T}
 "
 SOWO=$(nr_run "$SOW" NR_TREE="$NRTK")
 SOWP="$(grep -F 'Jak długo trzymać migawki na źródle' "$NR/wt.log" | head -1)"
@@ -3210,7 +3204,6 @@ NRTS="0${T}default
 0${T}__done__
 1${T}
 0${T}create
-0${T}
 0${T}
 "
 # KOSZYK MIEJSC (2026-09-18, trzecia wersja tego dnia). Wlasciciel: jedna lista kratek
@@ -3378,7 +3371,6 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-0${T}
 " NR_TREE="$NRTK")
 if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target=hdd/backups --landing=pve9b --profile=d30 --name=pve9b --exclude-family=__replicate_,vzdump,__migration__ --local-user=zfsbackup --grant-remotely --grant-quiesce --install --yes " \
    && ! grep -qF 'Pod tą nazwą relacja będzie widoczna' "$NR/wt.log" && [ "$(grep -c '^list-profiles' "$NR/zb.log")" -eq 1 ] && [ "$(grep -c '^status' "$NR/zb.log")" -eq 1 ]; then
@@ -3431,11 +3423,13 @@ if grep -qF 'zamraża: dobowe' "$NR/wt.log"; then
 else
     bad "new-relation: podsumowanie bez zamrazania" "$(grep -F 'Szablon:' "$NR/wt.log" | tail -2)"
 fi
-if grep -F 'Podsumowanie' "$NR/wt.log" | tail -1 | grep -qF 'BACKUP: ' && grep -qF 'Konto: zfsbackup.' "$NR/wt.log" \
-   && ! grep -F 'Podsumowanie' "$NR/wt.log" | tail -1 | grep -qF -- '--scrolltext'; then
-    ok "new-relation: podsumowanie miesci sie BEZ przewijania (w oknie z --scrolltext Enter nie dziala, dopoki nie przejdziesz Tabem na przyciski -- zmierzone jazda po pty)"
+# Od 2026-10-29 podsumowanie i plan to JEDNO okno (tytul "Plan", przycisk WYKONAJ).
+if grep -F -e '--yesno' "$NR/wt.log" | grep -F 'WYKONAJ' | tail -1 | grep -qF 'BACKUP: ' && grep -qF 'Konto: zfsbackup.' "$NR/wt.log" \
+   && ! grep -F -e '--yesno' "$NR/wt.log" | grep -F 'WYKONAJ' | tail -1 | grep -qF -- '--scrolltext' \
+   && ! grep -qF 'Plan był w poprzednim oknie' "$NR/wt.log" && ! grep -qF 'Pokaż plan' "$NR/wt.log"; then
+    ok "new-relation: podsumowanie i plan w JEDNYM oknie z WYKONAJ, bez przewijania, bez 'Plan był w poprzednim oknie' (wlasciciel 2026-10-29); BEZ przewijania (w oknie z --scrolltext Enter nie dziala, dopoki nie przejdziesz Tabem na przyciski -- zmierzone jazda po pty)"
 else
-    bad "new-relation: podsumowanie" "$(grep -F 'Podsumowanie' "$NR/wt.log" | tail -1 | cut -c1-600)"
+    bad "new-relation: podsumowanie" "$(grep -F 'WYKONAJ' "$NR/wt.log" | tail -1 | cut -c1-600)"
 fi
 
 # 3j. RETENCJA U ZRODLA (wlasciciel, uwaga 19, 2026-09-24): krok 9 -- "Inna
@@ -3457,7 +3451,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 1${T}
 0${T}create
-0${T}
 0${T}
 " NR_GRID_KEYS=down,right,bs,3,down,left,space,enter NR_TREE="$NRTK")
 NRL6SRC="$(grep -F 'Jak długo trzymać w celu' "$NR/wt.log" | head -1)"
@@ -3486,7 +3479,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 1${T}
 0${T}create
-0${T}
 0${T}
 " NR_GRID_KEYS=right,bs,bs,1,2,down,bs,3,enter NR_TREE="$NRTK")
 if printf '%s' "$NROUT" | grep -qE '\[X\] godzinowe +24 godz\.' && printf '%s' "$NROUT" | grep -qE '\[X\] dobowe +7 dni' \
@@ -3520,7 +3512,6 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-0${T}
 " NR_GRID_KEYS=space,enter NR_TREE="$NRTK")
 if printf '%s' "$NROUT" | grep -qF 'Nie można wyłączyć: tylko ten szczebel' && ! grep -q '^save-profile' "$NR/zb.log"; then
     ok "new-relation: szczebla, ktory jako jedyny sprzata rodzine, nie da sie wylaczyc"
@@ -3543,7 +3534,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 1${T}
 0${T}create
-0${T}
 0${T}
 " NR_GRID_KEYS=enter NR_TREE="$NRTK")
 if ! grep -q '^save-profile' "$NR/zb.log" && ! has "$NROUT" '--source-profile='; then
@@ -3575,7 +3565,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}passive
 0${T}create
 0${T}
-0${T}
 " NR_PRUNERS='hdd/test-kreator\tzfsbackup-pve10\n' NR_TREE="$NRTK"); NRRC=$?
 if [ "$NRRC" -eq 0 ] && has "$NROUT" " --profile=passive " && grep -q '^source-pruners 192.168.28.98 hdd/test-kreator$' "$NR/zb.log" \
    && [ "$(grep -c '^source-pruners' "$NR/zb.log")" = 1 ] \
@@ -3598,7 +3587,7 @@ fi
 # pokazuje menu "Relacja (nowa)" z kursorem na `create`, PO oknie "Ustawienia dodatkowe" i PRZED
 # "Podsumowanie". Numery linii dziennika: kazde okno to jedna linia, wiec kolejnosc = kolejnosc numerow.
 NRLN_X="$(grep -n -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1 | cut -d: -f1)"
-NRLN_S="$(grep -n -F 'Podsumowanie' "$NR/wt.log" | head -1 | cut -d: -f1)"
+NRLN_S="$(grep -n -F 'WYKONAJ' "$NR/wt.log" | grep -F -e '--yesno' | head -1 | cut -d: -f1)"
 NRLN_C="$(grep -n -F 'Nowa relacja -- podsumowanie' "$NR/wt.log" | grep -F -e '--menu' | awk -F: -v s="${NRLN_S:-0}" '$1 < s { n = $1 } END { print n }')"
 NRCARD="$(sed -n "${NRLN_C:-1}p" "$NR/wt.log")"
 if [ -n "$NRLN_X" ] && [ -n "$NRLN_C" ] && [ -n "$NRLN_S" ] && [ "$NRLN_X" -lt "$NRLN_C" ] && [ "$NRLN_C" -lt "$NRLN_S" ] \
@@ -3631,14 +3620,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}pve9b
 0${T}create
 0${T}
-0${T}
 " NR_TREE="$NRTK|goto:hdd,enter")
 if has "$NROUT" " --target=hdd " && ! grep -qF 'Dokąd -- przeglądaj ~ --ok-button' "$NR/wt.log" \
    && "$PY" - "$NR/tree-spec.last" <<'PYEOF'
 import sys, json
 s = json.load(open(sys.argv[1], encoding="utf-8")); names = [d["name"] for d in s["datasets"]]
 ok = s.get("single") is True and "hdd" in names and "hdd/backups" in names \
-     and not any(n.startswith("hdd/backups/192.168.28.99") for n in names) and "ukryto" in s.get("legend", "")
+     and not any(n.startswith("hdd/backups/192.168.28.99") for n in names) and "ukryto" in s.get("legend", "") + s.get("cursor_line", "")
 sys.exit(0 if ok else 1)
 PYEOF
 then
@@ -3657,7 +3645,6 @@ NROUT=$(nr_run "0${T}local
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
 0${T}create
-0${T}
 0${T}
 " NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
 if grep -qF 'Cel nakłada się na źródło' "$NR/wt.log" && grep -q -- '--target=hdd/kopie' "$NR/zb.log" && ! grep -q -- 'lab/kopie' "$NR/zb.log"; then
@@ -3681,7 +3668,6 @@ NROUT=$(nr_run "0${T}local
 0${T}__done__
 1${T}
 0${T}create
-0${T}
 0${T}
 " NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
 # Tytul i brak 'Sposób:' sprawdza ekran drzewa (tree.log), nie dziennik whiptaila.
@@ -3736,7 +3722,6 @@ nrl_ans() {   # <chain|own> -> odpowiedzi kreatora kopii lokalnej ze zrodlem z r
 1${T}
 0${T}create
 0${T}
-0${T}
 "; }
 NRLA=$(nr_run "$(nrl_ans chain)" NR_FIX="$NRL" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRLW="$(cat "$NR/wt.log")"
 NRLO=$(nr_run "$(nrl_ans own)" NR_FIX="$NRL" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRLOW="$(cat "$NR/wt.log")"
@@ -3765,7 +3750,6 @@ NROUT=$(nr_run "0${T}snap
 0${T}migawki-hdd-backups-192.168.28.99-hdd-lab
 0${T}create
 0${T}
-0${T}
 " NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
 NRSI="$(grep -E -- '^--source=hdd/backups/192.168.28.99/hdd/lab --target= .* --no-copy --install --yes$' "$NR/zb.log")"
 if [ "$NRRC" -eq 0 ] && [ -n "$NRSI" ] \
@@ -3773,7 +3757,7 @@ if [ "$NRRC" -eq 0 ] && [ -n "$NRSI" ] \
    && printf '%s' "$NRSI" | grep -qF -- ' --recursive=flat ' \
    && ! grep -qF 'Dokąd' "$NR/wt.log" && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log" \
    && grep -qF 'Gdzie robić migawki na' "$NR/tree.log" && grep -qF 'Jak długo trzymać migawki?' "$NR/wt.log" \
-   && grep -qF 'Podsumowanie' "$NR/wt.log" && grep -qF 'MIGAWKI LOKALNE' "$NR/wt.log"; then
+   && grep -qF 'MIGAWKI LOKALNE' "$NR/wt.log"; then
     ok "new-relation: migawki lokalne -- bez celu i ustawien dodatkowych, komenda local-backup --target= --no-copy --install --yes (bez drugiego pytania po WYKONAJ, wlasciciel 2026-10-19)"
 else
     bad "new-relation: same migawki" "rc=$NRRC" "$(cat "$NR/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | head -10 | tr '\n' ';')" "$(cat "$NR/err" | tail -5)"
@@ -3796,7 +3780,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 1${T}
 0${T}create
-0${T}
 0${T}
 " NR_TREE="$NRTK")
 # Od 2026-10-29 relacja z drugim hostem nazywa sie jak ten host (pve9b) -- okna nazwy nie ma.
@@ -4045,7 +4028,6 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-0${T}
 " NR_FLAT=1 NR_TREE="$NRTK")
 if has "$NROUT" " --profile=default " && has "$NROUT" " --local-user=zfsbackup " \
    && grep -qF 'Szablon nie pasuje do konta' "$NR/wt.log" && [ "$(grep -cF 'Szablon nie pasuje do konta' "$NR/wt.log")" -eq 1 ] \
@@ -4069,7 +4051,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 1${T}
 0${T}create
-0${T}
 0${T}
 " NR_TREE="$NRTK"); NRRC=$?
 # U66 czesc 2: wynik jest w OKNIE (textbox -> dziennik atrapy), nie na czarnym ekranie.
@@ -4120,7 +4101,6 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-0${T}
 " NR_TREE="$NRTK")
 if has "$NROUT" " --exclude-family=__replicate_,__migration__,_tmp " && grep -qF 'Pomijane prefiksy' "$NR/wt.log" \
    && grep -qF 'Nowy prefiks' "$NR/wt.log"; then
@@ -4142,9 +4122,10 @@ fi
 # tresc okna ma wiele linii, a atrapa loguje ja doslownie -- bierzemy CALE okno: od jego
 # linii tytulowej do nastepnego wywolania (linia zaczynajaca sie od "--").
 NRPLAN="$(awk '/Plan ~ --yes-button ~ WYKONAJ/{f=1; buf=""} f && /^--/ && !/Plan ~ --yes-button ~ WYKONAJ/{f=0} f{buf=buf $0 "\n"} END{printf "%s", buf}' "$NR/wt.log")"
-if has "$NRPLAN" 'Po WYKONAJ uruchomi się DOKŁADNIE' && has "$NRPLAN" '--exclude-family=__replicate_,__migration__,_tmp' \
+# Od 2026-10-29 jedno okno: podsumowanie z komendą + ścieżka pełnego planu (właściciel).
+if has "$NRPLAN" 'Komenda (to samo wpisałbyś z palca):' && has "$NRPLAN" '--exclude-family=__replicate_,__migration__,_tmp' \
    && has "$NRPLAN" 'Pomijane migawki z prefiksami: __replicate_, __migration__, _tmp.' \
-   && printf '%s' "$NRPLAN" | grep -q '^Konto: ' && ! has "$NRPLAN" 'grant-remotely is noted'; then
+   && has "$NRPLAN" 'Konto: ' && has "$NRPLAN" 'Pełny plan (sekcje configu, linie crona): ' && ! has "$NRPLAN" 'grant-remotely is noted'; then
     ok "new-relation: okno planu pokazuje komende po WYKONAJ i decyzje po polsku, bez mylacego 'grant-remotely is noted' (R2-2)"
 else
     bad "new-relation: okno planu (R2-2)" "$(printf '%s' "$NRPLAN" | cut -c1-600)"
@@ -4984,7 +4965,6 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-0${T}
 " NR_TREE='goto:hdd/data,space,enter'); NRRC=$?
 if [ "$NRRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=relacja-pve9b --hidden --force --description=' "$NR/zb.log" \
    && has "$NROUT" "--profile=relacja-pve9b " && ! grep -q '^delete-profile' "$NR/zb.log"; then
@@ -5006,7 +4986,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 1${T}
 0${T}create
-0${T}
 0${T}
 " NR_TREE='goto:hdd/data,space,enter'); NRRC=$?
 # Wlasciciel 2026-10-29: relacja z drugim hostem nazywa sie jak ten host -- zmiany nazwy w

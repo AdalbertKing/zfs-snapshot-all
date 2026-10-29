@@ -772,5 +772,8 @@
 "brak migawek": "no snapshots",
 "Enter przeglądaj   F9 przywróć   Esc wraca   Tab do linii poleceń": "Enter browse   F9 restore   Esc back   Tab to command line",
 "inny dysk": "other disk",
-"Jedna lista": "One list"
+"Jedna lista": "One list",
+"Kopie trafią pod:  {cur}$lv/<dataset źródła>": "Copies will go under:  {cur}$lv/<source dataset>",
+"Pełny plan (sekcje configu, linie crona): $planf": "Full plan (config sections, cron lines): $planf",
+"Pełny plan (z liniami crona): $planf": "Full plan (with the cron lines): $planf"
 }

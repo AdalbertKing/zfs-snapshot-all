@@ -717,8 +717,8 @@ save_all() {
             done
             echo
         fi
-        if [ "${#P_EDIT[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(T '%s. Szablon: %s -> %s' "$k" "$(cur_words)" "$P_EDIT_WORDS")"; sed -n '3,$p' "$TMPD/p_edit.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
-        if [ "${#P_TIERS[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(T '%s. Harmonogram i retencja (tabela):' "$k")"; sed -n '3,$p' "$TMPD/p_tiers.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
+        if [ "${#P_EDIT[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(T '%s. Szablon: %s -> %s' "$k" "$(cur_words)" "$P_EDIT_WORDS")"; sed -n '3,$p' "$TMPD/p_edit.txt" | grep -v '^Komenda:' | plan_words | sed 's/^/   /'; echo; fi
+        if [ "${#P_TIERS[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(T '%s. Harmonogram i retencja (tabela):' "$k")"; sed -n '3,$p' "$TMPD/p_tiers.txt" | grep -v '^Komenda:' | plan_words | sed 's/^/   /'; echo; fi
         if [ "${#P_TRANSFER[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(Tv '$k. Ustawienia silnika:' '$k' "$k")"; grep "^Relation '" "$TMPD/p_transfer.txt" | sed 's/^/   /'; echo; fi
         echo "$(T 'Komendy:')"
         [ -n "$P_HOST" ] && echo "  $(shq "$ZB") activate $NAME --host=$P_HOST --skip-final-catchup --yes"
@@ -727,6 +727,12 @@ save_all() {
         [ "${#P_TIERS[@]}" -gt 0 ] && echo "  $(shq "$ZB") set-tiers $NAME $(for a in "${P_TIERS[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
         [ "${#P_TRANSFER[@]}" -gt 0 ] && echo "  $(shq "$ZB") set-transfer $NAME $(for a in "${P_TRANSFER[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
     } >"$TMPD/saveplan.txt"
+    # Właściciel 2026-10-29 („Za dużo tych okien potwierdzających”): w oknie zostają zmiany
+    # słowami; pełny plan (z liniami crona) idzie do pliku obok dziennika, okno podaje ścieżkę.
+    local planf="$TMPD/saveplan-full.txt"
+    { cat "$TMPD/saveplan.txt"; for f in p_edit p_tiers p_transfer; do [ -s "$TMPD/$f.txt" ] && cat "$TMPD/$f.txt"; done; } >"$planf"
+    if [ -n "${ZFS_TUI_LOG:-}" ]; then cp -f "$planf" "${ZFS_TUI_LOG%.log}-plan.txt" 2>/dev/null && planf="${ZFS_TUI_LOG%.log}-plan.txt"; fi
+    { echo; echo "$(Tv 'Pełny plan (z liniami crona): $planf' '$planf' "$planf")"; } >>"$TMPD/saveplan.txt"
     # Enter = WYKONAJ, jak w kreatorze (U25: jedno zachowanie). Plan dłuższy niż ekran: okno
     # z przewijaniem trzyma fokus na tekście i Enter nic nie robi (zmierzone na pve10,
     # 2026-10-19) -- więc najpierw sam plan do przewinięcia (textbox_read: Tab -> Dalej na ramce),
