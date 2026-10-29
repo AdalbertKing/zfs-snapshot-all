@@ -14379,13 +14379,17 @@ fi
 # relationship once, by its FINEST installed job (hour '*'); a dataset with only a
 # daily job runs that one; never a prune line, never another relationship's job,
 # never the daily of a dataset that has an hourly. Paused = refused, nothing run.
-rr_fn=$(sed -n '/^cmd_run_relation() {/,/^}/p' "$ZFSBACKUP")
+# Since 2026-10-29 "finest" is the tier's RANK, not hour '*': r-c has its weekly line
+# BEFORE its daily in cron order and must run the daily (owner: "F7 najnizszy szczebel").
+rr_fn=$(sed -n '/^tiers_cadence_rank() {/p; /^cmd_run_relation() {/,/^}/p' "$ZFSBACKUP")
 [ -n "$rr_fn" ] || bad "addsource: could not lift cmd_run_relation -- anchor changed"
 cat > "$AS/rrtab" <<TAB
 # BEGIN zfs-backup-managed
 11 1 * * * $AS/zfs-job.sh "h daily backup (r-a)" --log=$AS/job.log -- /x/snapget.sh -m "d_" -L rel "u@10.0.0.1:hdd/lab/a" "b"
 31 * * * * $AS/zfs-job.sh "h hourly backup (r-a)" --log=$AS/job.log -- /x/snapget.sh -m "h_" -L rel "u@10.0.0.1:hdd/lab/a" "b"
 11 1 * * * $AS/zfs-job.sh "h daily backup (r-b)" --log=$AS/job.log -- /x/snapget.sh -m "d_" -L rel "u@10.0.0.1:hdd/lab/b" "b"
+21 2 * * 0 $AS/zfs-job.sh "h profile__relacja-rel__weekly snapshot (r-c)" --log=$AS/job.log -- /x/snapget.sh -s -m "w_" -L rel "u@10.0.0.1:hdd/lab/c" "b"
+11 1 * * * $AS/zfs-job.sh "h profile__relacja-rel__daily snapshot (r-c)" --log=$AS/job.log -- /x/snapget.sh -s -m "d_" -L rel "u@10.0.0.1:hdd/lab/c" "b"
 45 * * * * $AS/zfs-job.sh "h prune (r-a)" --log=$AS/job.log -- /x/delsnaps.sh -L rel "hdd/lab/a" "h_"
 31 * * * * $AS/zfs-job.sh "h hourly backup (o-c)" --log=$AS/job.log -- /x/snapget.sh -m "h_" -L other "u@10.0.0.2:hdd/lab/c" "b"
 # END zfs-backup-managed
@@ -14402,13 +14406,13 @@ cmd_run_relation rel" 2>&1); rr_rc=$?
 }
 rr_run 0 0 > "$AS/rr.out"; rc=$rr_rc; out=$(cat "$AS/rr.out")
 ran=$(sed -nE 's/.* ZFS-JOB END (.*) rc=.*/\1/p' "$AS/job.log" | tr '\n' '|')
-if [ "$ran" = "h hourly backup (r-a)|h daily backup (r-b)|" ] && printf '%s' "$out" | grep -q "LOG run-relation 'rel': 2 done, 0 not done"; then
-    ok "run-relation: each dataset once by its finest job (hourly over daily; a daily-only dataset runs its daily); no prune, no other relationship"
+if [ "$ran" = "h hourly backup (r-a)|h daily backup (r-b)|h profile__relacja-rel__daily snapshot (r-c)|" ] && printf '%s' "$out" | grep -q "LOG run-relation 'rel': 3 done, 0 not done"; then
+    ok "run-relation: each dataset once by its lowest tier (hourly over daily; a daily-only dataset runs its daily; daily over a weekly listed first); no prune, no other relationship"
 else
     bad "run-relation: finest job per dataset" "ran=[$ran]" "$out"
 fi
 rr_run 1 0 > "$AS/rr.out"; rc=$rr_rc; out=$(cat "$AS/rr.out")
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "WARN run-relation:   did NOT finish (rc=1)" && printf '%s' "$out" | grep -q "0 done, 2 not done"; then
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "WARN run-relation:   did NOT finish (rc=1)" && printf '%s' "$out" | grep -q "0 done, 3 not done"; then
     ok "run-relation: a job whose END rc is not 0 is reported as not done, and the verb fails"
 else
     bad "run-relation: failure verdict" "rc=$rc" "$out"
@@ -14418,7 +14422,7 @@ fi
 # verb does not fail on it (owner 2026-10-06: a warning).
 rr_run 75 0 > "$AS/rr.out"; rc=$rr_rc; out=$(cat "$AS/rr.out")
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "WARN run-relation:   busy -- another run of this copy holds its lock" \
-   && ! printf '%s' "$out" | grep -q "did NOT finish" && printf '%s' "$out" | grep -q "0 done, 2 busy (another run is copying them), 0 not done"; then
+   && ! printf '%s' "$out" | grep -q "did NOT finish" && printf '%s' "$out" | grep -q "0 done, 3 busy (another run is copying them), 0 not done"; then
     ok "run-relation: rc 75 (the lock of another run) is reported as busy, and the verb does not fail on it"
 else
     bad "run-relation: busy verdict" "rc=$rc" "$out"
