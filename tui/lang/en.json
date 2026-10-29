@@ -702,6 +702,7 @@
 "Jakie migawki ma przenosić replika?": "Which snapshots should the replica carry?",
 "Jakim szyfrem SSH idą kopie.": "Which SSH cipher the copies use.",
 "Jako nowe środowisko startowe na $TARGET -- działa po restarcie, obecny system zostaje obok": "As a new boot environment on $TARGET -- takes effect after a reboot, the current system stays beside it",
+"Jedna lista": "One list",
 "Jedna migawka na okres (godzinę, dobę, tydzień...), N okresów wstecz.": "One snapshot per period (hour, day, week...), N periods back.",
 "Jedna oś czasu": "One timeline",
 "Jeśli źródło ma trzymać inaczej, zmień liczby w następnym oknie": "If the source should keep differently, change the numbers in the next window",
