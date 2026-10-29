@@ -13112,7 +13112,7 @@ fi
 # the newest-failure event alike.
 cat > "$JS/cr.log" <<RLOG
 $(rt 30) ZFS-JOB BEGIN pve10 hourly backup (rn-cr)
-$(date '+%Y-%m-%d %H:%M:%S' -d '-30 minutes') - Cannot reach host over ssh (exit 255). ssh said: Connection reset by 192.0.2.7 port 22$(printf '')
+$(date '+%Y-%m-%d %H:%M:%S' -d '-30 minutes') - Cannot reach host over ssh (exit 255). ssh said: Connection reset by 192.0.2.7 port 22$(printf '\r')
 $(rt 29) ZFS-JOB END pve10 hourly backup (rn-cr) rc=1
 RLOG
 CRJ=$( ( PATH="$JS/bin:$PATH" ZFS_CRON_LOGS="$JS/cr.log" bash "$ZFSBACKUP" job-stats --json --runs=2 ) 2>"$JS/err")
@@ -13120,7 +13120,7 @@ got=$(printf '%s' "$CRJ" | "$PY_OR_PYTHON" -c '
 import sys,json; d=json.load(sys.stdin)
 r=[x for x in d["runs"] if x["label"] == "hourly backup (rn-cr)"][0]
 e=[x for x in d.get("events", []) if x["label"] == "hourly backup (rn-cr)"]
-print(r["rc"], repr(r["error"].rstrip()), all("" not in x["error"] for x in e) and bool(e))' 2>&1 | tr -d '')
+print(r["rc"], repr(r["error"].rstrip()), all("\r" not in x["error"] for x in e) and bool(e))' 2>&1 | tr -d '\r')
 if [ "$got" = "1 'Cannot reach host over ssh (exit 255). ssh said: Connection reset by 192.0.2.7 port 22' True" ]; then
     ok "jobstats: a CR in an engine's error line (ssh) leaves the JSON valid -- runs and events carry the text, the control character as a space"
 else
