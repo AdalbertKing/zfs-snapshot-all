@@ -4,6 +4,20 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [1.0.4] — 2026-10-29
+
+- **Browsing a copy with mc**: mc runs in its own small root. `/kopia` is the snapshot
+  (read-only), `/odzysk` is the only place it can write, and the rest is the read-only system mc
+  needs. Neither panel can reach the host's pools, `/root` or other copies any more.
+- **Faster GUI start**: the screen comes after the quick readers (about a second on the lab host);
+  the monitor and run statistics follow, and until they answer the screen says "sprawdzam…"
+  (checking…) instead of "bez monitora" / "brak w dziennikach".
+- **F2 cursor** stays on the same run when the run statistics arrive (at start and after every
+  window); it used to jump to an older run.
+- **Re-adding a source tier** of a local relationship (`set-tiers --add-src-tier`) runs that tier's
+  first snapshot, as for other relationships.
+- **Source-retention table**: a long note wraps inside the window instead of being cut.
+
 ## [1.0.3] — 2026-10-29
 
 - **New-relationship wizard**: when the chosen source datasets already carry our snapshots, the
