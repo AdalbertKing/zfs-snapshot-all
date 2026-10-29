@@ -874,7 +874,7 @@ while :; do
             clear 2>/dev/null
             "$ZB" edit-config "$NAME"; RC=$?
             # 3 = zamkniety bez zmian: nic do czytania, wracamy od razu (uwaga 22)
-            [ "$RC" -eq 3 ] && exit 0
+            [ "$RC" -eq 3 ] && { wt_end_nochange "$(T 'Zmień relację: przerwane, nic nie zmieniono')"; exit 0; }
             # Zainstalowane (rc=0): od razu z powrotem, bez "Enter = dalej" -- pytanie
             # "Install?" czasownika bylo jedynym potwierdzeniem (wlasciciel 2026-10-29).
             [ "$RC" -eq 0 ] && { wt_end "$(T 'Zmień relację: config zainstalowany')"; exit 0; }

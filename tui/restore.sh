@@ -3,8 +3,8 @@
 #
 # NIE ma własnej logiki odzysku. Zbiera cztery odpowiedzi (co, z kiedy, dokąd, potwierdzenie),
 # składa z nich JEDNO polecenie `zfs-backup.sh restore` i uruchamia je w terminalu. Samo
-# polecenie pokazuje swój plan i samo pyta "t/n", zanim cokolwiek nadpisze -- okno nigdy
-# nie dodaje --yes ani --plan.
+# okno "na pewno?" jest jedynym potwierdzeniem (właściciel 2026-10-29), więc polecenie
+# dostaje --yes i w terminalu już nie pyta; --plan okno nie dodaje.
 #
 # Kroki (Wstecz cofa o jeden, na pierwszym wychodzi z okna):
 #   1 Co?     drzewo (tui/tree.py) kopii relacji na tym kolektorze; domyślnie cała relacja
