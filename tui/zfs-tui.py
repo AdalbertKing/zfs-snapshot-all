@@ -1965,7 +1965,7 @@ TABS = {
     "zadania": [("run", u"Źródło → cel")],
     "relacje": [("ds", u"Datasety"), ("zad", u"Zadania")],
     "szablony": [("sz", u"Szczeble"), ("uz", u"Używają")],
-    "nosniki": [("ds", u"Datasety"), ("run", u"Przebiegi")],
+    "nosniki": [("run", u"Przebiegi")],
     "odzysk": [("ds", u"Datasety")],
 }
 
@@ -2614,27 +2614,31 @@ def tpl_children(tab, p, rows, now, ch):
     return {"heads": [_(u"Szczebel"), _(u"Kiedy"), _(u"Trzyma"), _(u"Prefiks migawek")], "items": items, "empty": _(u"szablon bez szczebli")}
 
 
-def rep_children(tab, r, data, now, ch):
-    """F6: Datasety repliki (co trafia na dysk) albo jej przebiegi."""
-    if tab == "run":
-        d = r.get("dst") or "\0"
-        ts = [t for t in (data.progress or {}).get("jobs", [])
-              if (t.get("target") or "") == d or (t.get("target") or "").startswith(d + "/")]
-        ts.sort(key=lambda t: int(t.get("finished_epoch") or t.get("started_epoch") or 0), reverse=True)
-        items = [transfer_item(t, data, now, ch) for t in ts[:20]]
-        return {"heads": [_(u"Kiedy"), _(u"Wynik"), _(u"Dataset"), _(u"Czas"), _(u"Dane")], "items": items, "prio": [0, 1, 2, 4, 3],
-                "empty": _(u"brak przebiegów w historii transferów (replika jeszcze nie biegła albo dysku nie było)")}
+def rep_children(tab, r, data, now, ch, jobrows=None):
+    """F6, dolna zakladka: PRZEBIEGI tej repliki jak na F2 -- wykonane, kreska "teraz",
+    nadchodzace (wlasciciel 2026-10-29, U130: "Wzór to okno jobs"). Zrodlo -> cel stoi
+    w prawym panelu (grupa Co)."""
+    bar = u"\u2500\u2500 " if not ch.ascii else u"-- "
+    rows = [x for x in build_runs(data, jobrows or [], now, True, False)
+            if x.get("kind") == "now" or (x.get("item") or {}).get("kind") == "replica"
+            and (x["item"].get("replica") or {}).get("name") == r.get("name")]
+    if not any(x.get("kind") == "run" for x in rows):
+        rows = []
+    elif not any(x.get("kind") == "run" and x.get("past") for x in rows):
+        rows = [x for x in rows if x.get("kind") != "now"]
     items = []
-    srcs = r.get("sources") or ([r["source"]] if r.get("source") else [])
-    rec = _(u"tak") if r.get("recursive") == "yes" else _(u"nie")
-    for s in srcs:
-        dst = r.get("dst") or "?"
-        items.append({"cells": [u"%s %s %s" % (s, ch.right, dst), rec],
-                      "pairs": [(_(u"Źródło"), s), (_(u"Cel"), _(u"%s   (pula %s)") % (dst, dst.split("/")[0])),
-                                (_(u"Z dziećmi"), rec),
-                                (_(u"Historia"), _(u"wszystkie migawki") if (r.get("history") or "all") == "all" else r.get("history"))],
-                      "title": u"%s -- dataset %s" % (r.get("name"), s)})
-    return {"heads": [_(u"Źródło %s cel") % ch.right, _(u"Z dziećmi")], "items": items, "empty": _(u"replika bez źródeł")}
+    for x in rows:
+        if x.get("kind") == "now":
+            items.append({"cells": [bar + _(u"teraz %s") % time.strftime("%H:%M", time.localtime(x["at"])), u" ", u" ", u" "],
+                          "pairs": [], "title": r.get("name") or u""})
+            continue
+        czas = fmt_dur(x["end"] - x["start"]) if x.get("past") and x.get("start") and x.get("end") else u"-"
+        rb = run_bytes(x, data)
+        items.append({"cells": [run_when(x["at"]), run_result(x), czas, hbytes_short(rb) if rb is not None else u"-"],
+                      "pairs": run_pairs(x, now, ch), "title": _(u"%s -- bieg") % r.get("name")})
+    return {"heads": [_(u"Kiedy"), _(u"Wynik"), _(u"Czas"), _(u"Dane")], "items": items, "prio": [0, 1, 3, 2],
+            "empty": _(u"brak przebiegów tej repliki w oknie %dh wstecz i %dh naprzód (dysku nie było albo nie ma harmonogramu)")
+            % (PRZ_PAST_H, PRZ_AHEAD_H)}
 
 
 def odz_children(tab, item, rows, data, now, ch):
@@ -4319,7 +4323,12 @@ def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
              (_(u"Rodzaj"), replica_kind(r)[1]),
              (_(u"Na dysku"), replica_disk_words(r)),
              (_(u"Szyfrowane"), replica_crypt_words(r)),
-             (_(u"Cel"), _(u"%s   (pula %s)") % (r.get("dst", "?"), (r.get("dst") or "?").split("/")[0])),
+             (_(u"Cel"), _(u"%s   (pula %s)") % (r.get("dst", "?"), (r.get("dst") or "?").split("/")[0]))]
+    # U130 (wlasciciel 2026-10-29): zrodla repliki w panelu, nie w dolnej zakladce
+    for _s in r.get("sources") or ([r["source"]] if r.get("source") else []):
+        pairs.append((_(u"Źródło %s cel") % ch.right, u"%s %s %s" % (_s, ch.right, r.get("dst") or "?")))
+    pairs += [(_(u"Z dziećmi"), _(u"tak") if r.get("recursive") == "yes" else _(u"nie")),
+              (_(u"Historia"), _(u"wszystkie migawki") if (r.get("history") or "all") == "all" else r.get("history")),
              group(ch, _(u"Kiedy")),
              (_(u"Nośnik"), media_state_line(r, MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"]))),
              (_(u"Kiedy"), when),
@@ -4338,7 +4347,7 @@ def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
     return pairs
 
 
-def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list", pair_cursor=0, ti=0):
+def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list", pair_cursor=0, ti=0, jobrows=None):
     if data.failed("replicas"):
         scr = Screen()
         scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, _(u"Replika"), source_error_body(ch, "replicas", data, "list-replicas"), width)
@@ -4363,7 +4372,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
         det = replica_detail_pairs(r, ch, replica_stats_row(data, r.get("name")), data.failed("stats"))
         tabs = TABS["nosniki"]
         ti = ti % len(tabs)
-        child = rep_children(tabs[ti][0], r, data, now, ch)
+        child = rep_children(tabs[ti][0], r, data, now, ch, jobrows)
         child.update({"name": r.get("name"), "tabs": tabs, "ti": ti})
     empty = [_(u"Brak sekcji [replica:] w configu tego kolektora."),
              _(u"Brak skonfigurowanych replik dla tego kolektora"),
@@ -4373,7 +4382,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
         det = [(_(MEDIA_STATES[k][0]), _(MEDIA_STATES[k][2])) for k in ("here", "available", "away", "wrong_medium")]
     return render_tabbed(data, width, height, now, ch, "nosniki", _(u"Repliki backupu kolektora (%d)") % len(reps),
                          [_(u"Replika"), _(u"Typ"), _(u"Wykonana"), _(u"Ostatni bieg"), _(u"Harmonogram")], cells, cursor,
-                         (_(u"Enter szczegóły   Ins nowa   Del usuń   Tab do datasetów")) if reps else _(u"Ins nowa replika"),
+                         (_(u"Enter szczegóły   Ins nowa   Del usuń   Tab do przebiegów")) if reps else _(u"Ins nowa replika"),
                          det_title, det, child, focus, pair_cursor, screen_actions("nosniki"), empty, prio=[0, 3, 1, 2, 4], flex=4)
 
 
@@ -6765,7 +6774,8 @@ def _ui_render(self, width, height):
                                 snaps, serr, width, sh, now, self.ch, ctx=self.kopie_ctx, grouped=self.kopie_group)
     else:
         base = render_nosniki(self.data, self.cursor["nosniki"], width, sh, now, self.ch, self.message,
-                              focus=self.focus, pair_cursor=self.pair_cursor, ti=self.ctab.get("nosniki", 0))
+                              focus=self.focus, pair_cursor=self.pair_cursor, ti=self.ctab.get("nosniki", 0),
+                              jobrows=self.jobrows)
     # LINIA POLECEN ZAWSZE NA DOLE, takze pod oknem (wlasciciel 2026-10-18: okna
     # nie na caly ekran, na dole widac bash i polecenie zlozone przez okno). Okno
     # potwierdzenia pokazuje w niej swoje polecenie; Tab przenosi je do edycji.
