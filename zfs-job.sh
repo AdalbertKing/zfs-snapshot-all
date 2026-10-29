@@ -81,6 +81,8 @@ Usage: zfs-job.sh <label> [--log=FILE] [--notify=SCRIPT] [--detail=N] -- <comman
             member of a PVE cluster and a guest's config is under another node,
             the command is NOT run: END rc=76 and the notify script is called
             (the disk here is a pvesr replication target). Written by gen-cron.sh.
+            The id `tree` marks a recursive line over a parent (rpool/data): the
+            guests are read from the tree at run time (see TREES below).
 
   Exits 0 whatever the command returned -- see the header for why. The
   command's own status is recorded in the END marker and is what decides
@@ -152,7 +154,7 @@ pve_node_of() {   # <host, "" = this one> -> its node name in this cluster
     [ -n "$r" ] && [ -d "$PVE_NODES/$r" ] && { printf '%s' "$r"; return 0; }
     return 1
 }
-guest_moved="" guest_unsure="" want=""
+guest_moved="" guest_unsure="" want="" tree_moved=""
 if [ -n "$GUESTS" ] && [ -d "$PVE_NODES" ]; then
     want="$(pve_node_of "${GUESTS%%:*}")" || want=""
     _ids="${GUESTS#*:}"
@@ -172,6 +174,85 @@ if [ -n "$GUESTS" ] && [ -d "$PVE_NODES" ]; then
             fi
         done
     done
+fi
+
+# TREES (owner 2026-10-29, variant A). A recursive line over a parent names no
+# guest; which guests' disks sit under it is a fact of the pool, read here at run
+# time: `zfs list -r` of each tree the command names (over the line's own ssh
+# options for a remote tree), the guest id from the disk's name (vm-/subvol-/
+# base-N-disk-M), and where the guest runs from its config's existence, as above.
+# A disk under the tree whose guest runs on ANOTHER node is a pvesr replica here.
+# A flat-recursive engine call (-R: one snapshot per dataset) leaves exactly those
+# disks out with -X and runs -- the config keeps its one line, the rest of the tree
+# keeps its snapshots, and a WARN names what was left out; anything else (a prune,
+# an atomic -r) cannot leave a child out and is NOT RUN, rc 76, as for a single
+# guest. Nothing is decided where the tree cannot be listed: the command runs and
+# WARNs, like an unmapped host.
+tree_out="" tree_unsure="" tree_x=()
+case ",${GUESTS#*:}," in *,tree,*) _tree=1 ;; *) _tree=0 ;; esac
+if [ "$_tree" = 1 ] && [ -d "$PVE_NODES" ] && [ -n "$want" ]; then
+    _ssh=() _w="" _p="" _rest=("${@:2}") _i=0 _pat="" _src_done=""
+    while [ "$_i" -lt "${#_rest[@]}" ]; do
+        _w="${_rest[$_i]}"; _p="${_rest[$((_i + 1))]:-}"
+        case "$_w" in
+            -K) _ssh+=(-i "$_p"); _i=$((_i + 1)) ;;
+            -k) _ssh+=(-o "UserKnownHostsFile=$_p"); _i=$((_i + 1)) ;;
+            -O) _ssh+=(-o "$_p"); _i=$((_i + 1)) ;;
+            -p) _ssh+=(-p "$_p"); _i=$((_i + 1)) ;;
+            -c) _ssh+=(-c "$_p"); _i=$((_i + 1)) ;;
+        esac
+        _i=$((_i + 1))
+    done
+    for _w in "${@:2}"; do
+        # a dataset or [user@]host:dataset; a leading / is a FILE (zfs list would map it
+        # to its file system), a word without / or : is a prefix, a label or a value
+        case "$_w" in -*|/*|*[!A-Za-z0-9_.:/@,-]*) continue ;; */*|*:*) ;; *) continue ;; esac
+        # ONLY the SOURCE: the first dataset word (snapget/snapsend SOURCE DEST, delsnaps
+        # DATASETS PATTERN). A copy's TARGET is full of other nodes' guest disks -- that
+        # is what a backup is -- and must not be read as replicas.
+        [ -n "${_src_done:-}" ] && break
+        _src_done=1
+        for _t in ${_w//,/ }; do
+            _h=""; _ds="$_t"
+            case "$_t" in *@*:*) _h="${_t%%:*}"; _ds="${_t#*:}" ;; *:*) continue ;; esac
+            case "$_ds" in */*|[A-Za-z]*) ;; *) continue ;; esac
+            if [ -n "$_h" ]; then
+                _list="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "${_ssh[@]}" "$_h" "zfs list -H -o name -r -- '$_ds'" 2>/dev/null)" || _list="!"
+            else
+                _list="$(zfs list -H -o name -r -- "$_ds" 2>/dev/null)" || _list="!"
+            fi
+            if [ "$_list" = "!" ]; then
+                # a word that is no dataset (a snapshot prefix with a slash, say) lists
+                # nothing; only a REMOTE tree that cannot be read is a real "not known"
+                [ -n "$_h" ] && tree_unsure="${tree_unsure:+$tree_unsure, }$_t"
+                continue
+            fi
+            while IFS= read -r _c; do
+                _b="${_c##*/}"
+                case "$_b" in vm-*-disk-*|subvol-*-disk-*|base-*-disk-*) ;; *) continue ;; esac
+                _id="${_b#*-}"; _id="${_id%%-*}"
+                case "$_id" in ''|*[!0-9]*) continue ;; esac
+                for _d in "$PVE_NODES"/*/; do
+                    _n="${_d%/}"; _n="${_n##*/}"
+                    [ "$_n" = "$want" ] && continue
+                    if [ -f "$_d/qemu-server/$_id.conf" ] || [ -f "$_d/lxc/$_id.conf" ]; then
+                        case " $tree_out " in *" $_c "*) ;; *)
+                            tree_out="${tree_out:+$tree_out }$_c"
+                            tree_moved="${tree_moved:+$tree_moved, }$_c (guest $_id runs on $_n)"
+                            _pat="${_c//./[.]}"
+                            tree_x+=(-X "^$_pat(/|\$)") ;;
+                        esac
+                    fi
+                done
+            done <<< "$_list"
+        done
+    done
+    if [ -n "$tree_out" ]; then
+        case "${1##*/} ${*:2} " in
+            snapget.sh*" -R "*|snapsend.sh*" -R "*) set -- "$1" "${tree_x[@]}" "${@:2}" ;;
+            *) guest_moved="${guest_moved:+$guest_moved, }$tree_moved"; tree_moved="" ;;
+        esac
+    fi
 fi
 
 if [ -n "$guest_moved" ]; then
@@ -196,6 +277,14 @@ if [ "$rc" -eq 75 ]; then
         "$(tail -n "$DETAIL" "$e" 2>/dev/null)" 2>>"$LOG"
 elif [ "$rc" -ne 0 ] && [ -x "$NOTIFY" ]; then
     "$NOTIFY" "$LABEL" "$(tail -n "$DETAIL" "$e" 2>/dev/null)" 2>>"$LOG"
+elif [ -n "${tree_moved:-}" ]; then
+    _u="zfs-job: guest guard: left out of this run, a pvesr replica here: $tree_moved -- the rest of the tree ran; back those guests up where they run"
+    printf '%s\n' "$_u" >>"$LOG" 2>/dev/null
+    [ -x "$WARN" ] && "$WARN" "$LABEL -- guest disks left out" "$_u" 2>>"$LOG"
+elif [ -n "${tree_unsure:-}" ]; then
+    _u="zfs-job: guest guard: could not list the tree $tree_unsure, so guests under it were not checked"
+    printf '%s\n' "$_u" >>"$LOG" 2>/dev/null
+    [ -x "$WARN" ] && "$WARN" "$LABEL -- guest guard not checked" "$_u" 2>>"$LOG"
 elif [ -n "$guest_unsure" ]; then
     _u="zfs-job: guest guard: cannot tell which PVE node '${GUESTS%%:*}' is, so where $guest_unsure runs was not checked -- set pve_node = <node> in the section (or pve_guest_guard = no)"
     printf '%s\n' "$_u" >>"$LOG" 2>/dev/null
