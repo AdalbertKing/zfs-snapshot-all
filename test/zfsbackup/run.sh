@@ -11145,7 +11145,33 @@ if [ "$(grep -o -- '"--own-snapshots"' "$IM/wlasne.json" | wc -l | tr -d ' ')" -
 else
     bad "importrel/own: OWN_SNAPSHOTS export/import" "$(grep -o '"argv":\[[^]]*\]' "$IM/wlasne.json")" "$(cat "$IM/calls.log")" "$(grep -o '"argv":\[[^]]*\]' "$IM/zwykla.json")"
 fi
-rm -f "$EX/clients/zwykla.conf" "$EX/clients/pasywna.conf" "$EX/clients/wlasne.conf"
+# RAW (pve10, 2026-10-29): set-transfer --raw writes only `raw = yes` in the relation's
+# [dataset:] sections, not RAW_SEND in the record. The export must still replay --raw, or the
+# import seeds non-raw and the encrypted target refuses it (pve9: "Refusing non-raw send").
+{ sed '/^CLIENT_NAME=/d; /^CRON_CONFIG=/d; /^PASSIVE=/d' "$EX/clients/ksiegowosc.conf"; echo "CLIENT_NAME=szyfr"; echo "CRON_CONFIG=$EX/cron-raw.conf"; } > "$EX/clients/szyfr.conf"
+cat > "$EX/cron-raw.conf" <<'EXRAW'
+[dataset:hdd/backups/szyfr/rpool/enc]
+	# managed-by: zfs-backup.sh client=szyfr
+	src          = root@10.0.0.11:rpool/enc
+	pair_label   = szyfr
+	raw          = yes
+
+[dataset:hdd/backups/obcy/rpool/enc]
+	src          = root@10.0.0.99:rpool/enc
+	pair_label   = obcy
+	raw          = yes
+EXRAW
+ex_run export-relation szyfr --json; cp "$WORK/ex.out" "$IM/szyfr.json"
+im_run "$IM/szyfr.json" --name=szyfr2 --yes
+ex_run export-relation ksiegowosc --json; cp "$WORK/ex.out" "$IM/ksieg-raw.json"
+if [ "$(grep -o -- '"--raw"' "$IM/szyfr.json" | wc -l | tr -d ' ')" -eq 1 ] && grep -q '"RAW_SEND":"1"' "$IM/szyfr.json" \
+        && [ "$(grep '^add-client|szyfr2|' "$IM/calls.log" | grep -o -- '|--raw' | wc -l | tr -d ' ')" -eq 1 ] \
+        && ! grep -q -- '"--raw"' "$IM/ksieg-raw.json"; then
+    ok "importrel/raw: a relation made raw by set-transfer (raw = yes in ITS [dataset:], no RAW_SEND) exports with one --raw and imports with it; one without raw carries none"
+else
+    bad "importrel/raw: raw export/import" "$(grep -o '"argv":\[[^]]*\]' "$IM/szyfr.json")" "$(cat "$IM/calls.log")" "$(grep -o '"argv":\[[^]]*\]' "$IM/ksieg-raw.json")" "$(cat "$WORK/ex.err")"
+fi
+rm -f "$EX/clients/zwykla.conf" "$EX/clients/pasywna.conf" "$EX/clients/wlasne.conf" "$EX/clients/szyfr.conf" "$EX/cron-raw.conf"
 
 # usage says so
 if bash "$ZFSBACKUP" 2>&1 | grep -q 'import-relation FILE'; then
