@@ -84,6 +84,15 @@
   jak F9 na F2 (F9 zostaje Przywróć). Repliki bez nośnika i relacje bez kopii mają swój wiersz z uwagą, bez akcji.
   Stan i klawisze bez zmian (Enter/Tab do migawek, Enter przegląda, F9 przywraca). F10: większy odstęp kolumn,
   opisy łamane w trzeciej kolumnie (dalszy ciąg otwiera to samo ustawienie). Zasada na przyszłość: każde okno przeglądania w układzie F2 (backlog U121).
+- **Jedna data w GUI: `RRRR.MM.DD GG:MM`; F6 czytelniej (2026-10-29, właściciel, U134).** Wszystkie formatery
+  `tui/zfs-tui.py` używają `DT_FMT` (`%Y.%m.%d %H:%M`, z sekundami tam, gdzie były). Krótkie formy (dziś sama godzina,
+  „jutro”, dzień tygodnia, `DD.MM`) zniknęły. Daty z czasowników (`created_at`, `last_at`, `last_current` …) przechodzą
+  przez `dshow`, a okna whiptail (przeglądanie, kreator, odzysk) pokazują ten sam zapis. Wartość `--at=` dla
+  czasownika i nazwy migawek zostają bez zmian. F6: „Z dziećmi” → „Rekurencyjnie” (w planach „z podrzędnymi”);
+  „Na dysku” to „2 najnowsze migawki replica_ (ok. 2 dni wstecz)”, a osobny wiersz „Ile migawek” mówi, że liczba jest
+  nieustawiona i dysk trzyma tyle, ile kolektor (2). Dane w przebiegach repliki to suma `written` jej migawek
+  `replica_` na źródle i podrzędnych z tego biegu; gdy migawki już nie ma na źródle, jest „-”. F4 w grupach nie ma
+  kolumny Rodzaj (rodzaj i kierunek stoją w nagłówku relacji), bo szersza data ucinała nazwy kopii.
 - **Start GUI dwuetapowo; drobne poprawki (2026-10-29, właściciel).** Start czytał sześć czytników naraz (~14 s
   na pve10). Teraz ekran przychodzi po czterech szybkich (~1,2 s), a monitor i job-stats dochodzą drugim etapem (~11 s),
   jak przy powrocie z okna. Do tego czasu kolumna Kopie na F3 i panel mówią „sprawdzam…”, a nie „bez monitora” i „brak
