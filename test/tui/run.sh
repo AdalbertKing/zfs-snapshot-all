@@ -2459,6 +2459,36 @@ if hasE "$F6R" '║ Replika +Typ +Wykonana +Ostatni bieg +Harmonogram' && hasE "
 else
     bad "nosniki: X11 Rodzaj repliki" "$(printf '%s' "$F6R" | sed -n 2,12p)"
 fi
+# F6, kolumna Dane przebiegu repliki (wlasciciel 2026-10-29: "kolumna dane pusta"): suma `written`
+# migawek jej prefiksu na zrodlach (z dziecmi), powstalych po poprzednim biegu i do konca tego.
+# Nie liczy: innego prefiksu, innego zrodla, migawki sprzed poprzedniego biegu; replika "historia"
+# (prefix "-") i bieg nadchodzacy -- None ("-").
+RDB="$("$PY" - "$TUI" <<'PYEOF'
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+class D: pass
+d = D(); d.stats = {"snaps": [
+    {"name": "hdd/backups@replica_a", "creation": 1000, "written": 24576},            # poprzedni bieg
+    {"name": "hdd/backups@replica_b", "creation": 2010, "written": 4096},             # ten bieg
+    {"name": "hdd/backups/pve9/hdd/enc@replica_b", "creation": 2011, "written": 1000},  # dziecko
+    {"name": "hdd/backups@automated_hourly_x", "creation": 2012, "written": 7},       # inny prefiks
+    {"name": "hdd/other@replica_b", "creation": 2012, "written": 9},                  # inne zrodlo
+    {"name": "hdd/backupsX@replica_b", "creation": 2012, "written": 11}]}             # nie dziecko
+r = {"source": "hdd/backups", "prefix": "replica_"}
+x = {"past": True, "at": 2030, "start": 2000, "end": 2030, "prev_end": 1500}
+print("run=%s" % m.replica_run_bytes(x, r, d))
+print("hist=%s" % m.replica_run_bytes(x, {"source": "hdd/backups", "prefix": "-"}, d))
+print("next=%s" % m.replica_run_bytes({"past": False, "at": 3000}, r, d))
+print("none=%s" % m.replica_run_bytes({"past": True, "at": 900, "start": 890, "end": 900}, r, d))
+PYEOF
+)"
+RDB="$(printf '%s' "$RDB" | tr -d '\r')"
+if has "$RDB" 'run=5096' && has "$RDB" 'hist=None' && has "$RDB" 'next=None' && has "$RDB" 'none=None'; then
+    ok "nosniki: Dane biegu repliki = written migawek jej prefiksu na zrodle i dzieciach z tego biegu; historia, nadchodzacy i bieg bez migawki -- '-'"
+else
+    bad "nosniki: Dane biegu repliki" "$RDB"
+fi
 # W19b (wlasciciel 2026-10-11/13): zaszyfrowany nosnik -- panel mowi "nośnik zaszyfrowany
 # (klucz: F8)", F8 pokazuje klucz z pliku; replika bez klucza: komunikat, bez okna.
 RMK="$(mktemp)"; KF="$(mktemp)"; printf 'ab12cd34ef56' > "$KF"
