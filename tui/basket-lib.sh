@@ -83,8 +83,8 @@ basket_step() {
     [ "${BASKET_NO_EXC:-0}" = 1 ] && noexc=1
     # Kampania 2026-10-22: przy migawkach (lokalnych albo zdalnych) nic się nie kopiuje, a okno
     # pytało "Co kopiować z ...?" i mówiło "[x] kopiowane". Słowa okna z rodzaju relacji.
-    local q lg="" hn="${HOSTNAME_R%%.*}"
-    hn="${hn:-$HOST}"   # U111: nazwa, którą zgłosił host (kreator); w zmianie relacji HOST to już nazwa
+    local q lg="" hn="${HOSTNAME_R:-}"     # replika i zmiana relacji nie mają HOSTNAME_R (set -u)
+    hn="${hn%%.*}"; hn="${hn:-$HOST}"   # U111: nazwa, którą zgłosił host (kreator); w zmianie relacji HOST to już nazwa
     q="$(Tv 'Co kopiować z $HOST?' '$HOST' "$hn")"
     if [ "${NOCOPY:-0}" = 1 ] || [ "${MODE:-}" = snaponly ]; then
         q="$(Tv 'Gdzie robić migawki na $HOST?' '$HOST' "$hn")"
