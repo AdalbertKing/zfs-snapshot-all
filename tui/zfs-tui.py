@@ -4939,7 +4939,15 @@ class UI(object):
         self.hist_pos = None
         self.pending_shell = None
         self.pending_log_path = None   # Del/Ins: dziennik dla ZFS_TUI_LOG, do dopisania do message po biegu
-        self.data = collect(repo, files)
+        # Start jak powrot z okna: ekran po czterech szybkich czytnikach, monitor i job-stats
+        # drugim etapem (przejscie GUI pve10, 2026-10-29: start ~14 s czekal na wszystkie szesc).
+        # Pliki (testy, podglad) i --offline czytaja wszystko od razu, jak refresh_bg.
+        two_stage = not (files.get("offline") or exec_log or any(files.get(k) for k in ("status", "jobs", "monitors")))
+        self.data = collect(repo, files, self.FAST_READERS if two_stage else None)
+        if two_stage:
+            self._slow_want = self.SLOW_READERS
+            self.start_slow()
+            self.message = _(self.MON_NOTE)
         self.rows = build_relations(self.data, self.now())
         self.jobrows = sort_zad_rows(build_jobs(self.data, self.now()), self.zad_sort, self.data)
         self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group)
