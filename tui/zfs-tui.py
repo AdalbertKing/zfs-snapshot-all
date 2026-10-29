@@ -4334,7 +4334,7 @@ def replica_disk_words(r):
         elif f[4] != "*":
             span = _(u" (ok. %d tyg. wstecz)") % n
         elif f[1] != "*" and "/" not in f[1] and "," not in f[1]:
-            span = _(u" (ok. %d dni wstecz)") % n
+            span = _(u" (ok. 1 dzień wstecz)") if n == 1 else _(u" (ok. %d dni wstecz)") % n
     if n == 1:
         words = _(u"najnowsza migawka")
     elif 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:

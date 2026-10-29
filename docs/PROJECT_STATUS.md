@@ -84,15 +84,15 @@
   jak F9 na F2 (F9 zostaje Przywróć). Repliki bez nośnika i relacje bez kopii mają swój wiersz z uwagą, bez akcji.
   Stan i klawisze bez zmian (Enter/Tab do migawek, Enter przegląda, F9 przywraca). F10: większy odstęp kolumn,
   opisy łamane w trzeciej kolumnie (dalszy ciąg otwiera to samo ustawienie). Zasada na przyszłość: każde okno przeglądania w układzie F2 (backlog U121).
-- **Jedna data w GUI: `RRRR.MM.DD GG:MM`; F6 czytelniej (2026-10-29, właściciel, U134).** Wszystkie formatery
-  `tui/zfs-tui.py` używają `DT_FMT` (`%Y.%m.%d %H:%M`, z sekundami tam, gdzie były). Krótkie formy (dziś sama godzina,
+- **Jedna data w GUI: `RRRR.MM.DD GG:MM`; F6 czytelniej (2026-10-29, właściciel, U134).** Wszystkie formatery daty
+  w `tui/zfs-tui.py` używają `DT_FMT` (`%Y.%m.%d %H:%M`, z sekundami tam, gdzie były). Krótkie formy (dziś sama godzina,
   „jutro”, dzień tygodnia, `DD.MM`) zniknęły. Daty z czasowników (`created_at`, `last_at`, `last_current` …) przechodzą
   przez `dshow`, a okna whiptail (przeglądanie, kreator, odzysk) pokazują ten sam zapis. Wartość `--at=` dla
-  czasownika i nazwy migawek zostają bez zmian. F6: „Z dziećmi” → „Rekurencyjnie” (w planach „z podrzędnymi”);
+  czasownika, nazwy migawek i kolumna CREATION migawek na F4 (zapis `zfs list`) zostają bez zmian. F6: „Z dziećmi” → „Rekurencyjnie” (w oknach planu „z podrzędnymi”);
   „Na dysku” to „2 najnowsze migawki replica_ (ok. 2 dni wstecz)”, a osobny wiersz „Ile migawek” mówi, że liczba jest
   nieustawiona i dysk trzyma tyle, ile kolektor (2). Dane w przebiegach repliki to suma `written` jej migawek
   `replica_` na źródle i podrzędnych z tego biegu; gdy migawki już nie ma na źródle, jest „-”. F4 w grupach nie ma
-  kolumny Rodzaj (rodzaj i kierunek stoją w nagłówku relacji), bo szersza data ucinała nazwy kopii.
+  kolumny Rodzaj (rodzaj i kierunek stoją w nagłówku relacji), bo szersza data ucinała nazwy kopii (zmierzone przy 150 i 160 kolumnach).
 - **Start GUI dwuetapowo; drobne poprawki (2026-10-29, właściciel).** Start czytał sześć czytników naraz (~14 s
   na pve10). Teraz ekran przychodzi po czterech szybkich (~1,2 s), a monitor i job-stats dochodzą drugim etapem (~11 s),
   jak przy powrocie z okna. Do tego czasu kolumna Kopie na F3 i panel mówią „sprawdzam…”, a nie „bez monitora” i „brak
@@ -118,7 +118,7 @@
   od „Na źródle <host> są już migawki naszej rodziny”. Pytanie zależy tylko od wybranych datasetów (`own.tsv` z kroku
   Datasety).
 - **F6 Replika: źródło → cel w panelu, na dole przebiegi jak na F2 (2026-10-29, właściciel, U130).** Prawy panel
-  repliki ma w grupie Co wiersze `Źródło → cel`, `Z dziećmi` i `Historia`; dawna zakładka Datasety odpadła. Dolna
+  repliki ma w grupie Co wiersze `Źródło → cel`, `Rekurencyjnie` i `Historia`; dawna zakładka Datasety odpadła. Dolna
   zakładka [Przebiegi] pokazuje biegi tej repliki w układzie F2: wykonane, kreska „teraz”, nadchodzące (Kiedy, Wynik,
   Czas, Dane). Wcześniej była to historia transferów z `progress` (na pve10 dla usb1 jeden wpis). Czytnik `job-stats` bierze
   biegi z 72 h (`--runs=72`, było 12), bo replika „pn-pt” ma przerwę od piątku do poniedziałku. F2 dalej pokazuje 12 h.

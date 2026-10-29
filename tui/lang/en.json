@@ -212,6 +212,7 @@
 " (ok. %d dni wstecz)": " (about %d days back)",
 " (ok. %d mies. wstecz)": " (about %d months back)",
 " (ok. %d tyg. wstecz)": " (about %d weeks back)",
+" (ok. 1 dzień wstecz)": " (about 1 day back)",
 " (relacja nie jest aktywna)": " (relation is not active)",
 " (sprawdzane przy Utwórz).') Zmienisz później.": " (checked at Create).') You can change it later.",
 " (tyle podłączeń dysku wstecz)": " (that many disk insertions back)",
