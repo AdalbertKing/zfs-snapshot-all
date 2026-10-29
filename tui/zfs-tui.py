@@ -1070,7 +1070,9 @@ def collect(repo, files, only=None):
     # zostaje (decyzja 2026-10-09: powrót zawsze odświeża), ale sześć czasowników tylko do
     # odczytu szło PO KOLEI -- zmierzone na pve10: list-jobs 6,0 s + monitor 5,6 s +
     # job-stats 2,6 s + reszta < 0,5 s. Razem trwa tyle, co najwolniejszy.
-    want = [(key, args) for key, args in plan if not only or key == only]
+    if isinstance(only, str):
+        only = (only,)
+    want = [(key, args) for key, args in plan if only is None or key in only]
     live = [(key, args) for key, args in want if not files.get(key) and not files.get("offline")]
     got = {}
     if len(live) > 1:
@@ -5026,6 +5028,7 @@ class UI(object):
         zmieniono"), a GUI pokazuje je po powrocie zamiast "[rc=1] <cala linia polecenia>"
         (kampania 3, wlasciciel 2026-10-23: Esc wygladal jak blad)."""
         self.pending_title = _(WINDOW_TITLES.get(verb, verb))
+        self.pending_reload = self.RELOAD_AFTER.get(verb)
         log_path = self.start_verb_log(verb, line)
         status = (log_path + ".status") if log_path else os.path.join(
             "/tmp", "zfs-tui-%d-%s.status" % (os.getpid(), time.strftime("%H%M%S")))
@@ -5130,21 +5133,49 @@ class UI(object):
     BG_NOTE = u"   (odświeżam w tle…)"
     BG_KEY_WAIT = 30   # s: tyle klawisz po oknie czeka na świeże dane, potem przepada (REV-172)
 
-    def refresh_bg(self):
+    # POWROT W DWOCH ETAPACH (wlasciciel 2026-10-29: "Zbyt dlugo trwaja powroty z opcji do
+    # glownego okna"). Zmierzone na pve10, szesc czytnikow naraz: status 0,7 s, list-replicas
+    # 1,2 s, progress 2,0 s, list-jobs 2,3 s -- a monitor 4,4 s i job-stats 6,8 s. Ekran czeka
+    # tylko na cztery szybkie; monitor i statystyki przebiegow dochodza drugim etapem, a do
+    # tego czasu stoja ich poprzednie wartosci z dopiskiem MON_NOTE na linii komunikatu.
+    SLOW_READERS = ("monitors", "stats")
+    FAST_READERS = ("status", "jobs", "progress", "replicas")
+    MON_NOTE = u"   (monitor i przebiegi: sprawdzam…)"
+    # Co czytac po oknie, ktore cos zapisalo (zamkniecie bez zmian = nic, wt_end_nochange).
+    # Brak wpisu = wszystko. Szablon zmienia tylko liste szablonow; ustawienia -- tylko status.
+    RELOAD_AFTER = {"save-profile": (), "delete-profile": (), "settings": ("status",)}
+
+    def refresh_bg(self, only=None):
         if self.files.get("offline") or self.exec_log or any(self.files.get(k) for k in ("status", "jobs", "monitors")):
-            self.refresh()
+            self.refresh(only)
             return
         bg = getattr(self, "_bg", None)
         if bg is not None and bg[0].is_alive():
             return
         import threading
+        old = self.data
+        if only is not None:
+            # Odczyt celowany: reszta danych zostaje; listy czytane na zadanie odpadaja.
+            old.profiles = None
+            if self.screen == "szablony":
+                self.ensure_profiles()
+            if not only:
+                return
+        fast = tuple(k for k in self.FAST_READERS if only is None or k in only)
+        slow = tuple(k for k in self.SLOW_READERS if only is None or k in only)
+        new = Data()
+        for k in self.FAST_READERS + self.SLOW_READERS:
+            if k not in fast:                       # wolne i niezamowione: poprzednia wartosc
+                setattr(new, k, getattr(old, k))
+                if k in old.errors:
+                    new.errors[k] = old.errors[k]
         files2 = dict(self.files)
-        files2["_data"] = Data()
-        box = {}
+        files2["_data"] = new
+        box = {"full": only is None}
 
         def _run():
             try:
-                box["data"] = collect(self.repo, files2)
+                box["data"] = collect(self.repo, files2, fast)
             except Exception as e:   # pokaż, nie wysadzaj GUI
                 box["err"] = str(e)
         t = threading.Thread(target=_run)
@@ -5153,6 +5184,47 @@ class UI(object):
         self._bg = (t, box)
         if not (self.message or "").endswith(_(self.BG_NOTE)):
             self.message = (self.message or "") + _(self.BG_NOTE)
+        mon = getattr(self, "_bgslow", None)
+        if slow and not (mon is not None and mon[0].is_alive()):
+            files3 = dict(self.files)
+            files3["_data"] = Data()
+            mbox = {"keys": slow}
+
+            def _run_slow():
+                try:
+                    mbox["data"] = collect(self.repo, files3, slow)
+                except Exception as e:
+                    mbox["err"] = str(e)
+            ts = threading.Thread(target=_run_slow)
+            ts.daemon = True
+            ts.start()
+            self._bgslow = (ts, mbox)
+
+    def slow_pending(self):
+        return getattr(self, "_bgslow", None) is not None
+
+    def poll_slow(self):
+        """Drugi etap: monitor i job-stats. -> True, gdy weszly (przerysuj). Czeka, az wejdzie
+        pierwszy etap -- inaczej pierwszy nadpisalby je poprzednimi wartosciami."""
+        mon = getattr(self, "_bgslow", None)
+        if mon is None or mon[0].is_alive() or getattr(self, "_bg", None) is not None:
+            return False
+        self._bgslow = None
+        msg = self.message or u""
+        if _(self.MON_NOTE) in msg:
+            self.message = msg.replace(_(self.MON_NOTE), u"")
+        d = mon[1].get("data")
+        if d is None:
+            self.message = (self.message or "") + _(u"   monitor nie odpowiedział: %s") % mon[1].get("err", "?")
+            return True
+        for k in mon[1]["keys"]:
+            setattr(self.data, k, getattr(d, k))
+            if k in d.errors:
+                self.data.errors[k] = d.errors[k]
+            else:
+                self.data.errors.pop(k, None)
+        self.apply_data(self.data, full=False)
+        return True
 
     ACTION_KEYS = ("F7", "F8", "F9", "enter", "del", "e")
     # REV-20261023-173: po NIEUDANYM odświeżeniu nie wystarcza lista klawiszy-czynności (Ins na
@@ -5194,7 +5266,9 @@ class UI(object):
             self.bg_failed = True   # REV-172: wiersze zostają stare -- czynności czekają na Ctrl-R
             return True
         self.files["_data"] = data
-        self.apply_data(data, full=True)
+        self.apply_data(data, full=bg[1].get("full", True))
+        if self.slow_pending() and _(self.MON_NOTE) not in (self.message or u""):
+            self.message = (self.message or u"") + _(self.MON_NOTE)
         before = getattr(self, "rel_names_before_bg", None)
         self.rel_names_before_bg = None
         if before is not None and self.cursor_to_new(before):
@@ -5202,7 +5276,11 @@ class UI(object):
         return True
 
     def refresh(self, only=None):
+        if only is not None:
+            self.data.profiles = None           # odczyt celowany (RELOAD_AFTER): szablony od nowa
         self.apply_data(collect(self.repo, self.files, only), full=(only is None))
+        if only is not None and self.screen == "szablony":
+            self.ensure_profiles()
 
     def apply_data(self, data, full=True):
         self.data = data
@@ -7012,16 +7090,17 @@ def curses_loop(ui):
             # (to pliki, nie komenda), i curses maluje roznice, nie ekran.
             if ui.window and ui.window[0] == "output" and ui.window[1].get("proc") is not None and ui.window[1]["proc"].poll() is None:
                 stdscr.timeout(500)          # ogon pliku wyjscia zyje
-            elif ui.bg_pending():
+            elif ui.bg_pending() or ui.slow_pending():
                 stdscr.timeout(300)          # dane z tła: przerysuj, gdy dojdą
             else:
                 stdscr.timeout(-1)
             k, seqname, is_char = read_key()
             if k == -1:
-                if ui.poll_bg():
-                    continue
+                ui.poll_bg()
+                ui.poll_slow()
                 continue
             ui.poll_bg()
+            ui.poll_slow()
             if k == curses.KEY_RESIZE:
                 continue
             name = seqname if k == -2 else KEYMAP.get(k)
@@ -7107,8 +7186,9 @@ def curses_loop(ui):
                     # (wt_end_nochange). Wszystkie inne okna nadal odswiezaja (decyzja 2026-10-09).
                     ui.noreload_after = False
                 else:
-                    ui.refresh_bg()
-                    ui.wait_fresh = True
+                    only, ui.pending_reload = getattr(ui, "pending_reload", None), None
+                    ui.refresh_bg(only)
+                    ui.wait_fresh = only != ()
     curses.wrapper(main)
 
 
