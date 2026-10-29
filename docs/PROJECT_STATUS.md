@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 97f8f33385c7575d -->
+<!-- status-covers-digest: ba0aca2c55dfd802 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -72,6 +72,11 @@
     nazwę migawki; okno „brak zgody” odsyła do F4 Kopie / F7 Przeglądaj zamiast nieistniejącego ekranu.
   Zostało: odświeżenie Ctrl-R ~9-11 s (czasowniki równolegle 5,8 s, reszta do zbadania); pozostałe ~3 s
   job-stats to kilka przebiegów awk po 9,6 MB dzienniku.
+- **job-stats: znak sterujący w błędzie nie psuje JSON-a (2026-10-29).** Komunikat ssh „Connection reset by …
+  port 22” trafiał do dziennika crona z końcowym CR, a `job-stats --json` wstawiał go do napisu JSON bez
+  zmian. GUI odrzucało wtedy cały odczyt i we wszystkich panelach pokazywało „job-stats nie odpowiedział”
+  (pve10). Pola błędów zamieniają teraz znaki sterujące na spację; `json_escape` zostaje bez zmian, bo jest
+  przypięty do kopii w zamrożonych silnikach.
 - **Kreator odzysku: najpierw z kiedy, potem dokąd (2026-10-28, U109, symulacja A przyjęta).** Kolejność
   kroków: co, z kiedy, dokąd, sprawdź, w obu trybach (relacja i „Przywróć z dysku”). To ta sama kolejność co
   z F4 Kopie, gdzie migawka jest już wybrana. Lista „z kiedy?” pokazuje czas i pełną nazwę migawki (`@automated_…`)
