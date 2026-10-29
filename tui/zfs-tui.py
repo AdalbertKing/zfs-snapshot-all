@@ -122,8 +122,10 @@ VERDICTS = {
     "CRITICAL":     ("stare",         1),
     "UNKNOWN":      ("nie odpowiada", 4),
     "BEZ MONITORA": ("bez monitora",  4),
+    # Start dwuetapowy (2026-10-29): monitor jeszcze nie odpowiedzial -- NIE "bez monitora".
+    "SPRAWDZAM":    (u"sprawdzam…",   4),
 }
-VERDICT_ORDER = ["BLAD", "CRITICAL", "WARNING", "UNKNOWN", "BEZ MONITORA", "OK"]
+VERDICT_ORDER = ["BLAD", "CRITICAL", "WARNING", "UNKNOWN", "SPRAWDZAM", "BEZ MONITORA", "OK"]
 
 # Stan transferu z progress --json -> slowo. `verified` to `ok` podniesione po
 # weryfikacji GUID (lib-zfs-snap.sh), wiec dla operatora to to samo "OK".
@@ -1033,6 +1035,7 @@ class Data(object):
         self.read_at = 0
         self.host_ip = None   # R3-1: adres IP hosta do paska tytulu; None = nieznany/offline
         self.guards = None    # stan strażników hosta (U35/U50) do paska tytułu
+        self.pending = set()  # czytniki drugiego etapu, ktore jeszcze nie odpowiedzialy (start)
 
     def failed(self, key):
         return self.errors.get(key)
@@ -1094,6 +1097,7 @@ def collect(repo, files, only=None):
         else:
             doc, err = run_verb(repo, args)
         setattr(data, key, doc)
+        data.pending.discard(key)
         if key == "status":
             note_relation_names(doc)
         if err:
@@ -1232,6 +1236,17 @@ def family_of(job):
     """Transfer stempluje `prefix` (`automated_daily_`), prune dopasowuje
     `pattern` (`automated_daily`) -- ta sama rodzina. Jedna pisownia: bez konca."""
     return (job.get("pattern") or job.get("prefix", "")).rstrip("_")
+
+
+def mark_pending(rows, data):
+    """Do drugiego etapu startu monitor jeszcze nie odpowiedzial: wiersz bez linii monitora
+    mowi "sprawdzam…", nie "bez monitora" (pve10, 2026-10-29: F3 przez 10 s mowilo, ze nikt
+    nie pilnuje zadnej relacji)."""
+    if "monitors" in data.pending:
+        for r in rows:
+            if r.get("verdict") == "BEZ MONITORA" and r.get("vword") == _(VERDICTS["BEZ MONITORA"][0]):
+                r["verdict"], r["vword"] = "SPRAWDZAM", _(VERDICTS["SPRAWDZAM"][0])
+    return rows
 
 
 def worst(verdicts):
@@ -2844,6 +2859,8 @@ def rel_panel_pairs(row, data, now, ch):
     pairs.append(group(ch, _(u"Przebiegi (%d dni)") % days))
     if data.failed("stats"):
         pairs.append((_(u"Wywołania"), _(u"? -- job-stats nie odpowiedział")))
+    elif "stats" in data.pending:
+        pairs.append((_(u"Wywołania"), _(VERDICTS["SPRAWDZAM"][0])))
     elif sends and stt.get("runs"):
         pairs.append((_(u"Wywołania"), _(u"%d, błędów %d") % (stt["runs"], stt.get("fails") or 0)))
         pairs.append((_(u"Czas"), times_words(stt["last"], stt["avg"], stt["max"])))
@@ -3351,6 +3368,8 @@ def rel_pairs(row, data, now, ch):
             elif dst == "-":
                 dst = None
             v, _reason = verdict_for_job(j, monitors)
+            if v == "BEZ MONITORA" and "monitors" in data.pending:
+                v = "SPRAWDZAM"
             # U61 (kampania 2026-10-21): wiersz relacji mowil "błąd biegu", a wiersz jej
             # datasetu "aktualne" -- ten sam fakt (nieudany ostatni bieg TEGO zadania) ma
             # dawac ten sam werdykt w obu miejscach.
@@ -3361,6 +3380,8 @@ def rel_pairs(row, data, now, ch):
             srow, vol = job_stats_for(data, j, job_cron_label(j))
             if data.failed("stats"):
                 czas, gb = "?", "?"
+            elif "stats" in data.pending:
+                czas, gb = u"…", u"…"
             else:
                 czas = times_cell(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s")) if srow else "-"
                 gb = hbytes_short(vol) if vol is not None else "-"
@@ -4945,11 +4966,12 @@ class UI(object):
         two_stage = not (files.get("offline") or exec_log or any(files.get(k) for k in ("status", "jobs", "monitors")))
         self.data = collect(repo, files, self.FAST_READERS if two_stage else None)
         if two_stage:
+            self.data.pending = set(self.SLOW_READERS)
             self._slow_want = self.SLOW_READERS
             self.start_slow()
             self.message = _(self.MON_NOTE)
-        self.rows = build_relations(self.data, self.now())
-        self.jobrows = sort_zad_rows(build_jobs(self.data, self.now()), self.zad_sort, self.data)
+        self.rows = mark_pending(build_relations(self.data, self.now()), self.data)
+        self.jobrows = sort_zad_rows(mark_pending(build_jobs(self.data, self.now()), self.data), self.zad_sort, self.data)
         self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group)
         # F2 otwiera sie PRZY "teraz" (najblizszy nadchodzacy bieg), nie na najstarszym
         # biegu sprzed 12 h (przejscie GUI pve10, 2026-10-28). Home = gora listy.
@@ -5190,6 +5212,8 @@ class UI(object):
                 setattr(new, k, getattr(old, k))
                 if k in old.errors:
                     new.errors[k] = old.errors[k]
+                if k in old.pending:                # start: jeszcze nie odpowiedzial
+                    new.pending.add(k)
         files2 = dict(self.files)
         files2["_data"] = new
         box = {"full": only is None}
@@ -5243,8 +5267,12 @@ class UI(object):
         if _(self.MON_NOTE) in msg:
             self.message = msg.replace(_(self.MON_NOTE), u"")
         d = mon[1].get("data")
+        self.data.pending.difference_update(mon[1]["keys"])
         if d is None:
             self.message = (self.message or "") + _(u"   monitor nie odpowiedział: %s") % mon[1].get("err", "?")
+            for k in mon[1]["keys"]:
+                self.data.errors[k] = mon[1].get("err", "?")
+            self.apply_data(self.data, full=False)
             return True
         for k in mon[1]["keys"]:
             setattr(self.data, k, getattr(d, k))
@@ -5328,8 +5356,8 @@ class UI(object):
                 self.ensure_profiles()
         prz = getattr(self, "runrows", None) or []
         old_run = prz[self.cursor["zadania"]] if self.cursor["zadania"] < len(prz) else None
-        self.rows = build_relations(self.data, self.now())
-        self.jobrows = sort_zad_rows(build_jobs(self.data, self.now()), self.zad_sort, self.data)
+        self.rows = mark_pending(build_relations(self.data, self.now()), self.data)
+        self.jobrows = sort_zad_rows(mark_pending(build_jobs(self.data, self.now()), self.data), self.zad_sort, self.data)
         self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group)
         # F2: kursor na TYM SAMYM biegu, nie na tym samym numerze wiersza. Drugi etap (job-stats)
         # dokłada wykonane biegi NAD nim -- start na pve10, 2026-10-29: "teraz" uciekło na 08:13.
