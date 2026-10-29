@@ -103,7 +103,7 @@ verb_refusal() {   # <plik z wyjściem czasownika> -> przyczyna odmowy do okna
 # OKNO POSTĘPU (U66/U64, właściciel 2026-10-21: "czarny ekran ponad 15 sekund i dopiero powrót"):
 # polecenie biegnie w tle z wyjściem do dziennika, okno pokazuje, ile już trwa. Właściciel
 # 2026-10-26 (pve2): linie dziennika w oknie migały przy każdym odświeżeniu -- okno mówi tylko
-# "trwa" i gdzie jest dziennik, odświeża się co 2 s; wyjście czyta result_box. Bez terminala dla polecenia (stdin z /dev/null): pytanie w terminalu
+# "trwa" i gdzie jest dziennik (okno raz, sekundy w dolnym wierszu -- niżej); wyjście czyta result_box. Bez terminala dla polecenia (stdin z /dev/null): pytanie w terminalu
 # kończy się odmową, nie zawieszeniem za oknem. Ctrl-C przerywa polecenie.
 run_progress() {   # <tytuł> <dziennik> <polecenie...> -> rc polecenia; dziennik dopisywany
     local t="$1" log="$2" pid rc=0 s0=$SECONDS i
