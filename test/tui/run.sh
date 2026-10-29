@@ -1128,7 +1128,7 @@ PK4E="$(prz F4,enter --exec-log "$PKX" $PZ)"; PK4LOG="$(cat "$PKX")"
 : > "$PKX"
 PK4N="$(prz down,F4 --exec-log "$PKX" $PZ)"
 PK4NE="$(prz down,F4,enter --exec-log "$PKX" $PZ)"; PK4NLOG="$(cat "$PKX")"
-if has "$PK4" '╔═ Kopie na pve20' && hasE "$PK4" 'zfs list -t snapshot hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]' \
+if has "$PK4" '╔═ Kopie na pve20' && hasE "$PK4" 'hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]: \[Migawki\]' \
    && hasE "$PK4" 'Migawka +hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]@automated_hourly_2026-09-09_10-20-01' && ! has "$PK4" 'Enter/Tab do migawek' \
    && printf '%s\n' "$PK4LOG" | grep -Eq "zfs-backup.sh'? browse sync-test --ask --snapshot=hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]@automated_hourly_2026-09-09_10-20-01\$" \
    && ! printf '%s' "$PK4LOG" | grep -q -- '--at=' && ! printf '%s' "$PK4LOG" | grep -q -- '--dataset='; then
@@ -1136,7 +1136,7 @@ if has "$PK4" '╔═ Kopie na pve20' && hasE "$PK4" 'zfs list -t snapshot hdd/b
 else
     bad "kopie: F4 z wykonanego biegu" "$(printf '%s\n' "$PK4" | grep -E 'Kopie na|zfs list|Migawka|Enter/Tab')" "log: $PK4LOG"
 fi
-if has "$PK4N" '╔═ Kopie na pve20' && hasE "$PK4N" 'zfs list -t snapshot hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]' && has "$PK4N" 'Enter/Tab do migawek' \
+if has "$PK4N" '╔═ Kopie na pve20' && hasE "$PK4N" 'hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]: \[Migawki\]' && has "$PK4N" 'Enter/Tab do migawek' \
    && ! hasE "$PK4N" 'Migawka +hdd/' && [ ! -s "$PKX" ] && [ -z "$PK4NLOG" ]; then
     ok "kopie: F4 na biegu nadchodzacym -- kursor na datasecie celu, fokus na LISCIE (nie ma chwili), Enter tylko przenosi fokus i niczego nie uruchamia"
 else
@@ -1613,20 +1613,22 @@ OZT="--zfs-tree $P10/zfs-tree.json --zfs-snapshots $P10/zfs-snapshots.json"
 VM101="hdd/backups/192.168.28.99/hdd/lab/vm-101"
 CT201="hdd/backups/192.168.28.99/hdd/lab/ct-201"
 A="$(od "")"
-if has "$A" '╔═ Kopie na pve10' && ! has "$A" 'Odzysk danych' && has "$A" '▸ relacja duplikat' && has "$A" '▸ relacja lab-ct201' \
-   && hasE "$A" '^║   hdd/backups/192\.168\.28\.99/hdd/lab/ ' && hasE "$A" '^║   vm-101 +3  ' \
-   && has "$A" "zfs list -t snapshot $VM101" && has "$A" '@automated_hourly_2026-09-09_11-20-01' \
-   && has "$A" 'NAME' && has "$A" 'USED' && has "$A" 'REFER' && has "$A" 'CREATION' && has "$A" 'Szczegóły' \
-   && has "$A" 'Enter/Tab do migawek'; then
-    ok "kopie: F4 -- lewy panel: grupa relacji, wspolna sciezka w drugiej linii, wiersz 'vm-101  3'; prawy: tytul 'zfs list -t snapshot DATASET', kolumny NAME USED REFER CREATION, wiersze '@migawka'; dol 'Szczegóły'"
+# Od 2026-10-29 (wlasciciel: „Zrob go taki sam jak w jobs”) F4 w ukladzie F2: tabela kopii
+# (Relacja, Kopia, Migawek, Najnowsza), fakty z prawej, migawki w dolnej zakladce [Migawki].
+if has "$A" '╔═ Kopie na pve10' && ! has "$A" 'Odzysk danych' && hasE "$A" 'Relacja +Kopia +Migawek +Najnowsza' \
+   && hasE "$A" "^║ duplikat +$VM101 +3 " && hasE "$A" "^║ lab-ct201 +$CT201 +3 " \
+   && has "$A" "$VM101: [Migawki]" && has "$A" '@automated_hourly_2026-09-09_11-20-01' \
+   && has "$A" 'NAME' && has "$A" 'USED' && has "$A" 'REFER' && has "$A" 'CREATION' \
+   && has "$A" 'Enter/Tab do migawek' && ! has "$A" '▸ relacja'; then
+    ok "kopie: F4 w ukladzie F2 -- tabela Relacja/Kopia/Migawek/Najnowsza ('duplikat  VM101  3'), dolna zakladka '[Migawki]' z kolumnami NAME USED REFER CREATION i wierszami '@migawka'"
 else
     bad "kopie: ekran F4 Kopie" "$A"
 fi
 A="$(od "" --width 200 --height 50)"
-if has "$A" '▸ replika sejf-a' && has "$A" '▸ replika sejf-b' && has "$A" 'nośnik niepodłączony -- podłącz go, potem Ctrl-R' \
+if hasE "$A" 'sejf-a .*nośnik niepodłączony -- podłącz go, potem Ctrl-R' && hasE "$A" 'sejf-b .*nośnik niepodłączony -- podłącz go, potem Ctrl-R' \
    && has "$A" 'inny dysk -- pula spoza relacji i replik' \
-   && hasE "$A" "Dataset +$VM101" && hasE "$A" 'Skąd +relacja duplikat' && hasE "$A" 'Rodzaj +system plików' && ! hasE "$A" 'Migawka +hdd/'; then
-    ok "kopie: repliki z nosnikiem niepodlaczonym -- grupa z uwaga 'podłącz go, potem Ctrl-R'; ostatni wiersz 'inny dysk'; dol: Dataset/Skąd/Rodzaj, bez Migawki gdy fokus na liscie"
+   && hasE "$A" "Dataset +$VM101" && hasE "$A" 'Relacja +duplikat +backup' && hasE "$A" 'Migawek +3' && ! hasE "$A" 'Migawka +hdd/'; then
+    ok "kopie: repliki z nosnikiem niepodlaczonym -- wiersz z uwaga 'podłącz go, potem Ctrl-R'; ostatni wiersz 'inny dysk'; panel: Dataset/Relacja/Migawek, bez Migawki gdy fokus na liscie"
 else
     bad "kopie: repliki, 'inny dysk', Szczegoly" "$A"
 fi
@@ -1637,8 +1639,8 @@ else
     bad "odzysk: pasek F4" "$A"
 fi
 A="$(od enter)"
-if [ ! -s "$XL" ] && has "$A" 'Esc do datasetów' && ! has "$A" 'Enter/Tab do migawek' && hasE "$A" 'Migawka +hdd/backups/192\.168\.28\.99/hdd/lab/vm-101@automated_hourly_2026-09-09_11-20-01'; then
-    ok "kopie: Enter na DATASECIE tylko przenosi fokus do prawego panelu (nic nie uruchamia), kursor na najnowszej migawce; Szczegoly pokazuja Migawke"
+if [ ! -s "$XL" ] && has "$A" 'Enter przeglądaj   F9 przywróć   Esc wraca' && ! has "$A" 'Enter/Tab do migawek' && hasE "$A" 'Migawka +hdd/backups/192\.168\.28\.99/hdd/lab/vm-101@automated_hourly_2026-09-09_11-20-01'; then
+    ok "kopie: Enter na DATASECIE tylko przenosi fokus do zakladki Migawki (nic nie uruchamia), kursor na najnowszej migawce; Szczegoly pokazuja Migawke"
 else
     bad "kopie: Enter na datasecie" "$(cat "$XL")" "$(printf '%s' "$A" | tail -4)"
 fi
@@ -1679,47 +1681,55 @@ else
     bad "kopie: F9 na inny dysk" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 A="$(od end)"
-if has "$A" 'Pula spoza relacji i replik' && has "$A" 'zpool import'; then
+if has "$A" 'inny dysk -- pula spoza relacji i replik' && has "$A" 'zpool import'; then
     ok "kopie: kursor na 'inny dysk' -- prawy panel i Szczegoly mowia o puli spoza relacji (zpool import)"
 else
     bad "kopie: panel 'inny dysk'" "$A"
 fi
+# GRUPY jak F2 (F8, wlasciciel 2026-10-29 „tak jak F2 -- wszystkie mozliwosci”): naglowek
+# relacji z rodzajem, pod nim jej kopie z wcieciem; pasek mowi „F8 Jedna lista”.
+A="$(od F8)"
+if has "$A" 'Kopie na pve10, po relacjach' && hasE "$A" '▸ duplikat +backup' && hasE "$A" "│ $VM101 +3 " && has "$A" 'F8 Jedna lista'; then
+    ok "kopie: F8 grupuje po relacji jak F9 na F2 -- naglowek '▸ duplikat  backup', pod nim '│ VM101  3', pasek 'F8 Jedna lista'"
+else
+    bad "kopie: grupowanie F8" "$(printf '%s\n' "$A" | head -12)"
+fi
 # Wybor w prawym panelu: zaznaczony wiersz lewego panelu dostaje znacznik "▸ ct-201", a dol
 # podaje migawke i slowo Czas (godzine pomijamy: zalezy od TZ).
 A="$(od down,enter,down)"
-if has "$A" "zfs list -t snapshot $CT201" && hasE "$A" '▸ ct-201 ' && hasE "$A" "Migawka +$CT201@automated_hourly_2026-09-09_10-20-01" && hasE "$A" 'Czas +20' && has "$A" 'Esc do datasetów'; then
-    ok "kopie: down, Enter, down -- prawy panel ct-201 z fokusem, lewy wiersz oznaczony '▸ ct-201', Szczegoly: Migawka (druga) i Czas"
+if has "$A" "$CT201: [Migawki]" && hasE "$A" "lab-ct201 +$CT201 " && hasE "$A" "Migawka +$CT201@automated_hourly_2026-09-09_10-20-01" && hasE "$A" 'Czas +20' && has "$A" 'Esc wraca'; then
+    ok "kopie: down, Enter, down -- zakladka Migawki ct-201 z fokusem, panel: Migawka (druga) i Czas"
 else
-    bad "kopie: fokus w prawym panelu" "$(printf '%s\n' "$A" | grep -E 'zfs list|▸ ct|Migawka|Czas|Esc do')"
+    bad "kopie: fokus w prawym panelu" "$(printf '%s\n' "$A" | grep -E 'Migawki\]|ct-201|Migawka|Czas|Esc wraca')"
 fi
 # Dataset BEZ migawek (srv-b): prawy panel mowi o tym wprost, Enter zostawia fokus na liscie.
 # srv-b szukany po tytule prawego panelu (kolejnosc grup zalezy od fikstur), potem Enter.
-k=""; for _i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do A="$(od "${k}enter")"; hasE "$A" 'zfs list -t snapshot .*/srv-b' && break; k="${k}down,"; done
-if hasE "$A" 'zfs list -t snapshot .*/srv-b' && has "$A" 'nie ma migawek' && has "$A" 'Enter/Tab do migawek' && ! has "$A" 'Esc do datasetów' && [ ! -s "$XL" ]; then
-    ok "kopie: dataset bez migawek (srv-b) -- 'nie ma migawek', Enter nie przenosi fokusu do pustego prawego panelu i niczego nie uruchamia"
+k=""; for _i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do A="$(od "${k}enter")"; hasE "$A" '/srv-b: \[Migawki\]' && break; k="${k}down,"; done
+if hasE "$A" '/srv-b: \[Migawki\]' && has "$A" 'brak migawek' && has "$A" 'Enter/Tab do migawek' && ! has "$A" 'Esc wraca' && [ ! -s "$XL" ]; then
+    ok "kopie: dataset bez migawek (srv-b) -- 'brak migawek', Enter nie przenosi fokusu do pustego prawego panelu i niczego nie uruchamia"
 else
-    bad "kopie: dataset bez migawek" "$(printf '%s\n' "$A" | grep -E 'zfs list|migawek|Esc do')" "log: $(cat "$XL")"
+    bad "kopie: dataset bez migawek" "$(printf '%s\n' "$A" | grep -E 'Migawki\]|migawek|Esc wraca')" "log: $(cat "$XL")"
 fi
 # F4 Z F3: kursor Kopii staje na PIERWSZYM datasecie relacji z F3, fokus na LISCIE (Enter tylko
 # przenosi fokus, niczego nie uruchamia); fokus w zakladce Datasety (Tab) = kursor na lokalnym
 # celu TEJ pary. Brak kontekstu biegu: bez wyboru migawki (to robi tylko F4 z Przebiegow).
 A="$(od enter)"
-if [ ! -s "$XL" ] && has "$A" "zfs list -t snapshot $VM101" && has "$A" 'Esc do datasetów'; then
+if [ ! -s "$XL" ] && has "$A" "$VM101: [Migawki]" && has "$A" 'Esc wraca'; then
     ok "kopie: F4 z wiersza relacji na F3 (fokus na liscie) -- kursor na pierwszym datasecie relacji, Enter tylko przenosi fokus (bez browse)"
 else
     bad "kopie: F4 z F3, fokus na liscie" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 : > "$XL"
 A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL $OZT --exec-log "$XL" --screen relacje --keys tab,F4 --width 200 2>&1)"
-if has "$A" '╔═ Kopie na pve10' && has "$A" "zfs list -t snapshot $VM101" && has "$A" 'Enter/Tab do migawek' && ! hasE "$A" 'Migawka +hdd/' && [ ! -s "$XL" ]; then
+if has "$A" '╔═ Kopie na pve10' && has "$A" "$VM101: [Migawki]" && has "$A" 'Enter/Tab do migawek' && ! hasE "$A" 'Migawka +hdd/' && [ ! -s "$XL" ]; then
     ok "kopie: F4 z zakladki Datasety na F3 -- kursor na celu tej pary (vm-101), fokus na liscie, bez --at=/--snapshot= (nic nie uruchomiono)"
 else
-    bad "kopie: F4 z F3, fokus w Datasety" "$(printf '%s\n' "$A" | grep -E 'Kopie na|zfs list|Migawka|Enter/Tab')" "log: $(cat "$XL")"
+    bad "kopie: F4 z F3, fokus w Datasety" "$(printf '%s\n' "$A" | grep -E 'Kopie na|Migawki\]|Migawka|Enter/Tab')" "log: $(cat "$XL")"
 fi
 # F4 na relacji BEZ kopii (rekord usuniety): Kopie sie otwiera, ale bez kontekstu, z komunikatem.
 # Z fikstura drzewa: bez niej KAZDA relacja wygladalaby na "bez kopii" (offline nie ma drzewa).
 A="$(act end,F4 --width 130 $OZT)"
-if has "$A" '╔═ Kopie na pve10' && has "$A" 'nie ma kopii na tym hoście -- nie ma czego przeglądać' && ! has "$A" 'Esc do datasetów' && [ ! -s "$XL" ]; then
+if has "$A" '╔═ Kopie na pve10' && has "$A" 'nie ma kopii na tym hoście -- nie ma czego przeglądać' && ! has "$A" 'Esc wraca' && [ ! -s "$XL" ]; then
     ok "kopie: F4 na relacji bez kopii (usunieta) -- Kopie bez kontekstu i komunikat 'nie ma kopii na tym hoście'"
 else
     bad "kopie: F4 na relacji bez kopii" "$(printf '%s\n' "$A" | grep -E 'Kopie na|zfs list|kopii')" "log: $(cat "$XL")"

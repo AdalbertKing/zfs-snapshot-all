@@ -4621,13 +4621,17 @@ def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, 
             ccur = len(cells)
         rows.append(it)
         if it.get("any"):
-            cells.append([_(u"inny dysk -- pula spoza relacji i replik"), u"", u"", u""] if grouped
-                         else [u"", u"", _(u"inny dysk -- pula spoza relacji i replik"), u"", u""])
+            cells.append([_(u"inny dysk -- pula spoza relacji i replik"), u" ", u" ", u" "] if grouped
+                         else [u" ", u" ", _(u"inny dysk -- pula spoza relacji i replik"), u" ", u" "])
+            continue
+        if it.get("note"):
+            cells.append([u"  %s %s" % (bar, it["note"]), u" ", u" ", u" "] if grouped
+                         else [g["name"], g.get("typ") or u" ", it["note"], u" ", u" "])
             continue
         ds = it["ds"] + (u"  (zvol)" if it.get("type") == "volume" else u"")
         when = fmt_when_short(it["newest"], now) if it.get("newest") else u"-"
         if grouped:
-            cells.append([u"  %s %s" % (bar, ds), u"", str(it.get("snaps") or 0), when])
+            cells.append([u"  %s %s" % (bar, ds), u" ", str(it.get("snaps") or 0), when])
         else:
             cells.append([g["name"], g.get("typ") or u"", ds, str(it.get("snaps") or 0), when])
     if not grouped:
@@ -4660,6 +4664,11 @@ def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, 
                  "heads": [u"NAME", u"USED", u"REFER", u"CREATION"], "items": sitems,
                  "empty": snaps_err or _(u"brak migawek"),
                  "foot": _(u"Enter przeglądaj   F9 przywróć   Esc wraca   Tab do linii poleceń")}
+    elif cur.get("note"):
+        g = cur["g"]
+        det_title = g["name"]
+        det = [(_(u"Relacja"), u"%s  %s" % (g["name"], g.get("typ") or u"")), (_(u"Kierunek"), g.get("dir") or u"-"),
+               (_(u"Uwaga"), cur["note"])]
     elif cur.get("any"):
         det_title = _(u"inny dysk")
         det = [(_(u"Inny dysk"), _(u"najpierw zaimportuj pulę (zpool import), potem Enter"))]
@@ -5483,7 +5492,9 @@ class UI(object):
                     roots.append(r)
         tree = load_ztree(self.repo, self.files, self.data, roots)[0] if roots else []
         items = kopie_items(groups, tree)
-        return items, [i for i, x in enumerate(items) if x.get("ds") or x.get("any")]
+        # Wiersz notatki (replika bez nosnika, relacja bez kopii) tez jest w tabeli -- operator
+        # ma go widziec; akcji na nim nie ma (klawisze nizej).
+        return items, [i for i, x in enumerate(items) if x.get("ds") or x.get("any") or x.get("note")]
 
     def kopie_current(self):
         items, selix = self.kopie_state()
@@ -6507,6 +6518,8 @@ class UI(object):
         elif k in ("F7", "enter", "F9") and n and self.screen == "odzysk":
             self.cursor["odzysk"] = c
             it = self.kopie_current()
+            if it.get("note"):
+                return "stay"      # replika bez nosnika / relacja bez kopii: nie ma czego otworzyc
             if self.focus == "pairs":
                 snaps = self.kopie_snaps(it)[0]
                 s_ = snaps[min(self.pair_cursor, len(snaps) - 1)] if snaps else None
