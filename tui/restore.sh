@@ -378,7 +378,7 @@ case "${ROWS[0]}" in
     *)   TARGET="ten host" ;;
 esac
 # TARGET = "ten host" jest tokenem porownywanym w kodzie; na ekranie idzie TARGET_DISP.
-if [ "$TARGET" = "ten host" ]; then TARGET_DISP="$(T 'ten host')"; else TARGET_DISP="$TARGET"; fi
+if [ "$TARGET" = "ten host" ]; then TARGET_DISP="$(T 'ten host')"; else TARGET_DISP="$(host_name "$TARGET")"; fi
 
 SEL=(); ORIG=(); ONTO=(); WHOLE=0; DEST=""; BASE=""; AT=""; CMD=()
 # Etykieta, pod którą cel zna ten kolektor -- to ją przyjmuje deploy.sh --allow-restore=

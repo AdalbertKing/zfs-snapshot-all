@@ -54,6 +54,14 @@ title() {
 }
 # Kopia lokalna nie ma drugiego hosta: czytelniki pytamy bez adresu (= ten host).
 hostport() { [ "$MODE" = local ] && return 0; [ "$PORT" = 22 ] && echo "$HOST" || echo "$HOST:$PORT"; }
+# Katalog kopii pod celem (U111, 2026-10-29): NAZWA źródła, którą zgłosił host przy diagnozie
+# (pve9), nie wpisany adres -- inaczej kopie lądowały w hdd/backups/192.168.28.99/...
+# Silnik zapisuje go raz, przy założeniu (--landing); zmiana adresu go nie rusza.
+landing() {
+    local n="${HOSTNAME_R%%.*}"
+    case "$n" in ''|.|..|-*|*[!A-Za-z0-9._-]*) n="$HOST" ;; esac
+    printf '%s' "$n"
+}
 
 # --- krok 1: typ ------------------------------------------------------------
 step_mode() {
@@ -338,7 +346,7 @@ for x in d.get("datasets", []):
     items+=(__other__ "$(T 'Wpisz ścieżkę…  (dataset na tym hoście, może jeszcze nie istnieć)')")
     if [ -n "$TARGET" ]; then in_list "$TARGET" "${items[@]}" && first="$TARGET" || first=__other__; fi
     # Kopia lokalna nie ma poziomu hosta: ląduje pod <cel>/<pełna ścieżka źródła>.
-    local lv="/$HOST"; [ "$MODE" = local ] && lv=""
+    local lv="/$(landing)"; [ "$MODE" = local ] && lv=""
     while :; do
         geom
         wt --title "$(title 5 "$(T 'Dokąd na tym hoście?')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "${first:-__other__}" \
@@ -389,7 +397,7 @@ browse_target() {
         printf '%s\n' "$n" >>"$TMPD/fs.pick"
     done <"$TMPD/fs.all"
     [ -s "$TMPD/fs.pick" ] || { wt --title "$(T 'Brak datasetów')" --msgbox "$(T 'Na tym hoście nie ma datasetu, pod którym mogłyby lądować kopie.')" 8 "$W"; return 1; }
-    local lv="/$HOST"; [ "$MODE" = local ] && lv=""
+    local lv="/$(landing)"; [ "$MODE" = local ] && lv=""
     local legend="$(Tv ' Kopie trafią pod:  <wybrany>$lv/<dataset źródła>' '$lv' "$lv")"
     [ "$hid" -gt 0 ] && legend="$legend   $(Tv '(ukryto $hid kopii innych relacji)' '$hid' "$hid")"
     "$PY" - "$TMPD/fs.pick" "$TMPD/tree-spec.json" "$(title 5 "$(T 'Dokąd -- przeglądaj')")" "$legend" "$TARGET" <<'PYEOF' || return 1
@@ -910,7 +918,7 @@ build_argv() {   # [install] -> ARGV[]
     fi
     if [ "$MODE" = sync ]; then ARGV+=("--mode=sync")
     elif [ "$MODE" = snaponly ]; then ARGV+=("--mode=snaponly")
-    elif [ "$MODE" != local ]; then ARGV+=("--target=$TARGET"); fi
+    elif [ "$MODE" != local ]; then ARGV+=("--target=$TARGET" "--landing=$(landing)"); fi
     [ -n "$PROFILE" ] && ARGV+=("--profile=$PROFILE")
     [ -n "$SRCPROF" ] && ARGV+=("--source-profile=$SRCPROF")
     [ -n "$RNAME" ] && ARGV+=("--name=$RNAME")
@@ -990,7 +998,7 @@ summary_text() {
     elif [ "$MODE" = snaponly ]; then
         echo "$(Tv 'MIGAWKI ZDALNE: $(hostname) będzie robić i sprzątać migawki NA $HOST' '$(hostname)' "$(hostname)" '$HOST' "$HOST")${HOSTNAME_R:+ ($HOSTNAME_R)}$(T ', nic nie kopiuje:')"
     else
-        echo "$(Tv 'BACKUP: $(hostname) będzie POBIERAĆ z $HOST' '$(hostname)' "$(hostname)" '$HOST' "$HOST")${HOSTNAME_R:+ ($HOSTNAME_R)}$(Tv ' do $TARGET/$HOST/...' '$TARGET' "$TARGET" '$HOST' "$HOST")"
+        echo "$(Tv 'BACKUP: $(hostname) będzie POBIERAĆ z $HOST' '$(hostname)' "$(hostname -s 2>/dev/null || hostname)" '$HOST' "$(landing)")$([ "$(landing)" = "$HOST" ] || echo " ($HOST)")$(Tv ' do $TARGET/$HOST/...' '$TARGET' "$TARGET" '$HOST' "$(landing)")"
     fi
     # Z wyjątkami relacja to lista [x]/[-] (set-datasets po założeniu), jak w planie okna zmiany.
     if any_excl && [ -s "${BASKET_DS_JSON:-}" ]; then
@@ -1218,7 +1226,7 @@ field_value() {   # <pole> -> wartość na karcie ("" = jeszcze nie ustawione)
         ds)     [ "${#B_ROOT[@]}" -gt 0 ] && echo "${#B_ROOT[@]}: $(for _i in "${!B_ROOT[@]}"; do _m=""
                     { [ -n "${B_EXCL[$_i]}" ] || printf '%s\n' "${B_CLOSED:-}" | grep -qxF -- "${B_ROOT[$_i]}"; } && _m=" [-]"
                     printf '%s%s, ' "${B_ROOT[$_i]}" "$_m"; done | sed 's/, $//')" ;;
-        target) [ -n "$TARGET" ] && { [ "$MODE" = local ] && echo "$TARGET  -> $TARGET/…" || echo "$TARGET  -> $TARGET/$HOST/…"; } ;;
+        target) [ -n "$TARGET" ] && { [ "$MODE" = local ] && echo "$TARGET  -> $TARGET/…" || echo "$TARGET  -> $TARGET/$(landing)/…"; } ;;
         profile)
             [ -n "$PROFILE" ] || return 0
             if [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ]; then echo "$(T 'własne (tabela szczebli)')"; return; fi
