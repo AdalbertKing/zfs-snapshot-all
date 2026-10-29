@@ -44,8 +44,8 @@ arguments and do one thing.
 ## GUI
 
 `zfs-backup gui` opens a screen in the terminal (whiptail), driven by function
-keys: F2 Runs, F3 Relations (Ins new, Enter window, `e` edit), F4 Copies (Enter browses,
-F9 restores, also from a disk), F6 Replica, F10 Settings. These are the same operations as in the `zfs-backup.sh` CLI, only in windows —
+keys: F2 Runs, F3 Relations (Ins new, Enter window, `e` edit), F4 Copies (F7 or Enter on a snapshot
+browses files, F9 restores, also from a disk), F6 Replica, F10 Settings. These are the same operations as in the `zfs-backup.sh` CLI, only in windows —
 the GUI calls the same verbs, so the config and the crontab come out identical.
 
 ## The script that writes the crontab

@@ -137,7 +137,7 @@ run: `ZFS_TUI_LANG=pl zfs-backup gui` or `--lang=pl`.
 | F1 | Help (Pomoc) |
 | F2 | Runs (Przebiegi): past and upcoming |
 | F3 | Relations (Relacje): Ins = new, Del = delete, Enter = open, `e` = edit inside a relation window |
-| F4 | Copies (Kopie): Enter browses, F9 restores |
+| F4 | Copies (Kopie): Enter/Tab to the snapshots, Enter on a snapshot or F7 browses files, F9 restores |
 | F5 | Templates (Szablony) |
 | F6 | Replica (Replika) |
 | F7 | Run now (F2, F3, F6), Browse (F4) |

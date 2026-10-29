@@ -137,7 +137,7 @@ jednorazowo: `ZFS_TUI_LANG=pl zfs-backup gui` albo `--lang=pl`.
 | F1 | Pomoc |
 | F2 | Przebiegi (co biegło i co pobiegnie) |
 | F3 | Relacje (Ins = nowa, Del = usuń, Enter = otwórz, `e` = edytuj w oknie relacji) |
-| F4 | Kopie (Enter przegląda, F9 przywraca) |
+| F4 | Kopie (Enter/Tab do migawek, Enter na migawce albo F7 przegląda pliki, F9 przywraca) |
 | F5 | Szablony |
 | F6 | Replika |
 | F7 | Uruchom teraz (F2, F3, F6), Przeglądaj (F4) |
