@@ -84,6 +84,11 @@
   jak F9 na F2 (F9 zostaje Przywróć). Repliki bez nośnika i relacje bez kopii mają swój wiersz z uwagą, bez akcji.
   Stan i klawisze bez zmian (Enter/Tab do migawek, Enter przegląda, F9 przywraca). F10: większy odstęp kolumn,
   opisy łamane w trzeciej kolumnie (dalszy ciąg otwiera to samo ustawienie). Zasada na przyszłość: każde okno przeglądania w układzie F2 (backlog U121).
+- **Kreator: pytanie o migawki na źródle zaraz po datasetach (2026-10-29, właściciel).** Okno „Migawki naszej
+  rodziny już są na źródle” (łańcuch czy resztki) było po kroku „Dokąd”. Operator wybierał cel, dostawał to pytanie
+  i brał je za przeszkodę w celu. Teraz kolejność to Rodzaj, Źródło, Datasety, Migawki na źródle, Cel, a okno zaczyna się
+  od „Na źródle <host> są już migawki naszej rodziny”. Pytanie zależy tylko od wybranych datasetów (`own.tsv` z kroku
+  Datasety).
 - **F6 Replika: źródło → cel w panelu, na dole przebiegi jak na F2 (2026-10-29, właściciel, U130).** Prawy panel
   repliki ma w grupie Co wiersze `Źródło → cel`, `Z dziećmi` i `Historia`; dawna zakładka Datasety odpadła. Dolna
   zakładka [Przebiegi] pokazuje biegi tej repliki w układzie F2: wykonane, kreska „teraz”, nadchodzące (Kiedy, Wynik,
