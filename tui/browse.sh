@@ -403,28 +403,61 @@ mount_ro() {
 
 # ---- mc TYLKO DO ODCZYTU (U103, wlasciciel 2026-10-28) ---------------------------------
 # mc dziala jako root, wiec dotad prawy panel mogl skasowac dowolny plik hosta, a lewy
-# wyjsc z kopii na zywy system. Teraz mc biegnie we wlasnej przestrzeni montowan
-# (unshare -m): kazdy punkt montowania przemontowany tylko do odczytu, zapisywalny jest
-# jeden katalog -- ~/odzysk/<kopia> (prawy panel). Przestrzen znika z mc. /proc, /sys,
-# /dev zostaja (terminal). Ustawienia mc ida do tmpfs w tej przestrzeni. Gdy przestrzeni
-# nie da sie zbudowac, mc NIE startuje (bez cichego powrotu do zapisywalnego hosta).
+# wyjsc z kopii na zywy system. mc biegnie we wlasnej przestrzeni montowan (unshare -m).
+# U126 (wlasciciel 2026-10-29, zrzut: "mc pozwolil wyjsc na obu panelach az do root
+# maszyny"): w tej przestrzeni mc dostaje WLASNY maly korzen (pivot_root). Pod "/" widac
+# tylko /kopia (ta migawka, tylko do odczytu), /odzysk (jedyne miejsce zapisu) i to, bez
+# czego mc nie wystartuje: usr, lib*, bin, sbin, etc -- dowiazane BEZ podmontowan (/etc/pve
+# jest tam pustym katalogiem) i tylko do odczytu; /dev z kilkoma wezlami terminala, /proc
+# tylko do odczytu, /tmp pusty. Pule, /root, /home, inne kopie -- niewidoczne. Root w takim
+# korzeniu wyszedlby z niego przez mknod+mount, wiec mc dostaje tylko uprawnienia do
+# czytania i kopiowania plikow (setpriv: dac_override, dac_read_search, chown, fowner,
+# fsetid; bez sys_admin i mknod). Gdy ktorykolwiek krok sie nie uda, mc NIE startuje (bez
+# cichego powrotu do zapisywalnego hosta).
 mc_readonly() {   # <katalog kopii>
     local mnt="$1" leaf odz rc=0
     leaf="$(printf '%s' "${DS##*/}@${SNAP:-x}" | tr -c 'A-Za-z0-9._@-' '_')"
     odz="${BROWSE_RECOVER_DIR:-${HOME:-/root}/odzysk}/${leaf:0:120}"
     mkdir -p "$odz" "$TMPD/mcxdg" || { echo "$(Tv 'nie mogę utworzyć $DIR' '$DIR' "$odz")"; return 1; }
-    echo "$(Tv '  prawy panel: $ODZ -- jedyne miejsce zapisu; reszta systemu tylko do odczytu.' '$ODZ' "$odz")"
+    echo "$(Tv '  w mc: /kopia = ta migawka (tylko do odczytu), /odzysk = $ODZ (jedyne miejsce zapisu).' '$ODZ' "$odz")"
     if [ "${BROWSE_RO_NS:-1}" = 1 ]; then
         unshare -m --propagation private -- bash -c '
             mnt="$1"; odz="$2"; xdg="$3"; mc="$4"
-            mount --bind "$odz" "$odz" || exit 97
-            awk "{print \$2}" /proc/self/mounts | sort -u | while IFS= read -r m; do
-                m="$(printf "%b" "$m")"
-                case "$m" in "$odz"|/proc|/proc/*|/sys|/sys/*|/dev|/dev/*) continue ;; esac
-                mount -o remount,bind,ro "$m" 2>/dev/null
+            set -o pipefail
+            mcbin="$(command -v "$mc")" || exit 97
+            command -v setpriv >/dev/null 2>&1 || exit 97
+            nr="$xdg/root"
+            mkdir -p "$nr" || exit 97
+            mount -t tmpfs -o size=16m,mode=0755 tmpfs "$nr" || exit 97
+            # system dla mc: dowiazania BEZ podmontowan, tylko do odczytu; dowiazania
+            # symboliczne (usrmerge: /bin -> usr/bin) przepisane jak sa
+            for d in usr lib lib32 lib64 libx32 bin sbin etc; do
+                if [ -L "/$d" ]; then ln -s "$(readlink "/$d")" "$nr/$d" || exit 97
+                elif [ -d "/$d" ]; then
+                    mkdir "$nr/$d" && mount --bind "/$d" "$nr/$d" && mount -o remount,bind,ro "$nr/$d" || exit 97
+                fi
             done
-            mount -t tmpfs -o size=16m,mode=0700 tmpfs "$xdg" || exit 97
-            XDG_CONFIG_HOME="$xdg" XDG_DATA_HOME="$xdg" XDG_CACHE_HOME="$xdg" "$mc" "$mnt" "$odz"
+            mkdir -p "$nr/dev/pts" "$nr/proc" "$nr/tmp" "$nr/kopia" "$nr/odzysk" "$nr/.old" || exit 97
+            mount -t tmpfs -o size=1m,mode=0755 tmpfs "$nr/dev" || exit 97
+            mkdir -p "$nr/dev/pts" || exit 97
+            for n in null zero tty random urandom full; do
+                [ -e "/dev/$n" ] || continue
+                touch "$nr/dev/$n" && mount --bind "/dev/$n" "$nr/dev/$n" || exit 97
+            done
+            mount --bind /dev/pts "$nr/dev/pts" || exit 97
+            ln -s pts/ptmx "$nr/dev/ptmx"
+            mount -o remount,ro,bind "$nr/dev" 2>/dev/null
+            mount -t proc -o ro,nosuid,nodev,noexec proc "$nr/proc" || exit 97
+            mount -t tmpfs -o size=64m,mode=1777 tmpfs "$nr/tmp" || exit 97
+            mount --bind "$mnt" "$nr/kopia" && mount -o remount,bind,ro "$nr/kopia" || exit 97
+            mount --bind "$odz" "$nr/odzysk" || exit 97
+            cd "$nr" && pivot_root . .old || exit 97
+            cd / && umount -l /.old && rmdir /.old || exit 97
+            mkdir -p /tmp/.mc
+            HOME=/tmp XDG_CONFIG_HOME=/tmp/.mc XDG_DATA_HOME=/tmp/.mc XDG_CACHE_HOME=/tmp/.mc \
+                exec setpriv --no-new-privs \
+                    --bounding-set -all,+dac_override,+dac_read_search,+chown,+fowner,+fsetid \
+                    --inh-caps -all -- "$mcbin" /kopia /odzysk
         ' _ "$mnt" "$odz" "$TMPD/mcxdg" "$MC" </dev/tty >/dev/tty 2>&1 || rc=$?
         if [ "$rc" -eq 97 ]; then
             echo "$(T 'Nie udało się zbudować przestrzeni tylko do odczytu (unshare/mount) -- mc nie zostanie uruchomiony.')"

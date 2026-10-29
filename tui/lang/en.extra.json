@@ -795,5 +795,6 @@
 "%s -- bieg": "%s -- run",
 "brak przebiegów tej repliki w oknie %dh wstecz i %dh naprzód (dysku nie było albo nie ma harmonogramu)": "no runs of this replica in the window %dh back and %dh ahead (the disk was not there, or there is no schedule)",
 "Enter szczegóły   Ins nowa   Del usuń   Tab do przebiegów": "Enter details   Ins new   Del delete   Tab to runs",
-"źródle": "the source"
+"źródle": "the source",
+"  w mc: /kopia = ta migawka (tylko do odczytu), /odzysk = $ODZ (jedyne miejsce zapisu).": "  in mc: /kopia = this snapshot (read-only), /odzysk = $ODZ (the only place to write)."
 }
