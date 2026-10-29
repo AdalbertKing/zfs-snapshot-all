@@ -1040,6 +1040,14 @@ notify       = pulled
   the `[snaponly:]`/`[dataset:]` (pull) section settles it. On by itself; `pve_guest_guard = no`
   in `[defaults]`, `[dataset:]` or `[snaponly:]` turns it off. Passive copies (`-e`) and backup
   targets are not checked.
+  **Trees** (1.0.1): a recursive line over a parent that is no guest disk (`rpool/data`,
+  `hdd/vm-disks`) carries `--pve-guests=<host>:tree`, and the config keeps its one entry. At run
+  time `zfs-job.sh` lists the SOURCE tree (`zfs list -r`; a remote tree over the line's own ssh
+  options), reads the guest id from each disk name (`vm-`/`subvol-`/`base-N-disk-M`) and where
+  that guest runs. A disk whose guest runs on another node is a pvesr replica: a `-R` snapshot
+  (one snapshot per dataset) runs with `-X` on exactly that disk and WARNs; a prune or an atomic
+  `-r` cannot leave a child out and is NOT RUN (`rc=76`, alarm). A remote tree that cannot be
+  listed runs as before and WARNs. The target of a copy is never read.
 - `recursive` drives all three generated lines from one declaration: `no` = this dataset,
   `flat` = `-R` on the transfer, `delsnaps -R`, `check-snap-age -R`; `atomic` = `-r` on the
   transfer with the same `-R` prune and monitor.

@@ -1059,6 +1059,14 @@ notify       = pulled
   w sekcji `[snaponly:]`/`[dataset:]` (pobranie) to rozstrzyga. Włączony sam;
   `pve_guest_guard = no` w `[defaults]`, `[dataset:]` albo `[snaponly:]` go wyłącza. Kopie
   pasywne (`-e`) i cele kopii nie są sprawdzane.
+  **Drzewa** (1.0.1): linia rekurencyjna nad rodzicem, który nie jest dyskiem gościa (`rpool/data`,
+  `hdd/vm-disks`), niesie `--pve-guests=<host>:tree`, a config zostaje jednym wpisem. Przy biegu
+  `zfs-job.sh` listuje drzewo ŹRÓDŁA (`zfs list -r`; zdalne tymi samymi opcjami ssh co linia),
+  z nazwy dysku (`vm-`/`subvol-`/`base-N-disk-M`) bierze numer gościa i sprawdza, gdzie gość stoi.
+  Dysk gościa z innego węzła to replika pvesr: migawka `-R` (osobna migawka każdego datasetu)
+  rusza z `-X` na dokładnie ten dysk i ostrzega; przycinanie i atomowe `-r` nie umieją pominąć
+  dziecka, więc nie ruszają (`rc=76`, alarm). Zdalne drzewo, którego nie da się wylistować, rusza
+  jak dotąd, z ostrzeżeniem. Cel kopii nie jest czytany.
 - `recursive` steruje wszystkimi trzema wygenerowanymi liniami z jednej deklaracji: `no` = ten
   dataset, `flat` = `-R` przy transferze, `delsnaps -R`, `check-snap-age -R`; `atomic` = `-r` przy
   transferze z tym samym `-R` dla prune i strażnika.

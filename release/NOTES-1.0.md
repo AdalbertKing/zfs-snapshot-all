@@ -49,5 +49,6 @@ is a documented, step-by-step operation (`zfs-backup edit-config`, then the wiza
 
 - Target-side GFS retention is rendered as a flat count per tier; while the cadence is regular
   the two keep the same snapshots, after a burst of catch-up runs they differ.
-- An automatic guard for datasets that become Proxmox replication targets while snapshotted is
-  planned for 1.1; until then the wizard asks and the admin decides.
+- An automatic guard for datasets that become Proxmox replication targets while snapshotted was
+  not part of 1.0 (the wizard asked and the admin decided). *It shipped in 1.0.1: the PVE guest
+  guard, for single guest disks and for recursive trees (see CHANGELOG).*

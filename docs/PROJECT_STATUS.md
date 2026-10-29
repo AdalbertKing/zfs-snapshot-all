@@ -54,8 +54,8 @@
   daje się przypisać do węzła z konta delegowanego (pve2: `corosync.conf` i `.members` nieczytelne, DNS z wildcardem)
   -> zadanie rusza, a gdy gość jest w tym klastrze, z ostrzeżeniem; `pve_node = <węzeł>` w sekcji to rozstrzyga. Na żywo pve2 jako `zfsbackup`
   (polecenie `true`, bez maila): `:990` -> rc 76 („guest 990 runs on pve1, not on pve2”), `pve1:990` -> 0.
-  **Metropolis jeszcze bez tego:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`, więc po wdrożeniu dadzą
-  ostrzeżenie, dopóki config pve2 nie dostanie `pve_node = pve1` (zmiana produkcji, za zgodą). Testy: `test/cron`
+  **Metropolis:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`; od 2026-10-29 rozstrzyga to wpis
+  `192.168.28.9 pve1` w `/etc/hosts` pve2 (opis niżej, przy drzewach). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
 - **Strażnik gościa PVE w drzewach (2026-10-29, wariant A właściciela, gałąź `feat/pve-guest-guard-trees`).**
   Linia rekurencyjna (`-R` albo `-r`) nad rodzicem (`rpool/data`, `hdd/vm-disks`) nie nazywała żadnego gościa, więc
@@ -68,7 +68,10 @@
   z datasetem): cel kopii jest pełen dysków gości z innych węzłów i to są kopie, nie repliki. Na labie z pve10 na pve11:
   `-R -X '^hdd/lab/vm-101(/|$)'` dał migawkę 7 z 10 datasetów i pominął vm-101 razem z dziećmi. Dziś w drzewach pve1
   nie ma żadnego cudzego gościa. Testy: `test/cron` PG17-PG24 (pve9 269/0); golden: 4 wzorce, linie rekurencyjne
-  dostały `:tree`. Metropolis: działa dopiero po przeliczeniu crontabu pve2 (produkcja, za zgodą).
+  dostały `:tree`. Metropolis od 2026-10-29 (wydanie 52f9198, za zgodą): w `/etc/hosts` pve2 wpis
+  `192.168.28.9 pve1` (adres ring0 pve1), crontab konta `zfsbackup` przeliczony: 28 linii ze strażnikiem
+  (20× `192.168.28.9:tree`, 4× `:103`, 4× `:tree`); kontrola pozytywna z konta produkcyjnego (drzewo `hdd/vm-disks`
+  na „złym” węźle -> rc 76 z sześcioma dyskami po nazwie); biegi 12:04 i 12:24 rc 0, bez ostrzeżeń.
 - **Kampania marudnego admina na pve10, poprawki (2026-10-28 wieczór).** Mierzone na żywo w tmux:
   - start GUI był 16,9 s, z czego job-stats 8,4 s: dwie pełne listy `zfs list -t snapshot` na wywołanie
     (2704 migawki na HDD, samo `-o name` 3,9 s). Teraz jedna lista zasila bajty biegów i sumy wolumenu.
