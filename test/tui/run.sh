@@ -581,7 +581,7 @@ if hasE "$Z200" "Czas +ostatni ${1}s / średni ${2}s / maks\. ${3}s" && has "$Z2
 else
     bad "zadania: czasy/GB z job-stats" "want: $want" "$Z200"
 fi
-if hasE "$Z200" "Wywołania +$5, błędów 0" && has "$Z200" "$6 $7   OK" && hasE "$Z200" "Dane +$4"; then
+if hasE "$Z200" "Wywołania +$5, błędów 0" && has "$Z200" "$(printf '%s' "$6" | tr - .) $7   OK" && hasE "$Z200" "Dane +$4"; then
     ok "zadania: panel nazywa wywolania, ostatni bieg z wynikiem i dane z oknem digestu"
 else
     bad "zadania: panel czasow" "$Z200"
@@ -670,7 +670,7 @@ else
 fi
 # Kursor zostaje na TYM SAMYM biegu po F8/F9 (run_cursor_for): panel (tytul i 'Kiedy' z data)
 # jest ten sam przed i po -- inaczej przelaczenie widoku przenosiloby operatora na cudze zadanie.
-panel_id() { printf '%s\n' "$1" | sed -n 2p | sed 's/^.*╗//'; printf '%s\n' "$1" | grep -oE 'Kiedy +20[0-9]{2}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1; }
+panel_id() { printf '%s\n' "$1" | sed -n 2p | sed 's/^.*╗//'; printf '%s\n' "$1" | grep -oE 'Kiedy +20[0-9]{2}\.[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1; }
 ZCK="$(zkeys "^║ $KD +pve9 +wysyłka " $ZJARGS)"
 ZC0="$(panel_id "$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys "$ZCK" --width 200 --height 60 2>&1)")"
 ZC8="$(panel_id "$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys "${ZCK:+$ZCK,}F8" --width 200 --height 60 2>&1)")"
@@ -712,8 +712,8 @@ snaps = [{"name": ds + "@automated_hourly_old", "creation": now - 9000, "written
          {"name": ds + "@automated_hourly_s2", "creation": now - 3600, "written": 2048}]
 json.dump({"window_days": 7, "runs": runs, "snaps": snaps, "jobs": [], "events": [], "datasets": [], "volume": []},
           open(d + "/stats.json", "w", encoding="utf-8"))
-print(time.strftime("%d.%m %H:%M", time.localtime(now - 3600)))
-print(time.strftime("%d.%m %H:%M", time.localtime(now - 7200)))
+print(time.strftime("%Y.%m.%d %H:%M", time.localtime(now - 3600)))
+print(time.strftime("%Y.%m.%d %H:%M", time.localtime(now - 7200)))
 PYEOF
 )"
 UWT="$(printf '%s\n' "$UWT" | tr -d '\r')"
@@ -1100,7 +1100,7 @@ json.dump(st, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 PRZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" ${PRARGS%--stats*} --stats "$PRM" --screen zadania --keys "" --width 200 --height 16 2>&1)"
 rm -f "$PRM"
-PRZT="$(printf '%s\n' "$PRZH" | grep -oE 'Kiedy +[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1 | grep -oE '[0-9]{2}:[0-9]{2}$')"
+PRZT="$(printf '%s\n' "$PRZH" | grep -oE 'Kiedy +[0-9]{4}\.[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1 | grep -oE '[0-9]{2}:[0-9]{2}$')"
 if [ -n "$PRZT" ] && printf '%s\n' "$PRZH" | sed 's/║│.*//' | grep -qE "^║ [0-9]{4}\.[0-9]{2}\.[0-9]{2} $PRZT "; then
     ok "przebiegi: wiersz z kursorem widac na liscie i przy niskim oknie (nie zaslania go '... jeszcze N')"
 else
@@ -1148,7 +1148,7 @@ rm -f "$PKX"
 # F8 chowa wykonane (bez kreski), drugi F8 je przywraca; kursor zostaje na TYM SAMYM biegu
 # (run_cursor_for: ten sam bieg -- zadanie i chwila; wykonanego, ktory zniknal, zastepuje
 # pierwszy nadchodzacy). F9 przeklada wiersze do grup, a bieg pod kursorem sie nie zmienia.
-pr_when() { printf '%s\n' "$1" | grep -oE 'Kiedy +20[0-9]{2}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1; }
+pr_when() { printf '%s\n' "$1" | grep -oE 'Kiedy +20[0-9]{2}\.[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1; }
 PRH="$(prz F8)"; PRHH="$(prz down,F8)"; PRHR="$(prz down,F8,F8)"; PRN="$(prz down)"
 PRG9="$(prz down,F9)"
 PRHL="$(lst "$PRH")"; PRHRL="$(lst "$PRHR")"; PRG9L="$(lst "$PRG9")"
@@ -5810,7 +5810,7 @@ RWSUM="$(grep -F -A 30 'k2: na pewno?' "$RW/wt.log" | head -40)"   # argv okna t
 # U109 (wlasciciel 2026-10-28, symulacja A): najpierw z kiedy, potem dokad; lista punktow
 # z pelna nazwa migawki; podsumowanie nazywa migawke, nie "Punkt: najnowszy".
 RWKD="$(grep -n 'k2: z kiedy?' "$RW/wt.log" | head -1 | cut -d: -f1)"; RWDK="$(grep -n 'k2: dokąd?' "$RW/wt.log" | head -1 | cut -d: -f1)"
-if [ -n "$RWKD" ] && [ -n "$RWDK" ] && [ "$RWKD" -lt "$RWDK" ] && grep -qE ' ~ p0 ~ 2026-10-1[56] [0-9]{2}:25:03  @automated_hourly_2026-10-15_17-25-01 ~ ' "$RW/wt.log" \
+if [ -n "$RWKD" ] && [ -n "$RWDK" ] && [ "$RWKD" -lt "$RWDK" ] && grep -qE ' ~ p0 ~ 2026.10.1[56] [0-9]{2}:25:03  @automated_hourly_2026-10-15_17-25-01 ~ ' "$RW/wt.log" \
    && has "$RWSUM" 'Migawka: tank/b/hdd/data/docs@automated_hourly_2026-10-15_17-25-01' && ! has "$RWSUM" 'Punkt:  najnowszy'; then
     ok "restore U109: okno 'z kiedy' przed 'dokad', punkt = pelna nazwa migawki, podsumowanie 'Migawka: <dataset>@<nazwa>'"
 else
