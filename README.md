@@ -31,8 +31,8 @@ zfs-backup gui          # F3 Relacje (relations), Ins: the wizard creates the fi
 For the setup the collector needs root SSH access to the source host; the wizard installs the package
 there itself; the jobs can run as a delegated account (`--backup-user`) instead of root. `deploy.sh`
 checks the dependencies: ZFS, `cron`, `flock`, `mbuffer`, `ssh`, `awk`, `zstd` (the default compressor; `pigz` as an
-alternative), `python3` for the GUI and a mail transport for alerts. The GUI is in Polish; an English
-translation is in preparation.
+alternative), `python3` for the GUI and a mail transport for alerts. The GUI starts in English; Polish via F10
+Settings (`language`) or `ZFS_TUI_LANG=pl`.
 
 ## Documentation
 
@@ -52,7 +52,7 @@ technical reference.
 | config examples | [docs/en/CONFIG-EXAMPLES.md](docs/en/CONFIG-EXAMPLES.md) | [docs/pl/PRZYKLADY-CONFIGU.md](docs/pl/PRZYKLADY-CONFIGU.md) |
 | shipped retention templates | [profiles/README.md](profiles/README.md) | |
 | tests | [test/README.md](test/README.md) | |
-| interactive tutorial (Polish GUI screens) | | [docs/tutorial/index.html](docs/tutorial/index.html) |
+| interactive tutorial: build your variant, GUI screens and CLI (PL + EN) | [docs/tutorial/index.html](docs/tutorial/index.html) | [docs/tutorial/index.html](docs/tutorial/index.html) |
 
 ## License
 
