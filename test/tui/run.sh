@@ -2377,6 +2377,37 @@ else
     bad "zadania: werdykt repliki z monitora" "$Z3"
 fi
 rm -f "$RMN"
+# Start i powrot z okna sa dwuetapowe (2026-10-29): job-stats dochodzi drugim etapem i dokłada
+# wykonane biegi NAD kursorem. Kursor ma zostac na tym samym biegu ("teraz"), nie na tym samym
+# numerze wiersza (pve10: F2 po starcie stalo na 08:13 zamiast przy nadchodzacym biegu).
+Z4="$("$PY" - "$TUI" "$REPO" "$NOW" "$P10/status.json" "$P10/list-jobs.json" "$P10/monitor.json" "$P10/job-stats.json" <<'PYEOF'
+import importlib.util, json, sys
+s = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+files = {"status": sys.argv[4], "jobs": sys.argv[5], "monitors": sys.argv[6], "progress": None, "replicas": None,
+         "stats": None, "config": None, "profiles": None, "offline": True, "datasets_local": None,
+         "datasets_remote": None, "check_source": None, "host_ip": None}
+ui = m.UI(sys.argv[2], files, m.Chars(False), int(sys.argv[3]), None)
+i0 = ui.cursor["zadania"]; r0 = ui.runrows[i0]
+# drugi etap: job-stats z wykonanymi biegami kazdej etykiety (1 h i 2 h temu)
+import time
+iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(t))
+now = int(sys.argv[3]); st = json.load(open(sys.argv[7], encoding="utf-8"))
+st["runs"] = [{"label": r["label"], "start": iso(now - 3600 * k - 40), "end": iso(now - 3600 * k - 30), "rc": 0}
+              for r in ui.runrows if r.get("label") for k in (1, 2)]
+ui.data.stats = st
+ui.apply_data(ui.data, full=False)
+i1 = ui.cursor["zadania"]; r1 = ui.runrows[i1]
+print("moved=%s same=%s upcoming=%s" % (i1 != i0, (r1.get("label"), r1.get("at")) == (r0.get("label"), r0.get("at")),
+                                         not r1.get("past")))
+PYEOF
+)"
+Z4="$(printf '%s' "$Z4" | tr -d '\r')"
+if has "$Z4" 'moved=True same=True upcoming=True'; then
+    ok "przebiegi: gdy job-stats dochodzi drugim etapem, kursor zostaje na tym samym nadchodzacym biegu (numer wiersza sie zmienia)"
+else
+    bad "przebiegi: kursor po drugim etapie" "$Z4"
+fi
 # REPLIKI Z GUI (2026-10-07): Ins nowa i Enter+'e' zmiana oddaja terminal oknom
 # add-replica --ask; Del i F7 przez okno potwierdzenia, jak pauza na F3.
 # W15 (wlasciciel 2026-10-11) + X9 (2026-10-12): F7 na F2 = zaznaczone zadanie TERAZ, bez

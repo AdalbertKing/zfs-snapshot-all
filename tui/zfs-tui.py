@@ -5326,9 +5326,14 @@ class UI(object):
             self.data.ztree, self.data.zsnaps = {}, {}
             if self.screen == "szablony":
                 self.ensure_profiles()
+        prz = getattr(self, "runrows", None) or []
+        old_run = prz[self.cursor["zadania"]] if self.cursor["zadania"] < len(prz) else None
         self.rows = build_relations(self.data, self.now())
         self.jobrows = sort_zad_rows(build_jobs(self.data, self.now()), self.zad_sort, self.data)
         self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group)
+        # F2: kursor na TYM SAMYM biegu, nie na tym samym numerze wiersza. Drugi etap (job-stats)
+        # dokłada wykonane biegi NAD nim -- start na pve10, 2026-10-29: "teraz" uciekło na 08:13.
+        self.cursor["zadania"] = self.run_cursor_same(old_run)
         for k in self.cursor:
             # F4 liczy wiersze z drzewa kopii (zfs-tree) -- poza F4 nie czytamy go tu w glownym
             # watku: na pve10 to bylo 5 s zamrozonego "Wczytuję… 0 s" po KAZDYM oknie (zrzut stosu,
@@ -5362,6 +5367,15 @@ class UI(object):
         t = threading.Thread(target=_run)
         t.daemon = True
         t.start()
+
+    def run_cursor_same(self, old):
+        """Po nowym odczycie: bieg o tej samej etykiecie i chwili (obiekty zadan sa juz nowe),
+        inaczej najblizszy nadchodzacy."""
+        if old is not None and old.get("kind") == "run" and old.get("label") is not None:
+            for i, r in enumerate(self.runrows):
+                if r.get("kind") == "run" and r.get("label") == old.get("label") and r.get("at") == old.get("at"):
+                    return i
+        return self.run_cursor_for(None)
 
     def run_cursor_for(self, old):
         """Po przebudowie Przebiegow: ten sam bieg (zadanie i chwila), inaczej
