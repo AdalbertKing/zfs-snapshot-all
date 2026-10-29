@@ -103,7 +103,7 @@ verb_refusal() {   # <plik z wyjściem czasownika> -> przyczyna odmowy do okna
 # OKNO POSTĘPU (U66/U64, właściciel 2026-10-21: "czarny ekran ponad 15 sekund i dopiero powrót"):
 # polecenie biegnie w tle z wyjściem do dziennika, okno pokazuje, ile już trwa. Właściciel
 # 2026-10-26 (pve2): linie dziennika w oknie migały przy każdym odświeżeniu -- okno mówi tylko
-# "trwa" i gdzie jest dziennik, odświeża się co 2 s; wyjście czyta result_box. Bez terminala dla polecenia (stdin z /dev/null): pytanie w terminalu
+# "trwa" i gdzie jest dziennik (okno raz, sekundy w dolnym wierszu -- niżej); wyjście czyta result_box. Bez terminala dla polecenia (stdin z /dev/null): pytanie w terminalu
 # kończy się odmową, nie zawieszeniem za oknem. Ctrl-C przerywa polecenie.
 run_progress() {   # <tytuł> <dziennik> <polecenie...> -> rc polecenia; dziennik dopisywany
     local t="$1" log="$2" pid rc=0 s0=$SECONDS i
@@ -112,11 +112,20 @@ run_progress() {   # <tytuł> <dziennik> <polecenie...> -> rc polecenia; dzienni
     "$@" >>"$log" 2>&1 </dev/null &
     pid=$!
     trap 'kill "$pid" 2>/dev/null' INT
+    # OKNO RAZ, licznik w dolnym wierszu (wlasciciel 2026-10-29, zrzut "Zmień relację pve9b:
+    # wykonuję -- trwa 16 s": "miga ... rzęzi"). Kazde wywolanie whiptail zaczyna od wyczyszczenia
+    # ekranu (ESC[H ESC[J, zmierzone na pve10), a petla rysowala okno co 2 s. Teraz okno jest
+    # rysowane raz, a sekundy co sekunde dopisuje sie w ostatnim wierszu ekranu -- jego miejsce
+    # jest znane (tput lines), polozenia ramki whiptaila nie trzeba zgadywac.
+    geom
+    TERM="$INFO_TERM" "$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" --title "$t" \
+          --infobox "$(T 'Trwa wykonywanie, proszę czekać.\n\nKomunikaty poleceń idą do dziennika:\n  %s\n\nCtrl-C przerywa.' "$log")" 12 "$W"
+    local rows; rows=$(tput lines 2>/dev/null) || rows=24
+    case "$rows" in ''|*[!0-9]*) rows=24 ;; esac
     while kill -0 "$pid" 2>/dev/null; do
-        geom
-        TERM="$INFO_TERM" "$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" --title "$(T '%s -- trwa %d s' "$t" "$((SECONDS - s0))")" \
-              --infobox "$(T 'Trwa wykonywanie, proszę czekać.\n\nKomunikaty poleceń idą do dziennika:\n  %s\n\nCtrl-C przerywa.' "$log")" 12 "$W"
-        for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+        # tylko na terminalu: biale na niebieskim (tlo whiptaila), reszta wiersza czyszczona tym tlem
+        [ -t 1 ] && printf '\033[%d;1H\033[1;37;44m%s\033[K\033[m' "$rows" "$(T '  trwa %d s' "$((SECONDS - s0))")"
+        for i in 1 2 3 4 5; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
     done
     wait "$pid" || rc=$?
     trap - INT
