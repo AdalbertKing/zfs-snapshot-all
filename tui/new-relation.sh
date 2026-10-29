@@ -1187,10 +1187,14 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
         fi
         local planf="$TMPD/plan2.txt"
         if [ -n "${ZFS_TUI_LOG:-}" ]; then planf="${ZFS_TUI_LOG%.log}-plan.txt"; cp -f "$TMPD/plan2.txt" "$planf" 2>/dev/null || planf="$TMPD/plan2.txt"; fi
-        { cat "$TMPD/summary.txt"
-          # ostrzeżenia czasownika zostają w oknie -- to one zmieniają decyzję
-          grep -E '^(!!!|WARNING|Warning|>>> .*(WARNING|warn))' "$TMPD/plan.txt" | grep -v -- '--grant-remotely is noted' | head -8 | sed 's/^/  /'
+        # Okno: zdanie po polsku (1. wiersz podsumowania), góra planu do „Plan czasownika”
+        # (komenda, cel, pomijane, konto), ostrzeżenia czasownika i ścieżka pełnego planu --
+        # mieści się w 80x24, więc bez drugiego okna z pytaniem.
+        { head -1 "$TMPD/summary.txt"
           echo
+          awk -v stop="$(T 'Plan czasownika -- nic jeszcze nie zostało zmienione')" 'index($0, stop) == 1 { exit } { print }' "$TMPD/plan2.txt" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+          # ostrzeżenia czasownika zostają w oknie -- to one zmieniają decyzję
+          grep -E '^(!!!|WARNING|Warning|>>> .*(WARNING|warn))' "$TMPD/plan.txt" | grep -v -- '--grant-remotely is noted' | head -8
           echo "$(Tv 'Pełny plan (sekcje configu, linie crona): $planf' '$planf' "$planf")"; } >"$TMPD/plan-short.txt"
         yesno_text "$TMPD/plan-short.txt" "$(title 10 "$(T 'Plan')")" "$(T WYKONAJ)" "$(T Wstecz)" || return 1
         build_argv install

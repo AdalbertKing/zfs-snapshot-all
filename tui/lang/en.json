@@ -938,6 +938,8 @@
 "Pauza": "Pause",
 "Pauza LOGICZNA: linie w cronie zostają, ale nic nie wysyła i nie kasuje;": "LOGICAL pause: cron lines stay, but nothing is sent or deleted;",
 "Pełna kopia": "Full copy",
+"Pełny plan (sekcje configu, linie crona): $planf": "Full plan (config sections, cron lines): $planf",
+"Pełny plan (z liniami crona): $planf": "Full plan (with the cron lines): $planf",
 "Pięć okien nad zfs-snapshot-all (tylko odczyt)": "Five windows over zfs-snapshot-all (read only)",
 "Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):": "Five cron fields (minute hour day month weekday):",
 "Plan": "Plan",

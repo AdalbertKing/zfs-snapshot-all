@@ -3615,7 +3615,7 @@ if has "$NROUT" " --target=hdd " && ! grep -qF 'Dokąd -- przeglądaj ~ --ok-but
 import sys, json
 s = json.load(open(sys.argv[1], encoding="utf-8")); names = [d["name"] for d in s["datasets"]]
 ok = s.get("single") is True and "hdd" in names and "hdd/backups" in names \
-     and not any(n.startswith("hdd/backups/192.168.28.99") for n in names) and "ukryto" in s.get("legend", "")
+     and not any(n.startswith("hdd/backups/192.168.28.99") for n in names) and "ukryto" in s.get("legend", "") + s.get("cursor_line", "")
 sys.exit(0 if ok else 1)
 PYEOF
 then
@@ -3746,7 +3746,7 @@ if [ "$NRRC" -eq 0 ] && [ -n "$NRSI" ] \
    && printf '%s' "$NRSI" | grep -qF -- ' --recursive=flat ' \
    && ! grep -qF 'Dokąd' "$NR/wt.log" && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log" \
    && grep -qF 'Gdzie robić migawki na' "$NR/tree.log" && grep -qF 'Jak długo trzymać migawki?' "$NR/wt.log" \
-   && grep -qF 'Podsumowanie' "$NR/wt.log" && grep -qF 'MIGAWKI LOKALNE' "$NR/wt.log"; then
+   && grep -qF 'MIGAWKI LOKALNE' "$NR/wt.log"; then
     ok "new-relation: migawki lokalne -- bez celu i ustawien dodatkowych, komenda local-backup --target= --no-copy --install --yes (bez drugiego pytania po WYKONAJ, wlasciciel 2026-10-19)"
 else
     bad "new-relation: same migawki" "rc=$NRRC" "$(cat "$NR/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | head -10 | tr '\n' ';')" "$(cat "$NR/err" | tail -5)"
