@@ -4,6 +4,12 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [1.0.3] — 2026-10-29
+
+- **New-relationship wizard**: when the chosen source datasets already carry our snapshots, the
+  question "chain or leftovers" comes right after the datasets, before the target, and names the
+  source ("Na źródle <host> …"). It came after the target and read like a problem with the target.
+
 ## [1.0.2] — 2026-10-29
 
 - **Faster return to the main window.** It waits only for the quick readers (status, jobs,
