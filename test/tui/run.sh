@@ -3175,7 +3175,7 @@ SOWP="$(grep -F 'Jak długo trzymać migawki na źródle' "$NR/wt.log" | head -1
 if has "$SOWO" "CMD: " && has "$SOWO" " --mode=snaponly " && ! has "$SOWO" "--target=" && has "$SOWO" " --grant-remotely " \
    && ! has "$SOWO" "--exclude-family" && ! has "$SOWO" " --raw " \
    && grep -qF 'Gdzie robić migawki na' "$NR/tree.log" && grep -qF '[x] z migawkami' "$NR/tree.log" && ! grep -qF 'Co kopiować z' "$NR/tree.log" \
-   && grep -qF 'Bez kopii: migawki na 192.168.28.98' "$NR/wt.log" && ! grep -qF 'lustro: ta sama' "$NR/wt.log" \
+   && grep -qF 'Bez kopii: migawki na pve9b' "$NR/wt.log" && ! grep -qF 'lustro: ta sama' "$NR/wt.log" \
    && has "$SOWP" '--default-item ~ d7h24' && ! grep -q 'Dokąd\|Pomijane prefiksy\|W ŹRÓDLE KOPII' "$NR/wt.log" \
    && grep -q 'Jak długo trzymać migawki na źródle' "$NR/wt.log"; then
     ok "new-relation: Migawki zdalnie -- --mode=snaponly bez --target, bez pola Dokąd/prefiksów/retencji źródła kopii, domyślny szablon d7h24, jest okno 'Jak długo trzymać migawki na źródle'"
@@ -3238,7 +3238,7 @@ fi
 # Dawna "lista miejsc" (whiptail) to teraz ekran drzewa w tree.log: tytul kroku, wciecie,
 # rozmiar, zvol i legenda "POWSTANIE". Dawne "druga lista nie oferuje tego, co koszyk juz
 # obejmuje" nie ma odpowiednika -- w drzewie to, co obejmuje miejsce, stoi w tym samym oknie jako [x].
-if has "$NRTL" 'Co kopiować z 192.168.28.98?' && has "$NRTL" 'także przyszłymi' \
+if has "$NRTL" 'Co kopiować z pve9b?' && has "$NRTL" 'także przyszłymi' \
    && hasE "$NRTL" '- \[-\] data +[0-9.]+[KMG] ' && hasE "$NRTL" 'vm-201-disk-0 +zvol [0-9.]+[KMGB] ' \
    && hasE "$NRTL" '\[x\] docs' && hasE "$NRTL" '\[x\] photos'; then
     ok "new-relation: lista miejsc = drzewo z kratkami (tytul okna, wciecie, rozmiar, zvol) i mowi wprost 'POWSTANIE'; to, co obejmuje miejsce, stoi w tym samym oknie jako [x]"

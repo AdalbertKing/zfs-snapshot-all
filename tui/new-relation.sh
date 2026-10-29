@@ -57,6 +57,9 @@ hostport() { [ "$MODE" = local ] && return 0; [ "$PORT" = 22 ] && echo "$HOST" |
 # Katalog kopii pod celem (U111, 2026-10-29): NAZWA źródła, którą zgłosił host przy diagnozie
 # (pve9), nie wpisany adres -- inaczej kopie lądowały w hdd/backups/192.168.28.99/...
 # Silnik zapisuje go raz, przy założeniu (--landing); zmiana adresu go nie rusza.
+# Nazwa źródła w TEKSTACH okien po diagnozie (U111): host zgłosił się jako pve9 -- okna mówią
+# „z pve9”, a adres zostaje tam, gdzie jest poleceniem (ssh, list-datasets, komenda).
+hostw() { local n="${HOSTNAME_R%%.*}"; printf '%s' "${n:-$HOST}"; }
 landing() {
     local n="${HOSTNAME_R%%.*}"
     case "$n" in ''|.|..|-*|*[!A-Za-z0-9._-]*) n="$HOST" ;; esac
@@ -250,7 +253,7 @@ load_tree() {   # -> T_*[] ; rc!=0 = błąd w $TMPD/ds.err
 }
 step_datasets() {
     geom
-    [ "$TREE_FOR" = "$(hostport)" ] || info "$(title 4 "$(T 'Datasety')")" "$(Tv 'Pobieram listę datasetów z $HOST...' '$HOST' "$HOST")"
+    [ "$TREE_FOR" = "$(hostport)" ] || info "$(title 4 "$(T 'Datasety')")" "$(Tv 'Pobieram listę datasetów z $HOST...' '$HOST' "$(hostw)")"
     # load_tree zapamiętuje drzewo po hostport(); dla kopii lokalnej to "" -- tak samo.
     if ! load_tree; then
         wt --title "$(T 'Nie udało się pobrać listy')" --msgbox "$(Tv 'list-datasets $HOST:\n\n' '$HOST' "$HOST")$(tail -3 "$TMPD/ds.err" | tr -d '\r')" 12 "$W"
@@ -576,7 +579,7 @@ step_chain() {   # 0 = odpowiedź zapisana, 1 = wstecz
     facts="$(chain_facts)"
     geom
     wt --title "$(title 5 "$(T 'Migawki naszej rodziny już są na źródle')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
-       --menu "$(Tv 'Na $HOST są już migawki naszej rodziny:\n$facts\n\nKto je dziś robi? Najnowsza sprzed godziny-dwóch zwykle znaczy, że ktoś je robi.\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.' '$HOST' "${HOST:-$(hostname)}" '$facts' "$facts")" "$H" "$W" 2 \
+       --menu "$(Tv 'Na $HOST są już migawki naszej rodziny:\n$facts\n\nKto je dziś robi? Najnowsza sprzed godziny-dwóch zwykle znaczy, że ktoś je robi.\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.' '$HOST' "$( [ -n "$HOST" ] && hostw || hostname)" '$facts' "$facts")" "$H" "$W" 2 \
        chain "$(T 'Tworzy je inny kolektor, lub inna relacja albo stary cron -- łańcuch, przyjmuję')" \
        own "$(T 'Nikt -- to resztki starej relacji, robię własne')" || return 1
     CHAIN_ANS="$WT_OUT"; CHAIN_FOR="${B_ROOT[*]}"
@@ -878,7 +881,7 @@ step_srcret() {
     fi
     [ -s "$TMPD/prof.json.tiers" ] || load_profiles
     if [ "$RECURSION" != atomic ] && [ -s "$TMPD/prof.json.tiers" ]; then
-        SRC_TITLE="$(title 9 "$(T 'Retencja: W ŹRÓDLE KOPII –') $HOST")"
+        SRC_TITLE="$(title 9 "$(T 'Retencja: W ŹRÓDLE KOPII –') $(hostw)")"
         source_retention_editor || return 1
     else
         SRCPROF=""
@@ -1017,9 +1020,9 @@ summary_text() {
     elif [ "$MODE" = local ]; then
         echo "$(Tv 'LOKALNIE: $(hostname) kopiuje u siebie do $TARGET/<źródło>:' '$(hostname)' "$(hostname)" '$TARGET' "$TARGET")"
     elif [ "$MODE" = sync ]; then
-        echo "$(Tv 'LUSTRO: $(hostname) i $HOST' '$(hostname)' "$(hostname)" '$HOST' "$HOST")${HOSTNAME_R:+ ($HOSTNAME_R)}$(T ' będą trzymać to samo pod tą samą ścieżką:')"
+        echo "$(Tv 'LUSTRO: $(hostname) i $HOST' '$(hostname)' "$(hostname -s 2>/dev/null || hostname)" '$HOST' "$(hostw)")$([ "$(hostw)" = "$HOST" ] || echo " ($HOST)")$(T ' będą trzymać to samo pod tą samą ścieżką:')"
     elif [ "$MODE" = snaponly ]; then
-        echo "$(Tv 'MIGAWKI ZDALNE: $(hostname) będzie robić i sprzątać migawki NA $HOST' '$(hostname)' "$(hostname)" '$HOST' "$HOST")${HOSTNAME_R:+ ($HOSTNAME_R)}$(T ', nic nie kopiuje:')"
+        echo "$(Tv 'MIGAWKI ZDALNE: $(hostname) będzie robić i sprzątać migawki NA $HOST' '$(hostname)' "$(hostname -s 2>/dev/null || hostname)" '$HOST' "$(hostw)")$([ "$(hostw)" = "$HOST" ] || echo " ($HOST)")$(T ', nic nie kopiuje:')"
     else
         echo "$(Tv 'BACKUP: $(hostname) będzie POBIERAĆ z $HOST' '$(hostname)' "$(hostname -s 2>/dev/null || hostname)" '$HOST' "$(landing)")$([ "$(landing)" = "$HOST" ] || echo " ($HOST)")$(Tv ' do $TARGET/$HOST/...' '$TARGET' "$TARGET" '$HOST' "$(landing)")"
     fi
@@ -1113,7 +1116,7 @@ check_pruners() {
     local lst; lst=$(awk -F'\t' '{printf "    %s  -- %s\n", $1, $2}' "$TMPD/pruners.tsv")
     geom
     wt --title "$(T 'Inny kolektor już przycina te datasety')" --notags --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
-       --menu "$(Tv 'Na $HOST migawki tych datasetów może już kasować inny kolektor:\n$lst\nDwie retencje na jednym źródle kasują sobie nawzajem bazy -- aktywacja odmówi.\nAlbo usuń tamtą relację (na tamtym kolektorze), albo:' '$HOST' "$HOST" '$lst' "$lst")" "$H" "$W" 2 \
+       --menu "$(Tv 'Na $HOST migawki tych datasetów może już kasować inny kolektor:\n$lst\nDwie retencje na jednym źródle kasują sobie nawzajem bazy -- aktywacja odmówi.\nAlbo usuń tamtą relację (na tamtym kolektorze), albo:' '$HOST' "$(hostw)" '$lst' "$lst")" "$H" "$W" 2 \
        pasywnie "$(T 'Pasywnie -- bez retencji u źródła (szablon passive)')" \
        datasety "$(T 'Inne datasety -- wróć do wyboru')" || return 1
     case "$WT_OUT" in
@@ -1147,7 +1150,7 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
           echo
           if [ "$NOCOPY" -eq 1 ]; then echo "$(Tv 'Cel: brak (same migawki).  Szablon: $PROFILE.' '$PROFILE' "$PROFILE")"
           # Kampania 2026-10-22: migawki zdalne dostawały zdanie lustra ("ta sama ścieżka").
-          elif [ "$MODE" = snaponly ]; then echo "$(Tv 'Bez kopii: migawki na $HOST, jego datasety.  Szablon: $PROFILE.' '$HOST' "$HOST" '$PROFILE' "$PROFILE")"
+          elif [ "$MODE" = snaponly ]; then echo "$(Tv 'Bez kopii: migawki na $HOST, jego datasety.  Szablon: $PROFILE.' '$HOST' "$(hostw)" '$PROFILE' "$PROFILE")"
           else echo "$(T 'Cel:') ${TARGET:-$(T '(lustro: ta sama ścieżka)')}.  $(Tv 'Trzyma tutaj: $PROFILE.  U źródła:' '$PROFILE' "$PROFILE") $(if is_passive_copy; then T 'nic (pasywnie)'; else printf '%s' "${SRCPROF:-$(T 'jak tutaj')}"; fi)."; fi
           if [ "$MODE" = snaponly ] || [ "$NOCOPY" -eq 1 ]; then :
           elif [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
@@ -1244,7 +1247,7 @@ field_value() {   # <pole> -> wartość na karcie ("" = jeszcze nie ustawione)
                 snaponly) echo "$(T 'migawki zdalne -- na innym hoście, bez kopii')" ;;
                 *) echo "$(T 'backup -- ten host pobiera ze źródła')" ;;
             esac ;;
-        host)   [ -n "$HOST" ] && [ "$DIAG_OK_FOR" = "$(hostport)" ] && echo "$(Tv '$(hostport) (${HOSTNAME_R:-?}) -- SSH, ZFS, pakiet: OK' '$(hostport)' "$(hostport)" '${HOSTNAME_R:-?}' "${HOSTNAME_R:-?}")" ;;
+        host)   [ -n "$HOST" ] && [ "$DIAG_OK_FOR" = "$(hostport)" ] && echo "$(Tv '$(hostport) (${HOSTNAME_R:-?}) -- SSH, ZFS, pakiet: OK' '$(hostport)' "$(hostw)" '${HOSTNAME_R:-?}' "$(hostport)")" ;;   # U111: nazwa, adres w nawiasie
         # [-] widać już w podsumowaniu (kampania 2026-10-26): korzeń z wyjątkiem albo zamknięty.
         ds)     [ "${#B_ROOT[@]}" -gt 0 ] && echo "${#B_ROOT[@]}: $(for _i in "${!B_ROOT[@]}"; do _m=""
                     { [ -n "${B_EXCL[$_i]}" ] || printf '%s\n' "${B_CLOSED:-}" | grep -qxF -- "${B_ROOT[$_i]}"; } && _m=" [-]"
