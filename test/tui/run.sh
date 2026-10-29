@@ -3099,14 +3099,15 @@ for x in d["profiles"]:
         x["hidden"] = "yes"
 json.dump(d, open(p, "w", encoding="utf-8"))
 PYEOF
-# 2026-10-24: przy rodzinie na zrodle jest okno "Migawki naszej rodziny już są na źródle"
-# (krok po "Dokąd", przed szablonem): chain = ktos je robi, own = resztki, robie wlasne.
+# 2026-10-24: przy rodzinie na zrodle jest okno "Migawki naszej rodziny już są na źródle":
+# chain = ktos je robi, own = resztki, robie wlasne. Od 2026-10-29 zaraz po Datasetach, PRZED
+# "Dokąd" (wlasciciel: po wyborze celu operator bral je za przeszkode w celu).
 nrc_ans() {   # <odpowiedz w oknie migawek: chain|own> [tryb: backup] -> odpowiedzi kreatora backupu ze zrodlem z rodzina
     printf '%s' "0${T}${2:-backup}
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}$1
+0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}adv
@@ -3711,9 +3712,9 @@ json.dump(d, open(p, "w", encoding="utf-8"))
 PYEOF
 nrl_ans() {   # <chain|own> -> odpowiedzi kreatora kopii lokalnej ze zrodlem z rodzina
     printf '%s' "0${T}local
+0${T}$1
 0${T}__other__
 0${T}hdd/kopie
-0${T}$1
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
 0${T}adv
