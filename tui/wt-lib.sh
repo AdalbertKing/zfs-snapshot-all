@@ -241,6 +241,9 @@ host_name() {   # <adres|nazwa> [nazwa relacji] -> nazwa z /etc/hosts tego hosta
                END { if (!ok && f != "") { sub(/\..*/, "", f); print f } }' "${ZFS_TUI_HOSTS:-/etc/hosts}" 2>/dev/null | grep . || printf '%s' "${2:-$1}" ;;
     esac
 }
+plan_words() {   # stdin -> plan bez linii crona i znaczników bloku (okno planu; pełny plan idzie do pliku)
+    grep -vE '^[[:space:]]*[-+]?[[:space:]]*(([0-9*/,@-]+|[a-z]+)[[:space:]]+){4}[0-9*/,a-z-]+[[:space:]]+/|^[[:space:]]*[-+]?[[:space:]]*# (BEGIN|END) zfs-backup|^[[:space:]]*[-+]?[[:space:]]*\*/[0-9]+ ' || true
+}
 shq() {   # argument tak, jak wpisałby go człowiek: apostrofy tylko tam, gdzie trzeba
     case "$1" in *[!A-Za-z0-9_./:=,@%+-]*) printf "'%s'" "$1" ;; *) printf '%s' "$1" ;; esac
 }

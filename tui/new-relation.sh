@@ -1150,11 +1150,15 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
         geom
         # (2026-10-26) Wyjątki działają w każdym rodzaju relacji: migawki zdalne dostają listę
         # (basket_expand), a po założeniu zakres zapisuje set-datasets -- dawna blokada odpadła.
+        # JEDNO OKNO (właściciel 2026-10-29: „Za dużo tych okien potwierdzających w ciągu
+        # decyzyjnym”): było podsumowanie -> „Pokaż plan” -> plan do przewinięcia -> „Plan był
+        # w poprzednim oknie... WYKONAJ?”. Karta przed UTWÓRZ jest już podsumowaniem; teraz
+        # po UTWÓRZ jest jedno okno: zdanie po polsku, komenda, ostrzeżenia czasownika i
+        # WYKONAJ. Pełny plan (sekcje configu, linie crona) idzie do pliku obok dziennika.
         build_argv install
         summary_text >"$TMPD/summary.txt"
-        yesno_text "$TMPD/summary.txt" "$(title 10 "$(T 'Podsumowanie')")" "$(T 'Pokaż plan')" "$(T Wstecz)" || return 1
         check_pruners; rc=$?
-        case "$rc" in 0) ;; 1) continue ;; *) return "$rc" ;; esac
+        case "$rc" in 0) ;; 1) return 1 ;; *) return "$rc" ;; esac     # Wstecz = karta (okna podsumowania już nie ma)
         build_argv
         info "$(title 10 "$(T 'Plan')")" "$(T 'Pytam czasownik o plan (nic nie zmienia)...')"
         "${ARGV[@]}" >"$TMPD/plan.txt" 2>&1; rc=$?
@@ -1181,7 +1185,14 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
             wt --title "$(title 10 "$(T 'Plan ODRZUCONY przez czasownik')")" --scrolltext --msgbox "$(cat "$TMPD/plan2.txt")" "$H" "$W"
             continue
         fi
-        yesno_text "$TMPD/plan2.txt" "$(title 10 "$(T 'Plan')")" "$(T WYKONAJ)" "$(T Wstecz)" || continue
+        local planf="$TMPD/plan2.txt"
+        if [ -n "${ZFS_TUI_LOG:-}" ]; then planf="${ZFS_TUI_LOG%.log}-plan.txt"; cp -f "$TMPD/plan2.txt" "$planf" 2>/dev/null || planf="$TMPD/plan2.txt"; fi
+        { cat "$TMPD/summary.txt"
+          # ostrzeżenia czasownika zostają w oknie -- to one zmieniają decyzję
+          grep -E '^(!!!|WARNING|Warning|>>> .*(WARNING|warn))' "$TMPD/plan.txt" | grep -v -- '--grant-remotely is noted' | head -8 | sed 's/^/  /'
+          echo
+          echo "$(Tv 'Pełny plan (sekcje configu, linie crona): $planf' '$planf' "$planf")"; } >"$TMPD/plan-short.txt"
+        yesno_text "$TMPD/plan-short.txt" "$(title 10 "$(T 'Plan')")" "$(T WYKONAJ)" "$(T Wstecz)" || return 1
         build_argv install
         # U66 część 2: okno postępu zamiast czarnego ekranu (wtl run_progress), potem okno wyniku.
         : >"$TMPD/run.log"
