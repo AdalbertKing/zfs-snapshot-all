@@ -59,7 +59,7 @@ hasE() { printf '%s' "$1" | grep -qE -- "$2"; }
 # listy pasujacego do wzorca (puste = wiersz 0; rc 1, gdy takiego wiersza nie ma). Lista
 # z --height 400 ma wszystkie wiersze; wiersz i lezy w linii 5+i. 'down' przeskakuje wiersze
 # tylko do czytania (kreska "teraz", naglowek grupy), wiec ich nie liczymy.
-KD='[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2}'   # komorka Kiedy: "dd.mm HH:MM"
+KD='[0-9]{4}\.[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2}'   # komorka Kiedy: "rrrr.mm.dd HH:MM" (DT_FMT, 2026-10-29)
 # Sama LISTA (lewa strona ramki): wiersz listy dzieli linie z wierszem panelu, a panel ma
 # 'OK', 'BŁĄD (rc=1)', 'wysyłka' we wlasnych slowach -- wzorzec z '.*' bez tego lapie panel.
 lst() { printf '%s\n' "$1" | sed 's/║│.*//'; }
@@ -156,7 +156,7 @@ else
 fi
 S4="$(screen relacje down,down,down,down --width 200 --height 40)"
 S4Z="$(screen relacje down,down,down,down,tab,right --width 200 --height 40)"
-if has "$S4" 'lab-vm101 -- relacja' && hasE "$S4" 'Następny +2026-09-09 [0-9]{2}:24:00' && hasE "$S4Z" 'pobranie +automated_hourly +co godzinę \(:24\)' && ! has "$S4" 'Wysyłka'; then
+if has "$S4" 'lab-vm101 -- relacja' && hasE "$S4" 'Następny +2026\.09\.09 [0-9]{2}:24:00' && hasE "$S4Z" 'pobranie +automated_hourly +co godzinę \(:24\)' && ! has "$S4" 'Wysyłka'; then
     ok "relacje: kursor przesuwa panel; nastepny bieg z harmonogramu; zadanie pobrania w zakladce Zadania (U21)"
 else
     bad "relacje: kursor i nastepny bieg" "$S4" "$S4Z"
@@ -193,7 +193,7 @@ else
     bad "zadania: panel trzyma" "$ZT"
 fi
 if hasE "$S4" 'Wywołania +[0-9]+, błędów [0-9]+' && hasE "$S4" 'Czas +ostatni [0-9]+s / średni' && hasE "$S4" 'Dane +[0-9.]+[KMG]' \
-   && hasE "$S4" 'Powstała +2026-09-08' && hasE "$S4" 'Pełna kopia +2026-09-08' && ! has "$S4" 'Zasiew' && hasE "$S4" 'Aktywna od +2026-09-08'; then
+   && hasE "$S4" 'Powstała +2026\.09\.08' && hasE "$S4" 'Pełna kopia +2026\.09\.08' && ! has "$S4" 'Zasiew' && hasE "$S4" 'Aktywna od +2026\.09\.08'; then
     ok "relacje: panel jako TABELA -- jeden fakt w wierszu: wywolania, czas ostatni/sredni/maks, dane, powstala/pelna kopia/aktywna od (U21: grupy Teraz, Przebiegi, Ustawienia)"
 else
     bad "relacje: statystyka/historia w panelu" "$S4"
@@ -346,30 +346,32 @@ else
     bad "odswiezanie: szablony i config po powrocie" "got=$RFOUT (chce: 1 2 False)"
 fi
 
-# KOLUMNA NASTEPNY -- format wg R3-4 (test b): dzis tylko godzina, jutro
-# "jutro HH:MM", w tygodniu dwuliterowy dzien tygodnia, dalej "DD.MM HH:MM".
-# Liczone NIEZALEZNIE od tablicy dni tygodnia w module (WD ponizej to REFERENCJA
-# z brief'u, nie import z zfs-tui.py) -- inaczej test bylby tautologia.
+# KOLUMNA NASTEPNY i wszystkie daty GUI: jeden zapis "RRRR.MM.DD HH:MM" (wlasciciel 2026-10-29:
+# "preferuję jednak wszędzie w pakiecie YYYY.MM.DD"). Zastepuje R3-4 (dzis/jutro/dzien tygodnia/
+# DD.MM): dzis, jutro, za kilka dni i za dwa tygodnie -- zawsze z rokiem. Oczekiwane napisy
+# wpisane recznie, nie liczone formatem modulu (inaczej test bylby tautologia).
 NXOUT="$("$PY" - "$TUI" <<'PYEOF'
 import sys, time, importlib.util
 spec = importlib.util.spec_from_file_location("zt", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 now = time.mktime((2026, 9, 9, 12, 0, 0, 0, 0, -1))
-WD = [u"pn", u"wt", u"śr", u"cz", u"pt", u"so", u"nd"]  # pon..niedz, z brief'u R3-4
 cases = [
-    ("today", time.mktime((2026, 9, 9, 14, 0, 0, 0, 0, -1)), "14:00"),
-    ("tomorrow", time.mktime((2026, 9, 10, 9, 5, 0, 0, 0, -1)), u"jutro 09:05"),
-    ("far", time.mktime((2026, 9, 20, 10, 30, 0, 0, 0, -1)), "20.09 10:30"),
+    ("today", time.mktime((2026, 9, 9, 14, 0, 0, 0, 0, -1)), "2026.09.09 14:00"),
+    ("tomorrow", time.mktime((2026, 9, 10, 9, 5, 0, 0, 0, -1)), "2026.09.10 09:05"),
+    ("week", time.mktime((2026, 9, 14, 8, 0, 0, 0, 0, -1)), "2026.09.14 08:00"),
+    ("far", time.mktime((2026, 9, 20, 10, 30, 0, 0, 0, -1)), "2026.09.20 10:30"),
 ]
-ok_all = True
 for name, epoch, want in cases:
-    got = m.fmt_next_short(epoch, now)
-    print("%s|%s|%s" % (name, got, want))
-# "w tygodniu" liczone z prawdziwym dniem tygodnia (nie zgadujemy kalendarza recznie)
-week_epoch = time.mktime((2026, 9, 14, 8, 0, 0, 0, 0, -1))
-wd = WD[time.localtime(week_epoch).tm_wday]
-print("week|%s|%s 08:00" % (m.fmt_next_short(week_epoch, now), wd))
+    print("%s|%s|%s" % (name, m.fmt_next_short(epoch, now), want))
+for name, epoch, want in cases[:2]:
+    print("when-%s|%s|%s" % (name, m.fmt_when(epoch, now), want))
+    print("short-%s|%s|%s" % (name, m.fmt_when_short(epoch, now), want))
+    print("run-%s|%s|%s" % (name, m.run_when(epoch), want))
+print("full|%s|%s" % (m.fmt_full(time.mktime((2026, 9, 9, 14, 0, 7, 0, 0, -1))), "2026.09.09 14:00:07"))
+print("dshow|%s|%s" % (m.dshow("2026-09-08 13:48"), "2026.09.08 13:48"))
+print("dshow-iso|%s|%s" % (m.dshow("2026-09-08T13:48:02+00:00"), "2026.09.08 13:48:02+00:00"))
+print("dshow-text|%s|%s" % (m.dshow("brak"), "brak"))
 PYEOF
 )"
 NXBAD=""
@@ -380,9 +382,9 @@ done <<EOF
 $NXOUT
 EOF
 if [ -z "$NXBAD" ]; then
-    ok "zadania: fmt_next_short -- dzis/jutro/tydzien/DD.MM zgodne ze specyfikacja R3-4"
+    ok "daty GUI: jeden zapis RRRR.MM.DD HH:MM -- Nastepny, Kiedy, panele (dzis i jutro tez z rokiem), daty z czasownikow przez dshow"
 else
-    bad "zadania: fmt_next_short" "$NXBAD" "$NXOUT"
+    bad "daty GUI: jeden zapis" "$NXBAD" "$NXOUT"
 fi
 
 # JEDNO OSTRZEZENIE NA FAKT. Relacja ma monitor na kazdy szczebel, wiec uwaga
@@ -730,7 +732,7 @@ if [ -n "$UWT" ] && [ -n "$UWT0" ] && hasE "$UWR" '^║ Kiedy +Relacja +Co +Wyni
    && hasE "$UWR" '║ Źródło +Cel +Dane' && ! hasE "$UWR" '║ Źródło +Cel +Wynik'; then
     ok "przebiegi U96/U97: kolumna Dane -- drugi bieg 3.0K (suma written migawek rodziny na celu miedzy biegami), pierwszy 977K (stara migawka 999999 B, hbytes_short), nadchodzacy '-'; dolna zakladka Źródło/Cel/Dane"
 else
-    bad "przebiegi U96: kolumna Dane" "kiedy: $UWT / $UWT0" "$(printf '%s\n' "$UWL" | grep -E '^║ (Kiedy|[0-9]{2}\.[0-9]{2}) ' | head -6)" "$(printf '%s\n' "$UWR" | grep -E 'Źródło')"
+    bad "przebiegi U96: kolumna Dane" "kiedy: $UWT / $UWT0" "$(printf '%s\n' "$UWL" | grep -E '^║ (Kiedy|[0-9]{4}\.[0-9]{2}\.[0-9]{2}) ' | head -6)" "$(printf '%s\n' "$UWR" | grep -E 'Źródło')"
 fi
 # (b) Enter na wykonanym biegu: okno ma TYLKO linie crona tego biegu (etykieta 'hourly backup'), nie
 # druga linie tego samego zadania ('extra backup'); okno relacji (F3) ma obie -- kontrola pozytywna.
@@ -819,7 +821,7 @@ FPD="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $FPARGS --screen
 # "Tylko wlasne" znaczy teraz: WSZYSTKIE wiersze 'lokalny prune' tej relacji maja minute
 # wlasnej linii delsnaps (:21), zadnego z minuta cudzej (:17) -- i panel wiersza to wlasny
 # harmonogram i retencja.
-FPMIN="$(printf '%s\n' "$FP" | grep -E "^║ $KD +sx +lokalny prune " | sed -E 's/^║ [0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort -u | tr '\n' ' ')"
+FPMIN="$(printf '%s\n' "$FP" | grep -E "^║ $KD +sx +lokalny prune " | sed -E 's/^║ [0-9]{4}\.[0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort -u | tr '\n' ' ')"
 if hasE "$FP" "^║ $KD +sx +lokalny prune " && hasE "$FPD" 'Kiedy +co godzinę \(:21\)' && hasE "$FPD" 'Trzyma +168 godz\.' && ! hasE "$FPD" 'Kiedy +co godzinę \(:17\)' \
    && [ "$FPMIN" = "21 " ]; then
     ok "zadania: szczebel plaski pokazuje WLASNE porzadki (harmonogram z jego linii delsnaps), bez cudzych z bloku (uwaga 4: pve9-synchro)"
@@ -873,7 +875,7 @@ GR="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --
 # etykiete) pod tym samym harmonogramem (:05), d inny (:10): wierszy :05 jest trzy razy tyle
 # co :10 -- kazda linia ma swoj bieg i swoj wynik, nic sie nie zlewa. Panel wiersza a: kierunek
 # synchro '<>' (z rekordu, choc linia crona to pull) i ZRODLO/CEL tego jednego datasetu.
-GN="$(lst "$G" | grep -E "^║ $KD +sync-test +pobranie " | sed -E 's/^║ [0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort | uniq -c | sed -E 's/^ *//' | tr '\n' ',')"
+GN="$(lst "$G" | grep -E "^║ $KD +sync-test +pobranie " | sed -E 's/^║ [0-9]{4}\.[0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort | uniq -c | sed -E 's/^ *//' | tr '\n' ',')"
 GN1="$(printf '%s' "$GN" | cut -d, -f1)"; GN2="$(printf '%s' "$GN" | cut -d, -f2)"
 GZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 60 2>&1)"
 if [ "$(printf '%s' "$GN" | tr -cd ',' | wc -c | tr -d ' ')" -eq 2 ] && [ "${GN1#* }" = "05" ] && [ "${GN2#* }" = "10" ] \
@@ -900,7 +902,7 @@ for x in abc:
 json.dump(j, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 G1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ1" --monitors "$GM" --screen zadania --width 200 --height 400 2>&1)"
-G1N="$(lst "$G1" | grep -E "^║ $KD +sync-test +pobranie " | sed -E 's/^║ [0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort | uniq -c | sed -E 's/^ *//' | tr '\n' ',')"
+G1N="$(lst "$G1" | grep -E "^║ $KD +sync-test +pobranie " | sed -E 's/^║ [0-9]{4}\.[0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort | uniq -c | sed -E 's/^ *//' | tr '\n' ',')"
 G1A="$(printf '%s' "$G1N" | cut -d, -f1)"; G1B="$(printf '%s' "$G1N" | cut -d, -f2)"
 if grep -q 'sync-test-all' "$GJ1" && [ "${G1A%% *}" = "${G1B%% *}" ] \
     && has "$G1" '3 datasetów w hdd/backups/192.168.28.50/hdd/lab: a, b, c' && ! has "$G1" 'zakres 1' && ! has "$G1" 'zakres 2'; then
@@ -1020,8 +1022,8 @@ if [ "$(printf '%s\n' "$GEL" | grep -cE "^║ $KD +sync-test .*BŁĄD rc=1")" = 
 else
     bad "zadania: błąd biegu na F2" "$(printf '%s\n' "$GE" | grep -E '^║ (sync|backup)-test|teraz' | head -8)" "$(printf '%s\n' "$GEP" | grep -E 'Wynik|Powód|Ten bieg')"
 fi
-if hasE "$GE" 'Błąd +2026-09-08 13:48 +[^ ]*/lab/b +rc=1' && has "$GE" 'Refusing' \
-   && hasE "$GE" 'Wyrzucono +2026-09-08 12:16  hdd/lab/a: 1 snapshot' \
+if hasE "$GE" 'Błąd +2026\.09\.08 13:48 +[^ ]*/lab/b +rc=1' && has "$GE" 'Refusing' \
+   && hasE "$GE" 'Wyrzucono +2026\.09\.08 12:16  hdd/lab/a: 1 snapshot' \
    && has "$GE" 'błędów 1   w 3 zadaniach'; then
     ok "zadania: panel wiersza mowi, ktory dataset i dlaczego (blad z dziennika) oraz co bieg wyrzucil z kopii"
 else
@@ -1099,7 +1101,7 @@ PYEOF
 PRZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" ${PRARGS%--stats*} --stats "$PRM" --screen zadania --keys "" --width 200 --height 16 2>&1)"
 rm -f "$PRM"
 PRZT="$(printf '%s\n' "$PRZH" | grep -oE 'Kiedy +[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1 | grep -oE '[0-9]{2}:[0-9]{2}$')"
-if [ -n "$PRZT" ] && printf '%s\n' "$PRZH" | sed 's/║│.*//' | grep -qE "^║ [0-9]{2}\.[0-9]{2} $PRZT "; then
+if [ -n "$PRZT" ] && printf '%s\n' "$PRZH" | sed 's/║│.*//' | grep -qE "^║ [0-9]{4}\.[0-9]{2}\.[0-9]{2} $PRZT "; then
     ok "przebiegi: wiersz z kursorem widac na liscie i przy niskim oknie (nie zaslania go '... jeszcze N')"
 else
     bad "przebiegi: wiersz kursora zasloniety" "czas z panelu: '$PRZT'" "$PRZH"
@@ -1173,7 +1175,7 @@ for u61k in "" down down,down; do
     U61="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES" --screen relacje --width 200 --height 60 --keys "$u61k" 2>&1)"
     has "$U61" 'Przyczyna' || continue
     u61_dump="$U61"
-    if hasE "$U61" 'Ostatni bieg +BŁĄD +2026-09-08 13:48 +rc=1' && hasE "$U61" 'Przyczyna +[^ ]*b: Refusing' \
+    if hasE "$U61" 'Ostatni bieg +BŁĄD +2026\.09\.08 13:48 +rc=1' && hasE "$U61" 'Przyczyna +[^ ]*b: Refusing' \
        && ! hasE "$U61" 'Ostatni bieg +OK' && printf '%s\n' "$U61" | grep 'lab/b' | grep -q 'błąd biegu' \
        && printf '%s\n' "$U61" | grep 'lab/c' | grep -vq 'błąd biegu'; then u61_ok=1; fi
     break
@@ -1209,7 +1211,7 @@ for sjk in "" down down,down; do
     has "$SJ" 'Przyczyna' || continue
     sj_dump="$SJ"
     pl="$(printf '%s\n' "$SJ" | grep 'Przyczyna')"
-    if hasE "$SJ" 'Ostatni bieg +BŁĄD +2026-09-08 13:48 +rc=1 ' && ! hasE "$SJ" 'rc=1 +\(\+' \
+    if hasE "$SJ" 'Ostatni bieg +BŁĄD +2026\.09\.08 13:48 +rc=1 ' && ! hasE "$SJ" 'rc=1 +\(\+' \
        && printf '%s' "$pl" | grep -q 'lab/a' && printf '%s' "$pl" | grep -q 'lab/b' \
        && has "$SJ" 'dataset is busy'; then sj_ok=1; fi
     break
@@ -2284,7 +2286,7 @@ fi
 # Ostatni bieg (przejscie GUI pve10, 2026-10-28): calapula padla 4/4 rc=1, a lista mowila
 # tylko "Wykonana 22.10". Kolumna niesie wynik i czas ostatniego biegu z job-stats.
 NF="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" ${ALL%--stats*} --stats "$FIX/stats-replica-fail.json" --screen nosniki --width 160 --height 40 2>&1)"
-if hasE "$NF" '^║ sejf-a +odłączony +brak +BŁĄD rc=1 11\.09 22:02 +co dobę' && hasE "$NF" '^║ sejf-b +wewnętrzny +brak +- +po podłączen'; then
+if hasE "$NF" '^║ sejf-a +odłączony +brak +BŁĄD rc=1 2026\.09\.11 22:02 +co dobę' && hasE "$NF" '^║ sejf-b +wewnętrzny +brak +- +po podłączen'; then
     ok "nosniki: kolumna Ostatni bieg -- nieudany bieg repliki widac na liscie (BŁĄD rc=1 + czas)"
 else
     bad "nosniki: Ostatni bieg" "$NF"
@@ -2336,7 +2338,7 @@ else
     bad "zadania: wiersze replik" "$(printf '%s' "$Z2" | grep -E 'sejf|replika')" "$(printf '%s' "$Z2B" | grep -E 'Kiedy')"
 fi
 N2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen nosniki --width 200 --height 60 2>&1)"
-if hasE "$N2" 'Ostatni bieg +2026-09-08 02:30   BŁĄD \(rc=1\)' && hasE "$N2" 'Wywołania +4, błędów 1' && hasE "$N2" 'Czas +ostatni 2s'; then
+if hasE "$N2" 'Ostatni bieg +2026\.09\.08 02:30   BŁĄD \(rc=1\)' && hasE "$N2" 'Wywołania +4, błędów 1' && hasE "$N2" 'Czas +ostatni 2s'; then
     ok "nosniki: panel repliki pokazuje ostatni bieg (kiedy, rc), czas i wywolania/bledy z job-stats"
 else
     bad "nosniki: biegi repliki" "$(printf '%s' "$N2" | grep -E 'Ostatni|Wywołania|Czas')"
@@ -2520,7 +2522,7 @@ json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 S1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RSL" --screen nosniki --width 200 --height 50 2>&1)"
 S2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RSL" --screen nosniki --keys down --width 200 --height 50 2>&1)"
-if has "$S1" 'Podłączony -- kopia aktualna z 2026-10-08 20:46' && has "$S2" 'Podłączony -- brak kopii' && has "$S1" 'Wykonana'; then
+if has "$S1" 'Podłączony -- kopia aktualna z 2026.10.08 20:46' && has "$S2" 'Podłączony -- brak kopii' && has "$S1" 'Wykonana'; then
     ok "nosniki: dysk w slocie mowi, czy kopia na nim jest aktualna (z czasem) albo ze kopii brak; kolumna 'Wykonana'"
 else
     bad "nosniki: w slocie + kopia" "$(printf '%s\n' "$S1" | grep -E 'Podłączony|Kopia')" "$(printf '%s\n' "$S2" | grep -E 'Podłączony')"
