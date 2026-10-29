@@ -342,7 +342,7 @@
 "co ile strażnik sprawdza wiek kopii": "how often the monitor checks the age of copies",
 "szablon proponowany nowej relacji": "template offered for a new relation",
 "minuta godzinnej aktualizacji (git pull)": "minute of the hourly update (git pull)",
-"%s -- trwa %d s": "%s -- running %d s",
+"  trwa %d s": "  running %d s",
 "odczyt %s ": "read %s ",
 "... jeszcze %d": "... %d more",
 " (%d szt.)": " (%d datasets)",
