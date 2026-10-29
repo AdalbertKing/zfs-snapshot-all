@@ -1187,12 +1187,10 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
         fi
         local planf="$TMPD/plan2.txt"
         if [ -n "${ZFS_TUI_LOG:-}" ]; then planf="${ZFS_TUI_LOG%.log}-plan.txt"; cp -f "$TMPD/plan2.txt" "$planf" 2>/dev/null || planf="$TMPD/plan2.txt"; fi
-        # Okno: zdanie po polsku (1. wiersz podsumowania), góra planu do „Plan czasownika”
-        # (komenda, cel, pomijane, konto), ostrzeżenia czasownika i ścieżka pełnego planu --
-        # mieści się w 80x24, więc bez drugiego okna z pytaniem.
-        { head -1 "$TMPD/summary.txt"
-          echo
-          awk -v stop="$(T 'Plan czasownika -- nic jeszcze nie zostało zmienione')" 'index($0, stop) == 1 { exit } { print }' "$TMPD/plan2.txt" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+        # Okno: całe podsumowanie (decyzje po polsku i komenda -- testy pilnują ich słów),
+        # bez pustych wierszy, ostrzeżenia czasownika i ścieżka pełnego planu; w 80x24 mieści
+        # się na styk, więc bez drugiego okna z pytaniem. Angielska góra planu powtarzała to samo.
+        { grep -v '^[[:space:]]*$' "$TMPD/summary.txt"
           # ostrzeżenia czasownika zostają w oknie -- to one zmieniają decyzję
           grep -E '^(!!!|WARNING|Warning|>>> .*(WARNING|warn))' "$TMPD/plan.txt" | grep -v -- '--grant-remotely is noted' | head -8
           echo "$(Tv 'Pełny plan (sekcje configu, linie crona): $planf' '$planf' "$planf")"; } >"$TMPD/plan-short.txt"

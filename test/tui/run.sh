@@ -4111,9 +4111,10 @@ fi
 # tresc okna ma wiele linii, a atrapa loguje ja doslownie -- bierzemy CALE okno: od jego
 # linii tytulowej do nastepnego wywolania (linia zaczynajaca sie od "--").
 NRPLAN="$(awk '/Plan ~ --yes-button ~ WYKONAJ/{f=1; buf=""} f && /^--/ && !/Plan ~ --yes-button ~ WYKONAJ/{f=0} f{buf=buf $0 "\n"} END{printf "%s", buf}' "$NR/wt.log")"
-if has "$NRPLAN" 'Po WYKONAJ uruchomi się DOKŁADNIE' && has "$NRPLAN" '--exclude-family=__replicate_,__migration__,_tmp' \
+# Od 2026-10-29 jedno okno: podsumowanie z komendą + ścieżka pełnego planu (właściciel).
+if has "$NRPLAN" 'Komenda (to samo wpisałbyś z palca):' && has "$NRPLAN" '--exclude-family=__replicate_,__migration__,_tmp' \
    && has "$NRPLAN" 'Pomijane migawki z prefiksami: __replicate_, __migration__, _tmp.' \
-   && printf '%s' "$NRPLAN" | grep -q '^Konto: ' && ! has "$NRPLAN" 'grant-remotely is noted'; then
+   && has "$NRPLAN" 'Konto: ' && has "$NRPLAN" 'Pełny plan (sekcje configu, linie crona): ' && ! has "$NRPLAN" 'grant-remotely is noted'; then
     ok "new-relation: okno planu pokazuje komende po WYKONAJ i decyzje po polsku, bez mylacego 'grant-remotely is noted' (R2-2)"
 else
     bad "new-relation: okno planu (R2-2)" "$(printf '%s' "$NRPLAN" | cut -c1-600)"
