@@ -707,9 +707,8 @@ step_name() {
     n="$(host_rname)"
     if [ -n "$n" ]; then
         RNAME="$n"
-        # w pierwszym przejściu bez okna (nie ma o co pytać); z karty -- wyjaśnienie, czemu
-        # tej nazwy się nie zmienia
-        case "$VIS" in *" name "*) ;; *) return 0 ;; esac
+        # jedno okno z faktem zamiast pola do wpisania (krok zostaje -- numeracja kroków i
+        # droga Wstecz się nie zmieniają)
         wt --title "$(title 7 "$(T 'Nazwa relacji')")" --msgbox "$(Tv 'Relacja nazywa się jak host po drugiej stronie: $n.
 
 Relacja to para hostów -- jedna nazwa na F3, w cronie i w mailach.' '$n' "$n")" 10 "$W"
@@ -1336,8 +1335,6 @@ CARD_NAMES_OF() {
 wz_steps() {   # -> kroki bieżącego rodzaju, w kolejności
     local f out=""
     for f in mode host ds target chain profile srcret name; do field_applies "$f" && out="$out $f"; done
-    # relacja z drugim hostem: nazwa = ten host, krok nazwy odpada (karta nadal ją pokazuje)
-    [ -n "$(host_rname)" ] && out="${out% name}"
     echo $out
 }
 wz_abort() {   # 0 = przerwij; 1 = zostań ("Zostań" albo Esc)
