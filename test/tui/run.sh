@@ -2296,7 +2296,7 @@ NB="$(screen nosniki down --width 160)"
 # U130 (2026-10-29): zrodlo -> cel, rekursja i historia stoja w prawym panelu repliki (grupa
 # Co); dolna zakladka to jej przebiegi w ukladzie F2.
 NBT="$(screen nosniki down,tab --width 160)"
-if hasE "$NB" 'Źródło → cel +[^ ]+ → ' && hasE "$NB" 'Z dziećmi +tak' && hasE "$NB" 'Historia +latest' \
+if hasE "$NB" 'Źródło → cel +[^ ]+ → ' && hasE "$NB" 'Rekurencyjnie +tak' && hasE "$NB" 'Historia +latest' \
    && has "$NBT" 'sejf-b: [Przebiegi]' && hasE "$NBT" 'Kiedy +Wynik +Czas +Dane'; then
     ok "nosniki: replika --fixed ma rekursje i historie na SWOICH miejscach w prawym panelu (kontrola przesuniecia pol list-replicas); dol: [Przebiegi] Kiedy/Wynik/Czas/Dane"
 else
@@ -2448,7 +2448,7 @@ fi
 # U93: "zdjecia" -> migawki; U99: kolumny listy Replika | Typ | Wykonana | Harmonogram.
 F6R="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen nosniki --width 200 --height 40 2>&1)"
 if hasE "$F6R" '║ Replika +Typ +Wykonana +Ostatni bieg +Harmonogram' && hasE "$F6R" 'Rodzaj +własne migawki -- replika' \
-   && hasE "$F6R" 'Na dysku +2 ostatnie migawki = ok\. 2 dni wstecz' && hasE "$F6R" 'Szyfrowane +nie' && ! has "$F6R" 'zdjęc'; then
+   && hasE "$F6R" 'Na dysku +2 najnowsze migawki [a-z_]+ \(ok\. 2 dni wstecz\)' && hasE "$F6R" 'Ile migawek +nieustawione -- tyle, ile trzyma kolektor' && hasE "$F6R" 'Szyfrowane +nie' && ! has "$F6R" 'zdjęc'; then
     ok "nosniki: X11 -- panel: Rodzaj, Na dysku z przykladem, Szyfrowane (U21: rodzaj w panelu, nie w liscie)"
 else
     bad "nosniki: X11 Rodzaj repliki" "$(printf '%s' "$F6R" | sed -n 2,12p)"
