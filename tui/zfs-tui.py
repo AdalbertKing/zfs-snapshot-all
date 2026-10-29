@@ -247,12 +247,31 @@ def export_file_info(path):
 
 
 _HOSTS = None
+_REL_BY_ADDR = {}
+
+
+def note_relation_names(status):
+    """Wlasciciel 2026-10-29: "gdy jest tylko adres, to nazwa relacji" -- relacja to para
+    hostow, a jej nazwa domyslnie jest nazwa drugiego hosta. Adres (peer_host i ten, przez
+    ktory chodzi teraz) -> nazwa relacji; jeden adres w dwoch relacjach -> zadnej."""
+    _REL_BY_ADDR.clear()
+    seen = {}
+    for r in (status or {}).get("relations", []) if isinstance(status, dict) else []:
+        if r.get("state") == "removed" or not r.get("name"):
+            continue
+        for a in {r.get("peer_host") or "", rel_addr(r)}:
+            if a:
+                seen.setdefault(a, set()).add(r["name"])
+    for a, names in seen.items():
+        if len(names) == 1:
+            _REL_BY_ADDR[a] = names.pop()
 
 
 def host_name(addr):
     """U111 (wlasciciel 2026-10-29, "Do kitu to jest"): adres -> nazwa hosta z /etc/hosts
-    tego hosta, krotka (pve9, nie pve9.lab). Tylko plik, bez DNS: odwrotne zapytanie o
-    obcy adres potrafi wisiec sekundami. Nazwa nieznana albo juz nazwa -> bez zmian."""
+    tego hosta, krotka (pve9, nie pve9.lab); gdy jej tam nie ma -- nazwa relacji z tym
+    adresem; dopiero potem sam adres. Tylko plik, bez DNS: odwrotne zapytanie o obcy
+    adres potrafi wisiec sekundami."""
     global _HOSTS
     if not addr or not re.match(r"^[0-9.]+$|^[0-9A-Fa-f:]*:[0-9A-Fa-f:]*$", addr):
         return addr
@@ -271,7 +290,7 @@ def host_name(addr):
                         _HOSTS[f[0]] = short[0] if short else names[0].split(".")[0]
         except OSError:
             pass
-    return _HOSTS.get(addr, addr)
+    return _HOSTS.get(addr) or _REL_BY_ADDR.get(addr) or addr
 
 
 def side_words(ep, here=None):
@@ -1072,6 +1091,8 @@ def collect(repo, files, only=None):
         else:
             doc, err = run_verb(repo, args)
         setattr(data, key, doc)
+        if key == "status":
+            note_relation_names(doc)
         if err:
             data.errors[key] = err
         else:
@@ -2516,9 +2537,9 @@ def pair_detail_pairs(pr, row, data, now, ch):
     """Prawy panel datasetu relacji (F3, zakladka Datasety)."""
     out = [group(ch, _(u"Co"))]
     if pr.get("dst") is None:
-        out.append((_(u"Dataset"), pr["src"]))
+        out.append((_(u"Dataset"), side_words(pr["src"])))
     else:
-        out += [(_(u"Źródło"), pr["src"]), (_(u"Cel"), pr["dst"])]
+        out += [(_(u"Źródło"), side_words(pr["src"])), (_(u"Cel"), pr["dst"])]
     out.append(group(ch, _(u"Teraz")))
     v = pr.get("vword") or "-"
     j = pr.get("job")
@@ -2625,7 +2646,7 @@ def odz_children(tab, item, rows, data, now, ch):
         copy = pr.get("dst") or pr["src"]
         last = newest_transfer(data, item["name"], copy, pr["src"])
         nw = fmt_when_short(int(last.get("finished_epoch") or last.get("started_epoch") or 0), now) if last else "-"
-        dpairs = [(_(u"Kopia"), copy), (_(u"Oryginał"), pr["src"]), (_(u"Kopie"), pr.get("vword") or "-")]
+        dpairs = [(_(u"Kopia"), copy), (_(u"Oryginał"), side_words(pr["src"])), (_(u"Kopie"), pr.get("vword") or "-")]
         if last:
             dpairs.append((_(u"Najnowsza"), (last.get("dataset") or "?").split("@", 1)[-1]))
         dpairs.append((_(u"Najstarsza"), _(u"w oknach Przywróć (lista migawek)")))
@@ -3389,7 +3410,7 @@ def pair_one(pr, ch):
     """Wiersz dolnego panelu F3: `zrodlo -> cel`, a bez kopii (migawki) sam dataset."""
     if pr.get("dst") is None:
         return pr["src"]
-    return u"%s %s %s" % (pr["src"], ch.right, pr["dst"])
+    return u"%s %s %s" % (side_words(pr["src"]), ch.right, pr["dst"])
 
 
 def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus="list", pair_cursor=0, jobrows=None, ti=0):
@@ -6617,7 +6638,7 @@ def _ui_render(self, width, height):
                 foot = _(u"Tab źródło/kopia   ") + foot
             if not obj.get("dst"):
                 foot = _(u"Esc wraca   strzałki/PgUp/PgDn przewijają")
-            scr, self.scroll = render_window(base, _(u"Migawki: relacja %s, %s") % (obj["name"], obj["src"]), lines,
+            scr, self.scroll = render_window(base, _(u"Migawki: relacja %s, %s") % (obj["name"], side_words(obj["src"])), lines,
                                              self.scroll, width, height, self.ch, footer=foot)
         elif kind == "output":
             lines = self.output_lines(obj, width)

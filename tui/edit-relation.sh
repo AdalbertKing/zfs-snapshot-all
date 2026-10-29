@@ -119,7 +119,7 @@ ACCT_U="${ACCT_U%$'\r'}"
 # kompresja, szyfr) nie dotyczą -- nic nie jest przesyłane.
 SNAPONLY=0; [ "${RMODE:-}" = snaponly ] && SNAPONLY=1
 # Relacja lokalna (bez peera): źródłem jest ten host -- lista datasetów bez adresu.
-SRCHOST="$(host_name "$PEER")"; LDS_ARGS=("$PEER"); HOST="$SRCHOST"
+SRCHOST="$(host_name "$PEER" "$NAME")"; LDS_ARGS=("$PEER"); HOST="$SRCHOST"
 SRCNAME="$PEER"
 if [ "$PEER" = - ]; then SRCHOST="$(T 'tego hosta') ($(hostname -s 2>/dev/null || hostname))"; LDS_ARGS=(); HOST="$SRCHOST"; SRCNAME="$(hostname -s 2>/dev/null || hostname)"; fi
 [ "$CUR_P" = - ] && CUR_P=""; [ "$CUR_S" = - ] && CUR_S=""
@@ -813,7 +813,7 @@ while :; do
         if [ "$4" -eq 1 ]; then CARD_NAMES+=("* $2"); else CARD_NAMES+=("  $2"); fi
     }
     # U111: ten wiersz zmienia ADRES, więc adres zostaje -- z nazwą hosta przed nim
-    _epn="$(host_name "${_ep%:*}")"; [ "$_epn" = "${_ep%:*}" ] || _ep="$_epn ($_ep)"
+    _epn="$(host_name "${_ep%:*}" "$NAME")"; [ "$_epn" = "${_ep%:*}" ] || _ep="$_epn ($_ep)"
     if [ "$PEER" != - ]; then er_row adres "$(T Źródło)" "$_ep${P_HOST:+ -> $P_HOST $_zm}" "$([ -n "$P_HOST" ] && echo 1 || echo 0)"; fi
     er_row dane "$(T Datasety)" "$_ds$_dsp" "$([ -n "$_dsp" ] && echo 1 || echo 0)"
     er_row harmon "$(T Harmonogram)" "$_sz" "$([ "${#P_EDIT[@]}" -gt 0 ] || [ "${#P_RARGS[@]}" -gt 0 ] && echo 1 || echo 0)"

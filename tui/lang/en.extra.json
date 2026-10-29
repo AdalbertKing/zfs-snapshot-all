@@ -765,5 +765,6 @@
 "Migawka: $SNAP\\n\\nPrzenieść też wszystkie starsze migawki (z historią)?\\nNie = tylko ta migawka.": "Snapshot: $SNAP\\n\\nAlso move all older snapshots (with history)?\\nNo = only this snapshot.",
 "  Kierunek       strzałka idzie jak dane: pve9 → pve10 pobieram z pve9,": "  Direction      the arrow follows the data: pve9 → pve10 I pull from pve9,",
 "                 pve10 → pve9 wysyłam, pve10 ↔ pve9 obie strony, local = na tym hoście;": "                 pve10 → pve9 I push, pve10 ↔ pve9 both ways, local = on this host;",
-"                 nazwy hostów z /etc/hosts, adres tylko gdy nazwy tam nie ma": "                 host names from /etc/hosts, the address only when no name is there"
+"                 nazwy hostów z /etc/hosts, adres tylko gdy nazwy tam nie ma": "                 host names from /etc/hosts, the address only when no name is there",
+"Relacja nazywa się jak host po drugiej stronie: $n.\n\nRelacja to para hostów -- jedna nazwa na F3, w cronie i w mailach.": "The relationship is named after the host on the other side: $n.\n\nA relationship is a pair of hosts -- one name on F3, in cron and in mail."
 }

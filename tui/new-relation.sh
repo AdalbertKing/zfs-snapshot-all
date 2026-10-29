@@ -689,8 +689,29 @@ step_profile() {
 }
 
 # --- krok 7: nazwa ------------------------------------------------------------
+# Relacja z drugim hostem NAZYWA SIĘ JAK TEN HOST (właściciel 2026-10-29: „nazwa relacji
+# miała odpowiadać hostowi po drugiej stronie i to się rozjechało” -- pole było do edycji
+# i na labie powstały ab, cb, bc). Nazwa = ta, którą host zgłosił przy diagnozie; wolne
+# pole zostaje tylko relacjom bez drugiego hosta (kopia lokalna) i gdy tamta nazwa jest
+# zajęta albo niepoprawna.
+host_rname() {   # -> nazwa relacji z drugim hostem albo nic
+    [ "$MODE" != local ] && [ -n "$HOSTNAME_R" ] || return 0
+    local n="${HOSTNAME_R%%.*}"
+    case "$n" in ''|[-.]*|*[!A-Za-z0-9._-]*) return 0 ;; esac
+    [ -s "$TMPD/rel.tsv" ] || status_tsv
+    awk -F'	' -v n="$n" '$1==n{f=1} END{exit !f}' "$TMPD/rel.tsv" && return 0
+    printf '%s' "$n"
+}
 step_name() {
     local n
+    n="$(host_rname)"
+    if [ -n "$n" ]; then
+        RNAME="$n"
+        wt --title "$(title 7 "$(T 'Nazwa relacji')")" --msgbox "$(Tv 'Relacja nazywa się jak host po drugiej stronie: $n.
+
+Relacja to para hostów -- jedna nazwa na F3, w cronie i w mailach.' '$n' "$n")" 10 "$W"
+        return 0
+    fi
     if [ -z "$RNAME" ] && [ "$MODE" = local ]; then
         RNAME="$(rname_default)"
     fi
@@ -1269,7 +1290,9 @@ run_field() {   # <pole> -> rc okna pola (0 = ustawione)
                  [ "$rc" -eq 0 ] && [ "$before" != "$MODE/$NOCOPY" ] && VIS=" " ;;
         host)    before="$HOST"
                  while :; do step_host || { rc=1; break; }; step_diag && { rc=0; break; }; done
-                 [ "$rc" -eq 0 ] && [ "$before" != "$HOST" ] && VIS="${VIS/ ds / }" ;;
+                 [ "$rc" -eq 0 ] && [ "$before" != "$HOST" ] && VIS="${VIS/ ds / }"
+                 # nazwa wynika z hosta -- karta ją pokazuje, osobnego okna nie trzeba
+                 [ "$rc" -eq 0 ] && [ -n "$(host_rname)" ] && { RNAME="$(host_rname)"; case "$VIS" in *" name "*) ;; *) VIS="$VIS""name " ;; esac; } ;;
         ds)      step_datasets; rc=$? ;;
         target)  step_target; rc=$? ;;
         profile) before="$PROFILE"; step_profile; rc=$?

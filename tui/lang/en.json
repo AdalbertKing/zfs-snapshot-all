@@ -1081,6 +1081,7 @@
 "Relacja '$RNAME' założona (rc=0).${ZFS_TUI_LOG:+\\n\\nDziennik: $ZFS_TUI_LOG}": "Relation '$RNAME' created (rc=0).${ZFS_TUI_LOG:+\\n\\nLog: $ZFS_TUI_LOG}",
 "Relacja jest WYŁĄCZONA: pauza tutaj i zamek na źródle.": "The relation is DISABLED: pause here and a lock on the source.",
 "Relacja lokalna: kopia i cel są na tym hoście, zgoda nie jest potrzebna.": "Local relation: the copy and the target are on this host, no consent needed.",
+"Relacja nazywa się jak host po drugiej stronie: $n.\n\nRelacja to para hostów -- jedna nazwa na F3, w cronie i w mailach.": "The relationship is named after the host on the other side: $n.\n\nA relationship is a pair of hosts -- one name on F3, in cron and in mail.",
 "Relacja o nazwie '$n' już jest na tym hoście. Podaj inną.": "A relation named '$n' already exists on this host. Enter another.",
 "Relacje": "Relations",
 "Relacje na kolektorze %s": "Relations on collector %s",
