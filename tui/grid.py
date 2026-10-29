@@ -367,8 +367,16 @@ class Grid(object):
             val = f["value"]
             add(lab + val + (u"_" if f.get("edit", True) else u""),
                 segs=[(("after", i), len(lab), len(lab) + max(1, len(val)))])
+        # Uwaga dluzsza niz okno -- zawijana po slowach, jak komunikat nizej (U116, pve10
+        # 2026-10-29: "0 = po skopiowaniu ..." ucinalo sie na "(baza kopii to inne szczebl").
         for n in self.spec.get("note") or []:
-            add(u" " + _(n))
+            cur_l = u""
+            for wd_ in _(n).split(u" "):
+                if cur_l and len(cur_l) + 1 + len(wd_) > inner - 1:
+                    add(u" " + cur_l); cur_l = wd_
+                else:
+                    cur_l = (cur_l + u" " + wd_) if cur_l else wd_
+            add(u" " + cur_l)
         add(u"")
         bl = u" " * max(1, (inner - 26) // 2)
         nxt, back = u"< %s >" % _(u"Dalej"), u"< %s >" % _(u"Wstecz")

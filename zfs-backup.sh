@@ -12684,7 +12684,7 @@ snaponly_first_snapshots() {   # <name>
         esac
     done < <(printf '%s\n' "$tab" | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
                  | grep -F -- " -L $name " \
-                 | { if [ -n "${SNAPONLY_FIRST_TIER:-}" ]; then grep -E "zfs-job[.]sh \"[^\"]*(__| )${SNAPONLY_FIRST_TIER} (snapshot|backup|copy) "; else cat; fi; } \
+                 | { if [ -n "${SNAPONLY_FIRST_TIER:-}" ]; then grep -E "zfs-job[.]sh \"[^\"]*[_ ]${SNAPONLY_FIRST_TIER} (snapshot|backup|copy) "; else cat; fi; } \
                  | { if [ "${FIRST_RUN_ANY:-0}" = 1 ]; then grep -E 'snap(get|send)\.sh '; else grep -F 'snapget.sh -s '; fi; } \
                  | { if [ -n "${SNAPONLY_FIRST_ONLY:-}" ]; then grep -F -e ":$SNAPONLY_FIRST_ONLY\"" -e "\"$SNAPONLY_FIRST_ONLY\"" \
                        -e ",$SNAPONLY_FIRST_ONLY\"" -e "\"$SNAPONLY_FIRST_ONLY," -e ",$SNAPONLY_FIRST_ONLY,"; else cat; fi; })

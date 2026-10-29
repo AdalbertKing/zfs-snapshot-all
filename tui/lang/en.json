@@ -1867,6 +1867,7 @@
 "source-pruners nie odpowiedział:\\n$(tail -2 \"$TMPD/pruners.err\")\\n\\nAktywacja i tak to sprawdzi -- przed instalacją crona.": "source-pruners did not answer:\\n$(tail -2 \"$TMPD/pruners.err\")\\n\\nActivation will check it anyway -- before installing cron.",
 "sprawdza okno Przywróć -- źródło musi wydać zgodę na dostęp (deploy.sh --allow-restore)": "checks the “Restore” window -- the source must grant access (deploy.sh --allow-restore)",
 "sprawdza to okno Przywróć -- źródło musi wydać zgodę na dostęp (deploy.sh --allow-restore)": "the “Restore” window checks it -- the source must grant access (deploy.sh --allow-restore)",
+"sprawdzam…": "checking…",
 "sprawdzona": "verified",
 "sprzątanie migawek nie trafia do historii -- ostatni czas i błędy masz w panelu obok": "snapshot pruning is not recorded in the history -- the last time and errors are in the panel next to it",
 "spóźnione": "late",

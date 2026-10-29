@@ -2377,6 +2377,37 @@ else
     bad "zadania: werdykt repliki z monitora" "$Z3"
 fi
 rm -f "$RMN"
+# Start i powrot z okna sa dwuetapowe (2026-10-29): job-stats dochodzi drugim etapem i dokłada
+# wykonane biegi NAD kursorem. Kursor ma zostac na tym samym biegu ("teraz"), nie na tym samym
+# numerze wiersza (pve10: F2 po starcie stalo na 08:13 zamiast przy nadchodzacym biegu).
+Z4="$("$PY" - "$TUI" "$REPO" "$NOW" "$P10/status.json" "$P10/list-jobs.json" "$P10/monitor.json" "$P10/job-stats.json" <<'PYEOF'
+import importlib.util, json, sys
+s = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+files = {"status": sys.argv[4], "jobs": sys.argv[5], "monitors": sys.argv[6], "progress": None, "replicas": None,
+         "stats": None, "config": None, "profiles": None, "offline": True, "datasets_local": None,
+         "datasets_remote": None, "check_source": None, "host_ip": None}
+ui = m.UI(sys.argv[2], files, m.Chars(False), int(sys.argv[3]), None)
+i0 = ui.cursor["zadania"]; r0 = ui.runrows[i0]
+# drugi etap: job-stats z wykonanymi biegami kazdej etykiety (1 h i 2 h temu)
+import time
+iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(t))
+now = int(sys.argv[3]); st = json.load(open(sys.argv[7], encoding="utf-8"))
+st["runs"] = [{"label": r["label"], "start": iso(now - 3600 * k - 40), "end": iso(now - 3600 * k - 30), "rc": 0}
+              for r in ui.runrows if r.get("label") for k in (1, 2)]
+ui.data.stats = st
+ui.apply_data(ui.data, full=False)
+i1 = ui.cursor["zadania"]; r1 = ui.runrows[i1]
+print("moved=%s same=%s upcoming=%s" % (i1 != i0, (r1.get("label"), r1.get("at")) == (r0.get("label"), r0.get("at")),
+                                         not r1.get("past")))
+PYEOF
+)"
+Z4="$(printf '%s' "$Z4" | tr -d '\r')"
+if has "$Z4" 'moved=True same=True upcoming=True'; then
+    ok "przebiegi: gdy job-stats dochodzi drugim etapem, kursor zostaje na tym samym nadchodzacym biegu (numer wiersza sie zmienia)"
+else
+    bad "przebiegi: kursor po drugim etapie" "$Z4"
+fi
 # REPLIKI Z GUI (2026-10-07): Ins nowa i Enter+'e' zmiana oddaja terminal oknom
 # add-replica --ask; Del i F7 przez okno potwierdzenia, jak pauza na F3.
 # W15 (wlasciciel 2026-10-11) + X9 (2026-10-12): F7 na F2 = zaznaczone zadanie TERAZ, bez
@@ -3889,6 +3920,50 @@ if ! has "$DRCL" 'Posprzątaj na źródle' && has "$DRCL" 'brak dostępu roota z
 else
     bad "okno usuwania: brak roota do zrodla" "cl: $(printf '%s' "$DRCL" | cut -c1-300)" "argv: $(cat "$DRD/argv" 2>/dev/null)" "$DROUT"
 fi
+
+# 3j2. Kasowanie kopii ma DRUGIE pytanie "SKASUJ KOPIE -- nieodwracalne" (wlasciciel
+#      2026-10-29, #993: jedno "na pewno?" wszedzie, drugie tylko tu). Wstecz w nim nie
+#      kasuje niczego; SKASUJ = --destroy-copies --yes; bez kopii do skasowania okna nie ma.
+# zb-del4 = zb-del2 z rootem do zrodla (--check-source nie mowi "NO root"): pozycja kopii jest.
+grep -vF -e '*" --check-source "*)' "$NR/bin/zb-del2" > "$NR/bin/zb-del4"; chmod +x "$NR/bin/zb-del4"
+drd_run() {   # <odpowiedzi> -> $DRD/wt.log, $DRD/argv
+    rm -rf "$DRD"; mkdir -p "$DRD"; printf '%b' "$1" > "$DRD/answers"
+    ( export NR_DIR="$DRD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-del4"
+      bash "$REPO/tui/delete-relation.sh" nazwa ) >/dev/null 2>&1 </dev/null
+}
+drd_run '0\tsrc|rec|data\n0\t\n1\t\n1\t\n'   # zaznacz kopie, WYKONAJ, SKASUJ? -> Wstecz, potem Wstecz
+dk_back_win=$(grep -cF 'SKASUJ KOPIE -- nieodwracalne' "$DRD/wt.log"); dk_back_yes=$(grep -c -- '--yes' "$DRD/argv")
+drd_run '0\tsrc|rec|data\n0\t\n0\t\n'        # zaznacz kopie, WYKONAJ, SKASUJ
+dk_yes=$(grep -c -- 'nazwa --destroy-copies --yes' "$DRD/argv"); dk_txt=$(grep -A3 -F 'SKASUJ KOPIE -- nieodwracalne' "$DRD/wt.log" | grep -c 'tank/b/x')
+drd_run '0\tsrc|rec\n0\t\n'                  # bez kopii: WYKONAJ i od razu bieg
+dk_ctl_win=$(grep -cF 'SKASUJ KOPIE -- nieodwracalne' "$DRD/wt.log"); dk_ctl_yes=$(grep -c -- '^delete-relation nazwa --yes' "$DRD/argv")
+if [ "$dk_back_win" = 1 ] && [ "$dk_back_yes" = 0 ] && [ "$dk_yes" = 1 ] && [ "$dk_txt" -ge 1 ] \
+   && [ "$dk_ctl_win" = 0 ] && [ "$dk_ctl_yes" = 1 ]; then
+    ok "okno usuwania: kasowanie kopii pyta drugi raz (SKASUJ KOPIE, z lista kopii); Wstecz tam nie kasuje, SKASUJ = --destroy-copies --yes; bez kopii drugiego okna nie ma"
+else
+    bad "okno usuwania: drugie pytanie przy kasowaniu kopii" "wstecz: okno=$dk_back_win yes=$dk_back_yes" "skasuj: $dk_yes lista=$dk_txt" "kontrola: okno=$dk_ctl_win yes=$dk_ctl_yes"
+fi
+
+# 3j3. U116 (pve10, 2026-10-29): uwaga tabeli retencji zrodla (tui/grid.py) dluzsza niz okno
+#      ucinala sie na "(baza kopii to inne szczebl". Teraz zawija sie po slowach w ramce.
+GS="$(mktemp)"
+cat > "$GS" <<'EOF'
+{"title": "Retencja: W ŹRÓDLE KOPII", "head": ["SZCZEBEL", "TUTAJ (cel)", "U ŹRÓDŁA"],
+ "rows": [{"key": "0", "label": "godzinowe", "on": true, "value": "24", "unit": "", "ref": "24", "q": null, "family": null, "zero_ok": true}],
+ "note": ["Bez zmian = źródło jak cel. Kratka = szczebel u źródła w ogóle.",
+          "0 = po skopiowaniu nic z tego szczebla u źródła (baza kopii to inne szczeble)."]}
+EOF
+GO="$(PYTHONIOENCODING=utf-8 "$PY" "$REPO/tui/grid.py" --spec "$GS" --out "$GS.out" --keys esc --width 80 2>&1 | tr -d '\r')"
+# szerokosc w ZNAKACH (ramka to znaki wielobajtowe): kazda linia jak gorna krawedz
+glong=$(printf '%s\n' "$GO" | "$PY" -c 'import io, sys
+l = [x.rstrip("\n") for x in io.open(sys.stdin.fileno(), encoding="utf-8")]
+print(sum(1 for x in l if x and len(x) != len(l[0])))' | tr -d '\r')
+if has "$GO" 'szczeble).' && [ "$glong" = 0 ] && printf '%s\n' "$GO" | grep -q '^│ 0 = po skopiowaniu'; then
+    ok "tabela retencji: uwaga dluzsza niz okno zawija sie po slowach w ramce, nie ucina sie (U116)"
+else
+    bad "tabela retencji: dluga uwaga" "linie innej szerokosci: $glong" "$GO"
+fi
+rm -f "$GS" "$GS.out"
 
 # 3k. F10 USTAWIENIA (wlasciciel 2026-10-19): lista kluczy z `settings --tsv` w sekcjach,
 #     zmiana jednej wartosci, "Zapisz" = plan czasownika i WYKONAJ -> `settings set K=V --yes`.

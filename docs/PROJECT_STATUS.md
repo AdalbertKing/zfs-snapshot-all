@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 81407ea7e4e6229b -->
+<!-- status-covers-digest: 150b3ee17623a942 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -84,6 +84,25 @@
   jak F9 na F2 (F9 zostaje Przywróć). Repliki bez nośnika i relacje bez kopii mają swój wiersz z uwagą, bez akcji.
   Stan i klawisze bez zmian (Enter/Tab do migawek, Enter przegląda, F9 przywraca). F10: większy odstęp kolumn,
   opisy łamane w trzeciej kolumnie (dalszy ciąg otwiera to samo ustawienie). Zasada na przyszłość: każde okno przeglądania w układzie F2 (backlog U121).
+- **Start GUI dwuetapowo; drobne poprawki (2026-10-29, właściciel).** Start czytał sześć czytników naraz (~14 s
+  na pve10). Teraz ekran przychodzi po czterech szybkich (~1,2 s), a monitor i job-stats dochodzą drugim etapem (~11 s),
+  jak przy powrocie z okna. Do tego czasu kolumna Kopie na F3 i panel mówią „sprawdzam…”, a nie „bez monitora” i „brak
+  w dziennikach” (`Data.pending`). Kursor F2 po nowym odczycie zostaje na tym samym biegu (etykieta i chwila), a nie
+  na tym samym numerze wiersza. Wcześniej po dojściu job-stats kursor zostawał na numerze wiersza, a nad nim przybywały
+  wykonane biegi, więc „teraz” uciekało na wcześniejszy bieg (pve10: 08:13), przy starcie i po każdym oknie. `set-tiers --add-src-tier` na relacji lokalnej uruchamia pierwszą migawkę linii
+  `__lsrc_<szczebel>` (filtr szukał tylko `__<szczebel>` i ` <szczebel>`). Na pve10 relacja lokalna jest pasywna (`passive = yes`,
+  `-e`) i nikt nie robi jej rodzin na źródle, więc tam wynik to „1 not done” (wcześniej: „0 not done”, linii nie było). Długa uwaga w tabeli retencji źródła
+  (`tui/grid.py`) zawija się po słowach, zamiast urywać się na krawędzi. Nowe testy: drugie pytanie „SKASUJ KOPIE”
+  przy usuwaniu relacji, kursor po drugim etapie, zawijanie uwagi, filtr `__lsrc_`.
+- **Przeglądanie kopii: mc we własnym małym korzeniu (2026-10-29, właściciel, U126).** Dotąd mc w przestrzeni
+  montowań tylko do odczytu pozwalał przejść na obu panelach do `/` hosta i czytać wszystko (pule, `/root`, inne kopie).
+  Teraz `mc_readonly` w `tui/browse.sh` buduje w tej przestrzeni tmpfs i robi `pivot_root`. Pod `/` jest `/kopia` (ta
+  migawka, tylko do odczytu) i `/odzysk` (jedyne miejsce zapisu, na hoście `~/odzysk/<kopia>`), a do tego `usr`, `lib*`,
+  `bin`, `sbin` i `etc`, dowiązane bez podmontowań i tylko do odczytu (`/etc/pve` to pusty katalog). Do tego `/dev`
+  z kilkoma węzłami terminala, `/proc` tylko do odczytu i pusty `/tmp`. mc dostaje przez `setpriv` tylko dac_override,
+  dac_read_search, chown, fowner i fsetid (bez sys_admin i mknod), więc nie wyjdzie z korzenia. Nieudany montaż, `pivot_root`
+  albo brak `setpriv` = mc nie startuje. Na pve10: `/hdd` i `/root` nie istnieją, zapis do `/kopia` daje „Read-only file system”, `mknod`
+  „Operation not permitted”, F10 kończy z „=== Odmontowane.” i bez montaży.
 - **Kreator: pytanie o migawki na źródle zaraz po datasetach (2026-10-29, właściciel).** Okno „Migawki naszej
   rodziny już są na źródle” (łańcuch czy resztki) było po kroku „Dokąd”. Operator wybierał cel, dostawał to pytanie
   i brał je za przeszkodę w celu. Teraz kolejność to Rodzaj, Źródło, Datasety, Migawki na źródle, Cel, a okno zaczyna się

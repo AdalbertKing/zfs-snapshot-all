@@ -15251,6 +15251,23 @@ if [ "$got" = "RAN-new RAN-new-d RAN-old RAN-old-d " ]; then
 else
     bad "snaponly: first snapshots, plain activation" "$got"
 fi
+# set-tiers --add-src-tier=<t> runs the added tier's first snapshot (SNAPONLY_FIRST_TIER).
+# A local relationship's source tier is labelled "__lsrc_<t> snapshot" (pve10, 2026-10-29:
+# "first snapshot of each tier: 0 done" -- the filter wanted "__<t>" or " <t>").
+cat > "$AFS/tab" <<'TAB'
+# BEGIN zfs-backup-managed
+24 * * * * echo RAN-lsrc-h # zfs-job.sh "h __lsrc_hourly snapshot (rel)" -- snapget.sh -s -L rel "u@h:pool/a"
+34 1 * * * echo RAN-lsrc-d # zfs-job.sh "h __lsrc_daily snapshot (rel)" -- snapget.sh -s -L rel "u@h:pool/a"
+24 * * * * echo RAN-h # zfs-job.sh "h hourly snapshot (rel)" -- snapget.sh -s -L rel "u@h:pool/b"
+24 * * * * echo RAN-2h # zfs-job.sh "h twohourly snapshot (rel)" -- snapget.sh -s -L rel "u@h:pool/b"
+# END zfs-backup-managed
+TAB
+got=$(FIRST_RUN_ANY=1 SNAPONLY_FIRST_TIER=hourly afs_run)
+if [ "$got" = "RAN-h RAN-lsrc-h " ]; then
+    ok "set-tiers: an added tier's first snapshot runs on a local relationship's __lsrc_ line too -- not another tier, not 'twohourly'"
+else
+    bad "set-tiers: first snapshot of an added tier" "$got"
+fi
 
 # status "sources" of a snaponly relationship = its [snaponly:] sections (a narrowed root and its
 # enumerated children), not the requested roots -- the GUI change window rebuilds [-] from it
