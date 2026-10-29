@@ -3187,7 +3187,7 @@ SOWP="$(grep -F 'Jak długo trzymać migawki na źródle' "$NR/wt.log" | head -1
 if has "$SOWO" "CMD: " && has "$SOWO" " --mode=snaponly " && ! has "$SOWO" "--target=" && has "$SOWO" " --grant-remotely " \
    && ! has "$SOWO" "--exclude-family" && ! has "$SOWO" " --raw " \
    && grep -qF 'Gdzie robić migawki na' "$NR/tree.log" && grep -qF '[x] z migawkami' "$NR/tree.log" && ! grep -qF 'Co kopiować z' "$NR/tree.log" \
-   && grep -qF 'Bez kopii: migawki na pve9b' "$NR/wt.log" && ! grep -qF 'lustro: ta sama' "$NR/wt.log" \
+   && grep -qF 'Pełny plan (sekcje configu, linie crona)' "$NR/wt.log" && ! grep -qF 'lustro: ta sama' "$NR/wt.log" \
    && has "$SOWP" '--default-item ~ d7h24' && ! grep -q 'Dokąd\|Pomijane prefiksy\|W ŹRÓDLE KOPII' "$NR/wt.log" \
    && grep -q 'Jak długo trzymać migawki na źródle' "$NR/wt.log"; then
     ok "new-relation: Migawki zdalnie -- --mode=snaponly bez --target, bez pola Dokąd/prefiksów/retencji źródła kopii, domyślny szablon d7h24, jest okno 'Jak długo trzymać migawki na źródle'"
@@ -3560,7 +3560,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 1${T}
 0${T}create
-0${T}
 0${T}pasywnie
 0${T}passive
 0${T}create
@@ -3913,8 +3912,8 @@ SMENU="$(grep -F -- '--menu' "$SD/wt.log" | head -1)"
 if has "$SMENU" '── Alerty ──' && has "$SMENU" '── GUI ──' && has "$SMENU" 'root  (zfs-alert.conf)' && has "$SMENU" 'Wyślij mail próbny' \
    && ! printf '%s' "$SMENU" | grep -qE ' ~ -[^ ~]* ~ ── ' \
    && grep -qx 'settings set alerts.digest_time=06:30' "$SD/argv" && grep -qx 'settings set alerts.digest_time=06:30 --yes' "$SD/argv" \
-   && grep -qF 'GOTOWE' "$SD/wt.log"; then
-    ok "F10 okno ustawien: sekcje i zrodla wartosci z czasownika, zmiana jednej pozycji, Zapisz = plan i WYKONAJ (settings set K=V --yes)"
+   && [ "$(printf '%s\n' "$SOUT" | grep -cx 'Zapisano\.')" -eq 1 ] && ! grep -qF 'Zapisano.' "$SD/wt.log"; then   # 2026-10-29: jednozdaniowy sukces = wt_end na stdout, bez msgboxa
+    ok "F10 okno ustawien: sekcje i zrodla wartosci z czasownika, zmiana jednej pozycji, Zapisz = plan i WYKONAJ (settings set K=V --yes), 'Zapisano.' na ekranie (wt_end), bez okna"
 else
     bad "F10 okno ustawien" "menu: $(printf '%s' "$SMENU" | cut -c1-300)" "argv: $(cat "$SD/argv" 2>/dev/null)" "$SOUT" "$(cut -c1-200 "$SD/err")"
 fi
@@ -5716,16 +5715,17 @@ else
 fi
 
 # 1. obok, tylko docs: config = ten, ktory MA wiersze (jobs.h.conf jest pierwszy w kolejnosci i pusty),
-#    onto = baza/basename; bez --at (p0 = najnowszy), bez --yes. Okno podsumowania ma "Wymaga zgody" i --defaultno.
+#    onto = baza/basename; bez --at (p0 = najnowszy), z --yes na koncu (okno podsumowania jest jedynym "Na pewno?",
+#    wlasciciel 2026-10-29). Okno podsumowania ma "Wymaga zgody" i --defaultno.
 printf '0\tp0\n0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-docs.json"
-W1="restore ~ k2 ~ k2 ~ --source=tank/b/hdd/data/docs ~ --onto=hdd/restore/docs ~ --config=$RWCFG"
-if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W1" ] && ! has "$(rw_ran)" '--at' && ! has "$(rw_ran)" '--yes'; then
-    ok "restore: obok, tylko docs -> restore k2 k2 --source=docs --onto=hdd/restore/docs --config=<ten z wierszami>, bez --at i bez --yes"
+W1="restore ~ k2 ~ k2 ~ --source=tank/b/hdd/data/docs ~ --onto=hdd/restore/docs ~ --config=$RWCFG ~ --yes"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W1" ] && ! has "$(rw_ran)" '--at' && has "$(rw_ran)" '~ --yes'; then
+    ok "restore: obok, tylko docs -> restore k2 k2 --source=docs --onto=hdd/restore/docs --config=<ten z wierszami> --yes, bez --at"
 else
     bad "restore: obok, tylko docs" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $W1" "err: $(cut -c1-200 "$RW/err")" "wt: $(tail -n 3 "$RW/wt.log" | cut -c1-200)"
 fi
-RWSUM="$(grep -F -A 30 'sprawdź' "$RW/wt.log" | head -40)"   # argv okna to jedna wielowierszowa pozycja dziennika
+RWSUM="$(grep -F -A 30 'k2: na pewno?' "$RW/wt.log" | head -40)"   # argv okna to jedna wielowierszowa pozycja dziennika
 # U109 (wlasciciel 2026-10-28, symulacja A): najpierw z kiedy, potem dokad; lista punktow
 # z pelna nazwa migawki; podsumowanie nazywa migawke, nie "Punkt: najnowszy".
 RWKD="$(grep -n 'k2: z kiedy?' "$RW/wt.log" | head -1 | cut -d: -f1)"; RWDK="$(grep -n 'k2: dokąd?' "$RW/wt.log" | head -1 | cut -d: -f1)"
@@ -5736,8 +5736,10 @@ else
     bad "restore U109: kolejnosc i nazwa migawki" "z kiedy=$RWKD dokad=$RWDK" "$(printf '%s' "$RWSUM" | head -12)"
 fi
 # U14: zgoda jest (atrapa: create rewind) -- podsumowanie mowi, jaka, i nie straszy brakiem.
-if has "$RWSUM" 'Zgoda 10.0.0.9: create rewind' && has "$RWSUM" '--defaultno' && ! has "$RWSUM" 'Wymaga zgody' && ! grep -qF 'brak zgody' "$RW/wt.log"; then
-    ok "restore: okno podsumowania ma domyslne 'Nie' (--defaultno) i mowi, jaka zgode wydal cel (U14)"
+# 2026-10-29: to okno jest jedynym "Na pewno?" -- przycisk Wykonaj i zdanie, ze polecenie idzie od razu (bez dalszych pytań).
+if has "$RWSUM" 'Zgoda 10.0.0.9: create rewind' && has "$RWSUM" '--defaultno' && ! has "$RWSUM" 'Wymaga zgody' && ! grep -qF 'brak zgody' "$RW/wt.log" \
+   && has "$RWSUM" '--yes-button ~ Wykonaj ~ --no-button ~ Wstecz' && has "$RWSUM" '<Wykonaj> uruchamia to od razu, bez dalszych pytań.'; then
+    ok "restore: okno podsumowania ('na pewno?') ma domyslne 'Nie' (--defaultno), Wykonaj/Wstecz, zdanie 'uruchamia to od razu' i mowi, jaka zgode wydal cel (U14)"
 else
     bad "restore: okno podsumowania" "$(printf '%s' "$RWSUM" | cut -c1-300)"
 fi
@@ -5756,7 +5758,7 @@ else
 fi
 printf '0\tdalej\n0\tp0\n0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
 STUB_GRANT_OUT='HOST=10.0.0.9\nLABEL=pve9\nGRANT=none' STUB_GRANT_RC=1 rw_run "$RW/t-docs.json"
-RWSUM_N="$(grep -F -A 30 'sprawdź' "$RW/wt.log" | head -40)"
+RWSUM_N="$(grep -F -A 30 'k2: na pewno?'"$RW/wt.log" | head -40)"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W1" ] && has "$RWSUM_N" 'Wymaga zgody na 10.0.0.9: deploy.sh --allow-restore=pve9'; then
     ok "restore: brak zgody + 'mimo to dalej' -> zwykle kroki i to samo polecenie; podsumowanie 'Wymaga zgody' z etykieta celu (U14)"
 else
@@ -5777,7 +5779,7 @@ cp "$RW/plan.json" "$RW/plan.remote.json"
 sed 's|"source":"acct@10.0.0.9:hdd/data"|"source":"hdd/data"|' "$RW/plan.remote.json" > "$RW/plan.json"
 printf '0\tp0\n0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-docs.json"
-RWSUM_L="$(grep -F -A 30 'sprawdź' "$RW/wt.log" | head -40)"
+RWSUM_L="$(grep -F -A 30 'k2: na pewno?'"$RW/wt.log" | head -40)"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W1" ] && has "$RWSUM_L" 'Relacja lokalna' && ! has "$RWSUM_L" 'Wymaga zgody'; then
     ok "restore: relacja lokalna obok -> to samo polecenie, podsumowanie bez zadania zgody"
 else
@@ -5802,7 +5804,7 @@ rw_run "$RW/t-whole.json"
 # --at dla punktu p1 = sekunda PRZED nowszym punktem p0 (P7, 2026-10-15): jeden bieg robi migawki
 # datasetow sekundy po sobie, wiec sekunda migawki korzenia odcinala dzieci tego samego biegu.
 RWAT="$(date -d @$((1792081503 - 1)) '+%Y-%m-%d %H:%M:%S')"
-W2="restore ~ k2 ~ --at=$RWAT ~ --config=$RWCFG"
+W2="restore ~ k2 ~ --at=$RWAT ~ --config=$RWCFG ~ --yes"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W2" ]; then
     ok "restore: na miejsce, cala relacja, punkt p1 -> restore k2 --at=<czas p1> --config=... (bez --source, bez --onto)"
 else
@@ -5812,7 +5814,7 @@ fi
 # 3. miejsce z wylaczonym mail: nie cala relacja -> --source z lista (rodzice przed dziecmi)
 printf '0\tp0\n0\tmiejsce\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-nomail.json"
-W3="restore ~ k2 ~ --source=tank/b/hdd/data,tank/b/hdd/data/docs ~ --config=$RWCFG"
+W3="restore ~ k2 ~ --source=tank/b/hdd/data,tank/b/hdd/data/docs ~ --config=$RWCFG ~ --yes"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W3" ]; then
     ok "restore: na miejsce z wylaczonym mail -> --source=data,data/docs (WHOLE=0 dodaje --source)"
 else
@@ -5822,7 +5824,7 @@ fi
 # 4. obok, cala relacja: --source i --onto w tej samej kolejnosci, onto = baza/data/...
 printf '0\tp0\n0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-whole.json"
-W4="restore ~ k2 ~ k2 ~ --source=tank/b/hdd/data,tank/b/hdd/data/docs,tank/b/hdd/data/mail ~ --onto=hdd/restore/data,hdd/restore/data/docs,hdd/restore/data/mail ~ --config=$RWCFG"
+W4="restore ~ k2 ~ k2 ~ --source=tank/b/hdd/data,tank/b/hdd/data/docs,tank/b/hdd/data/mail ~ --onto=hdd/restore/data,hdd/restore/data/docs,hdd/restore/data/mail ~ --config=$RWCFG ~ --yes"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W4" ]; then
     ok "restore: obok, cala relacja -> --source=3 datasety, --onto=hdd/restore/data/... w tej samej kolejnosci"
 else
@@ -5832,10 +5834,10 @@ fi
 # 5. Wstecz z podsumowania wraca do punktow i NIC nie uruchamia: summary rc 1, punkty znowu, summary rc 0 -> JEDNA linia ran
 printf '0\tp0\n0\tobok\n0\thdd/restore\n1\t\n0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-docs.json"
-if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran | grep -c '')" -eq 1 ] && [ "$(grep 'sprawdź' "$RW/wt.log" | grep -c -- '--yesno')" -eq 2 ]; then
-    ok "restore: Wstecz z podsumowania (wraca do 'dokad', U109) nic nie uruchamia -- dwa razy okno 'sprawdz', JEDNO wywolanie czasownika"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran | grep -c '')" -eq 1 ] && [ "$(grep 'k2: na pewno?' "$RW/wt.log" | grep -c -- '--yesno')" -eq 2 ]; then
+    ok "restore: Wstecz z podsumowania (wraca do 'dokad', U109) nic nie uruchamia -- dwa razy okno 'na pewno?', JEDNO wywolanie czasownika"
 else
-    bad "restore: Wstecz z podsumowania" "rc=$RW_RC" "ran: $(rw_ran)" "sprawdz: $(grep -c 'sprawdź' "$RW/wt.log")"
+    bad "restore: Wstecz z podsumowania" "rc=$RW_RC" "ran: $(rw_ran)" "na pewno?: $(grep -c 'k2: na pewno?' "$RW/wt.log")"
 fi
 
 # 7. brak kopii na tym hoscie (oba configi bez wierszy): komunikat, exit 1, zero wywolan restore
@@ -5849,8 +5851,8 @@ else
 fi
 
 # ---- tryb "Przywroc z dysku" (restore.sh --from-copy, C2b) -----------------------------------
-# Jedno polecenie: restore --from-copy=.. --onto=.. [--at=..] [--with-history] [--overwrite];
-# nigdy --yes ani --config. Atrapa zfs odpowiada na liste wszystkich datasetow hosta
+# Jedno polecenie: restore --from-copy=.. --onto=.. [--at=..] [--with-history] [--overwrite] --yes
+# (okno podsumowania jest jedynym "Na pewno?", wlasciciel 2026-10-29); nigdy --config. Atrapa zfs odpowiada na liste wszystkich datasetow hosta
 # (usb9/..., hdd, hdd/data, hdd/foo/bar), na "czy cel istnieje" (tylko hdd/data i usb9*) i na migawki.
 RWCP="usb9/backups/192.168.28.98/hdd/data"
 printf '{"action":"next","roots":["%s"],"excl":{},"recursion":"flat"}\n' "$RWCP" > "$RW/t-cp1.json"
@@ -5868,10 +5870,10 @@ rw_copy() {   # <plik drzewa> <argumenty restore.sh...> -- odpowiedzi w $RW/answ
 # c1. hdd/data ISTNIEJE -> okno nadpisania ("JUŻ ISTNIEJĄ"); Nadpisz; p0; historia Nie -> --overwrite, bez --at/--with-history
 printf '0\tp0\n1\t\n0\thdd/data\n0\t\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp1.json" --from-copy "$RWCP"
-C1="restore ~ --from-copy=$RWCP ~ --onto=hdd/data ~ --overwrite"
-if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$C1" ] && ! has "$(rw_ran)" '--yes' && ! has "$(rw_ran)" '--config' \
+C1="restore ~ --from-copy=$RWCP ~ --onto=hdd/data ~ --overwrite ~ --yes"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$C1" ] && has "$(rw_ran)" '~ --yes' && ! has "$(rw_ran)" '--config' \
    && ! has "$(rw_ran)" '--at' && ! has "$(rw_ran)" '--with-history'; then
-    ok "restore --from-copy: cel istnieje, Nadpisz, najnowszy, bez historii -> --from-copy=.. --onto=hdd/data --overwrite (bez --at/--with-history/--yes/--config)"
+    ok "restore --from-copy: cel istnieje, Nadpisz, najnowszy, bez historii -> --from-copy=.. --onto=hdd/data --overwrite --yes (bez --at/--with-history/--config)"
 else
     bad "restore --from-copy: nadpisanie" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $C1" "err: $(cut -c1-200 "$RW/err")" "wt: $(tail -n 3 "$RW/wt.log" | cut -c1-200)"
 fi
@@ -5881,11 +5883,19 @@ if grep -qF "\"roots\": [\"$RWCP\"]" "$RW/last-spec.json" 2>/dev/null && grep -q
 else
     bad "restore --from-copy: spec drzewa / okno nadpisania" "spec: $(cut -c1-300 "$RW/last-spec.json" 2>/dev/null)" "wt: $(grep -c 'ISTNIEJ' "$RW/wt.log")"
 fi
+# 2026-10-29: podsumowanie z dysku to jedyne "Na pewno?" -- tytul, Wykonaj/Wstecz i zdanie, ze polecenie idzie od razu.
+RWCS="$(grep -F -A 30 'Przywróć z dysku: na pewno?' "$RW/wt.log" | head -40)"
+if has "$RWCS" '--yes-button ~ Wykonaj ~ --no-button ~ Wstecz' && has "$RWCS" '--defaultno' \
+   && has "$RWCS" '<Wykonaj> uruchamia to od razu, bez dalszych pytań; zaszyfrowana kopia -- zapyta tylko o klucz albo plik klucza.'; then
+    ok "restore --from-copy: okno 'Przywróć z dysku: na pewno?' ma Wykonaj/Wstecz (--defaultno) i zdanie 'uruchamia to od razu, bez dalszych pytań'"
+else
+    bad "restore --from-copy: okno 'na pewno?'" "$(printf '%s' "$RWCS" | cut -c1-300)"
+fi
 
 # c2. nowa nazwa (nie istnieje -> bez okna nadpisania); starszy punkt p1; historia Tak
 printf '0\tp1\n0\t\n0\thdd/restore/data\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp1.json" --from-copy "$RWCP"
-C2="restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data ~ --at=$RWAT ~ --with-history"
+C2="restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data ~ --at=$RWAT ~ --with-history ~ --yes"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$C2" ] && ! has "$(rw_ran)" '--overwrite' && ! grep -qF 'ISTNIEJ' "$RW/wt.log"; then
     ok "restore --from-copy: nowy cel, punkt p1, historia Tak -> --onto=hdd/restore/data --at=<czas p1> --with-history, bez --overwrite i bez okna nadpisania"
 else
@@ -5895,7 +5905,7 @@ fi
 # c3. korzen bez wzorca backups -> podpowiedz <pula>/restore/<ostatni czlon>
 printf '0\tp0\n1\t\n0\thdd/restore/bar\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp-bar.json" --from-copy
-C3="restore ~ --from-copy=hdd/foo/bar ~ --onto=hdd/restore/bar"
+C3="restore ~ --from-copy=hdd/foo/bar ~ --onto=hdd/restore/bar ~ --yes"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$C3" ] && grep -qF -- 'hdd/restore/bar ~' "$RW/wt.log"; then
     ok "restore --from-copy: hdd/foo/bar (bez wzorca backups) -> pole 'dokad' podpowiada hdd/restore/bar, --onto=hdd/restore/bar"
 else
@@ -5929,7 +5939,7 @@ fi
 # c4. dwa korzenie -> dwa pola 'dokad', obie listy w kolejnosci drzewa
 printf '0\tp0\n1\t\n0\thdd/restore/data\n0\thdd/restore/bar\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp-two.json" --from-copy
-C4="restore ~ --from-copy=$RWCP,hdd/foo/bar ~ --onto=hdd/restore/data,hdd/restore/bar"
+C4="restore ~ --from-copy=$RWCP,hdd/foo/bar ~ --onto=hdd/restore/data,hdd/restore/bar ~ --yes"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$C4" ] && [ "$(grep -c -F inputbox "$RW/wt.log")" -eq 2 ]; then
     ok "restore --from-copy: dwa korzenie -> dwa pola 'dokad', --from-copy=A,B --onto=a,b w kolejnosci drzewa"
 else
@@ -5940,17 +5950,18 @@ fi
 # przechodzi do polecenia: okno "zla nazwa" i to samo pole jeszcze raz; potem poprawna nazwa.
 printf '0\tp0\n1\t\n0\trestore/home\n0\t\n0\thdd/restore/data\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp1.json" --from-copy "$RWCP"
-if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data" ] \
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data ~ --yes" ] \
    && grep -q 'zła nazwa' "$RW/wt.log" && ! grep -q 'onto=restore/home' "$RW/ran"; then
     ok "restore --from-copy: cel bez puli ('restore/home') -> okno 'zła nazwa' i to samo pole, polecenie dopiero z poprawna nazwa (P5)"
 else
     bad "restore --from-copy: cel bez puli (P5)" "rc=$RW_RC ran=$(rw_ran)" "$(grep -c 'zła nazwa' "$RW/wt.log")"
 fi
 # P1: po biegu napis o Enterze jest NA EKRANIE (stdout), nie schowany w stderr.
-# Powodzenie nie czeka na Enter (owner 2026-10-27): sam napis '=== GOTOWE (rc=0).', bez 'Enter = powrót'.
+# Powodzenie nie czeka na Enter (owner 2026-10-27); od 2026-10-29 napis to wt_end 'Odzysk: gotowe'
+# (zamiast '=== GOTOWE (rc=0).'), nadal bez 'Enter = powrót'.
 # Stdin tego biegu to /dev/null, wiec o czekaniu swiadczy tekst, nie zawieszenie.
-if grep -q '=== GOTOWE (rc=0)\.$' "$RW/out" && ! grep -q 'Enter = powrót' "$RW/out"; then
-    ok "restore: po udanym biegu na ekranie '=== GOTOWE (rc=0).' bez prosby o Enter (P1; wyjscie bez czekania)"
+if grep -qx 'Odzysk: gotowe' "$RW/out" && ! grep -q 'GOTOWE (rc=0)' "$RW/out" && ! grep -q 'Enter = powrót' "$RW/out"; then
+    ok "restore: po udanym biegu na ekranie 'Odzysk: gotowe' (wt_end) bez prosby o Enter (P1; wyjscie bez czekania)"
 else
     bad "restore: napis Enter po biegu (P1)" "$(tail -3 "$RW/out")"
 fi
@@ -5969,7 +5980,7 @@ fi
 #    Roznica wzgledem starego kodu: stary restore.sh bral $2 = "--dataset=.." za DATASET i pokazywal drzewo.
 printf '1\t\n0\thdd/restore/data\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp1.json" --from-copy --dataset="$RWCP" --snapshot=automated_daily_2026-10-14_01-35-01
-CA="restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data ~ --at=$RWAT"
+CA="restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data ~ --at=$RWAT ~ --yes"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$CA" ] && head -n 1 "$RW/wt.log" | grep -qF 'historia' \
    && [ ! -e "$RW/last-spec.json" ] && ! grep -qF 'z kiedy?' "$RW/wt.log" && ! grep -qF 'skąd?' "$RW/wt.log"; then
     ok "restore --from-copy --dataset= --snapshot=: pierwsze okno 'historia' (U109: migawka wybrana, potem dokad), bez drzewa i bez menu 'z kiedy'; polecenie z --from-copy=<kopia> i --at=<czas migawki>"
@@ -5979,7 +5990,7 @@ fi
 # b) migawki nie ma: msgbox "nie ma w" i menu jak dotad (p0 = najnowszy -> bez --at)
 printf '0\t\n0\tp0\n1\t\n0\thdd/restore/data\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp1.json" --from-copy --dataset="$RWCP" --snapshot=no_such_snap
-if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data" ] \
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data ~ --yes" ] \
    && grep -qF "Migawki no_such_snap nie ma w $RWCP -- wybierz z listy." "$RW/wt.log" && grep -qF 'z kiedy?' "$RW/wt.log"; then
     ok "restore --from-copy --snapshot=<brak>: okno 'Migawki .. nie ma w ..' i menu 'z kiedy' jak dotad"
 else
@@ -5989,7 +6000,7 @@ fi
 cp "$RW/plan.remote.json" "$RW/plan.json"      # test 7 zostawil plan bez kopii
 printf '0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-whole.json" k2 --dataset=tank/b/hdd/data --snapshot=automated_daily_2026-10-14_01-35-01
-CC="restore ~ k2 ~ k2 ~ --source=tank/b/hdd/data,tank/b/hdd/data/docs,tank/b/hdd/data/mail ~ --onto=hdd/restore/data,hdd/restore/data/docs,hdd/restore/data/mail ~ --at=$RWAT ~ --config=$RWCFG"
+CC="restore ~ k2 ~ k2 ~ --source=tank/b/hdd/data,tank/b/hdd/data/docs,tank/b/hdd/data/mail ~ --onto=hdd/restore/data,hdd/restore/data/docs,hdd/restore/data/mail ~ --at=$RWAT ~ --config=$RWCFG ~ --yes"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$CC" ] && [ ! -e "$RW/last-spec.json" ] \
    && grep -qF 'k2: dokąd?' "$RW/wt.log" && ! grep -qF 'z kiedy?' "$RW/wt.log"; then
     ok "restore RELACJA --dataset= --snapshot=: bez drzewa, bez menu 'z kiedy'; pierwsze okno 'dokad', polecenie z --at=<czas migawki>"
