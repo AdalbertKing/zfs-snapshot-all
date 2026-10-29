@@ -1690,7 +1690,9 @@ else
 fi
 # GRUPY jak F2 (F8, wlasciciel 2026-10-29 „tak jak F2 -- wszystkie mozliwosci”): naglowek
 # relacji z rodzajem, pod nim jej kopie z wcieciem; pasek mowi „F8 Jedna lista”.
-A="$(od F8)"
+# 160 kolumn: od 2026-10-29 Najnowsza ma pelna date (RRRR.MM.DD HH:MM, +5 znakow) i przy 150
+# nazwa kopii VM101 traci 5 ostatnich znakow (zmierzone) -- tu sprawdzamy grupy, nie waski ekran.
+A="$(od F8 --width 160)"
 if has "$A" 'Kopie na pve10, po relacjach' && hasE "$A" '▸ duplikat +backup' && hasE "$A" "│ $VM101 +3 " && has "$A" 'F8 Jedna lista'; then
     ok "kopie: F8 grupuje po relacji jak F9 na F2 -- naglowek '▸ duplikat  backup', pod nim '│ VM101  3', pasek 'F8 Jedna lista'"
 else
@@ -2294,7 +2296,9 @@ fi
 # KONTROLA CZYTELNIKA: sejf-b nie ma linii `media` (--fixed). Stary list-replicas
 # zwracal media="yes", recursive="latest" -- pola przesuniete o jedno przez
 # IFS=tab. Fikstura pochodzi z NAPRAWIONEGO czytelnika i ten ekran to przypina.
-NB="$(screen nosniki down --width 160)"
+# 30 wierszy: panel repliki ma od 2026-10-29 wiersz "Ile migawek" i przy domyslnych 24 "Nośnik"
+# wypada pod dolna krawedz (zmierzone) -- tu sprawdzamy tresc panelu, nie niski ekran.
+NB="$(screen nosniki down --width 160 --height 30)"
 # U130 (2026-10-29): zrodlo -> cel, rekursja i historia stoja w prawym panelu repliki (grupa
 # Co); dolna zakladka to jej przebiegi w ukladzie F2.
 NBT="$(screen nosniki down,tab --width 160)"
