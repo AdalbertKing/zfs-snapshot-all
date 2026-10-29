@@ -18685,6 +18685,16 @@ cmd_import_relation() {   # FILE [--name=NEW] [--yes]
 $(json_array_strings "$(json_value_of "$replay" argv)")
 ARGV
     [ "${#argv[@]}" -gt 0 ] || die "import-relation: replay argv is empty -- the export carried no declarations to reproduce"
+    # A FILE FROM BEFORE THE RAW FIX (2026-10-29): its argv has no --raw although the
+    # relation's installed [dataset:] sections, documented in the same file, are raw = yes
+    # (set-transfer --raw). Seeding such a copy non-raw is refused by the encrypted target,
+    # so the documented sections decide: raw there -> --raw here.
+    case " ${argv[*]} " in *" --raw "*) ;; *)
+        if printf '%s' "$(json_value_of "$doc" installed)" | grep -q '"raw":"yes"'; then
+            argv+=(--raw)
+            echo ">>> import-relation: the file's installed sections are raw (raw = yes) -- replaying with --raw"
+        fi ;;
+    esac
     # NO PROFILE FILE HERE? Build from the relationship itself (import_helper_profile).
     # Measured on pve10, 2026-10-22: with d30h24.conf absent the replay died in
     # add-client, although the file carried the whole [relation:] block.
@@ -19156,6 +19166,17 @@ cmd_export_relation() {
         decl_json="$decl_json\"OWN_SNAPSHOTS\":\"1\""
         argv+=(--own-snapshots)
     fi
+    # RAW: add-client --raw writes RAW_SEND=1, but set-transfer --raw writes only the config
+    # line (raw = yes) of the relation's [dataset:] sections. Either way the copy is raw and
+    # the replay must seed raw -- pve10, 2026-10-29: pve9 (encrypted hdd/enc, raw by
+    # set-transfer) exported without it, and the import's non-raw seed was refused by the
+    # encrypted target ("Refusing non-raw send"), the relation left in 'seeding'.
+    if [ "${RAW_SEND:-0}" = "1" ] || { [ -n "$cfg" ] && [ -r "$cfg" ] && export_relation_cfg_raw "$cfg" "$name"; }; then
+        [ "$first" -eq 1 ] || decl_json="$decl_json,"
+        first=0
+        decl_json="$decl_json\"RAW_SEND\":\"1\""
+        argv+=(--raw)
+    fi
     local x
     while IFS= read -r x; do
         [ -n "$x" ] || continue
@@ -19315,6 +19336,18 @@ EXF
         printf 'null'
     fi
     printf '}\n'
+}
+
+export_relation_cfg_raw() {   # <config> <client> -> 0 when a [dataset:] section of the client has raw = yes
+    local cfg="$1" name="$2" idx kind sname key val
+    while IFS=$'\001' read -r idx kind sname key val; do
+        [ "$kind" = dataset ] && [ "$key" = raw ] || continue
+        case "$val" in yes|1|true) ;; *) continue ;; esac
+        section_owned_by "$cfg" "[dataset:$sname]" "$name" "$sname" && return 0
+    done <<ERW
+$(config_section_dump "$cfg")
+ERW
+    return 1
 }
 
 export_relation_installed_json() {   # <config> <client>
