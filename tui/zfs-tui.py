@@ -2675,7 +2675,7 @@ def job_panel_pairs(row, data, now, ch):
     j = row["job"]
     jobs_here = row.get("jobs") or [j]
     _dir = row.get("dir") or "?"
-    pairs = [group(ch, _(u"Co")), (_(u"Kierunek"), _(u"lokalnie, na tym hoście") if _dir == "local" else _dir)]
+    pairs = [group(ch, _(u"Co")), (_(u"Kierunek"), _(u"lokalnie, na tym hoście") if _dir in ("local", _(u"lokalnie")) else _dir)]
     if len(jobs_here) > 1:
         # wspolny przedrostek RAZ, potem krotkie nazwy (R3-5)
         scopes = [(jj.get("scope", "") or "?").split(":")[-1] for jj in jobs_here]
