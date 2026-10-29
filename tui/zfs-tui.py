@@ -1065,7 +1065,7 @@ def collect(repo, files, only=None):
     files["_data"] = data
     plan = [("status", ["status", "--json"]), ("jobs", ["list-jobs", "--json"]),
             ("monitors", ["monitor", "--json"]), ("progress", ["progress", "--json"]),
-            ("replicas", ["list-replicas", "--json"]), ("stats", ["job-stats", "--json", "--vol-cache=300", "--runs=%d" % PRZ_PAST_H])]
+            ("replicas", ["list-replicas", "--json"]), ("stats", ["job-stats", "--json", "--vol-cache=300", "--runs=%d" % PRZ_RUNS_H])]
     # RÓWNOLEGLE (P2, właściciel 2026-10-15: powrót z okna do GUI > 5 s). Pełne odświeżenie
     # zostaje (decyzja 2026-10-09: powrót zawsze odświeża), ale sześć czasowników tylko do
     # odczytu szło PO KOLEI -- zmierzone na pve10: list-jobs 6,0 s + monitor 5,6 s +
@@ -1952,6 +1952,10 @@ def sort_zad_rows(rows, mode, data):
 # Lista = kiedy i z jakim skutkiem; panel = jak ustawione + ten bieg; dol =
 # zrodlo -> cel tego biegu. Kazdy fakt w jednym miejscu.
 PRZ_PAST_H = 12
+# F6 (U130): przebiegi repliki siegaja dalej -- replika "pn-pt" ma przerwe pt->pn. Czytnik
+# job-stats bierze tyle godzin biegow (pve10: 48 h ~5 s, 168 h ~12 s; idzie w drugim etapie),
+# F2 nadal pokazuje PRZ_PAST_H.
+PRZ_RUNS_H = 72
 PRZ_AHEAD_H = 6
 
 # ---------------------------------------------------------------------------
@@ -2220,7 +2224,7 @@ def run_is_prune(it):
     return j.get("section_kind") == "prune" or u"prune" in (it.get("task") or u"")
 
 
-def build_runs(data, jobrows, now, show_done=True, grouped=False):
+def build_runs(data, jobrows, now, show_done=True, grouped=False, past_h=PRZ_PAST_H):
     """Wiersze PRZEBIEGOW: bieg = (zadanie, chwila). Zadania z jedna linia crona
     (jedna etykieta) ida razem -- pve2: subvol-103 i ROOT/pve-1 w jednym snapget,
     jeden bieg, nie dwa. Wiersze "now" (kreska) i "grp" (naglowek relacji) sa
@@ -2266,7 +2270,7 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False):
                 st, en = iso_epoch(x.get("start") or ""), iso_epoch(x.get("end") or "")
                 at = en or st
                 p_end, prev = prev, (en or st)
-                if at is None or at < now - PRZ_PAST_H * 3600:
+                if at is None or at < now - past_h * 3600:
                     continue
                 r = dict(base)
                 r.update({"past": True, "at": at, "start": st, "end": en, "rc": x.get("rc"), "err": x.get("error") or "",
@@ -2619,7 +2623,7 @@ def rep_children(tab, r, data, now, ch, jobrows=None):
     nadchodzace (wlasciciel 2026-10-29, U130: "Wzór to okno jobs"). Zrodlo -> cel stoi
     w prawym panelu (grupa Co)."""
     bar = u"\u2500\u2500 " if not ch.ascii else u"-- "
-    rows = [x for x in build_runs(data, jobrows or [], now, True, False)
+    rows = [x for x in build_runs(data, jobrows or [], now, True, False, past_h=PRZ_RUNS_H)
             if x.get("kind") == "now" or (x.get("item") or {}).get("kind") == "replica"
             and (x["item"].get("replica") or {}).get("name") == r.get("name")]
     if not any(x.get("kind") == "run" for x in rows):
@@ -2638,7 +2642,7 @@ def rep_children(tab, r, data, now, ch, jobrows=None):
                       "pairs": run_pairs(x, now, ch), "title": _(u"%s -- bieg") % r.get("name")})
     return {"heads": [_(u"Kiedy"), _(u"Wynik"), _(u"Czas"), _(u"Dane")], "items": items, "prio": [0, 1, 3, 2],
             "empty": _(u"brak przebiegów tej repliki w oknie %dh wstecz i %dh naprzód (dysku nie było albo nie ma harmonogramu)")
-            % (PRZ_PAST_H, PRZ_AHEAD_H)}
+            % (PRZ_RUNS_H, PRZ_AHEAD_H)}
 
 
 def odz_children(tab, item, rows, data, now, ch):
