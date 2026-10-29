@@ -1104,6 +1104,68 @@ check "PG16 an address that is no node, guest in this cluster: runs" "0 1" "$(pg
 check "PG16b ...and WARNs that the guard was not checked, naming pve_node" "1" \
       "$(grep -c "^WARN|lbl -- guest guard not checked|.*cannot tell which PVE node '10.9.9.9' is.*guest 101 (on pveA).*pve_node" "$PG/calls")"
 
+# PG17-PG24: TREES (owner 2026-10-29, variant A). A recursive line over a parent is
+# marked `tree`; zfs-job.sh lists the tree (zfs list -r, over the line's ssh options
+# for a remote one), takes the guest id from each disk's name and leaves out --
+# -X on a -R snapshot -- the disks whose guest runs on another node; a prune or an
+# atomic -r cannot leave a child out and is NOT RUN. Fake pool: tank/data holds
+# vm-101 (runs on pveA = here) and vm-102 (CT 102 runs on pveB: a replica here).
+mkdir -p "$PG/zbin" "$PG/eng"
+cat > "$PG/zbin/zfs" <<ZF
+#!/bin/bash
+# zfs list -H -o name -r -- DS  ->  the fake tree
+[ "\$1 \$2 \$3 \$4 \$5 \$6" = "list -H -o name -r --" ] || exit 1
+f="$PG/tree.\$(printf '%s' "\$7" | tr / _)"
+[ -f "\$f" ] && cat "\$f" || exit 1
+ZF
+cat > "$PG/zbin/ssh" <<SF
+#!/bin/bash
+printf '%sNL' "\$*" >> "$PG/ssh.log"
+[ -n "\${PG_SSH_FAIL:-}" ] && exit 255
+PATH="$PG/zbin:\$PATH" exec bash -c "\${!#}"
+SF
+for e in snapget.sh snapsend.sh delsnaps.sh; do
+    printf '#!/bin/sh%secho "$*" > %s/argv%s' NL "$PG" NL > "$PG/eng/$e"
+done
+sed -i "s/NL/\n/g" "$PG/zbin/ssh" "$PG/eng/"*.sh
+chmod +x "$PG/zbin/zfs" "$PG/zbin/ssh" "$PG/eng/"*.sh
+printf 'tank/data\ntank/data/vm-101-disk-0\ntank/data/vm-102-disk-0\ntank/data/vm-1020-disk-0\n' > "$PG/tree.tank_data"
+printf 'tank/only\ntank/only/vm-101-disk-0\n' > "$PG/tree.tank_only"
+pg_tree() {   # <engine> <args...> -> "rc ran|argv" ; WARN/FAIL calls in $PG/calls
+    : > "$PG/argv"; : > "$PG/calls"; : > "$PG/ssh.log"
+    local eng="$1"; shift
+    PATH="$PG/zbin:$PATH" ZFS_JOB_PVE_NODES="$PG/nodes" ZFS_JOB_PVE_LOCAL="$PG/local" ZFS_JOB_PROPAGATE_RC=1 \
+        bash "$REPO/zfs-job.sh" "lbl" --log="$PG/log" --notify="$PG/notify-fail.sh" --pve-guests=:tree -- "$PG/eng/$eng" "$@"
+    echo "$? $(cat "$PG/argv")"
+}
+check "PG17 tree with only this node's guests: runs unchanged, no WARN" "0 -s -m p_ -R tank/only|0" \
+      "$(pg_tree snapget.sh -s -m p_ -R tank/only)|$(grep -c . "$PG/calls")"
+check "PG18 tree holding a replica of CT 102 (runs on pveB): -R snapshot runs with -X on that disk alone" \
+      "0 -X ^tank/data/vm-102-disk-0(/|\$) -s -m p_ -R tank/data" "$(pg_tree snapget.sh -s -m p_ -R tank/data)"
+check "PG18b ...and WARNs naming the disk and the node" "1" \
+      "$(grep -c '^WARN|lbl -- guest disks left out|.*tank/data/vm-102-disk-0 (guest 102 runs on pveB)' "$PG/calls")"
+x18="$(cut -d' ' -f3 "$PG/argv")"
+check "PG18c the -X pattern takes the disk and its children, not vm-1020" "1 1 0" \
+      "$(printf 'tank/data/vm-102-disk-0' | grep -cE "$x18") $(printf 'tank/data/vm-102-disk-0/x' | grep -cE "$x18") $(printf 'tank/data/vm-1020-disk-0' | grep -cE "$x18")"
+check "PG19 the same tree in a prune (delsnaps -R): NOT RUN, rc 76, notified" "76 |1" \
+      "$(pg_tree delsnaps.sh -R tank/data p_ -H24)|$(grep -c '^FAIL|lbl|zfs-job: NOT RUN -- .*vm-102-disk-0 (guest 102 runs on pveB)' "$PG/calls")"
+check "PG20 an atomic -r snapshot cannot leave a child out: NOT RUN" "76 " "$(pg_tree snapget.sh -s -m p_ -r tank/data)"
+check "PG21 a REMOTE tree is listed over the line's own ssh options" "0 -X ^tank/data/vm-102-disk-0(/|\$) -s -m p_ -K /k/a -k /k/kh -O HostKeyAlias=h -R zb@pveA:tank/data|1" \
+      "$(pg_tree snapget.sh -s -m p_ -K /k/a -k /k/kh -O HostKeyAlias=h -R zb@pveA:tank/data)|$(grep -c -- '-i /k/a -o UserKnownHostsFile=/k/kh -o HostKeyAlias=h zb@pveA zfs list -H -o name -r -- .tank/data.' "$PG/ssh.log")"
+check "PG22 a remote tree that cannot be listed: runs unchanged and WARNs" "0 -s -m p_ -R zb@pveA:tank/data|1" \
+      "$(PG_SSH_FAIL=1 pg_tree snapget.sh -s -m p_ -R zb@pveA:tank/data)|$(grep -c '^WARN|lbl -- guest guard not checked|.*could not list the tree zb@pveA:tank/data' "$PG/calls")"
+check "PG23 key and known_hosts PATHS are not taken for trees (no zfs list of a file)" "0" \
+      "$(pg_tree snapget.sh -s -m p_ -K /k/a -R tank/only >/dev/null; grep -c . "$PG/calls")"
+# gen-cron: the recursive snaponly over a PARENT is marked `tree`, snapshot and prune alike;
+# the same parent without recursion carries no mark.
+sed -e 's#hdd/vm-disks/subvol-990-disk-0#hdd/vm-disks#' "$REPO/test/fixtures/snaponly-basic.conf" > "$PG/t.conf"
+pg_t="$(bash "$GEN" -c "$PG/t.conf" 2>&1)"
+check "PG24 a recursive snaponly over a parent: snapshot and prune lines carry --pve-guests=hostA:tree" "2 2" \
+      "$(printf '%s\n' "$pg_t" | grep 'snapget.sh -s' | grep -c -- '--pve-guests=hostA:tree ') $(printf '%s\n' "$pg_t" | grep 'delsnaps.sh' | grep -c -- '--pve-guests=hostA:tree ')"
+sed -e '/recursive    = flat/d' "$PG/t.conf" > "$PG/t2.conf"
+check "PG24b ...and the same parent without recursion carries no mark" "0" \
+      "$(bash "$GEN" -c "$PG/t2.conf" 2>&1 | grep 'snapget.sh -s' | grep -c -- '--pve-guests')"
+
 # ===========================================================================
 # MIR. SYNC IS A MIRROR (owner 2026-10-06). A pull tier carrying -M makes the
 # target hold what the source holds, so the generator drops that tier's own

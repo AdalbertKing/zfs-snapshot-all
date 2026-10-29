@@ -4069,8 +4069,11 @@ job_cron_line() {
 # exactly such a dataset. A backup target named vm-N-disk-M is never marked, and
 # neither is a passive copy, which reads a replica on purpose. A recursive scope
 # counts only when its own path is a guest disk (its descendants are that
-# guest's); a parent like rpool/data names no guest and is not marked.
-# `pve_guest_guard = no` ([defaults] or the section) turns it off.
+# guest's). A parent like rpool/data names no guest: on a RECURSIVE line (-R or -r)
+# it is marked as a TREE (`tree` in the mark), and zfs-job.sh works out at run time
+# which guests of other nodes have a replica under it (owner 2026-10-29, variant A:
+# the config keeps its one line; a -R snapshot leaves those disks out, anything
+# else waits). `pve_guest_guard = no` ([defaults] or the section) turns it off.
 declare -gA GUARD_SCOPES=()
 pve_guest_id() {   # <dataset> -> the guest id of vm-N-disk-M / subvol-N-disk-M
     local b="${1##*/}" id
@@ -4086,7 +4089,9 @@ pve_guest_id() {   # <dataset> -> the guest id of vm-N-disk-M / subvol-N-disk-M
 pve_guard_mark() {   # <host, "" = this one> <dataset> <engine flags> <section> <template>
     local host="${1#*@}" ds="$2" raw
     case " $3 " in *" -e "*) return 0 ;; esac
-    pve_guest_id "$ds" >/dev/null || return 0
+    if ! pve_guest_id "$ds" >/dev/null; then
+        case " $3 " in *" -R "*|*" -r "*) ;; *) return 0 ;; esac     # a tree, see above
+    fi
     if raw="$(resolve_field pve_guest_guard "$4" "$5" defaults)"; then
         case "$(trim "$raw" | tr '[:upper:]' '[:lower:]')" in
             no)  return 0 ;;
@@ -4111,8 +4116,8 @@ pve_guard_spec() {   # <host, "" = this one> <dataset>... -> "node-or-host:id,id
     shift
     for d in "$@"; do
         [ -n "${GUARD_SCOPES["$host|$d"]+x}" ] || continue
-        id="$(pve_guest_id "$d")" || continue
         where="${GUARD_SCOPES["$host|$d"]}"
+        id="$(pve_guest_id "$d")" || id=tree
         case ",$ids," in *",$id,"*) ;; *) ids="${ids:+$ids,}$id" ;; esac
     done
     [ -n "$ids" ] && printf '%s:%s' "$where" "$ids"
