@@ -1242,7 +1242,7 @@ def mark_pending(rows, data):
     """Do drugiego etapu startu monitor jeszcze nie odpowiedzial: wiersz bez linii monitora
     mowi "sprawdzam…", nie "bez monitora" (pve10, 2026-10-29: F3 przez 10 s mowilo, ze nikt
     nie pilnuje zadnej relacji)."""
-    if "monitors" in data.pending:
+    if "monitors" in getattr(data, "pending", ()):
         for r in rows:
             if r.get("verdict") == "BEZ MONITORA" and r.get("vword") == _(VERDICTS["BEZ MONITORA"][0]):
                 r["verdict"], r["vword"] = "SPRAWDZAM", _(VERDICTS["SPRAWDZAM"][0])
@@ -2859,7 +2859,7 @@ def rel_panel_pairs(row, data, now, ch):
     pairs.append(group(ch, _(u"Przebiegi (%d dni)") % days))
     if data.failed("stats"):
         pairs.append((_(u"Wywołania"), _(u"? -- job-stats nie odpowiedział")))
-    elif "stats" in data.pending:
+    elif "stats" in getattr(data, "pending", ()):
         pairs.append((_(u"Wywołania"), _(VERDICTS["SPRAWDZAM"][0])))
     elif sends and stt.get("runs"):
         pairs.append((_(u"Wywołania"), _(u"%d, błędów %d") % (stt["runs"], stt.get("fails") or 0)))
@@ -3368,7 +3368,7 @@ def rel_pairs(row, data, now, ch):
             elif dst == "-":
                 dst = None
             v, _reason = verdict_for_job(j, monitors)
-            if v == "BEZ MONITORA" and "monitors" in data.pending:
+            if v == "BEZ MONITORA" and "monitors" in getattr(data, "pending", ()):
                 v = "SPRAWDZAM"
             # U61 (kampania 2026-10-21): wiersz relacji mowil "błąd biegu", a wiersz jej
             # datasetu "aktualne" -- ten sam fakt (nieudany ostatni bieg TEGO zadania) ma
@@ -3380,7 +3380,7 @@ def rel_pairs(row, data, now, ch):
             srow, vol = job_stats_for(data, j, job_cron_label(j))
             if data.failed("stats"):
                 czas, gb = "?", "?"
-            elif "stats" in data.pending:
+            elif "stats" in getattr(data, "pending", ()):
                 czas, gb = u"…", u"…"
             else:
                 czas = times_cell(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s")) if srow else "-"
