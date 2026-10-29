@@ -4857,7 +4857,7 @@ HELP = [
     u"  PANELE (każdy ekran): lista = wybór i stan; panel obok = fakty o",
     u"                 zaznaczonym wierszu, których nie widać na liście; na dole zakładki",
     u"                 z tym, co wiersz zawiera (F3: Datasety, Zadania; F5: Szczeble,",
-    u"                 Używają; F6: Datasety, Przebiegi; F4: Datasety). Tab wchodzi",
+    u"                 Używają; F6: Przebiegi; F4: Migawki). Tab wchodzi",
     u"                 na dół, strzałki w lewo/prawo zmieniają zakładkę, panel obok",
     u"                 pokazuje zaznaczony element, Enter jego pełne okno, Esc",
     u"                 wraca do listy, kolejny Tab do linii poleceń. Datasety relacji",

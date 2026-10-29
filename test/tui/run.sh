@@ -2293,11 +2293,14 @@ fi
 # zwracal media="yes", recursive="latest" -- pola przesuniete o jedno przez
 # IFS=tab. Fikstura pochodzi z NAPRAWIONEGO czytelnika i ten ekran to przypina.
 NB="$(screen nosniki down --width 160)"
+# U130 (2026-10-29): zrodlo -> cel, rekursja i historia stoja w prawym panelu repliki (grupa
+# Co); dolna zakladka to jej przebiegi w ukladzie F2.
 NBT="$(screen nosniki down,tab --width 160)"
-if has "$NBT" 'sejf-b -- dataset' && hasE "$NBT" 'Z dziećmi +tak' && hasE "$NBT" 'Historia +latest'; then
-    ok "nosniki: dataset repliki --fixed ma rekursje i historie na SWOICH miejscach (kontrola przesuniecia pol list-replicas)"
+if hasE "$NB" 'Źródło → cel +[^ ]+ → ' && hasE "$NB" 'Z dziećmi +tak' && hasE "$NB" 'Historia +latest' \
+   && has "$NBT" 'sejf-b: [Przebiegi]' && hasE "$NBT" 'Kiedy +Wynik +Czas +Dane'; then
+    ok "nosniki: replika --fixed ma rekursje i historie na SWOICH miejscach w prawym panelu (kontrola przesuniecia pol list-replicas); dol: [Przebiegi] Kiedy/Wynik/Czas/Dane"
 else
-    bad "nosniki: pola repliki --fixed" "$NBT"
+    bad "nosniki: pola repliki --fixed" "$NB" "$NBT"
 fi
 if hasE "$NB" 'Nośnik +W SEJFIE -- nośnika nie ma w maszynie'; then
     ok "nosniki: stan nosnika ma jedno zdanie wyjasnienia"
