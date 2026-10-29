@@ -4,6 +4,27 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [1.0.2] — 2026-10-29
+
+- **Faster return to the main window.** It waits only for the quick readers (status, jobs,
+  progress, replicas); the monitor and run statistics follow a moment later with
+  "(monitor i przebiegi: sprawdzam…)". The F4 copy tree is no longer read in the foreground after
+  every window, which froze the screen for seconds. A window closed without a change, the F8 key
+  window and a template or settings window re-read nothing or only what they changed.
+- **One "Are you sure?" per action.** Restore asks once in its window and runs with `--yes`, so it
+  no longer asks again in the terminal. Deleting a replica is one window. Deleting a relationship
+  asks a second time only when its copies are deleted too. The new-relationship wizard shows one
+  plan window after Create. A one-line success goes to the message line instead of a window.
+- **F4 Copies in the F2 layout**: a table of copies, the snapshots in the bottom tab with the
+  `zfs list` columns, F8 groups by relationship. The target browser of the wizard shows USED/AVAIL.
+- **F6 Replica**: source → target in the right panel; the bottom tab lists the replica's runs,
+  done and upcoming, like F2 (72 hours back).
+- **F7 on a relationship** runs each dataset's lowest tier (hourly before daily before weekly …).
+  A relationship without an hourly tier could run whichever line came first in cron.
+- **Adding a tier** (`set-tiers --add-tier`) takes that tier's first snapshot at once, so its
+  monitor does not report a missing snapshot until the first scheduled run.
+- **F10 Settings**: wider gap between the columns, descriptions wrap in the third column.
+
 ## [1.0.1] — 2026-10-29
 
 - **PVE guest guard.** Snapshots and prunes of a guest's disk run only on the node where the guest
