@@ -11171,6 +11171,17 @@ if [ "$(grep -o -- '"--raw"' "$IM/szyfr.json" | wc -l | tr -d ' ')" -eq 1 ] && g
 else
     bad "importrel/raw: raw export/import" "$(grep -o '"argv":\[[^]]*\]' "$IM/szyfr.json")" "$(cat "$IM/calls.log")" "$(grep -o '"argv":\[[^]]*\]' "$IM/ksieg-raw.json")" "$(cat "$WORK/ex.err")"
 fi
+# ...and a file written BEFORE that fix (argv without --raw, sections documented raw = yes)
+# is replayed with --raw too -- the pve9 file on pve10 was one.
+sed -e 's/,"--raw"//' -e 's/"--raw",//' -e 's/,"RAW_SEND":"1"//' -e 's/"RAW_SEND":"1",//' "$IM/szyfr.json" > "$IM/szyfr-old.json"
+im_run "$IM/szyfr-old.json" --name=szyfr3 --yes
+if ! grep -q -- '"--raw"' "$IM/szyfr-old.json" && grep -q '"raw":"yes"' "$IM/szyfr-old.json" \
+        && [ "$(grep '^add-client|szyfr3|' "$IM/calls.log" | grep -o -- '|--raw' | wc -l | tr -d ' ')" -eq 1 ] \
+        && grep -q 'replaying with --raw' "$WORK/im.out"; then
+    ok "importrel/raw: an old file (argv without --raw, installed sections raw = yes) is imported with --raw, and says so"
+else
+    bad "importrel/raw: old file without --raw" "$(grep -o '"argv":\[[^]]*\]' "$IM/szyfr-old.json")" "$(cat "$IM/calls.log")" "$(tail -5 "$WORK/im.out" 2>/dev/null)"
+fi
 rm -f "$EX/clients/zwykla.conf" "$EX/clients/pasywna.conf" "$EX/clients/wlasne.conf" "$EX/clients/szyfr.conf" "$EX/cron-raw.conf"
 
 # usage says so

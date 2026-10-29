@@ -18685,6 +18685,16 @@ cmd_import_relation() {   # FILE [--name=NEW] [--yes]
 $(json_array_strings "$(json_value_of "$replay" argv)")
 ARGV
     [ "${#argv[@]}" -gt 0 ] || die "import-relation: replay argv is empty -- the export carried no declarations to reproduce"
+    # A FILE FROM BEFORE THE RAW FIX (2026-10-29): its argv has no --raw although the
+    # relation's installed [dataset:] sections, documented in the same file, are raw = yes
+    # (set-transfer --raw). Seeding such a copy non-raw is refused by the encrypted target,
+    # so the documented sections decide: raw there -> --raw here.
+    case " ${argv[*]} " in *" --raw "*) ;; *)
+        if printf '%s' "$(json_value_of "$doc" installed)" | grep -q '"raw":"yes"'; then
+            argv+=(--raw)
+            echo ">>> import-relation: the file's installed sections are raw (raw = yes) -- replaying with --raw"
+        fi ;;
+    esac
     # NO PROFILE FILE HERE? Build from the relationship itself (import_helper_profile).
     # Measured on pve10, 2026-10-22: with d30h24.conf absent the replay died in
     # add-client, although the file carried the whole [relation:] block.
