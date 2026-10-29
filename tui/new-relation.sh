@@ -597,7 +597,7 @@ step_chain() {   # 0 = odpowiedź zapisana, 1 = wstecz
     facts="$(chain_facts)"
     geom
     wt --title "$(title 5 "$(T 'Migawki naszej rodziny już są na źródle')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
-       --menu "$(Tv 'Na $HOST są już migawki naszej rodziny:\n$facts\n\nKto je dziś robi? Najnowsza sprzed godziny-dwóch zwykle znaczy, że ktoś je robi.\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.' '$HOST' "$( [ -n "$HOST" ] && hostw || hostname)" '$facts' "$facts")" "$H" "$W" 2 \
+       --menu "$(Tv 'Na $HOST są już migawki naszej rodziny:\n$facts\n\nKto je dziś robi? Najnowsza sprzed godziny-dwóch zwykle znaczy, że ktoś je robi.\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.' '$HOST' "$(T 'źródle') $( [ -n "$HOST" ] && hostw || hostname -s)" '$facts' "$facts")" "$H" "$W" 2 \
        chain "$(T 'Tworzy je inny kolektor, lub inna relacja albo stary cron -- łańcuch, przyjmuję')" \
        own "$(T 'Nikt -- to resztki starej relacji, robię własne')" || return 1
     CHAIN_ANS="$WT_OUT"; CHAIN_FOR="${B_ROOT[*]}"
@@ -1248,7 +1248,9 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
 # karty dowolne pole poprawia się bez cofania. "Utwórz relację" = podsumowanie, plan,
 # WYKONAJ (step_summary, bez zmian).
 RC_RUN=1
-ORDER=(mode host ds target chain profile srcret name acct extra)
+# chain zaraz po ds (wlasciciel 2026-10-29): pytanie o migawki na ZRODLE padalo po wyborze celu
+# i operator bral je za przeszkode w celu.
+ORDER=(mode host ds chain target profile srcret name acct extra)
 VIS=" "
 field_applies() {   # <pole> -> 0, gdy pole jest w tej relacji
     case "$1" in
@@ -1368,7 +1370,7 @@ CARD_NAMES_OF() {
 # siedzą w "Zaawansowane" (domyślne pasują prawie zawsze); dopiero tam "Utwórz relację".
 wz_steps() {   # -> kroki bieżącego rodzaju, w kolejności
     local f out=""
-    for f in mode host ds target chain profile srcret name; do field_applies "$f" && out="$out $f"; done
+    for f in mode host ds chain target profile srcret name; do field_applies "$f" && out="$out $f"; done
     echo $out
 }
 wz_abort() {   # 0 = przerwij; 1 = zostań ("Zostań" albo Esc)
