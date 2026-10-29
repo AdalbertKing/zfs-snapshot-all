@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1e7a59728e24c822 -->
+<!-- status-covers-digest: 9cec767b82c90981 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -84,6 +84,10 @@
   jak F9 na F2 (F9 zostaje Przywróć). Repliki bez nośnika i relacje bez kopii mają swój wiersz z uwagą, bez akcji.
   Stan i klawisze bez zmian (Enter/Tab do migawek, Enter przegląda, F9 przywraca). F10: większy odstęp kolumn,
   opisy łamane w trzeciej kolumnie (dalszy ciąg otwiera to samo ustawienie). Zasada na przyszłość: każde okno przeglądania w układzie F2 (backlog U121).
+- **F7 na relacji robi najniższy szczebel (2026-10-29, właściciel, U132).** `run-relation` wybiera dla każdego datasetu
+  linię szczebla o najniższej randze (`tiers_cadence_rank`: godzinowy < dzienny < tygodniowy < miesięczny < roczny).
+  Wcześniej wybierał linię z godziną `*`, a bez niej pierwszą w kolejności crona. Relacja bez szczebla godzinowego
+  mogła więc dostać np. tygodniową (test: tygodniowa przed dzienną w cronie). Monitor szczebli (czy pusty wyższy szczebel alarmuje, progi) czeka po 1.0 (U131).
 - **Dodany szczebel dostaje od razu pierwszą migawkę (2026-10-29).** Na pve10 właściciel dodał relacji `pve9b`
   szczebel tygodniowy. Nowe linie czekały do niedzieli, F7 uruchomił godzinowe, a monitor czytał „brak
   `automated_weekly`, wiek od założenia datasetu” = CRITICAL („stare”). Zakładanie relacji i `set-datasets`
