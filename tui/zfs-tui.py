@@ -4671,23 +4671,23 @@ def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, 
         # GRUPY jak F2 po F9: naglowek relacji z rodzajem i kierunkiem (tylko do czytania),
         # pod nim jej kopie z wcieciem. Kursor chodzi po kopiach; ccur = jego wiersz w tabeli.
         if grouped and g is not None and g is not last_g:
-            cells.append([(u"> " if ch.ascii else u"▸ ") + g["name"], u"%s  %s" % (g.get("typ") or u"", g.get("dir") or u""), u" ", u" "])
+            cells.append([u"%s%s  %s  %s" % (u"> " if ch.ascii else u"▸ ", g["name"], g.get("typ") or u"", g.get("dir") or u""), u" ", u" "])
             last_g = g
         if len(rows) == cursor:
             ccur = len(cells)
         rows.append(it)
         if it.get("any"):
-            cells.append([_(u"inny dysk -- pula spoza relacji i replik"), u" ", u" ", u" "] if grouped
+            cells.append([_(u"inny dysk -- pula spoza relacji i replik"), u" ", u" "] if grouped
                          else [u" ", u" ", _(u"inny dysk -- pula spoza relacji i replik"), u" ", u" "])
             continue
         if it.get("note"):
-            cells.append([u"  %s %s" % (bar, it["note"]), u" ", u" ", u" "] if grouped
+            cells.append([u"  %s %s" % (bar, it["note"]), u" ", u" "] if grouped
                          else [g["name"], g.get("typ") or u" ", it["note"], u" ", u" "])
             continue
         ds = it["ds"] + (u"  (zvol)" if it.get("type") == "volume" else u"")
         when = fmt_when_short(it["newest"], now) if it.get("newest") else u"-"
         if grouped:
-            cells.append([u"  %s %s" % (bar, ds), u" ", str(it.get("snaps") or 0), when])
+            cells.append([u"  %s %s" % (bar, ds), str(it.get("snaps") or 0), when])
         else:
             cells.append([g["name"], g.get("typ") or u"", ds, str(it.get("snaps") or 0), when])
     if not grouped:
@@ -4732,11 +4732,11 @@ def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, 
         det = [(_(u"Inny dysk"), _(u"najpierw zaimportuj pulę (zpool import), potem Enter"))]
     host = (data.jobs or {}).get("host") if data is not None and data.jobs else ""
     title = (_(u"Kopie na %s") % (host or u"")).strip() + (_(u", po relacjach") if grouped else u"")
-    heads = ([_(u"Kopia"), _(u"Rodzaj"), _(u"Migawek"), _(u"Najnowsza")] if grouped
+    heads = ([_(u"Kopia"), _(u"Migawek"), _(u"Najnowsza")] if grouped
              else [_(u"Relacja"), _(u"Rodzaj"), _(u"Kopia"), _(u"Migawek"), _(u"Najnowsza")])
     return render_tabbed(data, width, height, now, ch, "odzysk", title, heads, cells, ccur,
                          _(u"Enter/Tab do migawek"), det_title, det, child, focus, scur, screen_actions("odzysk", grouped=grouped),
-                         prio=([0, 3, 2, 1] if grouped else [0, 2, 4, 3, 1]))
+                         prio=([0, 2, 1] if grouped else [0, 2, 4, 3, 1]))
 
 
 def render_kopie(data, items, sel, focus, scur, snaps, snaps_err, width, height, now, ch, ctx=None):

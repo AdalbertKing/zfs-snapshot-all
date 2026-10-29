@@ -1690,9 +1690,9 @@ else
 fi
 # GRUPY jak F2 (F8, wlasciciel 2026-10-29 „tak jak F2 -- wszystkie mozliwosci”): naglowek
 # relacji z rodzajem, pod nim jej kopie z wcieciem; pasek mowi „F8 Jedna lista”.
-# 160 kolumn: od 2026-10-29 Najnowsza ma pelna date (RRRR.MM.DD HH:MM, +5 znakow) i przy 150
-# nazwa kopii VM101 traci 5 ostatnich znakow (zmierzone) -- tu sprawdzamy grupy, nie waski ekran.
-A="$(od F8 --width 160)"
+# 150 kolumn: od 2026-10-29 Najnowsza ma pelna date (+5 znakow); w grupach nie ma juz kolumny
+# Rodzaj (pusta w wierszach kopii), rodzaj i kierunek stoja w naglowku -- pelna nazwa VM101 wchodzi.
+A="$(od F8)"
 if has "$A" 'Kopie na pve10, po relacjach' && hasE "$A" '▸ duplikat +backup' && hasE "$A" "│ $VM101 +3 " && has "$A" 'F8 Jedna lista'; then
     ok "kopie: F8 grupuje po relacji jak F9 na F2 -- naglowek '▸ duplikat  backup', pod nim '│ VM101  3', pasek 'F8 Jedna lista'"
 else
