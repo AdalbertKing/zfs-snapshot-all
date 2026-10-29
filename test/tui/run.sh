@@ -3890,6 +3890,29 @@ else
     bad "okno usuwania: brak roota do zrodla" "cl: $(printf '%s' "$DRCL" | cut -c1-300)" "argv: $(cat "$DRD/argv" 2>/dev/null)" "$DROUT"
 fi
 
+# 3j2. Kasowanie kopii ma DRUGIE pytanie "SKASUJ KOPIE -- nieodwracalne" (wlasciciel
+#      2026-10-29, #993: jedno "na pewno?" wszedzie, drugie tylko tu). Wstecz w nim nie
+#      kasuje niczego; SKASUJ = --destroy-copies --yes; bez kopii do skasowania okna nie ma.
+# zb-del4 = zb-del2 z rootem do zrodla (--check-source nie mowi "NO root"): pozycja kopii jest.
+grep -vF -e '*" --check-source "*)' "$NR/bin/zb-del2" > "$NR/bin/zb-del4"; chmod +x "$NR/bin/zb-del4"
+drd_run() {   # <odpowiedzi> -> $DRD/wt.log, $DRD/argv
+    rm -rf "$DRD"; mkdir -p "$DRD"; printf '%b' "$1" > "$DRD/answers"
+    ( export NR_DIR="$DRD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-del4"
+      bash "$REPO/tui/delete-relation.sh" nazwa ) >/dev/null 2>&1 </dev/null
+}
+drd_run '0\tsrc|rec|data\n0\t\n1\t\n1\t\n'   # zaznacz kopie, WYKONAJ, SKASUJ? -> Wstecz, potem Wstecz
+dk_back_win=$(grep -cF 'SKASUJ KOPIE -- nieodwracalne' "$DRD/wt.log"); dk_back_yes=$(grep -c -- '--yes' "$DRD/argv")
+drd_run '0\tsrc|rec|data\n0\t\n0\t\n'        # zaznacz kopie, WYKONAJ, SKASUJ
+dk_yes=$(grep -c -- 'nazwa --destroy-copies --yes' "$DRD/argv"); dk_txt=$(grep -A3 -F 'SKASUJ KOPIE -- nieodwracalne' "$DRD/wt.log" | grep -c 'tank/b/x')
+drd_run '0\tsrc|rec\n0\t\n'                  # bez kopii: WYKONAJ i od razu bieg
+dk_ctl_win=$(grep -cF 'SKASUJ KOPIE -- nieodwracalne' "$DRD/wt.log"); dk_ctl_yes=$(grep -c -- '^delete-relation nazwa --yes' "$DRD/argv")
+if [ "$dk_back_win" = 1 ] && [ "$dk_back_yes" = 0 ] && [ "$dk_yes" = 1 ] && [ "$dk_txt" -ge 1 ] \
+   && [ "$dk_ctl_win" = 0 ] && [ "$dk_ctl_yes" = 1 ]; then
+    ok "okno usuwania: kasowanie kopii pyta drugi raz (SKASUJ KOPIE, z lista kopii); Wstecz tam nie kasuje, SKASUJ = --destroy-copies --yes; bez kopii drugiego okna nie ma"
+else
+    bad "okno usuwania: drugie pytanie przy kasowaniu kopii" "wstecz: okno=$dk_back_win yes=$dk_back_yes" "skasuj: $dk_yes lista=$dk_txt" "kontrola: okno=$dk_ctl_win yes=$dk_ctl_yes"
+fi
+
 # 3k. F10 USTAWIENIA (wlasciciel 2026-10-19): lista kluczy z `settings --tsv` w sekcjach,
 #     zmiana jednej wartosci, "Zapisz" = plan czasownika i WYKONAJ -> `settings set K=V --yes`.
 cat > "$NR/bin/zb-set" <<'EOF'
