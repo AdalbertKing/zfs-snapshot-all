@@ -691,7 +691,7 @@
 "                 WYKONAJ). Z Przebiegów albo z datasetu relacji F4 otwiera od": "                 EXECUTE). From Runs or from a relation's dataset F4 opens",
 "                 razu tę kopię i tę chwilę.": "                 that copy at that moment.",
 "  F1-F6             główne okna (F4 Kopie: przeglądanie i odzysk); F12 wyjście": "  F1-F6             main windows (F4 Copies: browsing and restore); F12 quit",
-"                 Używają; F6: Datasety, Przebiegi; F4: Datasety). Tab wchodzi": "                 Used by; F6: Datasets, Runs; F4: Datasets). Tab goes",
+"                 Używają; F6: Przebiegi; F4: Migawki). Tab wchodzi": "                 Used by; F6: Runs; F4: Snapshots). Tab goes",
 "przywracanie z dysku jest teraz na F4 Kopie (F9)": "restoring from a disk is now on F4 Copies (F9)",
 "Enter przeglądaj   Tab do datasetów": "Enter browse   Tab to datasets",
 "Wykonana": "Done",
@@ -791,5 +791,8 @@
 "SKASUJ": "DELETE",
 "Kopie na tym hoście zostaną skasowane, bez powrotu:\\n\\n$COPIES\\n\\nNa pewno?": "The copies on this host will be deleted, with no way back:\\n\\n$COPIES\\n\\nAre you sure?",
 "   (monitor i przebiegi: sprawdzam…)": "   (monitor and runs: checking…)",
-"   monitor nie odpowiedział: %s": "   the monitor did not answer: %s"
+"   monitor nie odpowiedział: %s": "   the monitor did not answer: %s",
+"%s -- bieg": "%s -- run",
+"brak przebiegów tej repliki w oknie %dh wstecz i %dh naprzód (dysku nie było albo nie ma harmonogramu)": "no runs of this replica in the window %dh back and %dh ahead (the disk was not there, or there is no schedule)",
+"Enter szczegóły   Ins nowa   Del usuń   Tab do przebiegów": "Enter details   Ins new   Del delete   Tab to runs"
 }

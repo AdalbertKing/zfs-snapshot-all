@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9cec767b82c90981 -->
+<!-- status-covers-digest: a9c9821afeab1e69 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -84,6 +84,12 @@
   jak F9 na F2 (F9 zostaje Przywróć). Repliki bez nośnika i relacje bez kopii mają swój wiersz z uwagą, bez akcji.
   Stan i klawisze bez zmian (Enter/Tab do migawek, Enter przegląda, F9 przywraca). F10: większy odstęp kolumn,
   opisy łamane w trzeciej kolumnie (dalszy ciąg otwiera to samo ustawienie). Zasada na przyszłość: każde okno przeglądania w układzie F2 (backlog U121).
+- **F6 Replika: źródło → cel w panelu, na dole przebiegi jak na F2 (2026-10-29, właściciel, U130).** Prawy panel
+  repliki ma w grupie Co wiersze `Źródło → cel`, `Z dziećmi` i `Historia`; dawna zakładka Datasety odpadła. Dolna
+  zakładka [Przebiegi] pokazuje biegi tej repliki w układzie F2: wykonane, kreska „teraz”, nadchodzące (Kiedy, Wynik,
+  Czas, Dane). Wcześniej była to historia transferów z `progress` (na pve10 dla usb1 jeden wpis). Czytnik `job-stats` bierze
+  biegi z 72 h (`--runs=72`, było 12), bo replika „pn-pt” ma przerwę od piątku do poniedziałku. F2 dalej pokazuje 12 h.
+  Na pve10 usb1 pokazuje biegi 26.10-28.10 i nadchodzący 29.10 21:30.
 - **F7 na relacji robi najniższy szczebel (2026-10-29, właściciel, U132).** `run-relation` wybiera dla każdego datasetu
   linię szczebla o najniższej randze (`tiers_cadence_rank`: godzinowy < dzienny < tygodniowy < miesięczny < roczny).
   Wcześniej wybierał linię z godziną `*`, a bez niej pierwszą w kolejności crona. Relacja bez szczebla godzinowego
