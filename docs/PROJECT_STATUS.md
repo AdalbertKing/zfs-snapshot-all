@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 97f8f33385c7575d -->
+<!-- status-covers-digest: 48f7c86aeb0dd7c6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -72,6 +72,17 @@
     nazwę migawki; okno „brak zgody” odsyła do F4 Kopie / F7 Przeglądaj zamiast nieistniejącego ekranu.
   Zostało: odświeżenie Ctrl-R ~9-11 s (czasowniki równolegle 5,8 s, reszta do zbadania); pozostałe ~3 s
   job-stats to kilka przebiegów awk po 9,6 MB dzienniku.
+- **Nazwy hostów zamiast adresów; relacja nazywa się jak host po drugiej stronie (2026-10-29, U111).**
+  Każda strona kopii jest pokazywana jako `host:dataset` (`pve9:hdd/enc`, `pve10:hdd/backups/…`), a kierunek
+  strzałką zgodną z ruchem danych: `pve9 → pve10` przy pobieraniu, `pve10 → pve9` przy wysyłce, `pve10 ↔ pve11`
+  przy lustrze. Nazwę bierze GUI z `/etc/hosts` tego hosta (bez DNS). Gdy adresu tam nie ma, pokazuje nazwę
+  relacji z tym adresem, a dopiero na końcu sam adres. Konto ssh i adres widać w zakładce Config okna relacji;
+  poza nią adres stoi tylko przy rozjeździe adresu z crona z zapisanym. `status --json` podaje `landing` (katalog kopii z rekordu), więc zakładka Datasety w F3 bierze ścieżkę
+  z rekordu (z adresu tylko przy rekordach sprzed tego pola). Kreator nadaje relacji z drugim hostem nazwę zgłoszoną przez ten host, a wolne pole
+  zostaje dla kopii lokalnej oraz dla nazwy zajętej albo niepoprawnej. Przy pobieraniu kreator przekazuje też
+  `--landing=<nazwa>`, więc nowe kopie lądują w `hdd/backups/pve9`, nie w `hdd/backups/192.168.28.99`.
+  Istniejące relacje zachowują swój katalog, bo jest zapisany w rekordzie. Produkcja (pve2) ma już katalogi
+  z nazwami. Katalogi z adresem są tylko na labie pve10.
 - **Kreator odzysku: najpierw z kiedy, potem dokąd (2026-10-28, U109, symulacja A przyjęta).** Kolejność
   kroków: co, z kiedy, dokąd, sprawdź, w obu trybach (relacja i „Przywróć z dysku”). To ta sama kolejność co
   z F4 Kopie, gdzie migawka jest już wybrana. Lista „z kiedy?” pokazuje czas i pełną nazwę migawki (`@automated_…`)

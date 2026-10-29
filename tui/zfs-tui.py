@@ -246,6 +246,70 @@ def export_file_info(path):
     return doc.get("name") or "?", mt
 
 
+_HOSTS = None
+_REL_BY_ADDR = {}
+
+
+def note_relation_names(status):
+    """Wlasciciel 2026-10-29: "gdy jest tylko adres, to nazwa relacji" -- relacja to para
+    hostow, a jej nazwa domyslnie jest nazwa drugiego hosta. Adres (peer_host i ten, przez
+    ktory chodzi teraz) -> nazwa relacji; jeden adres w dwoch relacjach -> zadnej."""
+    _REL_BY_ADDR.clear()
+    seen = {}
+    for r in (status or {}).get("relations", []) if isinstance(status, dict) else []:
+        if r.get("state") == "removed" or not r.get("name"):
+            continue
+        for a in {r.get("peer_host") or "", rel_addr(r)}:
+            if a:
+                seen.setdefault(a, set()).add(r["name"])
+    for a, names in seen.items():
+        if len(names) == 1:
+            _REL_BY_ADDR[a] = names.pop()
+
+
+def host_name(addr):
+    """U111 (wlasciciel 2026-10-29, "Do kitu to jest"): adres -> nazwa hosta z /etc/hosts
+    tego hosta, krotka (pve9, nie pve9.lab); gdy jej tam nie ma -- nazwa relacji z tym
+    adresem; dopiero potem sam adres. Tylko plik, bez DNS: odwrotne zapytanie o obcy
+    adres potrafi wisiec sekundami."""
+    global _HOSTS
+    if not addr or not re.match(r"^[0-9.]+$|^[0-9A-Fa-f:]*:[0-9A-Fa-f:]*$", addr):
+        return addr
+    if _HOSTS is None:
+        _HOSTS = {}
+        try:
+            with io.open(os.environ.get("ZFS_TUI_HOSTS", "/etc/hosts"), encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    f = line.split("#", 1)[0].split()
+                    if len(f) < 2 or f[0] in _HOSTS:
+                        continue
+                    names = [n for n in f[1:] if n not in ("localhost", "localhost.localdomain")]
+                    if names:
+                        # pierwsza krotka nazwa wiersza, inaczej pierwsza nazwa bez domeny
+                        short = [n for n in names if "." not in n]
+                        _HOSTS[f[0]] = short[0] if short else names[0].split(".")[0]
+        except OSError:
+            pass
+    return _HOSTS.get(addr) or _REL_BY_ADDR.get(addr) or addr
+
+
+def side_words(ep, here=None):
+    """Strona kopii po ludzku: `zfsbackup-pve10@192.168.28.99:hdd/enc` -> `pve9:hdd/enc`;
+    dataset bez hosta lezy na tym hoscie -> `pve10:hdd/backups/...` (gdy `here` dane).
+    Konto ssh i adres sa w zakladce Config okna relacji, nie tu."""
+    if not ep or ep in ("?", "-"):
+        return ep
+    m = re.match(r"^(?:[^@/:\s]+@)?([A-Za-z0-9._-]+|\[[0-9A-Fa-f:]+\]):(.+)$", ep)
+    if m and "/" not in m.group(1):
+        return u"%s:%s" % (host_name(m.group(1).strip("[]")), m.group(2))
+    return u"%s:%s" % (here, ep) if here else ep
+
+
+def here_name(data):
+    """Nazwa TEGO hosta (list-jobs: hostname -s), do stron `pve10:hdd/...`."""
+    return ((getattr(data, "jobs", None) or {}).get("host")) or None
+
+
 def rel_addr(rel):
     """Adres, przez ktory relacja chodzi TERAZ (active_endpoint bez portu); po zmianie
     adresu (kolektor za VPN) kolumna Kierunek pokazywala stary peer_host (kampania 2026-10-19)."""
@@ -255,14 +319,17 @@ def rel_addr(rel):
 
 
 def direction_of(host, peer, dirs, mode=None):
-    """`pve10>pve9` wysylam, `pve10<pve9` pobieram, `pve10<>pve9` w obie strony,
-    `local` w obrebie hosta. Lewa strona to ZAWSZE ten host.
+    """`pve9 → pve10` pobieram (strzalka idzie jak dane), `pve10 → pve9` wysylam,
+    `pve10 ↔ pve9` w obie strony, `local` w obrebie hosta. Drugi host NAZWA z
+    /etc/hosts, adres tylko gdy nazwy nie ma (U111, 2026-10-29: `pve10<192.168.28.99`
+    trzeba bylo odszyfrowywac).
 
     ZAPISANY TRYB WYGRYWA z odczytem linii crona -- relacja synchro ciagnie
     OBIE strony PULLEM (kazdy kolektor pobiera od drugiego pod ta sama
     sciezka), wiec heurystyka z samych `dirs` widziala tylko "pull" i rysowala
     `<`, nie `<>` (owner brief, runda 2 ekranow)."""
     dirs = set(dirs)
+    peer = host_name(peer)
     # Relacja lokalna (local-backup --name, 2026-10-09): zrodlo i kopia na tym
     # hoscie -- ta sama strzalka co zadania lokalne na F2.
     if mode == "local":
@@ -274,18 +341,18 @@ def direction_of(host, peer, dirs, mode=None):
     if "local" in dirs or not peer:
         return "local" if dirs else "?"
     if mode == "sync":
-        return "%s<>%s" % (host, peer)
+        return u"%s ↔ %s" % (host, peer)
     if "pull" in dirs and "push" in dirs:
-        return "%s<>%s" % (host, peer)
+        return u"%s ↔ %s" % (host, peer)
     if "pull" in dirs:
-        return "%s<%s" % (host, peer)
+        return u"%s → %s" % (peer, host)
     if "push" in dirs:
-        return "%s>%s" % (host, peer)
+        return u"%s → %s" % (host, peer)
     # Relacja jeszcze bez linii crona (np. aktywacja nie doszla do konca): rekord zna tryb,
     # a relacja zakladana przez pakiet na kolektorze POBIERA (uwaga 7, 2026-10-08).
     if mode == "backup":
-        return "%s<%s" % (host, peer)
-    return "%s?%s" % (host, peer)
+        return u"%s → %s" % (peer, host)
+    return u"%s ? %s" % (host, peer)
 
 
 # ---------------------------------------------------------------------------
@@ -1024,6 +1091,8 @@ def collect(repo, files, only=None):
         else:
             doc, err = run_verb(repo, args)
         setattr(data, key, doc)
+        if key == "status":
+            note_relation_names(doc)
         if err:
             data.errors[key] = err
         else:
@@ -1304,7 +1373,7 @@ def next_step(rel):
 # WYŁĄCZ / WŁĄCZ (właściciel 2026-10-18: "tak, ale z wyjaśnieniem, co to implikuje i
 # jakie kroki admin musi zrobić, żeby włączyć z powrotem").
 def disable_note(rel):
-    peer = rel.get("peer_host") or "?"
+    peer = host_name(rel_addr(rel)) or "?"
     return [_(u"WYŁĄCZENIE = pauza tutaj ORAZ zamek na źródle %s:") % peer,
             _(u"  źródło ODRZUCA klucz tego kolektora, także wsadowym komendom."),
             _(u"  Kopie przestają powstawać, monitor nie alarmuje; dane po obu stronach"),
@@ -1364,7 +1433,7 @@ def verbs_for(rel):
 def ch_arrow(job):
     """Kierunek zadania bez rekordu, w UTF-8; tryb ASCII odogonkowuje strzalki
     razem z reszta ekranu (deaccent)."""
-    return _(ARROWS_UTF.get(job.get("direction", ""), "?")).format(peer=job.get("peer") or "?")
+    return _(ARROWS_UTF.get(job.get("direction", ""), "?")).format(peer=host_name(job.get("peer")) or "?")
 
 
 def rel_type(peer, dirs, mode=None, target=None):
@@ -2429,8 +2498,8 @@ def run_children(r, data, now, ch):
                         t = x
                         break
             b = run_dataset_bytes(r, j, data)
-            items.append({"cells": [src or u"-", dst or u"-", hbytes_short(b) if b is not None else u"-"],
-                          "pairs": transfer_detail_pairs(t, now, ch, data) if t else [(_(u"Źródło"), src or u"-"), (_(u"Cel"), dst or u"-")],
+            items.append({"cells": [side_words(src) or u"-", side_words(dst) or u"-", hbytes_short(b) if b is not None else u"-"],
+                          "pairs": transfer_detail_pairs(t, now, ch, data) if t else [(_(u"Źródło"), side_words(src, here_name(data)) or u"-"), (_(u"Cel"), side_words(dst, here_name(data)) or u"-")],
                           "title": u"%s -- %s" % (r["name"], s_ or d_)})
     return {"items": items}
 
@@ -2468,9 +2537,9 @@ def pair_detail_pairs(pr, row, data, now, ch):
     """Prawy panel datasetu relacji (F3, zakladka Datasety)."""
     out = [group(ch, _(u"Co"))]
     if pr.get("dst") is None:
-        out.append((_(u"Dataset"), pr["src"]))
+        out.append((_(u"Dataset"), side_words(pr["src"])))
     else:
-        out += [(_(u"Źródło"), pr["src"]), (_(u"Cel"), pr["dst"])]
+        out += [(_(u"Źródło"), side_words(pr["src"])), (_(u"Cel"), pr["dst"])]
     out.append(group(ch, _(u"Teraz")))
     v = pr.get("vword") or "-"
     j = pr.get("job")
@@ -2577,7 +2646,7 @@ def odz_children(tab, item, rows, data, now, ch):
         copy = pr.get("dst") or pr["src"]
         last = newest_transfer(data, item["name"], copy, pr["src"])
         nw = fmt_when_short(int(last.get("finished_epoch") or last.get("started_epoch") or 0), now) if last else "-"
-        dpairs = [(_(u"Kopia"), copy), (_(u"Oryginał"), pr["src"]), (_(u"Kopie"), pr.get("vword") or "-")]
+        dpairs = [(_(u"Kopia"), copy), (_(u"Oryginał"), side_words(pr["src"])), (_(u"Kopie"), pr.get("vword") or "-")]
         if last:
             dpairs.append((_(u"Najnowsza"), (last.get("dataset") or "?").split("@", 1)[-1]))
         dpairs.append((_(u"Najstarsza"), _(u"w oknach Przywróć (lista migawek)")))
@@ -2622,6 +2691,8 @@ def job_panel_pairs(row, data, now, ch):
         pairs.append((_(u"Zakres"), _(u"%d datasetów%s: %s") % (len(jobs_here), (_(u" w ") + base) if base else "", ", ".join(short))))
     else:
         src, dst = job_src_dst(j)
+        # U111: strony `pve9:hdd/enc` / `pve10:hdd/backups/...`, bez konta i adresu
+        src, dst = side_words(src, here_name(data)), side_words(dst, here_name(data))
         d = j.get("direction", "")
         if d == "snaponly":
             pairs.append((_(u"Cel"), src))
@@ -2773,7 +2844,9 @@ def rel_panel_pairs(row, data, now, ch):
         pairs.append((_(u"Źródło"), ", ".join(rel.get("sources") or []) or "?"))
         pairs.append((_(u"Cel"), rel.get("client_target") or _(SNAP_TARGET)))
     else:
-        ep = rel.get("active_endpoint") or rel.get("peer_host") or "?"
+        # U111: nazwa; adres i port w zakladce Config okna relacji. Rozjazd adresu
+        # crona z zapisanym zostaje -- to wlasnie fakt o adresie.
+        ep = host_name(rel_addr(rel)) or "?"
         if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint"):
             ep += _(u"   w cronie: %s") % rel["installed_endpoint"]
         pairs.append((_(u"Drugi host"), ep))
@@ -3174,7 +3247,7 @@ def rel_detail_pairs(row, data, now, ch):
     if row["kind"] == "job":
         return job_panel_pairs(row, data, now, ch)
     srcs = rel.get("sources", [])
-    pairs = [(_(u"Źródła (%d)") % len(srcs), ",  ".join(srcs) or "?")]
+    pairs = [(_(u"Źródła (%d)") % len(srcs), ",  ".join(side_words(x) for x in srcs) or "?")]
     tgt = rel.get("client_target", "?")
     md = rel.get("managed_datasets", [])
     pairs.append((_("Cel"), tgt + ("   -> %s" % ", ".join(md) if md else "")))
@@ -3258,7 +3331,7 @@ def rel_pairs(row, data, now, ch):
             # "konto@host:dataset" rozbity na dataset i host, jak mowi czlowiek.
             if j.get("direction") == "snaponly":
                 _sc = j.get("scope", "") or "?"
-                _h = _sc.rsplit(":", 1)[0].split("@", 1)[-1] if ":" in _sc else ""
+                _h = host_name(_sc.rsplit(":", 1)[0].split("@", 1)[-1]) if ":" in _sc else ""
                 src = _sc.rsplit(":", 1)[-1] + ((_(u"   na %s") % _h) if _h else "")
                 dst = None
             elif dst == "-":
@@ -3318,10 +3391,12 @@ def rel_pairs(row, data, now, ch):
     for src in rel.get("sources", []):
         bare = src.split(":", 1)[1] if ":" in src else src
         if rel.get("mode") == "snaponly" or (rel.get("mode") == "local" and not rel.get("client_target")):
-            out.append({"src": bare + ((_(u"   na %s") % peer) if rel.get("mode") == "snaponly" else ""), "dst": None,
+            out.append({"src": bare + ((_(u"   na %s") % host_name(peer)) if rel.get("mode") == "snaponly" else ""), "dst": None,
                         "job": None, "vword": "--", "czas": "-", "gb": "-"})
             continue
-        out.append({"src": src if ":" in src else "%s:%s" % (peer, src), "dst": "%s/%s/%s" % (tgt, peer, bare),
+        # katalog kopii z REKORDU (landing), nie z adresu: po zmianie adresu peer_host
+        # i katalog sie roznia (U111)
+        out.append({"src": side_words(src if ":" in src else "%s:%s" % (peer, src)), "dst": "%s/%s/%s" % (tgt, rel.get("landing") or peer, bare),
                     "job": None, "vword": "--", "czas": "-", "gb": "-"})
     return out, _("wg rekordu, nie crona")
 
@@ -3335,7 +3410,7 @@ def pair_one(pr, ch):
     """Wiersz dolnego panelu F3: `zrodlo -> cel`, a bez kopii (migawki) sam dataset."""
     if pr.get("dst") is None:
         return pr["src"]
-    return u"%s %s %s" % (pr["src"], ch.right, pr["dst"])
+    return u"%s %s %s" % (side_words(pr["src"]), ch.right, pr["dst"])
 
 
 def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus="list", pair_cursor=0, jobrows=None, ti=0):
@@ -3399,11 +3474,9 @@ def compact_paths(paths):
 
 
 def host_port_words(rel):
-    """U114: "Peer X   endpoint X:22" -> "X, ssh port 22" (adres, ktorym relacja chodzi TERAZ)."""
-    ep = rel.get("active_endpoint") or ""
-    h, _s, port = ep.rpartition(":") if ":" in ep else (ep, "", "")
-    h = h or rel.get("peer_host") or "?"
-    return _(u"%s, ssh port %s") % (h, port) if port else h
+    """U114: "Peer X   endpoint X:22" -> "X, ssh port 22"; U111 (2026-10-29): NAZWA hosta,
+    adres i port tylko w zakladce Config (tam stoi rekord, slowo w slowo)."""
+    return host_name(rel_addr(rel)) or "?"
 
 
 def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
@@ -3427,7 +3500,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     out.append("")
     # "co obejmuje" (wlasciciel 2026-10-18): to samo slowo dla kopii i dla migawek.
     out.append(_(u"co obejmuje"))
-    pairs = [(_(u"Źródła (%d)") % len(rel.get("sources", [])), compact_paths(rel.get("sources", [])) or "?")]
+    pairs = [(_(u"Źródła (%d)") % len(rel.get("sources", [])), compact_paths([side_words(x) for x in rel.get("sources", [])]) or "?")]
     # R5-3 (wlasciciel 2026-09-25): jedno slowo "Cel" zamiast "Ladowiska" plus
     # osobnego "Cel" -- JEDEN wiersz "Cele (N)" z lista datasetow docelowych;
     # przy synchro dopisek w tej samej linii.
@@ -3914,7 +3987,7 @@ def snap_pair_lines(d, width, side, now):
     rows = list(reversed(chrono))
     s_ds = (d.get("source") or {}).get("dataset", "?")
     t_ds = (d.get("target") or {}).get("dataset") or ""
-    host = (d.get("source") or {}).get("host") or _(u"ten host")
+    host = host_name((d.get("source") or {}).get("host")) or _(u"ten host")
     out = [fit(snap_pair_summary(d, chrono), width - 4), ""]
     for side_name in ("source", "target"):
         e = (d.get(side_name) or {}).get("error")
@@ -4678,8 +4751,9 @@ HELP = [
     u"                 Pasek u góry: „kasowanie przy pełnej puli” i „alarm przyrostu”",
     u"                 -- czy na tym hoście działa strażnik pojemności i strażnik",
     u"                 nagłego przyrostu danych; włączasz je w F10.",
-    u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
-    u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local = na tym hoście",
+    u"  Kierunek       strzałka idzie jak dane: pve9 → pve10 pobieram z pve9,",
+    u"                 pve10 → pve9 wysyłam, pve10 ↔ pve9 obie strony, local = na tym hoście;",
+    u"                 nazwy hostów z /etc/hosts, adres tylko gdy nazwy tam nie ma",
     "",
     u"  PANELE (każdy ekran): lista = wybór i stan; panel obok = fakty o",
     u"                 zaznaczonym wierszu, których nie widać na liście; na dole zakładki",
@@ -6564,7 +6638,7 @@ def _ui_render(self, width, height):
                 foot = _(u"Tab źródło/kopia   ") + foot
             if not obj.get("dst"):
                 foot = _(u"Esc wraca   strzałki/PgUp/PgDn przewijają")
-            scr, self.scroll = render_window(base, _(u"Migawki: relacja %s, %s") % (obj["name"], obj["src"]), lines,
+            scr, self.scroll = render_window(base, _(u"Migawki: relacja %s, %s") % (obj["name"], side_words(obj["src"])), lines,
                                              self.scroll, width, height, self.ch, footer=foot)
         elif kind == "output":
             lines = self.output_lines(obj, width)
@@ -6606,6 +6680,7 @@ def deaccent(text):
 _DEACCENT = {ord(a): b for a, b in zip(u"ąćęłńóśźżĄĆĘŁŃÓŚŹŻ", u"acelnoszzACELNOSZZ")}
 _DEACCENT[ord(u"→")] = ">"
 _DEACCENT[ord(u"←")] = "<"
+_DEACCENT[ord(u"↔")] = "<>"
 _DEACCENT[ord(u"\u00d7")] = "x"
 for _q in u"\u201e\u201d\u201c":   # cudzyslowy „ ” “ -> "
     _DEACCENT[ord(_q)] = '"'

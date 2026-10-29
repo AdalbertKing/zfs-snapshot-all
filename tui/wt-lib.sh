@@ -232,6 +232,15 @@ list_editor() {  # <tytuł> <wstęp> <tekst gdy pusto> <etykieta dodaj> <etykiet
         esac
     done
 }
+# Drugi argument: nazwa relacji z tym hostem -- relacja nazywa się jak host po drugiej
+# stronie (właściciel 2026-10-29), więc gdy /etc/hosts milczy, to ona, a nie sam adres.
+host_name() {   # <adres|nazwa> [nazwa relacji] -> nazwa z /etc/hosts tego hosta (U111, 2026-10-29); bez DNS
+    case "$1" in
+        ''|*[!0-9.:]*) printf '%s' "$1" ;;
+        *) awk -v a="$1" '{ sub(/#.*/, "") } $1 == a { for (i = 2; i <= NF; i++) { if ($i ~ /^localhost/) continue; if ($i !~ /\./) { print $i; ok = 1; exit } if (f == "") f = $i } }
+               END { if (!ok && f != "") { sub(/\..*/, "", f); print f } }' "${ZFS_TUI_HOSTS:-/etc/hosts}" 2>/dev/null | grep . || printf '%s' "${2:-$1}" ;;
+    esac
+}
 shq() {   # argument tak, jak wpisałby go człowiek: apostrofy tylko tam, gdzie trzeba
     case "$1" in *[!A-Za-z0-9_./:=,@%+-]*) printf "'%s'" "$1" ;; *) printf '%s' "$1" ;; esac
 }

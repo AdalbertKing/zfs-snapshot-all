@@ -30,6 +30,7 @@ line() { grep -m1 "^  $1\. " "$TMPD/plan0.txt" | sed 's/^  [0-9]\. [a-zA-Z]* *: 
 SRC_LINE="$(line 2)"; COPIES="$(line 4 | sed -n 's/^KEPT on this host (\(.*\)) --.*/\1/p')"
 STATE="$(sed -n "s/^delete-relation '.*' (state=\([^,]*\),.*/\1/p" "$TMPD/plan0.txt")"
 PEER="$(sed -n "s/^delete-relation '.*' (state=[^,]*, peer=\([^)]*\)).*/\1/p" "$TMPD/plan0.txt")"
+PEER="$(host_name "$PEER" "$NAME")"     # U111: nazwa w tekstach okna; adres stoi w planie czasownika
 LEAVE_CMD="$(printf '%s' "$SRC_LINE" | sed -n 's/.* as root: \(.*--leave=[^ ]*\).*/\1/p')"
 
 SRC=ON; REC=ON; DATA=OFF
