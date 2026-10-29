@@ -7628,6 +7628,17 @@ cmd_set_tiers() {
     fi
     EDIT_RELATION_NAME="$name"
     atomic_replace_and_install "$cronfile" "$workfile"
+    # A tier ADDED here gets its first snapshot now, as at creation and as set-datasets
+    # gives a new dataset (pve10, 2026-10-29: weekly added to pve9b, F7 ran the hourly
+    # lines, and the monitor read "no automated_weekly -- age from dataset creation" =
+    # CRITICAL, "stare", until Sunday). Only the added tier's lines run.
+    local _op _t
+    for _op in "${ops[@]}"; do
+        case "$_op" in --add-tier=*|--add-src-tier=*) ;; *) continue ;; esac
+        _t="${_op#*=}"
+        case "$_t" in hourly|daily|weekly|monthly|yearly) ;; *) continue ;; esac
+        FIRST_RUN_ANY=1 SNAPONLY_FIRST_TIER="$_t" snaponly_first_snapshots "$name"
+    done
 }
 
 
@@ -12673,6 +12684,7 @@ snaponly_first_snapshots() {   # <name>
         esac
     done < <(printf '%s\n' "$tab" | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
                  | grep -F -- " -L $name " \
+                 | { if [ -n "${SNAPONLY_FIRST_TIER:-}" ]; then grep -E "zfs-job[.]sh \"[^\"]*(__| )${SNAPONLY_FIRST_TIER} (snapshot|backup|copy) "; else cat; fi; } \
                  | { if [ "${FIRST_RUN_ANY:-0}" = 1 ]; then grep -E 'snap(get|send)\.sh '; else grep -F 'snapget.sh -s '; fi; } \
                  | { if [ -n "${SNAPONLY_FIRST_ONLY:-}" ]; then grep -F -e ":$SNAPONLY_FIRST_ONLY\"" -e "\"$SNAPONLY_FIRST_ONLY\"" \
                        -e ",$SNAPONLY_FIRST_ONLY\"" -e "\"$SNAPONLY_FIRST_ONLY," -e ",$SNAPONLY_FIRST_ONLY,"; else cat; fi; })

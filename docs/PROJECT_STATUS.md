@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d9707bc2a9707c1d -->
+<!-- status-covers-digest: 940e5a173d689383 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -57,6 +57,12 @@
   **Metropolis:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`; od 2026-10-29 rozstrzyga to wpis
   `192.168.28.9 pve1` w `/etc/hosts` pve2 (opis niżej, przy drzewach). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **Dodany szczebel dostaje od razu pierwszą migawkę (2026-10-29).** Na pve10 właściciel dodał relacji `pve9b`
+  szczebel tygodniowy. Nowe linie czekały do niedzieli, F7 uruchomił godzinowe, a monitor czytał „brak
+  `automated_weekly`, wiek od założenia datasetu” = CRITICAL („stare”). Zakładanie relacji i `set-datasets`
+  robiły już pierwszą migawkę każdego szczebla; `set-tiers` robi ją teraz dla szczebli, które dodaje, i tylko
+  dla nich. Na żywo (pve10, `pve9b`): usunięty i dodany szczebel tygodniowy -> „4 done”, migawka tygodniowa na
+  12 datasetach źródła i kopii, monitor OK.
 - **Strażnik gościa PVE w drzewach (2026-10-29, wariant A właściciela, gałąź `feat/pve-guest-guard-trees`).**
   Linia rekurencyjna (`-R` albo `-r`) nad rodzicem (`rpool/data`, `hdd/vm-disks`) nie nazywała żadnego gościa, więc
   strażnik jej nie widział. `gen-cron` oznacza ją teraz `--pve-guests=<host>:tree`, a config zostaje jednym wpisem.
