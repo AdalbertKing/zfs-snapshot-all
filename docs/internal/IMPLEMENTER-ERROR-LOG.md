@@ -85,7 +85,7 @@ Before adding a flag, a parser or a knob: grep for one. Before using a test
 helper, confirm the suite defines it. Before writing a resolver, check what the
 renderer already uses.
 
-*Evidence: E7, E3, E12, E29, E32, E34, E40, E55, E86, E107 (2026-10-29, a global replace and a `sed` regex where an exact-string edit with a count check was the established helper).*
+*Evidence: E7, E3, E12, E29, E32, E34, E40, E55, E86, E107 (2026-10-29, a global replace and a `sed` regex where an exact-string edit with a count check was the established helper), E108 (2026-10-29, new browsing windows one by one instead of the agreed single design, U68/U121).*
 
 ### R12 — A pass proves the shapes it ran, and the report must name them
 
@@ -1935,6 +1935,24 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E108 — new browsing windows instead of the one agreed design (2026-10-29, R8, repeat)
+**2026-10-29, lab pve10, owner's GUI pass.**
+
+*Genesis.* The owner had decided (U68, 2026-10-21: "To musi być jednolite w całym pakiecie") that
+browsing a dataset tree and its snapshots looks the same everywhere. In the last two days I added or
+reworked such windows one by one: F4 Copies in two panes with every relationship expanded
+(`gui/kopie-two-panes`), the target browser in the wizard (USED/AVAIL, branch `gui/browse-target`),
+and `mc` confined differently. Each time I took a remark about ONE window and designed it on its
+own, without looking at the others. Owner: "Nie posłuchałeś mnie. Co gdzieś wchodzę, to czyha
+jakieś straszydło w opcjach. Spisuj te uwagi, a nie koduj jeszcze."
+
+*Cause.* R8: the established helper here was a decided design, and I implemented a fresh variant
+per window instead of applying it. A remark about one browsing window is a remark about all of them.
+
+*Rule.* R8, unchanged. Before changing any window that browses datasets or snapshots: list every
+window of that kind, show ONE simulation of the shared design, wait for the owner's choice, then
+change all of them. When the owner says "spisuj, nie koduj", the backlog row is the deliverable.
 
 ### E107 — two blind text replacements in test/tui/run.sh (2026-10-29, R8, repeat)
 **2026-10-29, branch `fix/u111-host-names` (U111, host names in the GUI).**
