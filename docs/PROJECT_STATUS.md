@@ -87,7 +87,9 @@
   zostaje dla kopii lokalnej oraz dla nazwy zajętej albo niepoprawnej. Przy pobieraniu kreator przekazuje też
   `--landing=<nazwa>`, więc nowe kopie lądują w `hdd/backups/pve9`, nie w `hdd/backups/192.168.28.99`.
   Istniejące relacje zachowują swój katalog, bo jest zapisany w rekordzie. Produkcja (pve2) ma już katalogi
-  z nazwami. Katalogi z adresem są tylko na labie pve10.
+  z nazwami. Na labie pve10 relacje `pve9` i `pve9b` (ta przez VPN 10.98.0.2) założono 2026-10-29 od nowa
+  kreatorem, a stare katalogi z adresem usunięto. Nazwy z kampanii a>b<>c ma jeszcze lustro: `cb` na pve10
+  i `bc` na pve11.
 - **Kreator odzysku: najpierw z kiedy, potem dokąd (2026-10-28, U109, symulacja A przyjęta).** Kolejność
   kroków: co, z kiedy, dokąd, sprawdź, w obu trybach (relacja i „Przywróć z dysku”). To ta sama kolejność co
   z F4 Kopie, gdzie migawka jest już wybrana. Lista „z kiedy?” pokazuje czas i pełną nazwę migawki (`@automated_…`)
