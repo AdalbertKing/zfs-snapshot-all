@@ -131,7 +131,7 @@ else
     bad "relacje: licznik relacji" "$S"
 fi
 # Relacja w zasiewie: zamiast godziny -- NASTEPNY KROK slowami CLI.
-if hasE "$S200" '^║ duplikat +backup +pve10[?]192.168.28.99 +1\. kopia +-- +║' && hasE "$S120" 'Następny +seed duplikat'; then
+if hasE "$S200" '^║ duplikat +backup +pve9 → pve10 +1\. kopia +-- +║' && hasE "$S120" 'Następny +seed duplikat'; then
     ok "relacje: relacja nieaktywna pokazuje w panelu NASTEPNY KROK CLI (seed duplikat), nie godzine z crona"
 else
     bad "relacje: nastepny krok dla relacji w zasiewie" "$S200" "$S120"
@@ -149,7 +149,7 @@ if has "$S" 'duplikat -- relacja' && ! has "$S" 'Źródła' && ! hasE "$S" '│ 
 else
     bad "relacje: panel szczegolow" "$S" "$S200"
 fi
-if has "$S" 'duplikat (wg rekordu, nie crona): [Datasety]  Zadania' && has "$S120" '192.168.28.99:hdd/lab/vm-101 → hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
+if has "$S" 'duplikat (wg rekordu, nie crona): [Datasety]  Zadania' && has "$S120" 'pve9:hdd/lab/vm-101 → hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
     ok "relacje: dolny panel -- relacja BEZ crona (seeding) ma dataset policzony z rekordu i tytul to MOWI"
 else
     bad "relacje: pary z rekordu" "$S" "$S120"
@@ -1299,7 +1299,7 @@ fi
 ZH2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --keys down,down 2>&1)"
 # down,down: widok domyslny grupuje wiersze relacji -- oba "(bez rel.)" sa pierwsze
 ZH2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --keys down,down --width 160 2>&1)"
-if has "$ZH2" 'hdd/vm-disks/subvol-100-disk-0' && has "$ZH2" 'pve9:hdd/backups' && hasE "$ZH2" 'Źródło +pve10:hdd/vm-disks'; then
+if has "$ZH2" 'hdd/vm-disks/subvol-100-disk-0' && has "$ZH2" 'pve9:hdd/backups' && hasE "$ZH2" 'Źródło +hostA:hdd/vm-disks'; then
     ok "zadania: dla WYSYLKI zrodlo jest tutaj, a cel u peera"
 else
     bad "zadania: wysylka zrodlo/cel" "$ZH2"
@@ -1976,7 +1976,7 @@ else
 fi
 WP="$(screen relacje down,down,down,down,enter,right --height 260)"
 if has "$WP" '── CONFIG ' && has "$WP" '[dataset:hdd/backups/192.168.28.99/hdd/lab/vm-101]' \
-        && has "$WP" 'send_schedule = 24 * * * *' && has "$WP" 'src = pve9:hdd/lab/vm-101' \
+        && has "$WP" 'send_schedule = 24 * * * *' && has "$WP" 'src = zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' \
         && has "$WP" '[prune:hdd/backups/192.168.28.99/hdd/lab/vm-101]' && has "$WP" 'prune_schedule = 44 * * * *' \
         && has "$WP" '[template:profile__default__keep_monthly]' && has "$WP" 'retain = -M12'; then
     ok "okno: CONFIG relacji -- sekcje [dataset:]/[prune:] i szablony UZYTE (use_template), werbatim z show-config"
@@ -2201,7 +2201,7 @@ PYEOF
 SOA="--status $SOD/status.json --jobs $SOD/list-jobs.json --monitors $SOD/monitor.json"
 SO3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 2>&1)"
 SO3Z="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 --keys tab,right 2>&1)"
-if hasE "$SO3" '^║ som +migawki zdalne +→ 10\.0\.0\.9 +działa ' && hasE "$SO3" 'Kopia +brak -- migawki i ich' \
+if hasE "$SO3" '^║ som +migawki zdalne +→ som +działa ' && hasE "$SO3" 'Kopia +brak -- migawki i ich' \
    && hasE "$SO3Z" 'migawka +pve10_automated_daily +co dobę 01:49' && hasE "$SO3Z" 'migawka +pve10_automated_hourly +co godzinę' \
    && ! printf '%s\n' "$SO3" | grep -E '^║ som .*(pve10<|←)' | grep -q .; then
     ok "relacje: relacja snaponly -- '→ <peer>', typ 'migawki zdalne', w panelu 'Kopia: brak', w zakladce Zadania migawki z rodzina i harmonogramem"
@@ -2669,7 +2669,7 @@ else
 fi
 A="$("$PY" "$TUI" --render-once --offline --ascii --now "$NOW" $ALL --screen relacje 2>&1)"
 A="$("$PY" "$TUI" --render-once --offline --ascii --now "$NOW" $ALL --screen relacje --width 120 2>&1)"
-if hasE "$A" '^\| lab-ct201 +backup +pve9 → pve10 +dzia(ł|l)a +aktualne +\|' && has "$A" 'duplikat (wg rekordu, nie crona): [Datasety]' && has "$A" '192.168.28.99:hdd/lab/vm-101 -> hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
+if hasE "$A" '^\| lab-ct201 +backup +pve9 → pve10 +dzia(ł|l)a +aktualne +\|' && has "$A" 'duplikat (wg rekordu, nie crona): [Datasety]' && has "$A" 'pve9:hdd/lab/vm-101 -> hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
     ok "wyglad: w ASCII te same slowa (aktualne, Zrodla) -- werdykt niesie slowo, nie tylko kolor"
 else
     bad "wyglad: slowa w ASCII" "$A"
@@ -3348,9 +3348,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}hdd/backups
 0${T}default
-0${T}lab-ct201
-0${T}
-0${T}pve9b
 0${T}profile
 0${T}d30
 0${T}adv
@@ -3365,8 +3362,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 " NR_TREE="$NRTK")
 if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target=hdd/backups --landing=pve9b --profile=d30 --name=pve9b --exclude-family=__replicate_,vzdump,__migration__ --local-user=zfsbackup --grant-remotely --grant-quiesce --install --yes " \
-   && grep -qF 'Nazwa zajęta' "$NR/wt.log" && [ "$(grep -c '^list-profiles' "$NR/zb.log")" -eq 1 ] && [ "$(grep -c '^status' "$NR/zb.log")" -eq 1 ]; then
-    ok "new-relation: pola cel-konto -- zajeta nazwa odmowiona, z podsumowania szablon zmienia wybor (d30, U66), konto delegowane = --local-user; list-profiles i status czytane RAZ na przebieg (cofanie nie kaze czekac od nowa)"
+   && ! grep -qF 'Pod tą nazwą relacja będzie widoczna' "$NR/wt.log" && [ "$(grep -c '^list-profiles' "$NR/zb.log")" -eq 1 ] && [ "$(grep -c '^status' "$NR/zb.log")" -eq 1 ]; then
+    ok "new-relation: pola cel-konto -- nazwa = host po drugiej stronie, bez okna nazwy (wlasciciel 2026-10-29), z podsumowania szablon zmienia wybor (d30, U66), konto delegowane = --local-user; list-profiles i status czytane RAZ na przebieg (cofanie nie kaze czekac od nowa)"
 else
     bad "new-relation: pola cel-konto" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'Nazwa' "$NR/wt.log" | cut -c1-200)"
 fi
@@ -3771,7 +3768,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}hdd/backups
 0${T}default
-0${T}192.168.28.99
 0${T}adv
 0${T}acct
 0${T}root
@@ -3783,8 +3779,9 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}
 " NR_TREE="$NRTK")
-if has "$NROUT" " --name=192.168.28.99 " && ! grep -q '^delete-relation' "$NR/zb.log" && ! grep -qF "USUNIĘTA relacja" "$NR/wt.log"; then
-    ok "new-relation: nazwa relacji 'removed' jest wolna -- kreator jej uzywa bez pytania i bez delete-relation (add-client archiwizuje stary rekord)"
+# Od 2026-10-29 relacja z drugim hostem nazywa sie jak ten host (pve9b) -- okna nazwy nie ma.
+if has "$NROUT" " --name=pve9b " && ! grep -q '^delete-relation' "$NR/zb.log" && ! grep -qF "USUNIĘTA relacja" "$NR/wt.log"; then
+    ok "new-relation: nazwa = host po drugiej stronie, bez pytania i bez delete-relation (add-client archiwizuje stary rekord)"
 else
     bad "new-relation: nazwa usunietej relacji" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'USUNI' "$NR/wt.log" | cut -c1-300)"
 fi
@@ -3881,7 +3878,7 @@ DRCL="$(grep -F -- '--checklist' "$DRD/wt.log" | head -1)"
 if ! has "$DRCL" 'Posprzątaj na źródle' && has "$DRCL" 'brak dostępu roota z tego hosta' \
    && has "$DRCL" 'cd /root/scripts/zfs-snapshot-all && ./deploy.sh --leave=pve10' \
    && grep -q -- '--check-source' "$DRD/argv" && grep -q -- 'nazwa --keep-source --yes' "$DRD/argv" \
-   && grep -qF 'Na 10.0.0.9 zostało konto relacji' "$DRD/wt.log"; then
+   && grep -qF 'Na nazwa zostało konto relacji' "$DRD/wt.log"; then
     ok "okno usuwania: bez roota do zrodla -- bez pozycji 'Posprzątaj na źródle', z poleceniem do recznego sprzatania, usuniecie z --keep-source i przypomnienie na koncu (U16)"
 else
     bad "okno usuwania: brak roota do zrodla" "cl: $(printf '%s' "$DRCL" | cut -c1-300)" "argv: $(cat "$DRD/argv" 2>/dev/null)" "$DROUT"
@@ -4980,7 +4977,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}hdd/backups
 0${T}__manual__
-0${T}inna
 0${T}adv
 0${T}acct
 0${T}root
@@ -4992,9 +4988,11 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}
 " NR_TREE='goto:hdd/data,space,enter'); NRRC=$?
-if [ "$NRRC" -eq 0 ] && grep -q '^save-profile --from=relacja-pve9b --as=relacja-inna --hidden --force' "$NR/zb.log" \
-   && grep -q '^delete-profile relacja-pve9b --yes' "$NR/zb.log" && has "$NROUT" "--profile=relacja-inna "; then
-    ok "new-relation: Recznie + inna nazwa w kroku 7 -- szkic przeniesiony na relacja-<nowa nazwa>, stary usuniety"
+# Wlasciciel 2026-10-29: relacja z drugim hostem nazywa sie jak ten host -- zmiany nazwy w
+# kroku 7 juz nie ma, wiec szkic "Recznie" zostaje relacja-<host>, nic sie nie przenosi.
+if [ "$NRRC" -eq 0 ] && has "$NROUT" "--name=pve9b " && has "$NROUT" "--profile=relacja-pve9b " \
+   && ! grep -q '^delete-profile' "$NR/zb.log" && ! grep -qF 'Pod tą nazwą relacja będzie widoczna' "$NR/wt.log"; then
+    ok "new-relation: Recznie -- bez okna nazwy (nazwa = host), szkic relacja-<host> bez przenoszenia"
 else
     bad "new-relation: Recznie + zmiana nazwy" "rc=$NRRC" "$(cat "$NR/zb.log")"
 fi
@@ -5185,7 +5183,7 @@ ERP=$(sed -n '/plan wszystkich zmian/,$p' "$ER/wt.log")
 ERM=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 3p)
 if [ "$ERRC" -eq 0 ] && [ "$(grep -E -e '--yes$' "$ER/zb.log" | tr '\n' '|')" = 'activate r1 --host=10.99.0.9 --skip-final-catchup --yes|set-transfer r1 --history=newest --yes|' ] \
    && has "$ERP" 'Adres źródła: 10.99.0.9' && has "$ERP" 'Ustawienia silnika:' && has "$ERM" 'ZAPISZ ZMIANY (2)' \
-   && hasE "$ERM" 'Źródło +192\.168\.28\.99 -> 10\.99\.0\.9 \[zmiana\]' && hasE "$ERM" 'Silnik +historia: tylko różnica do najnowszej \[zmiana\]'; then
+   && hasE "$ERM" 'Źródło +pve9 \(192\.168\.28\.99\) -> 10\.99\.0\.9 \[zmiana\]' && hasE "$ERM" 'Silnik +historia: tylko różnica do najnowszej \[zmiana\]'; then
     ok "edit-relation: lista zmian -- adres i silnik czekaja ([zmiana] w wierszach Źródło i Silnik karty), jeden plan obu, jedno WYKONAJ, activate potem set-transfer"
 else
     bad "edit-relation: lista zmian (adres + silnik)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(printf '%s' "$ERM" | cut -c1-400)" "$(tail -3 "$ER/err")"
@@ -5243,7 +5241,7 @@ EROUT=$(er_run "0${T}adres
 "); ERRC=$?
 if [ "$ERRC" -eq 1 ] && ! grep -q '^activate' "$ER/zb.log" && [ "$(grep -cF 'Porzucić zmiany?' "$ER/wt.log")" -eq 2 ] \
    && grep -F 'Adres hosta: r1' "$ER/wt.log" | grep -F -e '--inputbox' | sed -n 2p | grep -qF '~ 10.99.0.9 ~' \
-   && grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 2p | grep -qE 'Źródło +192\.168\.28\.99 -> 10\.99\.0\.9 \[zmiana\]'; then
+   && grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 2p | grep -qE 'Źródło +pve9 \(192\.168\.28\.99\) -> 10\.99\.0\.9 \[zmiana\]'; then
     ok "edit-relation: Adres hosta -- zmiana czeka na liscie; Wstecz pyta o porzucenie, pole pamieta adres; Porzuc = nic nie uruchomione"
 else
     bad "edit-relation: Adres hosta -- Wstecz" "rc=$ERRC" "$(cat "$ER/zb.log")"
