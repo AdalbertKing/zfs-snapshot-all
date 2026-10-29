@@ -5758,7 +5758,7 @@ else
 fi
 printf '0\tdalej\n0\tp0\n0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
 STUB_GRANT_OUT='HOST=10.0.0.9\nLABEL=pve9\nGRANT=none' STUB_GRANT_RC=1 rw_run "$RW/t-docs.json"
-RWSUM_N="$(grep -F -A 30 'k2: na pewno?'"$RW/wt.log" | head -40)"
+RWSUM_N="$(grep -F -A 30 'k2: na pewno?' "$RW/wt.log" | head -40)"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W1" ] && has "$RWSUM_N" 'Wymaga zgody na 10.0.0.9: deploy.sh --allow-restore=pve9'; then
     ok "restore: brak zgody + 'mimo to dalej' -> zwykle kroki i to samo polecenie; podsumowanie 'Wymaga zgody' z etykieta celu (U14)"
 else
@@ -5779,7 +5779,7 @@ cp "$RW/plan.json" "$RW/plan.remote.json"
 sed 's|"source":"acct@10.0.0.9:hdd/data"|"source":"hdd/data"|' "$RW/plan.remote.json" > "$RW/plan.json"
 printf '0\tp0\n0\tobok\n0\thdd/restore\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-docs.json"
-RWSUM_L="$(grep -F -A 30 'k2: na pewno?'"$RW/wt.log" | head -40)"
+RWSUM_L="$(grep -F -A 30 'k2: na pewno?' "$RW/wt.log" | head -40)"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W1" ] && has "$RWSUM_L" 'Relacja lokalna' && ! has "$RWSUM_L" 'Wymaga zgody'; then
     ok "restore: relacja lokalna obok -> to samo polecenie, podsumowanie bez zadania zgody"
 else
