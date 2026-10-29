@@ -1129,7 +1129,7 @@ PK4E="$(prz F4,enter --exec-log "$PKX" $PZ)"; PK4LOG="$(cat "$PKX")"
 PK4N="$(prz down,F4 --exec-log "$PKX" $PZ)"
 PK4NE="$(prz down,F4,enter --exec-log "$PKX" $PZ)"; PK4NLOG="$(cat "$PKX")"
 if has "$PK4" '╔═ Kopie na pve20' && hasE "$PK4" 'hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]: \[Migawki\]' \
-   && hasE "$PK4" 'Migawka +hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]@automated_hourly_2026-09-09_10-20-01' && ! has "$PK4" 'Enter/Tab do migawek' \
+   && hasE "$PK4" 'Migawka +@automated_hourly_2026-09-09_10-20-01' && hasE "$PK4" 'Dataset +hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]' && ! has "$PK4" 'Enter/Tab do migawek' \
    && printf '%s\n' "$PK4LOG" | grep -Eq "zfs-backup.sh'? browse sync-test --ask --snapshot=hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]@automated_hourly_2026-09-09_10-20-01\$" \
    && ! printf '%s' "$PK4LOG" | grep -q -- '--at=' && ! printf '%s' "$PK4LOG" | grep -q -- '--dataset='; then
     ok "kopie: F4 na wykonanym biegu (F2) -- fokus w prawym panelu na najnowszej migawce nie nowszej niz koniec biegu (10:20, nie 11:20), Enter = browse REL --ask --snapshot=PELNA_NAZWA"
@@ -1137,7 +1137,7 @@ else
     bad "kopie: F4 z wykonanego biegu" "$(printf '%s\n' "$PK4" | grep -E 'Kopie na|zfs list|Migawka|Enter/Tab')" "log: $PK4LOG"
 fi
 if has "$PK4N" '╔═ Kopie na pve20' && hasE "$PK4N" 'hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]: \[Migawki\]' && has "$PK4N" 'Enter/Tab do migawek' \
-   && ! hasE "$PK4N" 'Migawka +hdd/' && [ ! -s "$PKX" ] && [ -z "$PK4NLOG" ]; then
+   && ! hasE "$PK4N" 'Migawka +@' && [ ! -s "$PKX" ] && [ -z "$PK4NLOG" ]; then
     ok "kopie: F4 na biegu nadchodzacym -- kursor na datasecie celu, fokus na LISCIE (nie ma chwili), Enter tylko przenosi fokus i niczego nie uruchamia"
 else
     bad "kopie: F4 z nadchodzacego biegu" "$(printf '%s\n' "$PK4N" | grep -E 'Kopie na|zfs list|Migawka|Enter/Tab')" "log: $PK4NLOG"
@@ -1627,7 +1627,7 @@ fi
 A="$(od "" --width 200 --height 50)"
 if hasE "$A" 'sejf-a .*nośnik niepodłączony -- podłącz go, potem Ctrl-R' && hasE "$A" 'sejf-b .*nośnik niepodłączony -- podłącz go, potem Ctrl-R' \
    && has "$A" 'inny dysk -- pula spoza relacji i replik' \
-   && hasE "$A" "Dataset +$VM101" && hasE "$A" 'Relacja +duplikat +backup' && hasE "$A" 'Migawek +3' && ! hasE "$A" 'Migawka +hdd/'; then
+   && hasE "$A" "Dataset +$VM101" && hasE "$A" 'Relacja +duplikat +backup' && hasE "$A" 'Migawek +3' && ! hasE "$A" 'Migawka +@'; then
     ok "kopie: repliki z nosnikiem niepodlaczonym -- wiersz z uwaga 'podłącz go, potem Ctrl-R'; ostatni wiersz 'inny dysk'; panel: Dataset/Relacja/Migawek, bez Migawki gdy fokus na liscie"
 else
     bad "kopie: repliki, 'inny dysk', Szczegoly" "$A"
@@ -1639,7 +1639,7 @@ else
     bad "odzysk: pasek F4" "$A"
 fi
 A="$(od enter)"
-if [ ! -s "$XL" ] && has "$A" 'Enter przeglądaj   F9 przywróć   Esc wraca' && ! has "$A" 'Enter/Tab do migawek' && hasE "$A" 'Migawka +hdd/backups/192\.168\.28\.99/hdd/lab/vm-101@automated_hourly_2026-09-09_11-20-01'; then
+if [ ! -s "$XL" ] && has "$A" 'Enter przeglądaj   F9 przywróć   Esc wraca' && ! has "$A" 'Enter/Tab do migawek' && hasE "$A" 'Migawka +@automated_hourly_2026-09-09_11-20-01' && hasE "$A" 'Dataset +hdd/backups/192\.168\.28\.99/hdd/lab/vm-101'; then
     ok "kopie: Enter na DATASECIE tylko przenosi fokus do zakladki Migawki (nic nie uruchamia), kursor na najnowszej migawce; Szczegoly pokazuja Migawke"
 else
     bad "kopie: Enter na datasecie" "$(cat "$XL")" "$(printf '%s' "$A" | tail -4)"
@@ -1697,7 +1697,7 @@ fi
 # Wybor w prawym panelu: zaznaczony wiersz lewego panelu dostaje znacznik "▸ ct-201", a dol
 # podaje migawke i slowo Czas (godzine pomijamy: zalezy od TZ).
 A="$(od down,enter,down)"
-if has "$A" "$CT201: [Migawki]" && hasE "$A" "lab-ct201 +$CT201 " && hasE "$A" "Migawka +$CT201@automated_hourly_2026-09-09_10-20-01" && hasE "$A" 'Czas +20' && has "$A" 'Esc wraca'; then
+if has "$A" "$CT201: [Migawki]" && hasE "$A" "lab-ct201 +$CT201 " && hasE "$A" 'Migawka +@automated_hourly_2026-09-09_10-20-01' && hasE "$A" "Dataset +$CT201" && hasE "$A" 'Czas +20' && has "$A" 'Esc wraca'; then
     ok "kopie: down, Enter, down -- zakladka Migawki ct-201 z fokusem, panel: Migawka (druga) i Czas"
 else
     bad "kopie: fokus w prawym panelu" "$(printf '%s\n' "$A" | grep -E 'Migawki\]|ct-201|Migawka|Czas|Esc wraca')"
@@ -1721,7 +1721,7 @@ else
 fi
 : > "$XL"
 A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL $OZT --exec-log "$XL" --screen relacje --keys tab,F4 --width 200 2>&1)"
-if has "$A" '╔═ Kopie na pve10' && has "$A" "$VM101: [Migawki]" && has "$A" 'Enter/Tab do migawek' && ! hasE "$A" 'Migawka +hdd/' && [ ! -s "$XL" ]; then
+if has "$A" '╔═ Kopie na pve10' && has "$A" "$VM101: [Migawki]" && has "$A" 'Enter/Tab do migawek' && ! hasE "$A" 'Migawka +@' && [ ! -s "$XL" ]; then
     ok "kopie: F4 z zakladki Datasety na F3 -- kursor na celu tej pary (vm-101), fokus na liscie, bez --at=/--snapshot= (nic nie uruchomiono)"
 else
     bad "kopie: F4 z F3, fokus w Datasety" "$(printf '%s\n' "$A" | grep -E 'Kopie na|Migawki\]|Migawka|Enter/Tab')" "log: $(cat "$XL")"
@@ -2742,7 +2742,8 @@ for w in (80, 120, 200):
 print(" ".join(out))
 PYEOF
 )"
-if [ "$MKOUT" = "80:4Kopie 120:F4 Kopie 200:F4 Kopie" ]; then
+# F4 ma od 2026-10-29 trzy akcje (F7, F8 grupy, F9), jak F2: przy 120 pasek zwija podpisy.
+if [ "$MKOUT" = "80:4Kopie 120:4Kopie 200:F4 Kopie" ]; then
     ok "klawisze: aktywne okno zaznaczone na pasku kolorem (marks), bez nawiasow"
 else
     bad "klawisze: zaznaczenie aktywnego okna" "got=$MKOUT"

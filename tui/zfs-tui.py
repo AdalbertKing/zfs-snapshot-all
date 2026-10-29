@@ -4656,7 +4656,9 @@ def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, 
         for x in snaps or []:
             y = dict(x)
             y["title"] = y.get("name") or u""
-            y["pairs"] = [group(ch, _(u"Migawka")), (_(u"Migawka"), y.get("name") or u""),
+            # w panelu sama migawka (@...) -- pelna nazwa ds@... w waskim panelu lamala sie na dwa
+            # wiersze; dataset stoi wiersz nizej i w tytule zakladki
+            y["pairs"] = [group(ch, _(u"Migawka")), (_(u"Migawka"), u"@" + (y.get("name") or u"").split("@", 1)[-1]),
                           (_(u"Czas"), fmt_full(y.get("creation")) if y.get("creation") else u"-"),
                           (_(u"Dataset"), cur["ds"]), (_(u"Relacja"), g["name"])]
             sitems.append(y)
