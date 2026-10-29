@@ -85,7 +85,7 @@ Before adding a flag, a parser or a knob: grep for one. Before using a test
 helper, confirm the suite defines it. Before writing a resolver, check what the
 renderer already uses.
 
-*Evidence: E7, E3, E12, E29, E32, E34, E40, E55, E86.*
+*Evidence: E7, E3, E12, E29, E32, E34, E40, E55, E86, E107 (2026-10-29, a global replace and a `sed` regex where an exact-string edit with a count check was the established helper).*
 
 ### R12 — A pass proves the shapes it ran, and the report must name them
 
@@ -1935,6 +1935,27 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E107 — two blind text replacements in test/tui/run.sh (2026-10-29, R8, repeat)
+**2026-10-29, branch `fix/u111-host-names` (U111, host names in the GUI).**
+
+*Genesis.* (1) To move the suite to the new notation I replaced
+`zfsbackup-pve10@192.168.28.99:` with `pve9:` in every assertion at once, eight hits. One of
+them was the Config tab assertion `src = zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101`. That tab
+shows the config verbatim, so the address is meant to stay there, and the test went red. (2) Then
+a one-line `sed` meant to change one ASCII assertion had `\|` in its pattern. In GNU sed that is
+alternation, so the expression also matched `hasE "$A" '^` on four lines and corrupted them.
+`bash -n` still passed. I restored the file with `git show HEAD:test/tui/run.sh` and applied the
+edits again in Python, each as an exact string with a count check.
+
+*Cause.* R8: I used a fresh one-off tool (global replace, `sed` with a regex) where the
+established helper exists: an exact-string replacement with an asserted count (the memory note
+"heredoc eats backslashes -> Write tool / chr(92)"). (1) is the same defect without the regex.
+A replacement whose hits were not read one by one is not a decided change.
+
+*Rule.* R8, unchanged. For test assertions: one exact string per edit with `assert count == N`.
+Read every hit before replacing all of them. Never use `sed` on a line that holds `\|`, `&` or
+the delimiter.
 
 ### E106 — Tab+Enter on the restore summary pressed Uruchom (2026-10-28, R14, repeat)
 **2026-10-28, live campaign on pve10 (dev main + `fix/campaign-20261028-night`).**

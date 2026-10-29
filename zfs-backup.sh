@@ -20243,6 +20243,10 @@ status_json_record() {   # <client record path> <ask the peer: 0|1>
     jsonw_field profile            "${PROFILE:-}"
     jsonw_field source_profile     "${SOURCE_PROFILE:-}"
     jsonw_field client_target      "${CLIENT_TARGET:-}"
+    # The directory under the target the copies land in (snapget_local_base) -- the
+    # GUI rebuilt it from peer_host and showed a path that does not exist once the
+    # address changed (ab: peer 10.98.0.2, copies under 192.168.28.98; U111).
+    jsonw_field landing            "${LANDING_LABEL:-}"
     # KIERUNEK RELACJI, a nie domysl czytelnika (2026-09-21). GUI nie mialo skad
     # wziac trybu, wiec kazda relacje rysowalo jako "backup" -- lacznie z synchro,
     # ktora nie ma celu i lezy u siebie pod TA SAMA sciezka. Rekord wie to od
