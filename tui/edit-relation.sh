@@ -765,7 +765,10 @@ save_all() {
     run_progress "$(Tv 'Zmień relację $NAME: wykonuję' '$NAME' "$NAME")" "$TMPD/run.log" apply_steps || rc=$?
     [ -e "$TMPD/edit.done" ] && DONE=1
     [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$rc"; } >>"$ZFS_TUI_LOG" 2>/dev/null
-    result_box "$T_CHG" "$rc" "$TMPD/run.log" "$(Tv 'Relacja '\''$NAME'\'' zmieniona (rc=0).' '$NAME' "$NAME")${ZFS_TUI_LOG:+\n\n$(T 'Dziennik:') $ZFS_TUI_LOG}" \
+    # Sukces jednym zdaniem = linia komunikatu GUI, bez okna z <Ok> (#993, "Na pewno? i koniec");
+    # dziennik dopisuje tam GUI (window_end_message). Na pve10 2026-10-29 okno zostawalo, bo
+    # druga linia "Dziennik: ..." robila z sukcesu tekst wielowierszowy.
+    result_box "$T_CHG" "$rc" "$TMPD/run.log" "$(Tv 'Relacja '\''$NAME'\'' zmieniona (rc=0).' '$NAME' "$NAME")" \
         "$(T 'ZATRZYMANE -- kroki przed tym, który odmówił, zostały.')"
     exit "$rc"
 }

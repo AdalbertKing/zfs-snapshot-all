@@ -5531,6 +5531,20 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'show-tiers r1 --json' "$ER/zb.log" \
 else
     bad "edit-relation: harmonogram przez set-tiers" "rc=$ERRC" "$(cat "$ER/zb.log")" "grid.n=$(cat "$ER/grid.n" 2>/dev/null)" "$(tail -3 "$ER/err")"
 fi
+# Udany zapis z GUI (ZFS_TUI_LOG ustawiony) konczy sie zdaniem na linii komunikatu, bez okna
+# z <Ok> (pve10, 2026-10-29: druga linia "Dziennik: ..." robila z sukcesu okno; dziennik
+# dopisuje GUI samo).
+rm -f "$ER/st" "$ER/gui.log"
+EROUT=$(ZFS_TUI_LOG="$ER/gui.log" ZFS_TUI_STATUS="$ER/st" er_run "0${T}srcret
+0${T}wykonaj
+0${T}
+" "right,bs,bs,1,2,enter"); ERRC=$?
+if [ "$ERRC" -eq 0 ] && grep -qx "Relacja 'r1' zmieniona (rc=0)." "$ER/st" && ! grep -F -- '--msgbox' "$ER/wt.log" | grep -q 'zmieniona' \
+   && grep -q '^rc=0$' "$ER/gui.log"; then
+    ok "edit-relation: udany zapis = jedno zdanie na linii komunikatu GUI (wt_end), bez okna z Ok; przebieg w dzienniku GUI"
+else
+    bad "edit-relation: koniec udanego zapisu" "rc=$ERRC" "status: $(cat "$ER/st" 2>/dev/null)" "$(grep -F -- '--msgbox' "$ER/wt.log" | cut -c1-200)" "$(tail -3 "$ER/err")"
+fi
 # X20 (wlasciciel 2026-10-14): tabela celu (harmon -> __manual__) otwarta DRUGI raz pokazuje
 # WPISANA zmiane (dobowe 5), nie znow wartosc z configu (7); zmiana idzie do set-tiers raz.
 EROUT=$(er_run "0${T}harmon
