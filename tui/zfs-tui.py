@@ -333,13 +333,14 @@ def direction_of(host, peer, dirs, mode=None):
     # Relacja lokalna (local-backup --name, 2026-10-09): zrodlo i kopia na tym
     # hoscie -- ta sama strzalka co zadania lokalne na F2.
     if mode == "local":
-        return u"lokalnie"
+        # przez _(): angielskie GUI na pve2 pokazywalo "lokalnie" w kolumnie Direction (2026-10-29)
+        return _(u"lokalnie")
     # snaponly: migawki robione STAD na zrodle; nic tu nie przychodzi, wiec nie
     # strzalka pobrania (REV-20261017-152 runda 3).
     if mode == "snaponly" or (dirs and set(dirs) == {"snaponly"}):
         return u"→ %s" % (peer or "?")
     if "local" in dirs or not peer:
-        return "local" if dirs else "?"
+        return _(u"lokalnie") if dirs else "?"
     if mode == "sync":
         return u"%s ↔ %s" % (host, peer)
     if "pull" in dirs and "push" in dirs:
@@ -2674,7 +2675,7 @@ def job_panel_pairs(row, data, now, ch):
     j = row["job"]
     jobs_here = row.get("jobs") or [j]
     _dir = row.get("dir") or "?"
-    pairs = [group(ch, _(u"Co")), (_(u"Kierunek"), _(u"lokalnie, na tym hoście") if _dir == "local" else _dir)]
+    pairs = [group(ch, _(u"Co")), (_(u"Kierunek"), _(u"lokalnie, na tym hoście") if _dir in ("local", _(u"lokalnie")) else _dir)]
     if len(jobs_here) > 1:
         # wspolny przedrostek RAZ, potem krotkie nazwy (R3-5)
         scopes = [(jj.get("scope", "") or "?").split(":")[-1] for jj in jobs_here]
@@ -4752,7 +4753,7 @@ HELP = [
     u"                 -- czy na tym hoście działa strażnik pojemności i strażnik",
     u"                 nagłego przyrostu danych; włączasz je w F10.",
     u"  Kierunek       strzałka idzie jak dane: pve9 → pve10 pobieram z pve9,",
-    u"                 pve10 → pve9 wysyłam, pve10 ↔ pve9 obie strony, local = na tym hoście;",
+    u"                 pve10 → pve9 wysyłam, pve10 ↔ pve9 obie strony, lokalnie = na tym hoście;",
     u"                 nazwy hostów z /etc/hosts, adres tylko gdy nazwy tam nie ma",
     "",
     u"  PANELE (każdy ekran): lista = wybór i stan; panel obok = fakty o",

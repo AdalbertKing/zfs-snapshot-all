@@ -2146,6 +2146,13 @@ if hasE "$LOK" '^║ lok +kopia lokalna +lokalnie +działa ' && hasE "$LOK" 'Źr
 else
     bad "relacje: relacja lokalna" "$LOK"
 fi
+# Ten sam ekran po angielsku (pve2, 2026-10-29): kolumna Direction mowila "lokalnie".
+LOKE="$(ZFS_TUI_LANG=en "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$LOKD/status.json" --jobs "$LOKD/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --width 120 --height 30 2>&1)"
+if hasE "$LOKE" '^║ lok +local copy +local +' && ! has "$LOKE" 'lokalnie'; then
+    ok "relacje: relacja lokalna po angielsku -- kierunek 'local', nie 'lokalnie'"
+else
+    bad "relacje: relacja lokalna po angielsku" "$(printf '%s\n' "$LOKE" | grep -E 'lok ' | head -3)"
+fi
 # MIGAWKI LOKALNE (nazwy wlasciciela 2026-10-18): ta sama relacja lokalna BEZ celu to
 # "migawki lokalne", nie "kopia lokalna" -- typ mowi CO, kierunek GDZIE.
 "$PY" - "$LOKD" <<'PYEOF2'
