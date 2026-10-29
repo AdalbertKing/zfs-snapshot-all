@@ -2046,6 +2046,7 @@
 "Źródło tej relacji nie ma własnej retencji (sprząta je tylko cel).": "This relation's source has no retention of its own (only the target prunes it).",
 "Źródło usunięte z listy zostawia swoją kopię na nośniku (wyczyścić dysk: Dodaj dysk = formatowanie).": "A source removed from the list leaves its copy on the medium (to wipe the disk: Add disk = formatting).",
 "Źródło → cel": "Source → target",
+"źródle": "the source",
 "źródła": "sources",
 "źródło": "source",
 "źródło nie ma żadnego datasetu": "the source has no dataset at all",
