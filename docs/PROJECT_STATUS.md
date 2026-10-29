@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 940e5a173d689383 -->
+<!-- status-covers-digest: b9e5c36b43ae9d01 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -57,6 +57,12 @@
   **Metropolis:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`; od 2026-10-29 rozstrzyga to wpis
   `192.168.28.9 pve1` w `/etc/hosts` pve2 (opis niżej, przy drzewach). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **F4 Kopie w układzie F2; F10 czytelne (2026-10-29, właściciel).** Dwa panele z rozwiniętym drzewem („badziewne
+  okno”, „haszcz”) zastąpił układ F2 przez `render_tabbed`: tabela kopii (Relacja, Rodzaj, Kopia, Migawek,
+  Najnowsza), fakty z prawej, migawki w dolnej zakładce [Migawki] z kolumnami `zfs list`. F8 grupuje po relacji
+  jak F9 na F2 (F9 zostaje Przywróć). Repliki bez nośnika i relacje bez kopii mają swój wiersz z uwagą, bez akcji.
+  Stan i klawisze bez zmian (Enter/Tab do migawek, Enter przegląda, F9 przywraca). F10: większy odstęp kolumn,
+  opisy łamane w trzeciej kolumnie (dalszy ciąg otwiera to samo ustawienie). Zasada na przyszłość: każde okno przeglądania w układzie F2 (backlog U121).
 - **Dodany szczebel dostaje od razu pierwszą migawkę (2026-10-29).** Na pve10 właściciel dodał relacji `pve9b`
   szczebel tygodniowy. Nowe linie czekały do niedzieli, F7 uruchomił godzinowe, a monitor czytał „brak
   `automated_weekly`, wiek od założenia datasetu” = CRITICAL („stare”). Zakładanie relacji i `set-datasets`
