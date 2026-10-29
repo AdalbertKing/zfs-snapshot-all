@@ -1336,6 +1336,8 @@ CARD_NAMES_OF() {
 wz_steps() {   # -> kroki bieżącego rodzaju, w kolejności
     local f out=""
     for f in mode host ds target chain profile srcret name; do field_applies "$f" && out="$out $f"; done
+    # relacja z drugim hostem: nazwa = ten host, krok nazwy odpada (karta nadal ją pokazuje)
+    [ -n "$(host_rname)" ] && out="${out% name}"
     echo $out
 }
 wz_abort() {   # 0 = przerwij; 1 = zostań ("Zostań" albo Esc)
