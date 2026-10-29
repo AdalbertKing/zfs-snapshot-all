@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b9e5c36b43ae9d01 -->
+<!-- status-covers-digest: 1e7a59728e24c822 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -57,6 +57,27 @@
   **Metropolis:** linie kolektora pve2 podają pve1 adresem `192.168.28.9`; od 2026-10-29 rozstrzyga to wpis
   `192.168.28.9 pve1` w `/etc/hosts` pve2 (opis niżej, przy drzewach). Testy: `test/cron`
   PG1-PG16 (pve9 256/0), golden 123/0 (4 wzorce z dyskami gości dostały `--pve-guests`).
+- **Powrót do głównego okna w dwóch etapach; jedno „Na pewno?” (2026-10-29, właściciel, backlog U129).**
+  - Powrót: ekran czeka tylko na `status`, `list-jobs`, `progress` i `list-replicas` (na pve10 0,9 s).
+  - Drugi etap: `monitor` i `job-stats` (3,5 s i 8,3 s) ruszają po pierwszym. Do tego czasu na ekranie są
+    ich poprzednie wartości z dopiskiem „(monitor i przebiegi: sprawdzam…)”.
+  - Liczenie wierszy F4 nie czyta już drzewa kopii (`zfs-tree`) w głównym wątku poza F4. Zrzut stosu na
+    pve10 pokazał, że to ono zamrażało „Wczytuję aktualne dane hosta… 0 s” na 5 s po każdym oknie.
+  - Bez odczytu: okno zamknięte znacznikiem „nic nie zmieniono” (`wt_end_nochange`, teraz także `edit-config`
+    zamknięty bez zmian) i okno tylko do pokazania (F8 Klucz, odmowa importu). Udany `edit-config` wraca bez
+    „Enter = dalej”, ale czyta dane.
+  - Szablon czyta tylko listę szablonów, ustawienia tylko `status`.
+  - Zmierzone na pve10: Esc po F8 Klucz 5 ms, wyjście z F10 6 ms, Esc po F7 Uruchom ~1 s
+    (wcześniej 6-9 s), dopisek monitora znika po kolejnych ~9 s.
+  - Potwierdzenia: przywracanie (z relacji i z dysku) ma jedno okno „…: na pewno?” z Wykonaj/Wstecz (domyślnie
+    Nie) i uruchamia polecenie z `--yes`, więc w terminalu nie ma już `Overwrite?`/`Restore?`/`Destroy…? [y/N]`.
+    Na pve10 przywrócenie obok przeszło od Wykonaj do „Odzysk: gotowe” bez pytania.
+  - Usunięcie repliki to jedno okno. Usunięcie relacji: lista „co jeszcze?” i „na pewno?”. Drugie pytanie
+    jest tylko przy zaznaczonym SKASUJ KOPIE.
+  - Kreator nowej relacji: po UTWÓRZ jedno okno planu (podsumowanie, ostrzeżenia czasownika, ścieżka pełnego planu).
+  - Jednozdaniowy sukces idzie na linię komunikatu GUI bez okna GOTOWE. Okno zostaje, gdy tekst mówi, co zrobić ręcznie.
+  - Okno „Dokąd -- przeglądaj” ma kolumny USED/AVAIL. Przy tej zmianie wstawka przerwała pętlę w skrypcie
+    kreatora i lista celów była pusta; naprawione, zanim trafiło do `main`.
 - **F4 Kopie w układzie F2; F10 czytelne (2026-10-29, właściciel).** Dwa panele z rozwiniętym drzewem („badziewne
   okno”, „haszcz”) zastąpił układ F2 przez `render_tabbed`: tabela kopii (Relacja, Rodzaj, Kopia, Migawek,
   Najnowsza), fakty z prawej, migawki w dolnej zakładce [Migawki] z kolumnami `zfs list`. F8 grupuje po relacji

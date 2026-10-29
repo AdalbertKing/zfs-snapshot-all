@@ -111,6 +111,12 @@ class Tree(object):
     def __init__(self, spec):
         self.spec = spec
         self.single = bool(spec.get("single"))
+        # Okno wyboru CELU (kreator, „Dokąd -- przeglądaj”; właściciel 2026-10-29, wariant A):
+        # kolumny USED/AVAIL jak `zfs list`, okno wysokości treści, a w dolnej linii prawdziwa
+        # ścieżka dla wiersza pod kursorem ("cursor_line" z {cur}). Inne okna bez zmian.
+        self.cols = any(isinstance(d, dict) and "avail" in d for d in spec.get("datasets", []))
+        self.fit = bool(spec.get("fit"))
+        self.cursor_line = spec.get("cursor_line") or u""
         sel = spec.get("selectable")
         self.selectable = set(sel) if sel is not None else None
         self.show_mode = bool(spec.get("show_mode")) and not self.single
@@ -163,7 +169,8 @@ class Tree(object):
         for n in names:
             p = n.rsplit("/", 1)[0] if "/" in n else None
             self.nodes[n] = {"name": n, "parent": p if p in seen else None, "kids": [], "sub": [],
-                             "depth": 0, "used": info[n].get("used"), "type": info[n].get("type")}
+                             "depth": 0, "used": info[n].get("used"), "type": info[n].get("type"),
+                             "avail": info[n].get("avail")}
         self.tops = []
         for n in names:
             p = self.nodes[n]["parent"]
@@ -388,6 +395,8 @@ class Tree(object):
         name = n if nd["depth"] == 0 else n.rsplit("/", 1)[1]
         size = used_text(nd["used"])
         right = (u"zvol " + size).strip() if nd["type"] == "volume" else size
+        if self.cols:
+            right = u"%9s %9s" % (size, used_text(nd.get("avail")))
         avail = iw - len(prefix) - (len(right) + 2 if right else 1)
         if len(name) > avail:
             name = name[:max(1, avail - 1)] + u"…"
@@ -402,7 +411,13 @@ class Tree(object):
         legend = _(self.spec.get("legend") or u"") or (_(u" · = sama gałąź (nic do wybrania)") if self.single
                                                        else _(u" [x] kopiowane z potomnymi, także przyszłymi   [-] tylko obecne albo część   [ ] nie"))
         llines = [u" " + l for l in wrap(legend.strip(), iw - 2)] or [u""]
+        if self.cols:
+            # nagłówek kolumn w miejscu legendy (legenda idzie na dół, z prawdziwą ścieżką)
+            hdr = u"%9s %9s" % (u"USED", u"AVAIL")
+            llines = [u"".ljust(iw - len(hdr) - 1) + hdr]
         lh = self.list_height(len(mlines) + len(llines) - 1)
+        if self.fit:
+            lh = min(lh, max(3, len(rows)))
         idx = rows.index(self.cur) if self.cur in rows else 0
         self.top = max(0, min(self.top, len(rows) - lh))
         if idx < self.top:
@@ -422,7 +437,9 @@ class Tree(object):
         body.append(_(u" ↓ więcej") if self.top + lh < len(rows) else u"")
         nexc = sum(1 for r in self.roots for e in self.excl.get(r, []) if e not in self.hide)
         auto = any(e in self.hide for r in self.roots for e in self.excl.get(r, []))
-        if self.single:
+        if self.single and self.cursor_line:
+            body.append(u" " + self.cursor_line.replace(u"{cur}", self.cur or u"-"))
+        elif self.single:
             body.append(_(u" Kursor: %s") % (self.cur or u"-"))
         else:
             body.append(_(u" Wybrane miejsca: %d   pominięte: %d%s") % (

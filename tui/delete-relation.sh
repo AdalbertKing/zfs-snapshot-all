@@ -74,7 +74,12 @@ while :; do
         echo
         echo "$(T 'Komenda:')  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
     } >"$TMPD/plan2.txt"
-    yesno_text "$TMPD/plan2.txt" "$(Tv 'Usuń relację $NAME -- plan' '$NAME' "$NAME")" "$(T WYKONAJ)" "$(T Wstecz)" --defaultno || continue
+    yesno_text "$TMPD/plan2.txt" "$(Tv 'Usuń relację $NAME -- na pewno?' '$NAME' "$NAME")" "$(T WYKONAJ)" "$(T Wstecz)" --defaultno || continue
+    # Drugie pytanie TYLKO przy kasowaniu kopii -- nieodwracalne (wlasciciel 2026-10-29).
+    if [ "$DATA" = ON ]; then
+        wt --title "$(T 'SKASUJ KOPIE -- nieodwracalne')" --yes-button "$(T SKASUJ)" --no-button "$(T Wstecz)" --defaultno \
+           --yesno "$(Tv 'Kopie na tym hoście zostaną skasowane, bez powrotu:\n\n$COPIES\n\nNa pewno?' '$COPIES' "$COPIES")" 12 "$W" || continue
+    fi
     : >"$TMPD/run.log"
     RC=0; run_progress "$(Tv 'Usuń relację $NAME' '$NAME' "$NAME")" "$TMPD/run.log" "${ARGV[@]}" --yes || RC=$?
     # Uwaga 5 (właściciel, 2026-09-24): usunięcie zostawia ślad jak import -- GUI podaje

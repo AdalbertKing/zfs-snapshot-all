@@ -127,6 +127,13 @@ result_box() {   # <tytuł> <rc> <dziennik> <tekst przy rc=0> [tekst przy rc!=0]
     local t="$1" rc="$2" log="$3" okt="$4" bad="${5:-$(T 'Nie udało się.')}"
     geom
     if [ "$rc" -eq 0 ]; then
+        # GOTOWE TYLKO PRZY BLEDZIE (wlasciciel 2026-10-29: "absolutne minimum: Na pewno? i
+        # koniec"). Jednozdaniowy sukces idzie na linie komunikatu GUI (wt_end), bez okna;
+        # okno zostaje, gdy tekst ma dalsze linie -- to sa rzeczy do zrobienia recznie.
+        if [ "$(printf '%b\n' "$okt" | grep -c .)" -le 1 ]; then
+            wt_end "$(printf '%b' "$okt")"
+            return 0
+        fi
         local l; l=$(printf '%b
 ' "$okt" | fold -s -w $((W - 4)) | grep -c '')
         l=$((l + 6)); [ "$l" -gt "$H" ] && l=$H
@@ -240,6 +247,9 @@ host_name() {   # <adres|nazwa> [nazwa relacji] -> nazwa z /etc/hosts tego hosta
         *) awk -v a="$1" '{ sub(/#.*/, "") } $1 == a { for (i = 2; i <= NF; i++) { if ($i ~ /^localhost/) continue; if ($i !~ /\./) { print $i; ok = 1; exit } if (f == "") f = $i } }
                END { if (!ok && f != "") { sub(/\..*/, "", f); print f } }' "${ZFS_TUI_HOSTS:-/etc/hosts}" 2>/dev/null | grep . || printf '%s' "${2:-$1}" ;;
     esac
+}
+plan_words() {   # stdin -> plan bez linii crona i znaczników bloku (okno planu; pełny plan idzie do pliku)
+    grep -vE '^[[:space:]]*[-+]?[[:space:]]*(([0-9*/,@-]+|[a-z]+)[[:space:]]+){4}[0-9*/,a-z-]+[[:space:]]+/|^[[:space:]]*[-+]?[[:space:]]*# (BEGIN|END) zfs-backup|^[[:space:]]*[-+]?[[:space:]]*\*/[0-9]+ ' || true
 }
 shq() {   # argument tak, jak wpisałby go człowiek: apostrofy tylko tam, gdzie trzeba
     case "$1" in *[!A-Za-z0-9_./:=,@%+-]*) printf "'%s'" "$1" ;; *) printf '%s' "$1" ;; esac
