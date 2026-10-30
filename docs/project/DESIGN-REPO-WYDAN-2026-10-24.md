@@ -122,7 +122,8 @@ paczkami (wolniej, ale świadomie).
 
 ## 9. Stan po przepięciu i sprzątanie starej historii (2026-10-30, do recenzji)
 
-Status: **PROPOZYCJA, nic nie zrobione na hostach.** Polecenie właściciela 2026-10-30: najpierw recenzent.
+Status: **nic nie zrobione na hostach.** Polecenie właściciela 2026-10-30: najpierw recenzent. REV-20261030-185
+zablokował pierwszą wersję §9.2; obecna czeka na jego ocenę.
 
 ### 9.1 Zmierzone 2026-10-30
 
@@ -152,22 +153,29 @@ Status: **PROPOZYCJA, nic nie zrobione na hostach.** Polecenie właściciela 202
 - Checkout roota trzyma pliki ignorowane, które są konfiguracją hosta (pve2: `jobs.pve2.conf` i kopie,
   `cron.txt`); klon konta: `jobs.test.conf`. Dlatego **nie** proponuję ponownego klonowania katalogu.
 
-### 9.2 Propozycja: sprzątanie w miejscu
+### 9.2 Sprzątanie w miejscu: `release/clean-host-clone.sh` (REV-20261030-185)
 
-Na każdej instalacji, root i konto w jednym oknie czasowym:
+Wersja pierwsza (okno czasowe poza :15) nie dawała wykluczenia: `git gc --prune=now` mógł trafić na
+trwający `git pull` konta (REV-20261030-185 F1). Teraz jednorazowe narzędzie, uruchamiane jako root na
+jednym hoście: `release/clean-host-clone.sh <katalog stanu> <repo>...`. Nie trafia do wydania
+(`release/MANIFEST` to biała lista); na host kopiowane ręcznie.
 
-1. zapis: `git rev-parse HEAD`, `git status --porcelain --ignored`, `du -sm .git`;
-2. plik `update-hold` w katalogu stanu roota (`update-control.sh:44`). Konto nie ma holdu (cron
-   `git pull --ff-only`, `deploy.sh:7868`), dlatego pkt 3-5 poza minutą :15 (np. między :20 a :10);
-3. usunięcie wszystkich refów poza `refs/heads/main` i `refs/remotes/origin/main`;
-   `git fetch --prune --prune-tags origin` (tagi tylko z zfsbackup);
-4. `git reflog expire --expire=now --all` i `git gc --prune=now`;
-5. kontrola: `HEAD` bez zmian, `git status --porcelain --ignored` identyczny z pkt 1, `git fsck` bez błędów,
-   `previous-revision` osiągalny, `du -sm .git`;
-6. zdjęcie holdu; po najbliższym :15 odczyt `git-pull.log` i `--version`.
+1. Zamknięcie wejść: plik `update-hold` dla aktualizatora roota (sprawdzany przez `do_self_update`, zanim
+   dotknie gita); linia `git pull` z crona każdego właściciela repo innego niż root zdjęta, crontab zapisany.
+2. Dopiero potem czekanie, aż żaden proces nie pracuje w repo: katalog bieżący w repo, ścieżka repo albo
+   wywołanie `update-control.sh` / `deploy.sh --self-update|--rollback|--resume-updates` w linii poleceń.
+   Wejścia są zamknięte, więc nic nowego nie rusza: bieg sprzed pkt 1 jest doczekany, nie ścigany.
+3. Pozostawiony `*.lock` w `.git` = odmowa.
+4. Na każdym repo, jako jego właściciel: usunięcie refów poza `main`, `origin/main`, `origin/HEAD`;
+   `reflog expire --expire=now --all`; `gc --prune=now`. Odmowa przy zmienionych plikach śledzonych,
+   `stash` albo celu rollbacku spoza `origin/main`.
+5. Kontrola: `fsck --full`, `HEAD`, `origin/main`, cel rollbacku, każdy plik poza `.git` (także ignorowana
+   konfiguracja hosta) bajt w bajt z właścicielem, grupą i trybem; `fetch`, który nadal przewija się do przodu.
+6. Otwarcie wejść: zapisany crontab z powrotem, hold zdjęty tylko, gdy założył go ten bieg.
 
-Bez zmiany kodu i bez zmiany plików roboczych. Kolejność jak w §6: lab (pve9, pve10, pve11; pve9b gdy wróci),
-potem produkcja host po hoście za zgodą właściciela.
+Pierwszy błąd zatrzymuje bieg z barierą na miejscu: hold zostaje, linie crona zostają zdjęte, komunikat
+podaje katalog z zapisanym crontabem. Testy: `test/cleanclone`. Kolejność jak w §6: lab (pve9, pve10,
+pve11; pve9b gdy wróci), potem produkcja host po hoście za zgodą właściciela.
 
 ### 9.3 Pytania do recenzenta
 
