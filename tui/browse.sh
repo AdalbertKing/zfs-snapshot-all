@@ -566,7 +566,7 @@ PYEOF
             # U74 (właściciel 2026-10-27, "okno się rozjeżdża"): rozmiary o stałej szerokości,
             # żeby nazwy migawek stały w jednej kolumnie.
             su="$(printf '%6s' "$su")"; sw="$(printf '%6s' "$sw")"
-            lbl="$(date -d "@$cr" '+%Y-%m-%d %H:%M')  $(Tv 'zajmuje $su, zmian $sw' '$su' "$su" '$sw' "$sw")  $nm$([ "$i" -eq 0 ] && printf '  %s' "$(T '(najnowsza)')")"
+            lbl="$(date -d "@$cr" '+%Y.%m.%d %H:%M')  $(Tv 'zajmuje $su, zmian $sw' '$su' "$su" '$sw' "$sw")  $nm$([ "$i" -eq 0 ] && printf '  %s' "$(T '(najnowsza)')")"
             menu+=("p$i" "$(clip_label "$lbl" $((W - 12)))")
             [ -z "$dflt" ] && [ -n "$PRE_AT" ] && [ "$cr" -le "$PRE_AT" ] && dflt="p$i"
             i=$((i + 1))

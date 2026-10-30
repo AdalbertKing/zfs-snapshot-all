@@ -128,21 +128,25 @@ form, which is the GUI's data layer.
 
 `zfs-backup gui` (equivalently `./zfs-backup.sh gui`) opens a full-screen text interface for an ssh
 session. It is a thin layer over the verbs above: it reads their `--json` output and runs the same
-commands, so everything it does can be done on the command line. The GUI is in Polish.
+commands, so everything it does can be done on the command line. The GUI starts in English; for
+Polish: F10 Settings, item `language` (writes `[gui] language = pl` to `settings.ini`); for one
+run: `ZFS_TUI_LANG=pl zfs-backup gui` or `--lang=pl`.
 
 | Key | Window or action |
 |---|---|
-| F1 | Pomoc — Help |
-| F2 | Przebiegi — Runs (past and upcoming) |
-| F3 | Relacje — Relations (Ins = new, Del = delete, Enter = open, `e` = edit inside a relation window) |
-| F4 | Kopie — Copies (Enter browses, F9 restores) |
-| F5 | Szablony — Templates |
-| F6 | Replika — Replicas |
-| F7 | Uruchom teraz — Run now |
-| F8 | Wykonane / Pauza — Show/hide past runs (F2), or pause/resume a relation (F3) |
-| F9 | Grupuj / Plik / Przywróć — Group by relation (F2), File export/import (F3), Restore (F4) |
-| F10 | Ustawienia — Host settings (`settings.ini`, see [Alerting](#alerting)) |
-| F12 | Wyjście — Exit |
+| F1 | Help (Pomoc) |
+| F2 | Runs (Przebiegi): past and upcoming |
+| F3 | Relations (Relacje): Ins = new, Del = delete, Enter = open, `e` = edit inside a relation window |
+| F4 | Copies (Kopie): Enter/Tab to the snapshots, Enter on a snapshot or F7 browses files, F9 restores |
+| F5 | Templates (Szablony) |
+| F6 | Replica (Replika) |
+| F7 | Run now (F2, F3, F6), Browse (F4) |
+| F8 | Show/hide past runs (F2), pause/resume a relation (F3), group by relation (F4), Key (F6) |
+| F9 | Group by relation (F2), File export/import (F3), Restore (F4) |
+| F10 | Settings (Ustawienia): host settings (`settings.ini`, see [Alerting](#alerting)) |
+| F12 | Quit (Wyjście) |
+
+Restore from a disk (the former F11 Restore window) has been inside F4 Copies since 2026-10-27: the disk's row, F9. F11 is free.
 
 ## Core concepts
 

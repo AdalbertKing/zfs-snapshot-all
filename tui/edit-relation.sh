@@ -713,7 +713,7 @@ save_all() {
             echo "$(T '   Po zmianie relacja obejmuje:')"
             printf '%s\n' "$P_ENT" | while IFS=$'\t' read -r n r; do
                 [ -n "$n" ] || continue
-                if [ "$r" = flat ]; then echo "     [x] $n  $(T '(z dziećmi, także przyszłymi)')"; else echo "     [-] $n  $(T '(sam dataset; dzieci tylko wymienione)')"; fi
+                if [ "$r" = flat ]; then echo "     [x] $n  $(T '(z podrzędnymi, także przyszłymi)')"; else echo "     [-] $n  $(T '(sam dataset; podrzędne tylko wymienione)')"; fi
             done
             echo
         fi
@@ -765,7 +765,10 @@ save_all() {
     run_progress "$(Tv 'Zmień relację $NAME: wykonuję' '$NAME' "$NAME")" "$TMPD/run.log" apply_steps || rc=$?
     [ -e "$TMPD/edit.done" ] && DONE=1
     [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$rc"; } >>"$ZFS_TUI_LOG" 2>/dev/null
-    result_box "$T_CHG" "$rc" "$TMPD/run.log" "$(Tv 'Relacja '\''$NAME'\'' zmieniona (rc=0).' '$NAME' "$NAME")${ZFS_TUI_LOG:+\n\n$(T 'Dziennik:') $ZFS_TUI_LOG}" \
+    # Sukces jednym zdaniem = linia komunikatu GUI, bez okna z <Ok> (#993, "Na pewno? i koniec");
+    # dziennik dopisuje tam GUI (window_end_message). Na pve10 2026-10-29 okno zostawalo, bo
+    # druga linia "Dziennik: ..." robila z sukcesu tekst wielowierszowy.
+    result_box "$T_CHG" "$rc" "$TMPD/run.log" "$(Tv 'Relacja '\''$NAME'\'' zmieniona (rc=0).' '$NAME' "$NAME")" \
         "$(T 'ZATRZYMANE -- kroki przed tym, który odmówił, zostały.')"
     exit "$rc"
 }

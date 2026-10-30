@@ -27,9 +27,10 @@ server console.
    ./deploy.sh --backup-user=zfsbackup
    ```
 
-2. Start the GUI and create the first relation: **F3 Relacje (relations)**, key **Ins**. The wizard asks for the kind
-   of relation, the source host, the datasets, the target and the template, shows the plan, and changes anything
-   only after **WYKONAJ (execute)**.
+2. Start the GUI and create the first relation: **F3 Relations**, key **Ins**. The wizard asks for the kind
+   of relation, the source host, the datasets, the target, the template, how many snapshots stay on the source
+   and the name, shows a summary and the plan, and changes anything only after **EXECUTE**. Step by step, for
+   every variant: [docs/tutorial/index.html](../tutorial/index.html).
 
    ```bash
    zfs-backup gui

@@ -95,8 +95,10 @@ dataset in place.
 ## Documentation
 
 Each topic exists in both languages: a one-page essentials file to start with, then the full guides and the
-technical reference. An **interactive tutorial** with real GUI screens (Polish):
-[docs/tutorial/index.html](docs/tutorial/index.html) — download it and open it in a browser.
+technical reference. An **interactive tutorial**: build your variant from blocks (one host, two hosts, a Proxmox
+cluster with pvesr, A > B <> C) and follow it in real GUI screens or CLI commands, in English and Polish:
+[https://adalbertking.github.io/zfsbackup/tutorial/](https://adalbertking.github.io/zfsbackup/tutorial/). The same page is in [docs/tutorial/index.html](docs/tutorial/index.html) and also works
+downloaded, offline.
 
 | | English | Polski |
 |---|---|---|
