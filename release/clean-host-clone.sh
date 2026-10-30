@@ -5,17 +5,21 @@
 # history the release-repo switch left in the host's checkouts (design
 # DESIGN-REPO-WYDAN-2026-10-24.md section 9). Not shipped: release/MANIFEST is
 # a whitelist. Copy it to the host and run it there, one host at a time, with
-# the Owner's consent.
+# the Owner's consent. It sources lib-cron.sh from next to itself, else from
+# the first repo given (the host checkout), else CLEAN_LIB_CRON.
 #
 # REV-20261030-185: `git gc --prune=now` must never overlap a writer. A clock
 # window is not exclusion, so the order here is
 #   1. close every entry point: update-hold for root's updater (checked by
-#      do_self_update before it touches git), and the hourly `git pull` cron
-#      line of each non-root repo owner removed (crontab saved first);
+#      do_self_update before it touches git), and the hourly `cd <repo> && git
+#      pull` cron line removed from the crontab of each repo's owner, root
+#      included (some hosts still carry root's old bare-pull form, which the
+#      hold does not gate); the original crontab is saved first;
 #   2. only then wait until no process works in any of the repos: no cwd under
 #      a repo, no command line naming a repo or an update-control verb. With the
-#      entry points closed nothing new can start, so once this is empty it
-#      stays empty; a run that began before step 1 is waited for, not raced;
+#      entry points closed no scheduled updater can start; a run that began
+#      before step 1 is waited for, not raced. A manual --rollback does not
+#      check the hold: no manual update commands while this runs;
 #   3. refuse on a leftover *.lock in a repo's .git;
 #   4. per repo: delete every ref but main, origin/main and origin/HEAD, expire
 #      the reflogs, gc --prune=now, all as the repo's owner;
@@ -72,7 +76,7 @@ if [ -n "$PRIOR" ]; then
         CRON_SAVED[${v##*/crontab.}]="$v"
     done < "$PRIOR/barrier"
 fi
-record() { printf '%s\n' "$1" >> "$WORK/barrier"; }
+record() { printf '%s\n' "$1" >> "$WORK/barrier"; }   # entry-point steps only
 
 fail() {
     echo "FATAL: $*" >&2
@@ -96,6 +100,9 @@ cron_line() { printf 'cd %s && git pull --ff-only origin main' "$1"; }
 # per-user lock, its read (an unreadable crontab is not an empty one) and its
 # write with read-back. The host's checkout carries the library.
 LIB_CRON="${CLEAN_LIB_CRON:-$(dirname "$(readlink -f "$0")")/../lib-cron.sh}"
+if [ -z "${CLEAN_LIB_CRON:-}" ] && [ ! -f "$LIB_CRON" ]; then
+    for r in "${REPOS[@]}"; do [ -f "$r/lib-cron.sh" ] && { LIB_CRON="$r/lib-cron.sh"; break; }; done
+fi
 [ -f "$LIB_CRON" ] || die "no lib-cron.sh at $LIB_CRON (set CLEAN_LIB_CRON to the host checkout's copy)"
 # shellcheck source=../lib-cron.sh
 . "$LIB_CRON"
@@ -116,8 +123,7 @@ BARRIER="$BARRIER update-hold"
 
 declare -A CRON_DONE=()
 for r in "${REPOS[@]}"; do
-    o=$(owner_of "$r")
-    [ "$o" != root ] || continue
+    o=$(stat -c %U "$r/.git")
     [ -z "${CRON_DONE[$o]:-}" ] || continue
     CRON_DONE[$o]=1
     cron_lock_acquire "$o" || fail "crontab lock of $o: $CRON_ERR"
@@ -129,15 +135,16 @@ for r in "${REPOS[@]}"; do
     record "crontab=${CRON_SAVED[$o]}"
     cp "$WORK/crontab.$o.now" "$WORK/crontab.$o.new"
     for r2 in "${REPOS[@]}"; do
-        [ "$(owner_of "$r2")" = "$o" ] || continue
-        grep -vF "$(cron_line "$r2")" "$WORK/crontab.$o.new" > "$WORK/crontab.$o.tmp" || true
+        [ "$(stat -c %U "$r2/.git")" = "$o" ] || continue
+        rc=0; grep -vF "$(cron_line "$r2")" "$WORK/crontab.$o.new" > "$WORK/crontab.$o.tmp" || rc=$?
+        [ "$rc" -le 1 ] || fail "filtering the crontab of $o failed (grep rc $rc)"
         mv "$WORK/crontab.$o.tmp" "$WORK/crontab.$o.new"
     done
     BARRIER="$BARRIER cron-of-$o(saved:${CRON_SAVED[$o]})"
     cron_write "$o" "$WORK/crontab.$o.new" || fail "writing the crontab of $o: $CRON_ERR"
     cron_lock_release "$o"
     for r2 in "${REPOS[@]}"; do
-        [ "$(owner_of "$r2")" = "$o" ] || continue
+        [ "$(stat -c %U "$r2/.git")" = "$o" ] || continue
         ! grep -qF "$(cron_line "$r2")" "$WORK/crontab.$o.new" || fail "the pull line of $o for $r2 is still in its crontab"
     done
 done
@@ -188,7 +195,7 @@ for r in "${REPOS[@]}"; do
     head=$(g rev-parse HEAD)
     main=$(g rev-parse refs/heads/main)
     om=$(g rev-parse refs/remotes/origin/main)
-    [ "$head" = "$main" ] || fail "$r: HEAD is not main"
+    [ "$(g symbolic-ref -q HEAD || true)" = refs/heads/main ] && [ "$head" = "$main" ] || fail "$r: HEAD is not the branch main"
     st=$(g status --porcelain --untracked-files=no) || fail "$r: git status failed"
     [ -z "$st" ] || fail "$r: tracked files changed"
     st=$(g for-each-ref refs/stash) || fail "$r: git for-each-ref failed"
@@ -233,6 +240,6 @@ for o in "${!CRON_SAVED[@]}"; do
     cron_lock_release "$o"
 done
 [ "$CREATED_HOLD" = 0 ] || rm -f "$HOLD"
-rm -f "$WORK/barrier"
-[ -z "$PRIOR" ] || rm -f "$PRIOR/barrier"
+# every record: a run that adopted and then failed left one that says the same
+rm -f "$STATE"/clean-host-clone.*/barrier
 log "done; entry points reopened"

@@ -209,6 +209,8 @@ kill "$SP" 2>/dev/null
 t "c6 rc != 0" rc_not
 t "c6 says still busy" has "still busy"
 t "c6 refs/heads/old untouched" has_ref refs/heads/old
+# root's own crontab can still carry the old bare-pull form, which the hold does not gate
+tn "c6 root's bare-pull line is off while the barrier stands" cron_has "git pull --ff-only"
 
 # ---- c7 the hold stops root's updater (positive control of the barrier) -------------------------
 new_host c7
@@ -317,6 +319,20 @@ t  "c14 recovery run rc 0" rc_is
 t  "c14 recovery adopts the barrier" has "adopting the barrier"
 t  "c14 crontab is the original" cron_same_as_seed
 tn "c14 the hold the first run created is removed" test -e "$STATE/update-hold"
+
+# ---- c15 fail, fail again (adopting), then succeed: the first run's state comes back -------------
+new_host c15
+PATH="$WORK/failbin:$PATH" run_clean
+t  "c15 first run fails" rc_not
+sleep 1
+PATH="$WORK/failbin:$PATH" run_clean
+t  "c15 second run adopts and fails" has "adopting the barrier"
+sleep 1
+run_clean
+t  "c15 third run rc 0" rc_is
+t  "c15 crontab is the original" cron_same_as_seed
+tn "c15 the hold the first run created is removed" test -e "$STATE/update-hold"
+tn "c15 no barrier record of any run is left" ls "$STATE"/clean-host-clone.*/barrier
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
