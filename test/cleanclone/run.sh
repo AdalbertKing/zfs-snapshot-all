@@ -31,7 +31,7 @@ REALGIT="$(command -v git)"
 # stub crontab: [-u USER] -l prints the file, [-u USER] FILE installs it (lib-cron.sh drops -u for
 # the calling user)
 mkdir -p "$WORK/bin" "$WORK/locks"
-export CRON_LOCK_DIR="$WORK/locks"
+export CRON_LOCK_DIR="$WORK/locks" CLEAN_LOCK_DIR="$WORK/locks"
 printf '%s\n' \
     '#!/bin/bash' \
     'W="'"$WORK"'"' \
@@ -355,6 +355,54 @@ if [ "$(git -C "$R" symbolic-ref -q refs/remotes/origin/HEAD)" = refs/remotes/or
 else
     bad "c17b origin/HEAD -> origin/main is kept" "$(tail5)"
 fi
+
+# ---- c18 two cleaners: B refuses while A, paused before gc, is alive (REV-185 reviewer) ----------
+# pausebin/git holds every `reflog` call while $WORK/pause.on exists, and fails `gc` while
+# $WORK/fail.gc exists
+mkdir -p "$WORK/pausebin"
+printf '%s\n' '#!/bin/bash' \
+    'for a in "$@"; do' \
+    '  if [ "$a" = reflog ]; then : > "'"$WORK"'/paused"; while [ -e "'"$WORK"'/pause.on" ]; do sleep 0.1; done; fi' \
+    '  if [ "$a" = gc ] && [ -e "'"$WORK"'/fail.gc" ]; then echo "injected gc failure" >&2; exit 1; fi' \
+    'done' \
+    'exec '"$REALGIT"' "$@"' > "$WORK/pausebin/git"
+chmod +x "$WORK/pausebin/git"
+start_paused_a() {   # A runs in the background and stops at its first `reflog`
+    rm -f "$WORK/paused"; : > "$WORK/pause.on"
+    PATH="$WORK/pausebin:$PATH" CLEAN_WAIT=5 CLEAN_POLL=1 bash "$SCRIPT" "$STATE" "$R" > "$WORK/a.out" 2>&1 &
+    APID=$!; BGPIDS+=("$APID")
+    local i; for i in $(seq 1 100); do [ -e "$WORK/paused" ] && return 0; sleep 0.1; done; return 1
+}
+new_host c18
+t  "c18 A reaches the point before gc" start_paused_a
+run_clean
+t  "c18 B refuses" rc_not
+t  "c18 B says another run holds the lock" has "another clean-host-clone is running"
+t  "c18 the hold stays while A runs" test -e "$STATE/update-hold"
+tn "c18 the pull line stays off while A runs" cron_has "git pull --ff-only"
+t  "c18 A's barrier record is still there" ls "$STATE"/clean-host-clone.*/barrier
+t  "c18 A has not cleaned yet" has_ref refs/heads/old
+rm -f "$WORK/pause.on"; wait "$APID"; arc=$?
+if [ "$arc" -eq 0 ]; then ok "c18 A completes after B refused"; else bad "c18 A completes after B refused" "A rc=$arc" "$(tail -5 "$WORK/a.out")"; fi
+t  "c18 crontab is the original" cron_same_as_seed
+tn "c18 hold removed" test -e "$STATE/update-hold"
+tn "c18 no barrier record left" ls "$STATE"/clean-host-clone.*/barrier
+tn "c18 old history gone" has_obj "$OLD_SHA"
+
+# ---- c18b A paused, B refused, then A fails at gc: the next run adopts and recovers --------------
+new_host c18b
+t  "c18b A reaches the point before gc" start_paused_a
+run_clean
+t  "c18b B refuses" rc_not
+: > "$WORK/fail.gc"; rm -f "$WORK/pause.on"; wait "$APID"; arc=$?; rm -f "$WORK/fail.gc"
+if [ "$arc" -ne 0 ]; then ok "c18b A fails at gc"; else bad "c18b A fails at gc" "A rc=$arc"; fi
+t  "c18b the barrier stays after A's failure" test -e "$STATE/update-hold"
+sleep 1
+run_clean
+t  "c18b recovery run rc 0" rc_is
+t  "c18b recovery adopts A's barrier" has "adopting the barrier"
+t  "c18b crontab is the original" cron_same_as_seed
+tn "c18b hold removed" test -e "$STATE/update-hold"
 
 # ---- c16 an updater line of another shape is refused before the crontab is written -------------
 new_host c16

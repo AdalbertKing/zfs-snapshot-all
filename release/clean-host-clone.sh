@@ -53,6 +53,28 @@ for r in "$@"; do
     REPOS+=("$r")
 done
 
+# One run at a time (REV-20261030-185, reviewer's two-cleaner reproducer): the
+# process scan skips this tool by name, so a second run used to adopt a LIVE
+# run's barrier, reopen it on success and delete its record while the first
+# was still before gc. The locks are taken before any barrier state is read and
+# held until this process exits, success or failure; a second run refuses. One
+# per state directory and one per repository (in CLEAN_LOCK_DIR, default
+# /run/lock), so two runs naming different state directories still cannot
+# share a repo.
+LOCKDIR="${CLEAN_LOCK_DIR:-/run/lock}"
+[ -d "$LOCKDIR" ] || die "no lock directory $LOCKDIR"
+lock_or_die() {   # <fd> <path>
+    [ ! -L "$2" ] || die "$2 is a symlink"
+    eval "exec $1>>\"\$2\"" || die "cannot open $2"
+    flock -n "$1" || die "another clean-host-clone is running (lock $2) -- one run at a time"
+}
+lock_or_die 8 "$STATE/.clean-host-clone.lock"
+fd=20
+for r in "${REPOS[@]}"; do
+    lock_or_die "$fd" "$LOCKDIR/clean-host-clone.$(printf '%s' "$r" | sha256sum | cut -c1-16).lock"
+    fd=$((fd + 1))
+done
+
 # Every barrier step is recorded in <run dir>/barrier BEFORE it is taken, so a
 # run that dies anywhere leaves a record of what it changed. The next run
 # adopts the oldest record: the original crontabs and "this tool created the
