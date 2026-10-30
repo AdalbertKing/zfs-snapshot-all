@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 26ab6000258e04bb -->
+<!-- status-covers-digest: ef80a7496f0ca27f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -90,6 +90,12 @@
   jak F9 na F2 (F9 zostaje Przywróć). Repliki bez nośnika i relacje bez kopii mają swój wiersz z uwagą, bez akcji.
   Stan i klawisze bez zmian (Enter/Tab do migawek, Enter przegląda, F9 przywraca). F10: większy odstęp kolumn,
   opisy łamane w trzeciej kolumnie (dalszy ciąg otwiera to samo ustawienie). Zasada na przyszłość: każde okno przeglądania w układzie F2 (backlog U121).
+- **Okno „wykonuję” bez migania; udany zapis relacji bez okna (2026-10-29, właściciel, U133).** `run_progress`
+  (`tui/wt-lib.sh`) rysował okno postępu co 2 s, a każde wywołanie whiptail zaczyna od wyczyszczenia ekranu
+  (`ESC[H ESC[J`, zmierzone na pve10). Teraz okno jest rysowane raz, a „trwa N s” co sekundę idzie w ostatni wiersz
+  ekranu, tylko gdy wyjście to terminal. Na pve10 zapis zmiany relacji (17 s) czyści ekran 2 razy: okno postępu
+  i powrót. Udany zapis w „Zmień relację” kończy się zdaniem na linii komunikatu GUI (z dziennikiem), bez okna
+  z `<Ok>`. Wcześniej druga linia „Dziennik: …” robiła z sukcesu okno.
 - **Start GUI dwuetapowo; drobne poprawki (2026-10-29, właściciel).** Start czytał sześć czytników naraz (~14 s
   na pve10). Teraz ekran przychodzi po czterech szybkich (~1,2 s), a monitor i job-stats dochodzą drugim etapem (~11 s),
   jak przy powrocie z okna. Do tego czasu kolumna Kopie na F3 i panel mówią „sprawdzam…”, a nie „bez monitora” i „brak

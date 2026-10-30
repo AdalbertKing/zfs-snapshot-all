@@ -5531,6 +5531,20 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'show-tiers r1 --json' "$ER/zb.log" \
 else
     bad "edit-relation: harmonogram przez set-tiers" "rc=$ERRC" "$(cat "$ER/zb.log")" "grid.n=$(cat "$ER/grid.n" 2>/dev/null)" "$(tail -3 "$ER/err")"
 fi
+# Udany zapis z GUI (ZFS_TUI_LOG ustawiony) konczy sie zdaniem na linii komunikatu, bez okna
+# z <Ok> (pve10, 2026-10-29: druga linia "Dziennik: ..." robila z sukcesu okno; dziennik
+# dopisuje GUI samo).
+rm -f "$ER/st" "$ER/gui.log"
+EROUT=$(ZFS_TUI_LOG="$ER/gui.log" ZFS_TUI_STATUS="$ER/st" er_run "0${T}srcret
+0${T}wykonaj
+0${T}
+" "right,bs,bs,1,2,enter"); ERRC=$?
+if [ "$ERRC" -eq 0 ] && grep -qx "Relacja 'r1' zmieniona (rc=0)." "$ER/st" && ! grep -F -- '--msgbox' "$ER/wt.log" | grep -q 'zmieniona' \
+   && grep -q '^rc=0$' "$ER/gui.log"; then
+    ok "edit-relation: udany zapis = jedno zdanie na linii komunikatu GUI (wt_end), bez okna z Ok; przebieg w dzienniku GUI"
+else
+    bad "edit-relation: koniec udanego zapisu" "rc=$ERRC" "status: $(cat "$ER/st" 2>/dev/null)" "$(grep -F -- '--msgbox' "$ER/wt.log" | cut -c1-200)" "$(tail -3 "$ER/err")"
+fi
 # X20 (wlasciciel 2026-10-14): tabela celu (harmon -> __manual__) otwarta DRUGI raz pokazuje
 # WPISANA zmiane (dobowe 5), nie znow wartosc z configu (7); zmiana idzie do set-tiers raz.
 EROUT=$(er_run "0${T}harmon
@@ -6115,22 +6129,25 @@ rm -rf "$RW"
 # ---- U66/U64 (owner 2026-10-21: "czarny ekran ponad 15 sekund"): run_progress / result_box ----
 # The command runs behind an infobox that says how long it has been running and where the log
 # is -- no log lines (owner 2026-10-26: they flickered); rc comes back; stdin is /dev/null (a prompt fails instead of hanging).
+# The infobox is drawn ONCE (owner 2026-10-29: it flickered -- every whiptail call clears the screen);
+# the elapsed seconds go to the last screen row, and only on a terminal. The command takes 2.6 s:
+# the old loop drew the window every 2 s, i.e. twice.
 RP="$(mktemp -d)"; mkdir -p "$RP/bin"
 printf '#!/bin/bash\nprintf "%%s\\n" "TERM=$TERM ~ $(printf "%%s ~ " "$@")" >> "%s/wt.log"; for a; do [ "$p" = --textbox ] && cat "$a" >> "%s/wt.log"; p="$a"; done; exit 0\n' "$RP" "$RP" > "$RP/bin/wt"
 chmod +x "$RP/bin/wt"
 cat > "$RP/cmd" <<'EOF'
 #!/bin/bash
-echo "krok 1"; sleep 1.3; echo "!!! zrodlo odmowilo: brak miejsca"; read -r x && echo "STDIN: $x"; echo "FATAL: nic nie zmieniono"; exit 3
+echo "krok 1"; sleep 2.6; echo "!!! zrodlo odmowilo: brak miejsca"; read -r x && echo "STDIN: $x"; echo "FATAL: nic nie zmieniono"; exit 3
 EOF
 chmod +x "$RP/cmd"
 ( cd "$RP" && WHIPTAIL="$RP/bin/wt" bash -c '. "$1/tui/wt-lib.sh"; : > "$2/run.log"; rc=0
     run_progress "Test" "$2/run.log" "$2/cmd" <<<"tak" || rc=$?; echo "RC=$rc"
     result_box "Wynik" "$rc" "$2/run.log" "" "Nie wyszlo."' x "$REPO" "$RP" ) > "$RP/out" 2>&1
 if grep -qx 'RC=3' "$RP/out" && grep -qF 'krok 1' "$RP/run.log" && grep -qF 'FATAL: nic nie zmieniono' "$RP/run.log" \
-   && ! grep -qF 'STDIN:' "$RP/run.log" && grep -q -- '^TERM=linux ~ .*--title ~ Test -- trwa [0-9]* s ~ --infobox ~ Trwa wykonywanie' "$RP/wt.log" && ! grep -q '^krok 1 ~ ' "$RP/wt.log" && grep -qF "$RP/run.log" "$RP/wt.log" \
+   && ! grep -qF 'STDIN:' "$RP/run.log" && grep -q -- '^TERM=linux ~ .*--title ~ Test ~ --infobox ~ Trwa wykonywanie' "$RP/wt.log" && [ "$(grep -c -- '--infobox' "$RP/wt.log")" = 1 ] && ! grep -q '^krok 1 ~ ' "$RP/wt.log" && grep -qF "$RP/run.log" "$RP/wt.log" \
    && grep -qF 'Nie wyszlo.  (rc=3)' "$RP/wt.log" && grep -qF 'zrodlo odmowilo: brak miejsca' "$RP/wt.log" \
    && ! grep -q 'krok 1' "$RP/out"; then
-    ok "U66/U64: run_progress -- command behind an infobox (elapsed time, log path, no log lines; TERM=linux so it stays on screen), rc returned, no stdin; result_box shows the reason and the log end"
+    ok "U66/U64: run_progress -- command behind an infobox drawn once (log path, no log lines; TERM=linux so it stays on screen), rc returned, no stdin; result_box shows the reason and the log end"
 else
     bad "U66/U64: run_progress/result_box" "$(cat "$RP/out")" "$(cut -c1-200 "$RP/wt.log" | head -8)" "$(cat "$RP/run.log")"
 fi
