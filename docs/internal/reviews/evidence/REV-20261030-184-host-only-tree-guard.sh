@@ -27,7 +27,7 @@ p = Path(sys.argv[1])
 s = p.read_text()
 needle = 'check "PG22 a remote tree that cannot be listed: runs unchanged and WARNs"'
 probe = r'''_rev184_wrapped="$(pg_tree snapget.sh -s -m p_ -R pveA:tank/data)"
-_rev184_lists="$(grep -c -- '^pveA zfs list -H -o name -r -- .tank/data.$' "$PG/ssh.log")"
+_rev184_lists="$(grep -c -- 'ConnectTimeout=10 pveA zfs list -H -o name -r -- .tank/data.$' "$PG/ssh.log")"
 printf 'sha=%s\nwrapped=%s\nremote_tree_lists=%s\n' \
        '__TARGET_SHA__' "$_rev184_wrapped" "$_rev184_lists"
 if [ "$_rev184_lists" -ne 1 ] || ! printf '%s\n' "$_rev184_wrapped" | grep -q -- ' -X '; then
