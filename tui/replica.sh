@@ -156,8 +156,14 @@ prep_media() {   # <pula> <baza> -> PREP_DST, PREP_GUID ; 0 = sformatowany, 1 = 
     local pool="$1" base="$2" items=() id sz model serial onit dev
     info "$(Tv 'Replika $NAME -- nośnik' '$NAME' "$NAME")" "$(T 'Szukam dysków, których nic nie używa...')"
     "$ZB" prepare-media --list >"$TMPD/disks.tsv" 2>"$TMPD/disks.err" || :
+    # Dysk z pulą INNEJ repliki nie jest do formatowania -- ta sama reguła co na liście
+    # nośników (K45). Kampania pve10, 2026-10-29: jedynym dyskiem na liście był nośnik usb9
+    # („UWAGA: ma pulę pve10-usb9”), jeden Enter od wyczyszczenia cudzej repliki.
+    local others=""
+    [ -s "$TMPD/rep.tsv" ] && others="$(awk -F'\t' -v n="$NAME" '$1!=n && $3!="-" {split($3,a,"/"); printf "|%s|", a[1]}' "$TMPD/rep.tsv")"
     while IFS=$'\t' read -r id sz model serial onit; do
         [ -n "$id" ] || continue
+        case "$onit" in zfs:*) case "$others" in *"|${onit#zfs:}|"*) continue ;; esac ;; esac
         case "$onit" in -) onit="$(T 'pusty')" ;; zfs:*) onit="$(T 'UWAGA: ma pulę %s' "${onit#zfs:}")" ;; *) onit="$(T 'ma: %s' "$onit")" ;; esac
         items+=("$id" "$(clip_label "$sz  $model  $serial  ($onit)" $((W - 12)))")
     done <"$TMPD/disks.tsv"
@@ -624,18 +630,37 @@ PYEOF
         wt --title "$(rtitle 6 "$(T 'kiedy kopiować?')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
            --menu "$([ "$MEDIA" = removable ] && T 'Nośnik wymienny jest podłączany tylko na czas kopii.' || T 'Nośnik stały jest stale w maszynie: kopia idzie o tej porze.')$([ "$EDIT" -eq 1 ] && printf '%s' " $(T 'Teraz:') $([ "$SCHED" = on-insert ] && T 'tylko po podłączeniu' || echo "$SCHED")")" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || { step=4; continue; }
         if [ "$WT_OUT" = __other__ ]; then
-            wt --title "$(Tv 'Replika $NAME -- własny harmonogram' '$NAME' "$NAME")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
-               --inputbox "$(T 'Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):')" 9 "$W" "$(case "$SCHED" in on-insert|auto) ;; *) echo "$SCHED" ;; esac)" || continue
-            _c="$(printf '%s' "$WT_OUT" | tr -s ' ' | sed 's/^ //; s/ $//')"
-            # Kampania 2026-10-22: "0 22 * * *zle" przechodził aż do planu. Pięć pól ze znaków crona.
-            if ! printf '%s\n' "$_c" | awk '
-                    { if (NF != 5) exit 1
-                      n = "^(\\*|[0-9]+(-[0-9]+)?)(/[0-9]+)?(,(\\*|[0-9]+(-[0-9]+)?)(/[0-9]+)?)*$"
-                      w = "^[A-Za-z][A-Za-z][A-Za-z](-[A-Za-z][A-Za-z][A-Za-z])?(,[A-Za-z][A-Za-z][A-Za-z](-[A-Za-z][A-Za-z][A-Za-z])?)*$"
-                      for (i = 1; i <= 5; i++) if ($i !~ n && !(i >= 4 && $i ~ w)) exit 1 }'; then
-                wt --title "$(T 'Zły harmonogram')" --msgbox "$(Tv ''\''$_c'\'' -- potrzeba pięciu pól crona (minuta godzina dzień miesiąc dzień-tygodnia), np. 30 21 * * 1-5.' '$_c' "$_c")" 9 "$W"
-                continue
-            fi
+            # Błąd wpisu wraca DO POLA z tym, co wpisano (kampania pve10, 2026-10-29: po "Zły
+            # harmonogram" kreator wracał do menu z "auto" podświetlonym -- Enter dawał auto po
+            # cichu). Zakresy pól też: "61 25 * * *" przechodziło.
+            _c="$(case "$SCHED" in on-insert|auto) ;; *) echo "$SCHED" ;; esac)"
+            _back=0
+            while :; do
+                wt --title "$(Tv 'Replika $NAME -- własny harmonogram' '$NAME' "$NAME")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
+                   --inputbox "$(T 'Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):')" 9 "$W" "$_c" || { _back=1; break; }
+                _c="$(printf '%s' "$WT_OUT" | tr -s ' ' | sed 's/^ //; s/ $//')"
+                # Kampania 2026-10-22: "0 22 * * *zle" przechodził aż do planu. Pięć pól ze znaków crona.
+                if printf '%s\n' "$_c" | awk '
+                        function inr(x, i) { return (i == 1 && x <= 59) || (i == 2 && x <= 23) || (i == 3 && x >= 1 && x <= 31) || (i == 4 && x >= 1 && x <= 12) || (i == 5 && x <= 7) }
+                        { if (NF != 5) exit 1
+                          n = "^(\\*|[0-9]+(-[0-9]+)?)(/[0-9]+)?(,(\\*|[0-9]+(-[0-9]+)?)(/[0-9]+)?)*$"
+                          w = "^[A-Za-z][A-Za-z][A-Za-z](-[A-Za-z][A-Za-z][A-Za-z])?(,[A-Za-z][A-Za-z][A-Za-z](-[A-Za-z][A-Za-z][A-Za-z])?)*$"
+                          for (i = 1; i <= 5; i++) {
+                              if ($i ~ w && i >= 4) continue
+                              if ($i !~ n) exit 1
+                              # liczby pola (bez kroku po "/") w zakresie pola
+                              m = split($i, part, ",")
+                              for (j = 1; j <= m; j++) {
+                                  sub(/\/.*/, "", part[j]); if (part[j] == "*") continue
+                                  k = split(part[j], ab, "-")
+                                  for (q = 1; q <= k; q++) if (!inr(ab[q] + 0, i)) exit 1
+                              }
+                          } }'; then
+                    break
+                fi
+                wt --title "$(T 'Zły harmonogram')" --msgbox "$(Tv ''\''$_c'\'' -- potrzeba pięciu pól crona (minuta 0-59, godzina 0-23, dzień 1-31, miesiąc 1-12, dzień tygodnia 0-7), np. 30 21 * * 1-5.' '$_c' "$_c")" 9 "$W"
+            done
+            [ "$_back" -eq 1 ] && continue
             SCHED="$_c"
         else
             SCHED="$WT_OUT"

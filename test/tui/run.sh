@@ -4396,7 +4396,7 @@ case "$1" in
     remove-media-trigger) echo ">>> atrapa: regula zdjeta"; exit 0 ;;
     prepare-media) case " $* " in
             *" --list "*) printf '/dev/disk/by-id/usb-C	2G	QEMU	USB-C	-
-' ;;
+'; [ -n "${RP_DISKS:-}" ] && printf '%b' "$RP_DISKS" ;;
             *" --yes "*)  echo ">>> prepare-media: medium ready"; echo "guid=777" ;;
             *)            echo "PLAN (prepare-media):"; echo "  1. zpool create ... EVERYTHING on the disk is erased" ;;
         esac ;;
@@ -4451,13 +4451,17 @@ RPOUT=$(rp_run "0${T}usb2
 0${T}__other__
 0${T}0 22 * * *zle
 0${T}
-0${T}__other__
+0${T}61 25 * * *
+0${T}
 0${T}30 21 * * 1-5
 0${T}
 0${T}
 " RP_TREE='goto:hdd/backups,space,enter'); RPRC=$?
-if grep -qF 'Zły harmonogram' "$RP/wt.log" && grep -q "^add-replica usb2 .*--schedule=30 21 \* \* 1-5 " "$RP/zb.log" && ! grep -q 'zle' "$RP/zb.log"; then
-    ok "replika: zly wlasny harmonogram odrzucony w oknie (Zły harmonogram), poprawny idzie do planu"
+# Kampania pve10 2026-10-29: po bledzie okno wraca DO POLA (bylo: do menu z "auto" -- Enter dawal
+# auto po cichu), a "61 25 * * *" (poza zakresem) tez jest odrzucane.
+if [ "$(grep -cF 'Zły harmonogram' "$RP/wt.log")" = 2 ] && [ "$(grep -cF 'kiedy kopiować?' "$RP/wt.log")" = 1 ] \
+   && grep -q "^add-replica usb2 .*--schedule=30 21 \* \* 1-5 " "$RP/zb.log" && ! grep -q 'zle\|61 25' "$RP/zb.log"; then
+    ok "replika: zly wlasny harmonogram (znaki i zakres pol) odrzucony w oknie, ponowny wpis w TYM SAMYM polu, poprawny idzie do planu"
 else
     bad "replika: walidacja wlasnego harmonogramu" "rc=$RPRC" "$(cat "$RP/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$RP/wt.log" | tr '\n' ';')"
 fi
@@ -4601,6 +4605,22 @@ if [ "$RPRC" -eq 0 ] && grep -q '^prepare-media --list$' "$RP/zb.log" \
     ok "replica: 'Sformatuj nowy nosnik' -- bez pytan o nazwe/baze (<host>-<replika>/replica), pytanie o szyfrowanie (Tak = --encrypt, W19b), plan --defaultno, ID do --media-guid"
 else
     bad "replica: formatowanie nosnika" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -6 "$RP/wt.log" | cut -c1-250)"
+fi
+# K27 (kampania pve10, 2026-10-29): dysk z pula INNEJ repliki nie jest na liscie do formatowania
+# (jedynym dyskiem na liscie byl nosnik usb9 -- jeden Enter od wyczyszczenia cudzej repliki).
+rm -f "$RP/rules"
+RPOUT=$(rp_run "0${T}usb6
+0${T}own
+0${T}mirror
+0${T}removable
+0${T}__prep__
+" RP_TREE='goto:hdd/data,space,enter' 'RP_DISKS=/dev/disk/by-id/usb-D\t4G\tQEMU\tUSB-D\tzfs:sejfpula\n/dev/disk/by-id/usb-E\t4G\tQEMU\tUSB-E\tzfs:staraobca\n' \
+  'RP_REPS={"replicas":[{"name":"sejf","sources":["hdd/backups"],"dst":"sejfpula/replica","media":"removable"}]}'); RPRC=$?
+RPFM="$(grep -F 'który dysk sformatować' "$RP/wt.log" | head -1)"
+if [ -n "$RPFM" ] && has "$RPFM" 'usb-C' && has "$RPFM" 'usb-E' && ! has "$RPFM" 'usb-D'; then
+    ok "replica K27: dysk z pula INNEJ repliki (sejfpula) nie jest do formatowania; pusty i z obca pula -- sa (z ostrzezeniem)"
+else
+    bad "replica K27: lista dyskow do formatowania" "rc=$RPRC" "$(printf '%s' "$RPFM" | cut -c1-400)"
 fi
 # (6) WYJATKI (uwaga 13): ten sam koszyk co w relacji -- "Wyjatki..." przy hdd/data,
 #     odznaczone mail -> --exclude-child=^hdd/data/mail$ w komendzie i "Pomijane" w planie;
