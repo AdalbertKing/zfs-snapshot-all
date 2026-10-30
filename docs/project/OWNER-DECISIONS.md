@@ -726,3 +726,19 @@ formą jednokomendową (`--source=… --install --grant-remotely`) i zatwierdza 
 jest zgodą źródła. To świadomy wyjątek od domyślnego „grant to decyzja źródła”
 (2026-08-17). Wymaga kanału root-ssh kolektor → źródło. Bez niego import kończy
 się odmową, zanim cokolwiek powstanie.
+
+## 2026-10-30 — projekt zamknięty na wydaniu 1.0.5, bez czekania na recenzenta
+
+Polecenie właściciela 2026-10-30: „Zamykaj projekt bez względu na recenzenta. […] Proszę natychmiast
+opublikować i zamknąć wszystko”.
+
+- Wydanie: zfsbackup `v1.0.5` (`3d15bc4`, strona wydania jako najnowsze). Ostatnia publikacja
+  `5de1b27` (dev `f6e9bcde`) zmienia tylko `RELEASE-OF`; kod jak w `v1.0.5`.
+- REV-20261030-185 zostaje w rejestrze jako `IMPLEMENTED | Reviewer` (impl `a0a57632`). Zamknięcie
+  REV należy do recenzenta i nie jest tu udawane; decyzja właściciela: nie czekać na nie. Implementer
+  nie bierze z rejestru nowej pracy do czasu nowego polecenia właściciela.
+- Hosty: wszystkie osiągalne na wydaniu, klony bez historii repo dev (`release/clean-host-clone.sh`,
+  §9 `DESIGN-REPO-WYDAN-2026-10-24.md`). pve9b (10.98.0.2) nieosiągalny: gałąź labowa z
+  `update-hold`; po powrocie `bash /root/lab-dev.sh off`, potem czyszczenie.
+- Otwarte pozycje z `FINISZ-BACKLOG.md` nie są robione w tym projekcie.
+
