@@ -381,6 +381,8 @@ t  "c18 A reaches the point before gc" start_paused_a
 run_clean
 t  "c18 B refuses" rc_not
 t  "c18 B says another run holds the lock" has "another clean-host-clone is running"
+# B stops at the lock: it never reaches the wait, the per-repo steps or gc (each of which logs)
+tn "c18 B never got past the lock" has ">>> "
 t  "c18 the hold stays while A runs" test -e "$STATE/update-hold"
 tn "c18 the pull line stays off while A runs" cron_has "git pull --ff-only"
 t  "c18 A's barrier record is still there" ls "$STATE"/clean-host-clone.*/barrier
