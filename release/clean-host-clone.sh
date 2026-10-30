@@ -161,7 +161,7 @@ busy() {   # prints the first process working in a repo, rc 0 if any
         p="${p#/proc/}"
         [ "$p" != "$self" ] && [ "$p" != "$BASHPID" ] || continue
         cwd=$(readlink "/proc/$p/cwd" 2>/dev/null) || cwd=""
-        cmd=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null) || cmd=""
+        cmd=$( { tr '\0' ' ' < "/proc/$p/cmdline"; } 2>/dev/null) || cmd=""   # a process may exit mid-scan
         case "$cmd" in *clean-host-clone*) continue ;; esac
         case "$cmd" in
             *update-control.sh*|*"deploy.sh --self-update"*|*"deploy.sh --rollback"*|*"deploy.sh --resume-updates"*)
@@ -215,8 +215,16 @@ for r in "${REPOS[@]}"; do
 
     g for-each-ref --format='%(refname)' | while read -r ref; do
         case "$ref" in refs/heads/main|refs/remotes/origin/main|refs/remotes/origin/HEAD) ;;
-            *) g update-ref -d "$ref" ;; esac
+            *) g update-ref --no-deref -d "$ref" ;; esac
     done
+    # origin/HEAD is a symbolic ref; pointing at a deleted branch it would dangle
+    # (fsck: invalid sha1 pointer -- measured on pve9, 2026-10-30), so it stays
+    # only when it points at origin/main. --no-deref deletes the symref itself.
+    if oh=$(g symbolic-ref -q refs/remotes/origin/HEAD); then
+        [ "$oh" = refs/remotes/origin/main ] || g update-ref --no-deref -d refs/remotes/origin/HEAD
+    elif g show-ref -q --verify refs/remotes/origin/HEAD; then
+        g update-ref --no-deref -d refs/remotes/origin/HEAD   # a plain ref by that name: not git's
+    fi
     g reflog expire --expire=now --all
     g gc --prune=now --quiet
 
