@@ -156,8 +156,14 @@ prep_media() {   # <pula> <baza> -> PREP_DST, PREP_GUID ; 0 = sformatowany, 1 = 
     local pool="$1" base="$2" items=() id sz model serial onit dev
     info "$(Tv 'Replika $NAME -- nośnik' '$NAME' "$NAME")" "$(T 'Szukam dysków, których nic nie używa...')"
     "$ZB" prepare-media --list >"$TMPD/disks.tsv" 2>"$TMPD/disks.err" || :
+    # Dysk z pulą INNEJ repliki nie jest do formatowania -- ta sama reguła co na liście
+    # nośników (K45). Kampania pve10, 2026-10-29: jedynym dyskiem na liście był nośnik usb9
+    # („UWAGA: ma pulę pve10-usb9”), jeden Enter od wyczyszczenia cudzej repliki.
+    local others=""
+    [ -s "$TMPD/rep.tsv" ] && others="$(awk -F'\t' -v n="$NAME" '$1!=n && $3!="-" {split($3,a,"/"); printf "|%s|", a[1]}' "$TMPD/rep.tsv")"
     while IFS=$'\t' read -r id sz model serial onit; do
         [ -n "$id" ] || continue
+        case "$onit" in zfs:*) case "$others" in *"|${onit#zfs:}|"*) continue ;; esac ;; esac
         case "$onit" in -) onit="$(T 'pusty')" ;; zfs:*) onit="$(T 'UWAGA: ma pulę %s' "${onit#zfs:}")" ;; *) onit="$(T 'ma: %s' "$onit")" ;; esac
         items+=("$id" "$(clip_label "$sz  $model  $serial  ($onit)" $((W - 12)))")
     done <"$TMPD/disks.tsv"
