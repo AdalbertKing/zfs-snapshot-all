@@ -334,6 +334,16 @@ t  "c15 crontab is the original" cron_same_as_seed
 tn "c15 the hold the first run created is removed" test -e "$STATE/update-hold"
 tn "c15 no barrier record of any run is left" ls "$STATE"/clean-host-clone.*/barrier
 
+# ---- c16 an updater line of another shape is refused before the crontab is written -------------
+new_host c16
+printf '%s\n' "17 * * * * cd $R && git fetch -q origin && git merge -q --ff-only FETCH_HEAD" >> "$WORK/cron.$ME"
+cp "$WORK/cron.$ME" "$HOSTDIR/cron.seed"
+run_clean
+t "c16 rc != 0" rc_not
+t "c16 says another git line" has "another git line"
+t "c16 crontab not written" cron_same_as_seed
+t "c16 refs/heads/old untouched" has_ref refs/heads/old
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

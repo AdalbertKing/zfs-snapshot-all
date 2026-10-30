@@ -139,6 +139,11 @@ for r in "${REPOS[@]}"; do
         rc=0; grep -vF "$(cron_line "$r2")" "$WORK/crontab.$o.new" > "$WORK/crontab.$o.tmp" || rc=$?
         [ "$rc" -le 1 ] || fail "filtering the crontab of $o failed (grep rc $rc)"
         mv "$WORK/crontab.$o.tmp" "$WORK/crontab.$o.new"
+        # deploy.sh knows older updater shapes too; any other line running git on
+        # this repo is one this tool would not close, so it stops instead
+        if grep -F -- "$r2" "$WORK/crontab.$o.new" | grep -qw git; then
+            fail "the crontab of $o has another git line for $r2 -- not a shape this tool closes; look first"
+        fi
     done
     BARRIER="$BARRIER cron-of-$o(saved:${CRON_SAVED[$o]})"
     cron_write "$o" "$WORK/crontab.$o.new" || fail "writing the crontab of $o: $CRON_ERR"
