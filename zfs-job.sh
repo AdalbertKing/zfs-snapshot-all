@@ -218,7 +218,10 @@ if [ "$_tree" = 1 ] && [ -d "$PVE_NODES" ] && [ -n "$want" ]; then
         _src_done=1
         for _t in ${_w//,/ }; do
             _h=""; _ds="$_t"
-            case "$_t" in *@*:*) _h="${_t%%:*}"; _ds="${_t#*:}" ;; *:*) continue ;; esac
+            # remote = a ':' with no '/' before the first ':' -- the engines' own rule
+            # (delsnaps.sh parse_remote): host:ds and user@host:ds alike; a local name may
+            # carry a ':' after its pool/ (tank/data:x). REV-20261030-184: host:ds was skipped.
+            case "$_t" in *:*) case "${_t%%:*}" in */*) ;; *) _h="${_t%%:*}"; _ds="${_t#*:}" ;; esac ;; esac
             case "$_ds" in */*|[A-Za-z]*) ;; *) continue ;; esac
             if [ -n "$_h" ]; then
                 _list="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "${_ssh[@]}" "$_h" "zfs list -H -o name -r -- '$_ds'" 2>/dev/null)" || _list="!"
