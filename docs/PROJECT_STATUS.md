@@ -21,6 +21,12 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Strażnik gości PVE: drzewo `host:dataset` jest zdalne jak `konto@host:dataset` (2026-10-30, REV-20261030-184, P1).**
+  Skaner drzewa w `zfs-job.sh` pomijał źródło `host:dataset` (bez konta). Drzewo nie było listowane i
+  rekurencyjne przycinanie szło po dysku gościa przeniesionego na inny węzeł. Teraz obowiązuje reguła
+  `delsnaps.sh` (`parse_remote`): słowo jest zdalne, gdy ma `:`, a przed pierwszym `:` nie ma `/`. Na hostach
+  od wydania 1.0.5; wydanie `630841d2` ma jeszcze starą regułę.
+  Lokalna nazwa z `:` po puli (`tank/data:x`) zostaje lokalna. Testy: `test/cron` PG25-PG29.
 - **Cache job-stats tylko w prywatnym katalogu (2026-10-29, REV-20261029-183, P1).** `job-stats --vol-cache`
   (GUI, root) zapisywał cache przez przewidywalną nazwę w `/tmp`, gdy nie było katalogu uruchomieniowego, więc
   podstawione dowiązanie dawało zapis roota do wskazanego pliku. Teraz oba cache (lista migawek i objętości)

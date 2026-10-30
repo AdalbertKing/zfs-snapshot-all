@@ -1131,6 +1131,7 @@ sed -i "s/NL/\n/g" "$PG/zbin/ssh" "$PG/eng/"*.sh
 chmod +x "$PG/zbin/zfs" "$PG/zbin/ssh" "$PG/eng/"*.sh
 printf 'tank/data\ntank/data/vm-101-disk-0\ntank/data/vm-102-disk-0\ntank/data/vm-1020-disk-0\n' > "$PG/tree.tank_data"
 printf 'tank/only\ntank/only/vm-101-disk-0\n' > "$PG/tree.tank_only"
+printf 'tank/only:c\ntank/only:c/vm-102-disk-0\n' > "$PG/tree.tank_only:c"
 pg_tree() {   # <engine> <args...> -> "rc ran|argv" ; WARN/FAIL calls in $PG/calls
     : > "$PG/argv"; : > "$PG/calls"; : > "$PG/ssh.log"
     local eng="$1"; shift
@@ -1163,6 +1164,30 @@ check "PG22b a copy's TARGET is not read: other nodes' guests under hdd/backups 
       "$(pg_tree snapget.sh -s -m p_ -R tank/only tank/data)|$(grep -c . "$PG/calls")"
 check "PG23 key and known_hosts PATHS are not taken for trees (no zfs list of a file)" "0" \
       "$(pg_tree snapget.sh -s -m p_ -K /k/a -R tank/only >/dev/null; grep -c . "$PG/calls")"
+# PG25-PG29 (REV-20261030-184): the account is optional -- host:dataset is a remote tree as
+# much as user@host:dataset (the engines' rule: a ':' with no '/' before it). main skipped
+# host:dataset, so the tree was never listed and a prune ran over a migrated guest's disk.
+check "PG25 host:dataset -R snapshot: listed over the line's ssh options, -X on the replica disk" \
+      "0 -X ^tank/data/vm-102-disk-0(/|\$) -s -m p_ -K /k/a -R pveA:tank/data|1" \
+      "$(pg_tree snapget.sh -s -m p_ -K /k/a -R pveA:tank/data)|$(grep -c -- 'ConnectTimeout=10 -i /k/a pveA zfs list -H -o name -r -- .tank/data.$' "$PG/ssh.log")"
+check "PG26 host:dataset in a generated prune (-L, -P __replicate_:2 first): NOT RUN, rc 76, notified" "76 |1|1" \
+      "$(pg_tree delsnaps.sh -R -L lbl -P __replicate_:2 -P vzdump:2 pveA:tank/data p_ -H24)|$(grep -c 'ConnectTimeout=10 pveA zfs list -H -o name -r -- .tank/data.$' "$PG/ssh.log")|$(grep -c '^FAIL|lbl|zfs-job: NOT RUN -- .*vm-102-disk-0 (guest 102 runs on pveB)' "$PG/calls")"
+check "PG26b user@host:dataset in the same prune: NOT RUN, rc 76" "76 |1" \
+      "$(pg_tree delsnaps.sh -R -L lbl -P __replicate_:2 zb@pveA:tank/data p_ -H24)|$(grep -c 'ConnectTimeout=10 zb@pveA zfs list -H -o name -r -- .tank/data.$' "$PG/ssh.log")"
+check "PG27 host:dataset that cannot be listed: same policy as user@host (runs unchanged, WARNs)" "0 -s -m p_ -R pveA:tank/data|1" \
+      "$(PG_SSH_FAIL=1 pg_tree snapget.sh -s -m p_ -R pveA:tank/data)|$(grep -c '^WARN|lbl -- guest guard not checked|.*could not list the tree pveA:tank/data' "$PG/calls")"
+# PG27b: the whole result -- rc, the wrapped command and every WARN/FAIL call -- with the
+# account removed from the user@host side, so only the spelling differs
+pg27u="$(PG_SSH_FAIL=1 pg_tree delsnaps.sh -R zb@pveA:tank/data p_ -H24 | sed 's/zb@//g')|$(sed 's/zb@//g' "$PG/calls")"
+pg27h="$(PG_SSH_FAIL=1 pg_tree delsnaps.sh -R pveA:tank/data p_ -H24)|$(cat "$PG/calls")"
+check "PG27b ...and a prune over it: the same rc, command and notices as user@host" "$pg27u" "$pg27h"
+check "PG27c ...which is: the prune runs and the WARN names the tree" "0 -R pveA:tank/data p_ -H24|1" \
+      "$(printf '%s' "$pg27h" | head -1 | cut -d'|' -f1)|$(grep -c '^WARN|lbl -- guest guard not checked|.*could not list the tree pveA:tank/data' "$PG/calls")"
+check "PG28 a local name with a ':' after its pool/ stays local (zfs list here, no ssh)" \
+      "0 -X ^tank/only:c/vm-102-disk-0(/|\$) -s -m p_ -R tank/only:c|0" \
+      "$(pg_tree snapget.sh -s -m p_ -R tank/only:c)|$(grep -c . "$PG/ssh.log")"
+check "PG29 a remote copy TARGET (host:dataset) is not read as the source" "0 -s -m p_ -R tank/only pveA:tank/data|0|0" \
+      "$(pg_tree snapget.sh -s -m p_ -R tank/only pveA:tank/data)|$(grep -c . "$PG/ssh.log")|$(grep -c . "$PG/calls")"
 # gen-cron: the recursive snaponly over a PARENT is marked `tree`, snapshot and prune alike;
 # the same parent without recursion carries no mark.
 sed -e 's#hdd/vm-disks/subvol-990-disk-0#hdd/vm-disks#' "$REPO/test/fixtures/snaponly-basic.conf" > "$PG/t.conf"
