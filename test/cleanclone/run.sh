@@ -381,7 +381,7 @@ t  "c18 B says another run holds the lock" has "another clean-host-clone is runn
 t  "c18 the hold stays while A runs" test -e "$STATE/update-hold"
 tn "c18 the pull line stays off while A runs" cron_has "git pull --ff-only"
 t  "c18 A's barrier record is still there" ls "$STATE"/clean-host-clone.*/barrier
-t  "c18 A has not cleaned yet" has_ref refs/heads/old
+t  "c18 A has not cleaned yet (objects still there before gc)" has_obj "$OLD_SHA"
 rm -f "$WORK/pause.on"; wait "$APID"; arc=$?
 if [ "$arc" -eq 0 ]; then ok "c18 A completes after B refused"; else bad "c18 A completes after B refused" "A rc=$arc" "$(tail -5 "$WORK/a.out")"; fi
 t  "c18 crontab is the original" cron_same_as_seed
