@@ -404,6 +404,7 @@
 "'$WT_OUT' nie wygląda na adres hosta.\\nDozwolone: litery, cyfry, kropka, myślnik; opcjonalnie :port.": "'$WT_OUT' does not look like a host address.\\nAllowed: letters, digits, dot, dash; optionally :port.",
 "'$WT_OUT' nie wygląda na nazwę datasetu (pula/nazwa, bez / na początku i końcu).": "'$WT_OUT' does not look like a dataset name (pool/name, no / at the start or end).",
 "'$WT_OUT' nie zaczyna się od puli tego hosta.": "'$WT_OUT' does not start with a pool of this host.",
+"'$_c' -- potrzeba pięciu pól crona (minuta 0-59, godzina 0-23, dzień 1-31, miesiąc 1-12, dzień tygodnia 0-7), np. 30 21 * * 1-5.": "'$_c' -- five cron fields are needed (minute 0-59, hour 0-23, day 1-31, month 1-12, day of week 0-7), e.g. 30 21 * * 1-5.",
 "'$_c' -- potrzeba pięciu pól crona (minuta godzina dzień miesiąc dzień-tygodnia), np. 30 21 * * 1-5.": "'$_c' -- five cron fields are needed (minute hour day month weekday), e.g. 30 21 * * 1-5.",
 "($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)": "($GRANT_LABEL = this collector's name on $TARGET; list: ls /var/lib/zfs-snapshot-all/relationships)",
 "(NADPISUJE)": "(OVERWRITES)",

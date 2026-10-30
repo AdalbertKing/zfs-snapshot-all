@@ -4415,13 +4415,17 @@ RPOUT=$(rp_run "0${T}usb2
 0${T}__other__
 0${T}0 22 * * *zle
 0${T}
-0${T}__other__
+0${T}61 25 * * *
+0${T}
 0${T}30 21 * * 1-5
 0${T}
 0${T}
 " RP_TREE='goto:hdd/backups,space,enter'); RPRC=$?
-if grep -qF 'Zły harmonogram' "$RP/wt.log" && grep -q "^add-replica usb2 .*--schedule=30 21 \* \* 1-5 " "$RP/zb.log" && ! grep -q 'zle' "$RP/zb.log"; then
-    ok "replika: zly wlasny harmonogram odrzucony w oknie (Zły harmonogram), poprawny idzie do planu"
+# Kampania pve10 2026-10-29: po bledzie okno wraca DO POLA (bylo: do menu z "auto" -- Enter dawal
+# auto po cichu), a "61 25 * * *" (poza zakresem) tez jest odrzucane.
+if [ "$(grep -cF 'Zły harmonogram' "$RP/wt.log")" = 2 ] && [ "$(grep -cF 'kiedy kopiować?' "$RP/wt.log")" = 1 ] \
+   && grep -q "^add-replica usb2 .*--schedule=30 21 \* \* 1-5 " "$RP/zb.log" && ! grep -q 'zle\|61 25' "$RP/zb.log"; then
+    ok "replika: zly wlasny harmonogram (znaki i zakres pol) odrzucony w oknie, ponowny wpis w TYM SAMYM polu, poprawny idzie do planu"
 else
     bad "replika: walidacja wlasnego harmonogramu" "rc=$RPRC" "$(cat "$RP/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$RP/wt.log" | tr '\n' ';')"
 fi
