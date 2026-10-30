@@ -35,7 +35,10 @@ printf '%s\n' \
     'W="'"$WORK"'"' \
     '[ "${1:-}" = "-u" ] && [ $# -eq 3 ] || exit 2' \
     'u="$2"' \
-    'if [ "$3" = "-l" ]; then [ -f "$W/cron.$u" ] || exit 1; cat "$W/cron.$u"; exit 0; fi' \
+    'if [ "$3" = "-l" ]; then' \
+    '  [ ! -e "$W/cron.fail" ] || { echo "crontab: permission denied" >&2; exit 1; }' \
+    '  [ -f "$W/cron.$u" ] || { echo "no crontab for $u" >&2; exit 1; }' \
+    '  cat "$W/cron.$u"; exit 0; fi' \
     'cp "$3" "$W/cron.$u"' > "$WORK/bin/crontab"
 chmod +x "$WORK/bin/crontab"
 export PATH="$WORK/bin:$PATH"
@@ -84,7 +87,6 @@ has_ref() { git -C "$R" show-ref -q --verify "$1"; }
 head_is() { [ "$(git -C "$R" rev-parse HEAD)" = "$1" ]; }
 cron_same_as_seed() { cmp -s "$WORK/cron.$ME" "$HOSTDIR/cron.seed"; }
 cron_has() { grep -qF -- "$1" "$WORK/cron.$ME"; }
-first_saved_cron() { ls -d "$STATE"/clean-host-clone.* 2>/dev/null | sort | head -1 | sed 's|$|/crontab.'"$ME"'|'; }
 push_commit() {   # <content>: a new commit on origin/main, from the host's seed clone
     printf '%s' "$1" > "$HOSTDIR/seed/tool.sh"
     git -C "$HOSTDIR/seed" commit -q -a -m "c $1" && git -C "$HOSTDIR/seed" push -q "$O" main
@@ -135,6 +137,18 @@ else
 fi
 tn "c2 hold absent afterwards" test -e "$STATE/update-hold"
 t  "c2 root mode does not touch cron" cron_same_as_seed
+if [ "$(cat "$R/jobs.h.conf")" = "conf-c2" ] && [ "$(stat -c %a "$R/jobs.h.conf")" = 640 ]; then
+    ok "c2 ignored host config kept (content, mode 640)"
+else
+    bad "c2 ignored host config kept (content, mode 640)" "$(tail5)"
+fi
+C2_SHA="$(push_commit c2new)"; : > "$STATE/no-auto-apply"
+uout=$(REPO_DIR="$R" UPDATE_STATE_DIR="$STATE" bash "$REPO/update-control.sh" --self-update 2>&1); urc=$?
+if head_is "$C2_SHA"; then
+    ok "c2 root's updater still updates the cleaned checkout"
+else
+    bad "c2 root's updater still updates the cleaned checkout" "updater rc=$urc" "$(printf '%s\n' "$uout" | tail -5)"
+fi
 
 # ---- c3 a hold that existed before is kept -----------------------------------------------------
 new_host c3
@@ -170,13 +184,16 @@ fi
 
 # ---- c5 a writer that started before the request is waited for ---------------------------------
 new_host c5
-( cd "$R" && exec sleep 3 ) >/dev/null 2>&1 &
+C5_SHA="$(push_commit c5new)"
+( cd "$R" && sleep 3 && exec git pull -q --ff-only origin main ) >/dev/null 2>&1 &
 SP=$!; BGPIDS+=("$SP")
 W=20 run_clean
-kill "$SP" 2>/dev/null
 t  "c5 rc 0" rc_is
 t  "c5 says waiting for" has "waiting for"
 tn "c5 old history gone" has_obj "$OLD_SHA"
+t  "c5 the updater's pull landed and survived the clean" head_is "$C5_SHA"
+git -C "$R" fsck --full >/dev/null 2>&1; frc=$?
+if [ "$frc" -eq 0 ]; then ok "c5 fsck --full clean"; else bad "c5 fsck --full clean" "fsck rc=$frc"; fi
 
 # ---- c6 a process naming the repo on its command line counts as busy ---------------------------
 new_host c6
@@ -190,7 +207,7 @@ t "c6 refs/heads/old untouched" has_ref refs/heads/old
 
 # ---- c7 the hold stops root's updater (positive control of the barrier) -------------------------
 new_host c7
-printf 'x\n' > "$STATE/update-hold"
+printf 'x\n' > "$STATE/update-hold"; : > "$STATE/no-auto-apply"
 push_commit new >/dev/null
 uout=$(REPO_DIR="$R" UPDATE_STATE_DIR="$STATE" bash "$REPO/update-control.sh" --self-update 2>&1); urc=$?
 if head_is "$B_SHA"; then
@@ -199,7 +216,7 @@ else
     bad "c7 update-control --self-update leaves HEAD alone while the hold exists" "updater rc=$urc" "$(printf '%s\n' "$uout" | tail -5)"
 fi
 # the same call without the hold must move HEAD, else c7 above proves nothing
-rm -f "$STATE/update-hold"; : > "$STATE/no-auto-apply"
+rm -f "$STATE/update-hold"
 uout=$(REPO_DIR="$R" UPDATE_STATE_DIR="$STATE" bash "$REPO/update-control.sh" --self-update 2>&1); urc=$?
 if ! head_is "$B_SHA"; then
     ok "c7 control: without the hold the same updater call does move HEAD"
@@ -230,14 +247,12 @@ else
 fi
 sleep 1   # the work dir is named by the second
 run_clean
-t "c8 recovery run rc 0" rc_is
-t "c8 the pre-existing hold stays after recovery" test -e "$STATE/update-hold"
-SAVED="$(first_saved_cron)"
-if [ -f "$SAVED" ] && cp "$SAVED" "$WORK/cron.$ME" && cron_same_as_seed; then
-    ok "c8 the crontab saved by the FIRST run restores the seed byte for byte"
-else
-    bad "c8 the crontab saved by the FIRST run restores the seed byte for byte" "saved: $SAVED" "$(ls "$STATE" 2>&1 | tail -5)"
-fi
+t  "c8 recovery run rc 0" rc_is
+t  "c8 recovery adopts the failed run's barrier" has "adopting the barrier"
+t  "c8 recovery reopens the account's cron as it was before the first run" cron_same_as_seed
+tn "c8 recovery removes the hold the first run created" test -e "$STATE/update-hold"
+tn "c8 no barrier record is left" ls "$STATE"/clean-host-clone.*/barrier
+tn "c8 old history gone after recovery" has_obj "$OLD_SHA"
 
 # ---- c9 a leftover lock is refused untouched ------------------------------------------------------
 new_host c9
@@ -263,6 +278,26 @@ run_clean
 t "c11 rc != 0" rc_not
 t "c11 says tracked files changed" has "tracked files changed"
 t "c11 refs/heads/old untouched" has_ref refs/heads/old
+
+# ---- c12 a crontab that cannot be read (other than "no crontab") stops before any cleaning ------
+new_host c12
+: > "$WORK/cron.fail"
+run_clean
+rm -f "$WORK/cron.fail"
+t "c12 rc != 0" rc_not
+t "c12 says it cannot read the crontab" has "cannot read the crontab"
+t "c12 refs/heads/old untouched" has_ref refs/heads/old
+
+# ---- c13 a repo given through a symlink is still seen as busy -----------------------------------
+new_host c13
+ln -s "$R" "$HOSTDIR/link"
+( cd "$R" && exec sleep 30 ) >/dev/null 2>&1 &
+SP=$!; BGPIDS+=("$SP")
+out=$(CLEAN_WAIT=3 CLEAN_POLL=1 bash "$SCRIPT" "$STATE" "$HOSTDIR/link" 2>&1); rc=$?
+kill "$SP" 2>/dev/null
+t "c13 rc != 0" rc_not
+t "c13 says still busy" has "still busy"
+t "c13 refs/heads/old untouched" has_ref refs/heads/old
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

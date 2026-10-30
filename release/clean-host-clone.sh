@@ -43,16 +43,32 @@ cd /
 
 REPOS=()
 for r in "$@"; do
-    r="${r%/}"
     case "$r" in /*) ;; *) die "repo path must be absolute: $r" ;; esac
     [ -d "$r/.git" ] || die "no git checkout at $r"
+    r=$(readlink -f "$r")   # the process scan compares resolved cwds
     REPOS+=("$r")
 done
 
-WORK="$STATE/clean-host-clone.$(date +%Y%m%d-%H%M%S)"
-mkdir -m 700 "$WORK"
+# A failed run leaves its barrier and a `barrier` file in its directory. The
+# next run adopts it: the original crontabs and "this tool created the hold"
+# come from that first run, so reopening restores what was there before it.
+PRIOR=""
+for d in "$STATE"/clean-host-clone.*; do
+    [ -f "$d/barrier" ] && { PRIOR="$d"; break; }   # glob order = oldest first
+done
+WORK=$(mktemp -d "$STATE/clean-host-clone.$(date +%Y%m%d-%H%M%S).XXXX")
+chmod 700 "$WORK"
 CREATED_HOLD=0
 BARRIER=""
+declare -A CRON_SAVED=()
+if [ -n "$PRIOR" ]; then
+    log "adopting the barrier of the failed run $PRIOR"
+    grep -qx 'created_hold=1' "$PRIOR/barrier" && CREATED_HOLD=1
+    for f in "$PRIOR"/crontab.*; do
+        case "$f" in *.new|*.tmp) continue ;; esac
+        [ -f "$f" ] && CRON_SAVED[${f##*/crontab.}]="$f"
+    done
+fi
 
 fail() {
     echo "FATAL: $*" >&2
@@ -82,14 +98,21 @@ if [ ! -e "$HOLD" ]; then
 fi
 BARRIER="$BARRIER update-hold"
 
-declare -A CRON_SAVED=()
+read_crontab() {   # <owner> <file>: "no crontab" is empty, any other failure stops
+    local err
+    if err=$(crontab -u "$1" -l 2>&1 >"$2"); then return 0; fi
+    case "$err" in *"no crontab for"*) : > "$2"; return 0 ;; esac
+    fail "cannot read the crontab of $1: $err"
+}
+declare -A CRON_DONE=()
 for r in "${REPOS[@]}"; do
     o=$(owner_of "$r")
     [ "$o" != root ] || continue
-    [ -z "${CRON_SAVED[$o]:-}" ] || continue
-    if crontab -u "$o" -l > "$WORK/crontab.$o" 2>/dev/null; then :; else : > "$WORK/crontab.$o"; fi
-    CRON_SAVED[$o]="$WORK/crontab.$o"
-    cp "$WORK/crontab.$o" "$WORK/crontab.$o.new"
+    [ -z "${CRON_DONE[$o]:-}" ] || continue
+    CRON_DONE[$o]=1
+    read_crontab "$o" "$WORK/crontab.$o.now"
+    [ -n "${CRON_SAVED[$o]:-}" ] || { cp "$WORK/crontab.$o.now" "$WORK/crontab.$o"; CRON_SAVED[$o]="$WORK/crontab.$o"; }
+    cp "$WORK/crontab.$o.now" "$WORK/crontab.$o.new"
     for r2 in "${REPOS[@]}"; do
         [ "$(owner_of "$r2")" = "$o" ] || continue
         grep -vF "$(cron_line "$r2")" "$WORK/crontab.$o.new" > "$WORK/crontab.$o.tmp" || true
@@ -102,8 +125,9 @@ for r in "${REPOS[@]}"; do
             fail "the pull line of $o for $r2 is still in its crontab"
         fi
     done
-    BARRIER="$BARRIER cron-of-$o(saved:$WORK/crontab.$o)"
+    BARRIER="$BARRIER cron-of-$o(saved:${CRON_SAVED[$o]})"
 done
+{ echo "created_hold=$CREATED_HOLD"; for o in "${!CRON_SAVED[@]}"; do echo "crontab=${CRON_SAVED[$o]}"; done; } > "$WORK/barrier"
 
 # ---- 2. wait for running writers ------------------------------------------
 busy() {   # prints the first process working in a repo, rc 0 if any
@@ -175,8 +199,14 @@ for r in "${REPOS[@]}"; do
     [ -z "$prev" ] || g cat-file -e "$prev^{commit}" || fail "$r: rollback target $prev lost"
     inventory "$r" > "$WORK/inv.$n.after"
     cmp -s "$WORK/inv.$n.before" "$WORK/inv.$n.after" || fail "$r: files outside .git changed (diff $WORK/inv.$n.before $WORK/inv.$n.after)"
-    g fetch --quiet origin main
-    g merge-base --is-ancestor HEAD FETCH_HEAD || fail "$r: origin main no longer fast-forwards from HEAD"
+    if [ "$o" = root ]; then
+        # root's real update is update-control after the hold is gone (next :15)
+        g fetch --quiet origin main
+        g merge-base --is-ancestor HEAD FETCH_HEAD || fail "$r: origin main no longer fast-forwards from HEAD"
+    else
+        # the account's update is exactly its cron command: run it once, under the barrier
+        ( cd "$r" && as_owner "$real" git pull --quiet --ff-only origin main ) || fail "$r: git pull --ff-only failed after the clean"
+    fi
     log "$r: .git ${before} MB -> $(du -sm "$r/.git" | cut -f1) MB, HEAD $(printf '%.8s' "$head")"
 done
 
@@ -187,4 +217,6 @@ for o in "${!CRON_SAVED[@]}"; do
     crontab -u "$o" -l 2>/dev/null | cmp -s - "${CRON_SAVED[$o]}" || fail "the crontab of $o differs from the saved one"
 done
 [ "$CREATED_HOLD" = 0 ] || rm -f "$HOLD"
+rm -f "$WORK/barrier"
+[ -z "$PRIOR" ] || rm -f "$PRIOR/barrier"
 log "done; entry points reopened"
