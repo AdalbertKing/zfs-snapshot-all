@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83, E85, E94.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83, E85, E94, E109.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -1935,6 +1935,26 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E109 — a release finding answered with a dev SHA, nothing published (2026-10-30, R2)
+**2026-10-30, REV-20261029-183, PR #1008.**
+
+*Genesis.* The reviewer found the job-stats cache defect in the release repository:
+`AdalbertKing/zfsbackup` main `3dc6e1ae`, reproducer with `TARGET_REPO=/path/to/zfsbackup`. I fixed
+it in the dev repository, merged #1008 (dev `60b8b1b8`) and reported it as handed to the Reviewer,
+because the dev ledger showed `IMPLEMENTED | Reviewer` for the dev SHA `4d8e4e64`. At that point
+nothing was published. In the same minute a parallel session published zfsbackup `5e91325` from dev
+`80250657` (PR #1009, README links to the tutorial), which is older than #1008, so zfsbackup moved forward without the fix. Owner: "Recenzent nie widzi poprawki
+183."
+
+*Cause.* R2: the ledger is a fact about the dev repository; the finding was about the release
+repository. I carried "submitted" across that boundary without measuring the release side. The
+response named no commit the reviewer could check out where the defect was found.
+
+*Rule.* R2, applied to releases. A finding raised against a zfsbackup SHA is handed over only when
+the fix is published there (`release/publish.sh`, with the Owner's consent), and the response names
+that release commit next to the dev `implementation` SHA. Before saying "handed to the Reviewer",
+read zfsbackup main and check that it contains the fix.
 
 ### E108 — new browsing windows instead of the one agreed design (2026-10-29, R8, repeat)
 **2026-10-29, lab pve10, owner's GUI pass.**
