@@ -27,7 +27,9 @@ Wszystko w bashu, zadania chodzą z crona, a do codziennej pracy jest tekstowe G
    ```
 
 2. Uruchom GUI i załóż pierwszą relację: **F3 Relacje**, klawisz **Ins**. Kreator pyta o rodzaj relacji,
-   host źródłowy, datasety, cel i szablon, pokazuje plan i dopiero po **WYKONAJ** cokolwiek zmienia.
+   host źródłowy, datasety, cel, szablon, ile migawek zostaje na źródle i nazwę, pokazuje podsumowanie
+   i plan, a dopiero po **WYKONAJ** cokolwiek zmienia. Krok po kroku, dla każdego wariantu:
+   [docs/tutorial/index.html](../tutorial/index.html).
 
    ```bash
    zfs-backup gui

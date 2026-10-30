@@ -16810,6 +16810,39 @@ cmd_new_relation() {
 # midnight. The logs are the digest's: ZFS_CRON_LOGS, else the same discovery.
 # Where the mail has nothing (no -v 3, no runs in the window) this has nothing
 # -- and says so with an empty list, never a zero dressed as a measurement.
+# JOB-STATS CACHES (REV-20261029-183, P1). The GUI runs job-stats as root with --vol-cache.
+# The cache used to fall back to /tmp and to write "$cf.$$" there: a redirection follows a
+# symlink planted in advance, and the mv then made the stable name that symlink -- a local
+# user could make root truncate and write a file of his choice. Now:
+#   - the directory is the user's runtime directory only, and only when it is a real
+#     directory (not a symlink), owned by this user and not writable by group or others;
+#     otherwise there is NO cache (a fresh listing, as cron and the digest always do);
+#   - the temporary file is created exclusively by mktemp in that directory and renamed
+#     over the stable name (rename never follows a link at the destination);
+#   - a stable name is read only when it is a regular file, not a symlink, owned by this
+#     user, with one link.
+jobstats_cache_dir() {   # -> the private directory for the job-stats caches; rc 1 = none
+    local d="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" mode
+    [ -n "$d" ] && [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && [ -w "$d" ] || return 1
+    mode="$(stat -c %a -- "$d" 2>/dev/null)" || return 1
+    case "$mode" in ''|*[!0-7]*) return 1 ;; esac
+    [ $(( 8#$mode & 8#022 )) -eq 0 ] || return 1
+    printf '%s' "$d"
+}
+jobstats_cache_safe() {   # <file> -> 0 when it may be read as this user's cache
+    local f="$1"
+    [ -f "$f" ] && [ ! -L "$f" ] && [ -O "$f" ] && [ "$(stat -c %h -- "$f" 2>/dev/null)" = 1 ]
+}
+jobstats_cache_write() {   # <file> <content> -- best effort; a failure only leaves no cache
+    local f="$1" t
+    t="$(mktemp -- "${f%/*}/.zfs-snapshot-all-jobstats.XXXXXXXX" 2>/dev/null)" || return 0
+    if ( umask 077; printf '%s\n' "$2" > "$t" ) 2>/dev/null && mv -f -T -- "$t" "$f" 2>/dev/null; then
+        return 0
+    fi
+    rm -f -- "$t" 2>/dev/null
+    return 0
+}
+
 cmd_job_stats() {
     local as_json=0 days="${ZFS_DIGEST_DAYS:-7}" a vol_cache=0 runs_h=0
     for a in "$@"; do
@@ -16851,24 +16884,26 @@ cmd_job_stats() {
         snap_got=1
         local cf="" vc="${vol_cache:-0}" newest=0 m _l
         case "$vc" in ''|*[!0-9]*) vc=0 ;; esac
-        if [ "$vc" -gt 0 ]; then
-            cf="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-            [ -d "$cf" ] && [ -w "$cf" ] || cf="/tmp"
+        # REV-20261029-183: only a private runtime directory (jobstats_cache_dir); without
+        # one there is no cache at all -- never /tmp, never a predictable temporary name.
+        if [ "$vc" -gt 0 ] && cf="$(jobstats_cache_dir)"; then
             cf="$cf/zfs-snapshot-all-jobstats-snaps.$(id -u)"
             for _l in $logs; do
                 m=$(stat -c %Y "$_l" 2>/dev/null || echo 0)
                 [ "$m" -gt "$newest" ] && newest=$m
             done
-            if [ -f "$cf" ] && [ -O "$cf" ]; then
-                m=$(stat -c %Y "$cf" 2>/dev/null || echo 0)
+            if jobstats_cache_safe "$cf"; then
+                m=$(stat -c %Y -- "$cf" 2>/dev/null || echo 0)
                 if [ $(( $(date +%s) - m )) -lt "$vc" ] && [ "$m" -ge "$newest" ]; then
-                    snap_raw=$(cat "$cf"); return 0
+                    snap_raw=$(cat -- "$cf"); return 0
                 fi
             fi
+        else
+            cf=""
         fi
         snap_raw=$(zfs list -H -p -t snapshot -o name,written,creation 2>/dev/null | tr -d '\r')
         if [ -n "$cf" ] && [ -n "$snap_raw" ]; then
-            ( umask 077; printf '%s\n' "$snap_raw" > "$cf.$$" && mv -f "$cf.$$" "$cf" ) 2>/dev/null || rm -f "$cf.$$"
+            jobstats_cache_write "$cf" "$snap_raw"
         fi
     }
     if [ -n "$logs" ]; then
@@ -17022,13 +17057,13 @@ cmd_job_stats() {
     # /run, keyed by the window; anyone else (cron, digest) computes it fresh as before.
     local vol_rows="" vol_cf=""
     case "$vol_cache" in ''|*[!0-9]*) vol_cache=0 ;; esac
-    if [ "$vol_cache" -gt 0 ]; then
-        vol_cf="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-        [ -d "$vol_cf" ] && [ -w "$vol_cf" ] || vol_cf="/tmp"
+    if [ "$vol_cache" -gt 0 ] && vol_cf="$(jobstats_cache_dir)"; then
         vol_cf="$vol_cf/zfs-snapshot-all-jobstats-vol.$(id -u).$since_ep"
-        if [ -f "$vol_cf" ] && [ -O "$vol_cf" ] && [ $(( $(date +%s) - $(stat -c %Y "$vol_cf" 2>/dev/null || echo 0) )) -lt "$vol_cache" ]; then
-            vol_rows=$(cat "$vol_cf")
+        if jobstats_cache_safe "$vol_cf" && [ $(( $(date +%s) - $(stat -c %Y -- "$vol_cf" 2>/dev/null || echo 0) )) -lt "$vol_cache" ]; then
+            vol_rows=$(cat -- "$vol_cf")
         fi
+    else
+        vol_cf=""
     fi
     [ -n "$vol_rows" ] || { _js_snaps; vol_rows=$(printf '%s\n' "$snap_raw" | awk -F'\t' -v since="$since_ep" '
         { p = index($1, "@"); if (p == 0) next; ds = substr($1, 1, p - 1); sn = substr($1, p + 1) }
@@ -17041,7 +17076,7 @@ cmd_job_stats() {
             for (k in b) { split(k, a, "\t"); printf "%s\t%s\t%.0f\n", a[1], a[2], b[k] }
         }' | sort); }
     if [ -n "$vol_cf" ] && [ -n "$vol_rows" ]; then
-        ( umask 077; printf '%s\n' "$vol_rows" > "$vol_cf.$$" && mv -f "$vol_cf.$$" "$vol_cf" ) 2>/dev/null || rm -f "$vol_cf.$$"
+        jobstats_cache_write "$vol_cf" "$vol_rows"
     fi
     printf '{"window_days":%s' "$days"
     jsonw_field since "$dstart"
