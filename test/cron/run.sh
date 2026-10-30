@@ -1176,8 +1176,13 @@ check "PG26b user@host:dataset in the same prune: NOT RUN, rc 76" "76 |1" \
       "$(pg_tree delsnaps.sh -R -L lbl -P __replicate_:2 zb@pveA:tank/data p_ -H24)|$(grep -c 'ConnectTimeout=10 zb@pveA zfs list -H -o name -r -- .tank/data.$' "$PG/ssh.log")"
 check "PG27 host:dataset that cannot be listed: same policy as user@host (runs unchanged, WARNs)" "0 -s -m p_ -R pveA:tank/data|1" \
       "$(PG_SSH_FAIL=1 pg_tree snapget.sh -s -m p_ -R pveA:tank/data)|$(grep -c '^WARN|lbl -- guest guard not checked|.*could not list the tree pveA:tank/data' "$PG/calls")"
-check "PG27b ...and a prune over it: same policy too" "$(PG_SSH_FAIL=1 pg_tree delsnaps.sh -R zb@pveA:tank/data p_ -H24 | cut -c1-2)" \
-      "$(PG_SSH_FAIL=1 pg_tree delsnaps.sh -R pveA:tank/data p_ -H24 | cut -c1-2)"
+# PG27b: the whole result -- rc, the wrapped command and every WARN/FAIL call -- with the
+# account removed from the user@host side, so only the spelling differs
+pg27u="$(PG_SSH_FAIL=1 pg_tree delsnaps.sh -R zb@pveA:tank/data p_ -H24 | sed 's/zb@//g')|$(sed 's/zb@//g' "$PG/calls")"
+pg27h="$(PG_SSH_FAIL=1 pg_tree delsnaps.sh -R pveA:tank/data p_ -H24)|$(cat "$PG/calls")"
+check "PG27b ...and a prune over it: the same rc, command and notices as user@host" "$pg27u" "$pg27h"
+check "PG27c ...which is: the prune runs and the WARN names the tree" "0 -R pveA:tank/data p_ -H24|1" \
+      "$(printf '%s' "$pg27h" | head -1 | cut -d'|' -f1)|$(grep -c '^WARN|lbl -- guest guard not checked|.*could not list the tree pveA:tank/data' "$PG/calls")"
 check "PG28 a local name with a ':' after its pool/ stays local (zfs list here, no ssh)" \
       "0 -X ^tank/only:c/vm-102-disk-0(/|\$) -s -m p_ -R tank/only:c|0" \
       "$(pg_tree snapget.sh -s -m p_ -R tank/only:c)|$(grep -c . "$PG/ssh.log")"
