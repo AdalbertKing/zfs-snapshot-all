@@ -23,7 +23,7 @@
 
 - **Kampania marudnego admina 2026-10-29/30 (właściciel; wyniki: `docs/project/KAMPANIA-1030-WYNIKI.md`).**
   Lab pve9 → pve10 ↔ pve11 i pve9b, całe GUI sterowane przez tmux z pomiarem czasu, plus strażnicy na żywo.
-  Strażnicy przepełnienia i przyrostu zaliczeni bez zmian. Naprawione na gałęzi `fix/kamp-1030`: eksport
+  Strażnicy przepełnienia i przyrostu zaliczeni, bez poprawek kodu. Naprawione na gałęzi `fix/kamp-1030`: eksport
   i import relacji z zaszyfrowanym źródłem gubiły raw (K5); kreator przy 2+ datasetach gubił
   `--own-snapshots` (i `--passive` kopii lokalnej, K14); strażnik gościa PVE nie zatrzymywał porządków
   drzewa, bo brał `-P "__replicate_:2"` za źródło (K20); lista dysków do formatowania podawała nośnik
@@ -31,7 +31,8 @@
   (K28, K29); sukces kreatora relacji, udany eksport i import „nic do zrobienia” nie zostawiają okna;
   okno wyjścia śledzi koniec; Enter nie zamyka potwierdzenia jako „anulowano”. Otwarte (opis w pliku
   wyników): m.in. zbędne okna kreatora „Źródło gotowe” i „Nazwa relacji”, progi monitora lustra
-  z łańcuchem (dobowy CRITICAL codziennie), kilka sekund po tabeli „Ręcznie” i menu silnika.
+  z łańcuchem (stałe 3h/5h trafiają też do monitora dobowych), 5,8–7 s po tabeli „Ręcznie” i 6,4 s
+  po menu silnika.
 - **Wydanie 1.0 i wdrożenie (2026-10-25).** Repo wydań `AdalbertKing/zfsbackup`: tag `v1.0` i strona
   wydania. Od 25.10 wszystkie 8 hostów (lab pve9, pve9b, pve10, pve11; Metropolis pve1 28.9, pve2 28.8; Dąbrowska
   pve0 11.10, pve1 11.11) i ich konta mają `origin` = repo wydań.

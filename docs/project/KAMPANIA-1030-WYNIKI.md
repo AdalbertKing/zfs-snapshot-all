@@ -46,7 +46,7 @@ i najnowsze.”
 ## Znaleziska
 
 Waga: A = błędny wynik / utrata danych / zła decyzja; B = zbędny krok, myląca informacja,
-strata czasu; C = kosmetyka.
+strata czasu; C = kosmetyka. „Naprawione” = na gałęzi `fix/kamp-1030` (PR), nie na main.
 
 | # | gdzie | co | waga | stan |
 |---|---|---|---|---|
@@ -63,9 +63,9 @@ strata czasu; C = kosmetyka.
 | K7 | okno wyjścia | nie śledziło końca: wynik rc=1 importu poza ekranem | B | **naprawione** |
 | K9 | kreator „Źródło gotowe” | okno z samym Dalej, gdy wszystko OK | B | otwarte -- usunięcie przesuwa odpowiedzi w kilkudziesięciu sekwencjach testów kreatora |
 | K13 | kreator „Nazwa relacji” | okno z samym Ok (nazwa = host) | B | otwarte (jak K9) |
-| K19 | monitor lustra (sync z łańcuchem) | sekcja ma stałe `monitor_warn = 3h`, `monitor_crit = 5h` (add-client sync, zfs-backup.sh ok. 4976) nadpisujące progi szczebla -- dobowy CRITICAL codziennie | B | otwarte -- poprawka = próg szczebla + jeden przeskok, zmienia generator i wzorce |
+| K19 | monitor lustra (sync z łańcuchem) | `client_section_plan` pisze w sekcji stałe `monitor_warn = 3h`, `monitor_crit = 5h` (zfs-backup.sh 4977–4978; komentarz 4964–4968: progi pod rytm łańcucha godzinowego). Pole sekcji wygrywa z progiem szablonu, więc dostaje je też monitor szczebla dobowego (`target_monitor = 30h 48h` w configu) -- na pve10 w kolejce alertów CRITICAL dla dobowych pve11 przy age=13h | B | otwarte -- poprawka = próg szczebla + jeden przeskok, zmienia generator i wzorce |
 | K23 | F4 na kopii → F9 Przywróć | drzewo zaznacza CAŁĄ relację, nie kopię spod kursora | B | otwarte |
-| K25 | odzysk na miejsce | GUI „Odzysk: gotowe”, a że dataset „not mounted” -- tylko w dzienniku | B | otwarte |
+| K25 | odzysk na miejsce | GUI pisze „Odzysk: gotowe”, choć dataset jest „not mounted”; tę informację ma tylko dziennik | B | otwarte |
 | K32 | zmiana relacji, tabela „Ręcznie” | podsumowanie „tabela [zmiana]” nie mówi, co (np. wyłączony dobowy) | B | otwarte |
 | K33, K35 | zmiana relacji | tabela → Dalej 5,8–7 s, Silnik → Gotowe 6,4 s, bez okna „liczę” | B | otwarte |
 | K34 | zmiana relacji, tabela zmieniana dwa razy | plan „daily dropped + added” mimo końcowej tabeli = config (różnica od stanu sesji) | B | otwarte |
@@ -82,8 +82,9 @@ strata czasu; C = kosmetyka.
 | K31 | menu zmiany (relacji, repliki) | linia „────” wybieralna | C | otwarte |
 | K37 | usunięcie relacji lokalnej | „the pairing with  stays” -- pusta nazwa | C | otwarte |
 
-Obserwacje (nie wady): strażnik przepełnienia na puli < ~1,2 GB nie ruszy (zapas ZFS min.
-128 MB zatrzymuje zapis przed 89%); po podłączeniu nośnika ruszają wszystkie repliki „po
+Obserwacje (nie wady): strażnik przepełnienia nie ruszy na bardzo małej puli -- zmierzone: pula
+240 MB zgłaszała „No space left” przy zajętości 50% (zapas, który ZFS trzyma dla siebie), więc 89% nie
+zapada nigdy; na puli 2 GB próg osiągnięty; po podłączeniu nośnika ruszają wszystkie repliki „po
 podłączeniu”, których nośnik jest obecny -- w labie `replab` i `gwlive` to pliki, zawsze obecne.
 
 ## Stan labu po kampanii
