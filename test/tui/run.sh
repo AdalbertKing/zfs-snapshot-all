@@ -1419,6 +1419,47 @@ if [ ! -s "$XL" ] && has "$A" 'anulowano -- nic nie wykonano'; then
 else
     bad "akcje: Esc anuluje" "$(cat "$XL")" "$A"
 fi
+# Kampania pve10, 2026-10-29: Enter w potwierdzeniu zamykal je jako "anulowano" (import
+# przepadl) -- teraz okno zostaje i mowi, co dziala; nic nie biegnie.
+A="$(act down,F8,enter)"
+if [ ! -s "$XL" ] && has "$A" 'POTWIERDZENIE' && has "$A" 't wykonuje' && has "$A" 'Esc wraca' && ! has "$A" 'anulowano'; then
+    ok "akcje: Enter w potwierdzeniu NIE zamyka okna -- podpowiada 't wykonuje, Esc wraca'; nic nie wykonane"
+else
+    bad "akcje: Enter w potwierdzeniu" "$(cat "$XL")" "$A"
+fi
+# Okno WYJSCIE po czystym sukcesie zamyka sie samo, zdanie idzie na linie komunikatu; ostrzezenie
+# w wyjsciu albo rc != 0 -- okno zostaje (kampania pve10: eksport zostawial okno do zamkniecia).
+COF="$("$PY" - "$TUI" "$REPO" "$NOW" "$P10/status.json" "$P10/list-jobs.json" "$P10/monitor.json" <<'PYEOF'
+import importlib.util, sys, tempfile, os
+s = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+files = {"status": sys.argv[4], "jobs": sys.argv[5], "monitors": sys.argv[6], "progress": None, "replicas": None,
+         "stats": None, "config": None, "profiles": None, "offline": True, "datasets_local": None,
+         "datasets_remote": None, "check_source": None, "host_ip": None}
+ui = m.UI(sys.argv[2], files, m.Chars(False), int(sys.argv[3]), None)
+class P:
+    def __init__(self, rc): self.rc, self.pid = rc, 1
+    def poll(self): return self.rc
+def case(body, rc, follow=True):
+    fd, path = tempfile.mkstemp(); os.write(fd, ("$ cmd\n" + body).encode("utf-8")); os.close(fd)
+    ui.window = ("output", {"title": "Eksport relacji x", "path": path, "proc": P(rc), "shell": "cmd", "lines": None,
+                            "rc": None, "redirect": "/etc/x.json", "follow": follow})
+    ui.message = ""
+    closed = ui.close_finished_output()
+    return "%s|%s" % (closed, ui.message)
+print("ok=" + case("written\n", 0))
+print("warn=" + case("!!! careful\n", 0))
+print("rc1=" + case("written\n", 1))
+print("scrolled=" + case("written\n", 0, follow=False))
+PYEOF
+)"
+COF="$(printf '%s' "$COF" | tr -d '\r')"
+if has "$COF" 'ok=True|Eksport relacji x: gotowe   zapisano: /etc/x.json   dziennik:' && has "$COF" 'warn=False|' \
+   && has "$COF" 'rc1=False|' && has "$COF" 'scrolled=False|'; then
+    ok "wyjscie: czysty sukces (rc 0, bez !!!/WARN) zamyka okno i mowi 'gotowe, zapisano, dziennik'; ostrzezenie, rc != 0, przewiniete -- okno zostaje"
+else
+    bad "wyjscie: zamykanie po sukcesie" "$COF"
+fi
 A="$(act down,F8,q)"
 if [ ! -s "$XL" ] && has "$A" 'anulowano'; then
     ok "akcje: KAZDY klawisz poza 't' anuluje (tu: q) -- nie ma przypadkowego wykonania"

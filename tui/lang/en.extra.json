@@ -798,5 +798,9 @@
 "źródle": "the source",
 "  w mc: /kopia = ta migawka (tylko do odczytu), /odzysk = $ODZ (jedyne miejsce zapisu).": "  in mc: /kopia = this snapshot (read-only), /odzysk = $ODZ (the only place to write).",
 "sprawdzam…": "checking…",
-"'$_c' -- potrzeba pięciu pól crona (minuta 0-59, godzina 0-23, dzień 1-31, miesiąc 1-12, dzień tygodnia 0-7), np. 30 21 * * 1-5.": "'$_c' -- five cron fields are needed (minute 0-59, hour 0-23, day 1-31, month 1-12, day of week 0-7), e.g. 30 21 * * 1-5."
+"'$_c' -- potrzeba pięciu pól crona (minuta 0-59, godzina 0-23, dzień 1-31, miesiąc 1-12, dzień tygodnia 0-7), np. 30 21 * * 1-5.": "'$_c' -- five cron fields are needed (minute 0-59, hour 0-23, day 1-31, month 1-12, day of week 0-7), e.g. 30 21 * * 1-5.",
+"%s: gotowe": "%s: done",
+"   zapisano: %s": "   saved: %s",
+"Import z %s: relacja już jest na tym hoście, identyczna -- nic do zrobienia": "Import from %s: the relation is already on this host, identical -- nothing to do",
+"t wykonuje, Esc wraca (Enter nic tu nie robi)": "t runs it, Esc goes back (Enter does nothing here)"
 }

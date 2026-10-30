@@ -5535,6 +5535,35 @@ class UI(object):
                                   "rc": None, "redirect": redirect})
         self.scroll = 0
 
+    OUTPUT_WARN = re.compile(r"^(!!!|WARN|FATAL|ERROR|BŁĄD)|\bwarning:", re.I)
+
+    def close_finished_output(self):
+        """Proces z okna WYJŚCIE skończył się rc=0 i nic nie ostrzega -> okno znika, zostaje
+        jedno zdanie na linii komunikatu (właściciel 2026-10-29: „Na pewno? i koniec”;
+        kampania pve10: udany eksport zostawiał okno do zamknięcia). Błąd, ostrzeżenie
+        w wyjściu albo przewinięcie przez admina -- okno zostaje. -> True, gdy zamknięte."""
+        if not self.window or self.window[0] != "output":
+            return False
+        obj = self.window[1]
+        proc = obj.get("proc")
+        if proc is None or obj.get("back_to") or obj.get("follow") is False or proc.poll() != 0:
+            return False
+        try:
+            with open(obj["path"], "rb") as fh:
+                body = fh.read().decode("utf-8", "replace").splitlines()[1:]
+        except OSError:
+            return False
+        if any(self.OUTPUT_WARN.search(ln.strip()) for ln in body):
+            return False
+        msg = _(u"%s: gotowe") % obj["title"]
+        if obj.get("redirect"):
+            msg += _(u"   zapisano: %s") % obj["redirect"]
+        msg += _(u"   dziennik: %s") % obj["path"]
+        self.window, self.scroll = None, 0
+        self.message = msg
+        self.refresh_bg()
+        return True
+
     def output_lines(self, obj, width):
         """Ogon pliku wyjscia + stan procesu. Czytane przy kazdym rysowaniu."""
         out = wrap(u"$ " + obj["shell"], width - 4) + [""]
@@ -6212,6 +6241,11 @@ class UI(object):
                 self.message = _(u"nie udało się uruchomić podglądu: %s") % e
                 return
             preview, rc = p.stdout.decode("utf-8", "replace").splitlines(), p.returncode
+        if rc == 0 and not any(self.IMPORT_PLAN_MARK in x for x in preview):
+            # Relacja już jest i jest identyczna: zdanie na linii komunikatu, bez okna
+            # (kampania pve10, 2026-10-29). Odmowa (rc != 0) zostaje oknem z powodem.
+            self.message = _(u"Import z %s: relacja już jest na tym hoście, identyczna -- nic do zrobienia") % os.path.basename(path)
+            return
         if rc != 0 or not any(self.IMPORT_PLAN_MARK in x for x in preview):
             self.window = ("output", {"title": _(u"Import: odmowa") if rc else _(u"Import: nic do zrobienia"),
                                       "path": None, "proc": None, "shell": self.shell_line(argv),
@@ -6411,6 +6445,11 @@ class UI(object):
                 self.scroll += max(1, height - 4)
             elif k == "pgup":
                 self.scroll = max(0, self.scroll - max(1, height - 4))
+            elif k == "enter":
+                # W oknach whiptail Enter naciska podświetlony przycisk; tu nie ma przycisków.
+                # Enter zamykał okno jako "anulowano" (kampania pve10, 2026-10-29: import
+                # przepadł) -- teraz zostaje i mówi, co działa.
+                self.message = _(u"t wykonuje, Esc wraca (Enter nic tu nie robi)")
             else:
                 self.window, self.message = None, _(u"anulowano -- nic nie wykonano")
             return "stay"
@@ -6454,12 +6493,15 @@ class UI(object):
                 self.scroll += 1
             elif k in ("up", "k"):
                 self.scroll = max(0, self.scroll - 1)
+                self.window[1]["follow"] = False
             elif k == "pgdn":
                 self.scroll += max(1, height - 4)
             elif k == "pgup":
                 self.scroll = max(0, self.scroll - max(1, height - 4))
+                self.window[1]["follow"] = False
             elif k == "end":
                 self.scroll = 10 ** 6
+                self.window[1]["follow"] = True
             return "stay"
         if self.window:
             if k in ("esc", "q", "enter"):
@@ -6899,8 +6941,11 @@ def _ui_render(self, width, height):
                                              self.scroll, width, height, self.ch, footer=foot)
         elif kind == "output":
             lines = self.output_lines(obj, width)
-            if self.scroll == 0 and obj.get("proc") is not None and obj["proc"].poll() is None:
-                self.scroll = 10 ** 6   # ogon: pokazuj koniec, jak tail -f
+            # Ogon jak tail -f, dopóki admin sam nie przewinie -- także PO końcu procesu
+            # (kampania pve10, 2026-10-29: import stał na liniach 21-63 ze 189, wynik rc=1
+            # był niewidoczny bez End; dawniej ogon tylko przy scroll == 0).
+            if obj.get("proc") is not None and obj.get("follow", True):
+                self.scroll = 10 ** 6
             scr, self.scroll = render_window(base, _(u"WYJŚCIE: ") + obj["title"], lines, self.scroll, width, height, self.ch,
                                              footer=_(u"Esc zamyka okno (proces zostaje)   strzałki przewijają"))
         else:
@@ -7157,6 +7202,7 @@ def curses_loop(ui):
                     pass
             return 27, None, False
         while True:
+            ui.close_finished_output()
             if getattr(ui, "wait_fresh", False):
                 wait_fresh(stdscr)
             h, w = stdscr.getmaxyx()
