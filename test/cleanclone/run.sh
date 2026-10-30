@@ -334,6 +334,28 @@ t  "c15 crontab is the original" cron_same_as_seed
 tn "c15 the hold the first run created is removed" test -e "$STATE/update-hold"
 tn "c15 no barrier record of any run is left" ls "$STATE"/clean-host-clone.*/barrier
 
+# ---- c17 origin/HEAD pointing at a branch the clean deletes (pve9 bkp clone, 2026-10-30) --------
+new_host c17
+git -C "$R" update-ref refs/remotes/origin/old "$OLD_SHA"
+git -C "$R" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/old
+run_clean
+t  "c17 rc 0" rc_is
+git -C "$R" fsck --full >/dev/null 2>&1; frc=$?
+if [ "$frc" -eq 0 ]; then ok "c17 fsck --full clean"; else bad "c17 fsck --full clean" "fsck rc=$frc" "$(tail5)"; fi
+tn "c17 the dangling origin/HEAD is gone" git -C "$R" symbolic-ref -q refs/remotes/origin/HEAD
+tn "c17 old history gone" has_obj "$OLD_SHA"
+t  "c17 HEAD is still B" head_is "$B_SHA"
+# ...and one pointing at origin/main is kept
+new_host c17b
+git -C "$R" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+run_clean
+t  "c17b rc 0" rc_is
+if [ "$(git -C "$R" symbolic-ref -q refs/remotes/origin/HEAD)" = refs/remotes/origin/main ]; then
+    ok "c17b origin/HEAD -> origin/main is kept"
+else
+    bad "c17b origin/HEAD -> origin/main is kept" "$(tail5)"
+fi
+
 # ---- c16 an updater line of another shape is refused before the crontab is written -------------
 new_host c16
 printf '%s\n' "17 * * * * cd $R && git fetch -q origin && git merge -q --ff-only FETCH_HEAD" >> "$WORK/cron.$ME"
