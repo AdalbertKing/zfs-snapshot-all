@@ -43,7 +43,8 @@ printf '%s\n' \
     '  [ ! -e "$W/cron.fail" ] || { echo "crontab: permission denied" >&2; exit 1; }' \
     '  [ -f "$W/cron.$u" ] || { echo "no crontab for $u" >&2; exit 1; }' \
     '  cat "$W/cron.$u"; exit 0; fi' \
-    '[ ! -e "$W/cron.wfail" ] || { echo "crontab: write refused" >&2; exit 1; }'     'cp "$3" "$W/cron.$u"' > "$WORK/bin/crontab"
+    '[ ! -e "$W/cron.wfail" ] || { echo "crontab: write refused" >&2; exit 1; }' \
+    'cp "$3" "$W/cron.$u"' > "$WORK/bin/crontab"
 chmod +x "$WORK/bin/crontab"
 export PATH="$WORK/bin:$PATH"
 
