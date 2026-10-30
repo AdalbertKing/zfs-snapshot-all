@@ -11,7 +11,7 @@ statusie i recenzjach) znikną przy wydaniu.
   `update.time`; bez wdrożonej kopii update-control -- `deploy.sh --self-update`, który ją wywołuje): `git fetch origin main`, odmowa przy zmianach lokalnych, zapis `previous-revision`,
   `git merge --ff-only FETCH_HEAD`, potem `deploy.sh` (`update-control.sh:230-281`). Konta delegowane mają własny
   cron o stałej minucie :15, zwykły `git pull --ff-only origin main` bez holdu i bez `previous-revision`
-  (`deploy.sh:7846`), a ich kopia jest klonem checkoutu roota (`git clone $SCRIPT_DIR`, `zfs-backup.sh:9835`)
+  (`deploy.sh:7868`), a ich kopia jest klonem checkoutu roota (`git clone $SCRIPT_DIR`, `zfs-backup.sh:9835`)
   -- ich `origin` to ścieżka lokalna, nie GitHub.
 - Adres repo: w `deploy.sh` -- `REPO_URL` ze środowiska (`deploy.sh:81`), inaczej `origin` checkoutu
   (`deploy.sh:97-98`), dopiero na końcu wpisany na sztywno `https://github.com/AdalbertKing/zfs-snapshot-all.git`
@@ -87,7 +87,7 @@ paczkami (wolniej, ale świadomie).
    `RELEASE-OF` w nowym repo to rewizja nie starsza niż obecna -> `reset --hard origin/main` -> `deploy.sh` ->
    zdjęcie holdu. To samo dla kopii kont delegowanych: ich `origin` to checkout roota, więc po przepięciu roota
    wystarczy u konta `fetch` + `reset --hard origin/main` -- i to KONIECZNIE w tym samym kroku, bo cron konta
-   to zwykły `git pull --ff-only` bez holdu (`deploy.sh:7846`) i na różnej historii zacznie się po cichu
+   to zwykły `git pull --ff-only` bez holdu (`deploy.sh:7868`) i na różnej historii zacznie się po cichu
    wywracać. Przy okazji: cron konta dostaje ten sam hold i tę samą minutę co root. `previous-revision` czyszczony: rollback przez granicę przepięcia nie ma
    sensu (stara rewizja nie istnieje w nowym repo) i jest odrzucany jak dziś.
 4. `release/MANIFEST`, `release/publish.sh` i test listy (§3).
@@ -119,3 +119,60 @@ paczkami (wolniej, ale świadomie).
    pod inną organizacją).
 2. Publikacja automatyczna po zielonym main czy ręczna.
 3. README i LICENSE w repo wydań już teraz (repo jest publiczne od początku) czy minimalne do 1.0.
+
+## 9. Stan po przepięciu i sprzątanie starej historii (2026-10-30, do recenzji)
+
+Status: **PROPOZYCJA, nic nie zrobione na hostach.** Polecenie właściciela 2026-10-30: najpierw recenzent.
+
+### 9.1 Zmierzone 2026-10-30
+
+- Wydanie 1.0.5 = zfsbackup `3d15bc4`: 96 plików, 6,0 MB po rozpakowaniu, świeży klon pobiera 2,0 MB
+  (`size-pack`, 40 commitów). Żaden plik wydania nie odwołuje się do `AdalbertKing/zfs-snapshot-all`.
+- Wszystkie osiągalne instalacje (pve1 i pve2 na 28.x, pve0 i pve1 na 11.x, pve9, pve10, pve11; root i konto
+  `zfsbackup`) mają `origin` = zfsbackup i `main` = `3d15bc42`. pve9b (10.98.0.2) nieosiągalny, niezmierzony.
+- Kod nie ma czynności przepięcia z §5 pkt 3 (`git grep 'switch-origin\|set-url origin'` -- brak); hosty
+  przepięto bez niej, a `previous-revision` wskazuje dziś commit zfsbackup (niżej).
+- §6 pkt 5 mówi o 2 kontach `zfsbackup` na produkcji; zmierzone: klon konta jest na czterech hostach
+  produkcyjnych (tabela).
+- Przepięcie zostawiło w `.git` starą historię repo dev (MB, `du -sm .git`; refs = `refs/heads` + `refs/remotes`
+  checkoutu roota):
+
+  | host | root `.git` | konto `.git` | refs roota |
+  |---|---|---|---|
+  | pve1 (28.9) | 404 | 401 | 49 |
+  | pve2 (28.8) | 407 | 392 | 41 |
+  | pve0 (11.10) | 407 | 271 | 31 |
+  | pve1 (11.11) | 404 | 271 | 8 |
+  | pve9 | 99 | 78 | 31 |
+  | pve10 | 438 | 419 | 145 |
+  | pve11 | 320 | 163 | 86 |
+
+  Na pve2: 354 MB luźnych obiektów, 48 MB w paczkach, 926 wpisów reflog. `previous-revision` = `630841d2`
+  (osiągalny z `origin/main`), brak `stash`, jeden worktree.
+- Checkout roota trzyma pliki ignorowane, które są konfiguracją hosta (pve2: `jobs.pve2.conf` i kopie,
+  `cron.txt`); klon konta: `jobs.test.conf`. Dlatego **nie** proponuję ponownego klonowania katalogu.
+
+### 9.2 Propozycja: sprzątanie w miejscu
+
+Na każdej instalacji, root i konto w jednym oknie czasowym:
+
+1. zapis: `git rev-parse HEAD`, `git status --porcelain --ignored`, `du -sm .git`;
+2. plik `update-hold` w katalogu stanu roota (`update-control.sh:44`). Konto nie ma holdu (cron
+   `git pull --ff-only`, `deploy.sh:7868`), dlatego pkt 3-5 poza minutą :15 (np. między :20 a :10);
+3. usunięcie wszystkich refów poza `refs/heads/main` i `refs/remotes/origin/main`;
+   `git fetch --prune --prune-tags origin` (tagi tylko z zfsbackup);
+4. `git reflog expire --expire=now --all` i `git gc --prune=now`;
+5. kontrola: `HEAD` bez zmian, `git status --porcelain --ignored` identyczny z pkt 1, `git fsck` bez błędów,
+   `previous-revision` osiągalny, `du -sm .git`;
+6. zdjęcie holdu; po najbliższym :15 odczyt `git-pull.log` i `--version`.
+
+Bez zmiany kodu i bez zmiany plików roboczych. Kolejność jak w §6: lab (pve9, pve10, pve11; pve9b gdy wróci),
+potem produkcja host po hoście za zgodą właściciela.
+
+### 9.3 Pytania do recenzenta
+
+1. Czy sprzątanie w miejscu (§9.2) zamiast ponownego klonu jest właściwe przy plikach konfiguracji w checkoucie?
+2. Czy czynność ma być w kodzie (`update-control.sh`), czy wystarczy jednorazowy krok z runbooka?
+3. Czy po §9.2 coś jeszcze blokuje §6 pkt 6 (repo dev prywatne)? Otwarte z §7: limit CI dla repo prywatnych.
+   Dokumentacja GitHuba (2026-10-30): w cenie planu Free jest 12 USD miesięcznie na obliczenia, Linux po
+   0,006 USD/min (~2000 min, jak w §7); zużycie naszej baterii niezmierzone.
