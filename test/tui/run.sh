@@ -1421,6 +1421,47 @@ if [ ! -s "$XL" ] && has "$A" 'anulowano -- nic nie wykonano'; then
 else
     bad "akcje: Esc anuluje" "$(cat "$XL")" "$A"
 fi
+# Kampania pve10, 2026-10-29: Enter w potwierdzeniu zamykal je jako "anulowano" (import
+# przepadl) -- teraz okno zostaje i mowi, co dziala; nic nie biegnie.
+A="$(act down,F8,enter)"
+if [ ! -s "$XL" ] && has "$A" 'POTWIERDZENIE' && has "$A" 't wykonuje' && has "$A" 'Esc wraca' && ! has "$A" 'anulowano'; then
+    ok "akcje: Enter w potwierdzeniu NIE zamyka okna -- podpowiada 't wykonuje, Esc wraca'; nic nie wykonane"
+else
+    bad "akcje: Enter w potwierdzeniu" "$(cat "$XL")" "$A"
+fi
+# Okno WYJSCIE po czystym sukcesie zamyka sie samo, zdanie idzie na linie komunikatu; ostrzezenie
+# w wyjsciu albo rc != 0 -- okno zostaje (kampania pve10: eksport zostawial okno do zamkniecia).
+COF="$("$PY" - "$TUI" "$REPO" "$NOW" "$P10/status.json" "$P10/list-jobs.json" "$P10/monitor.json" <<'PYEOF'
+import importlib.util, sys, tempfile, os
+s = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+files = {"status": sys.argv[4], "jobs": sys.argv[5], "monitors": sys.argv[6], "progress": None, "replicas": None,
+         "stats": None, "config": None, "profiles": None, "offline": True, "datasets_local": None,
+         "datasets_remote": None, "check_source": None, "host_ip": None}
+ui = m.UI(sys.argv[2], files, m.Chars(False), int(sys.argv[3]), None)
+class P:
+    def __init__(self, rc): self.rc, self.pid = rc, 1
+    def poll(self): return self.rc
+def case(body, rc, follow=True):
+    fd, path = tempfile.mkstemp(); os.write(fd, ("$ cmd\n" + body).encode("utf-8")); os.close(fd)
+    ui.window = ("output", {"title": "Eksport relacji x", "path": path, "proc": P(rc), "shell": "cmd", "lines": None,
+                            "rc": None, "redirect": "/etc/x.json", "follow": follow})
+    ui.message = ""
+    closed = ui.close_finished_output()
+    return "%s|%s" % (closed, ui.message)
+print("ok=" + case("written\n", 0))
+print("warn=" + case("!!! careful\n", 0))
+print("rc1=" + case("written\n", 1))
+print("scrolled=" + case("written\n", 0, follow=False))
+PYEOF
+)"
+COF="$(printf '%s' "$COF" | tr -d '\r')"
+if has "$COF" 'ok=True|Eksport relacji x: gotowe   zapisano: /etc/x.json   dziennik:' && has "$COF" 'warn=False|' \
+   && has "$COF" 'rc1=False|' && has "$COF" 'scrolled=False|'; then
+    ok "wyjscie: czysty sukces (rc 0, bez !!!/WARN) zamyka okno i mowi 'gotowe, zapisano, dziennik'; ostrzezenie, rc != 0, przewiniete -- okno zostaje"
+else
+    bad "wyjscie: zamykanie po sukcesie" "$COF"
+fi
 A="$(act down,F8,q)"
 if [ ! -s "$XL" ] && has "$A" 'anulowano'; then
     ok "akcje: KAZDY klawisz poza 't' anuluje (tu: q) -- nie ma przypadkowego wykonania"
@@ -3191,6 +3232,9 @@ NRCA=$(nr_run "$(nrc_ans chain)" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCW="$(cat "$N
 # okno pytajace: tytul, menu z tagami chain/own, wiek najnowszej migawki z 4. kolumny own.tsv
 NRCQ="$NRCW"
 NRCOA=$(nr_run "$(nrc_ans own)" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCOW="$(cat "$NR/wt.log")"
+# Dwa korzenie (kampania pve10, 2026-10-29): build_argv ma `local IFS=,`, a odpowiedz byla
+# przypisana do "${B_ROOT[*]}" ze spacja -- przy dwoch datasetach --own-snapshots ginal.
+NRCO2=$(nr_run "$(nrc_ans own)" NR_FIX="$NRC" NR_TREE='goto:hdd/test-kreator,space,goto:hdd/vm-disks,space,enter')
 # sync + szablon default + odpowiedz chain: lustro bedzie PASYWNE, bez --own-snapshots
 NRCS=$(nr_run "0${T}sync
 0${T}192.168.28.98
@@ -3222,6 +3266,11 @@ if has "$NRCW" '[polecany]' && has "$NRCW" 'resztki starej relacji' && has "$NRC
     ok "new-relation: backup z magazynu kopii (nasza rodzina na zrodle) -- polecany passive-flat, UWAGA LANCUCH w podsumowaniu; reczne migawki -- bez tego"
 else
     bad "new-relation: lancuch dla backupu" "$(printf '%s' "$NRCW" | grep -E 'polecany|ŁAŃCUCH' | cut -c1-200)" "$(printf '%s' "$NRCW0" | grep -E 'polecany|ŁAŃCUCH' | cut -c1-200)" "$NRCA"
+fi
+if has "$NRCO2" 'hdd/test-kreator,hdd/vm-disks' && has "$NRCO2" ' --own-snapshots '; then
+    ok "new-relation: 'own' przy DWOCH datasetach -- komenda niesie --own-snapshots (build_argv z IFS=, nie gubi odpowiedzi)"
+else
+    bad "new-relation: own przy dwoch datasetach" "$(printf '%s' "$NRCO2" | grep -a 'CMD' | cut -c1-300)"
 fi
 if has "$NRCOA" 'CMD: ' && has "$NRCOA" ' --own-snapshots ' && has "$NRCOW" 'WŁASNE MIGAWKI' && ! has "$NRCOW" 'UWAGA ŁAŃCUCH'; then
     ok "new-relation: odpowiedz 'own' w oknie migawek rodziny -- komenda niesie --own-snapshots, podsumowanie mowi WŁASNE MIGAWKI (kontrola: 'chain' = bez flagi)"
@@ -4388,7 +4437,7 @@ case "$1" in
     remove-media-trigger) echo ">>> atrapa: regula zdjeta"; exit 0 ;;
     prepare-media) case " $* " in
             *" --list "*) printf '/dev/disk/by-id/usb-C	2G	QEMU	USB-C	-
-' ;;
+'; [ -n "${RP_DISKS:-}" ] && printf '%b' "$RP_DISKS" ;;
             *" --yes "*)  echo ">>> prepare-media: medium ready"; echo "guid=777" ;;
             *)            echo "PLAN (prepare-media):"; echo "  1. zpool create ... EVERYTHING on the disk is erased" ;;
         esac ;;
@@ -4443,13 +4492,17 @@ RPOUT=$(rp_run "0${T}usb2
 0${T}__other__
 0${T}0 22 * * *zle
 0${T}
-0${T}__other__
+0${T}61 25 * * *
+0${T}
 0${T}30 21 * * 1-5
 0${T}
 0${T}
 " RP_TREE='goto:hdd/backups,space,enter'); RPRC=$?
-if grep -qF 'Zły harmonogram' "$RP/wt.log" && grep -q "^add-replica usb2 .*--schedule=30 21 \* \* 1-5 " "$RP/zb.log" && ! grep -q 'zle' "$RP/zb.log"; then
-    ok "replika: zly wlasny harmonogram odrzucony w oknie (Zły harmonogram), poprawny idzie do planu"
+# Kampania pve10 2026-10-29: po bledzie okno wraca DO POLA (bylo: do menu z "auto" -- Enter dawal
+# auto po cichu), a "61 25 * * *" (poza zakresem) tez jest odrzucane.
+if [ "$(grep -cF 'Zły harmonogram' "$RP/wt.log")" = 2 ] && [ "$(grep -cF 'kiedy kopiować?' "$RP/wt.log")" = 1 ] \
+   && grep -q "^add-replica usb2 .*--schedule=30 21 \* \* 1-5 " "$RP/zb.log" && ! grep -q 'zle\|61 25' "$RP/zb.log"; then
+    ok "replika: zly wlasny harmonogram (znaki i zakres pol) odrzucony w oknie, ponowny wpis w TYM SAMYM polu, poprawny idzie do planu"
 else
     bad "replika: walidacja wlasnego harmonogramu" "rc=$RPRC" "$(cat "$RP/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$RP/wt.log" | tr '\n' ';')"
 fi
@@ -4593,6 +4646,22 @@ if [ "$RPRC" -eq 0 ] && grep -q '^prepare-media --list$' "$RP/zb.log" \
     ok "replica: 'Sformatuj nowy nosnik' -- bez pytan o nazwe/baze (<host>-<replika>/replica), pytanie o szyfrowanie (Tak = --encrypt, W19b), plan --defaultno, ID do --media-guid"
 else
     bad "replica: formatowanie nosnika" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -6 "$RP/wt.log" | cut -c1-250)"
+fi
+# K27 (kampania pve10, 2026-10-29): dysk z pula INNEJ repliki nie jest na liscie do formatowania
+# (jedynym dyskiem na liscie byl nosnik usb9 -- jeden Enter od wyczyszczenia cudzej repliki).
+rm -f "$RP/rules"
+RPOUT=$(rp_run "0${T}usb6
+0${T}own
+0${T}mirror
+0${T}removable
+0${T}__prep__
+" RP_TREE='goto:hdd/data,space,enter' 'RP_DISKS=/dev/disk/by-id/usb-D\t4G\tQEMU\tUSB-D\tzfs:sejfpula\n/dev/disk/by-id/usb-E\t4G\tQEMU\tUSB-E\tzfs:staraobca\n' \
+  'RP_REPS={"replicas":[{"name":"sejf","sources":["hdd/backups"],"dst":"sejfpula/replica","media":"removable"}]}'); RPRC=$?
+RPFM="$(grep -F 'który dysk sformatować' "$RP/wt.log" | head -1)"
+if [ -n "$RPFM" ] && has "$RPFM" 'usb-C' && has "$RPFM" 'usb-E' && ! has "$RPFM" 'usb-D'; then
+    ok "replica K27: dysk z pula INNEJ repliki (sejfpula) nie jest do formatowania; pusty i z obca pula -- sa (z ostrzezeniem)"
+else
+    bad "replica K27: lista dyskow do formatowania" "rc=$RPRC" "$(printf '%s' "$RPFM" | cut -c1-400)"
 fi
 # (6) WYJATKI (uwaga 13): ten sam koszyk co w relacji -- "Wyjatki..." przy hdd/data,
 #     odznaczone mail -> --exclude-child=^hdd/data/mail$ w komendzie i "Pomijane" w planie;

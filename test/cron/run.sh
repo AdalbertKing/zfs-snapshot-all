@@ -1149,6 +1149,11 @@ check "PG18c the -X pattern takes the disk and its children, not vm-1020" "1 1 0
       "$(printf 'tank/data/vm-102-disk-0' | grep -cE "$x18") $(printf 'tank/data/vm-102-disk-0/x' | grep -cE "$x18") $(printf 'tank/data/vm-1020-disk-0' | grep -cE "$x18")"
 check "PG19 the same tree in a prune (delsnaps -R): NOT RUN, rc 76, notified" "76 |1" \
       "$(pg_tree delsnaps.sh -R tank/data p_ -H24)|$(grep -c '^FAIL|lbl|zfs-job: NOT RUN -- .*vm-102-disk-0 (guest 102 runs on pveB)' "$PG/calls")"
+# PG19b: the prune as gen-cron writes it -- -L and -P "family:N" BEFORE the dataset. The
+# value "__replicate_:2" was taken for the source and the tree was never listed (pve10,
+# 2026-10-29: the prune ran over a pvesr replica disk, rc 0).
+check "PG19b a generated prune (-L lbl -P __replicate_:2 -P vzdump:2 tank/data): NOT RUN, rc 76" "76 " \
+      "$(pg_tree delsnaps.sh -R -L lbl -P __replicate_:2 -P vzdump:2 tank/data p_ -H24)"
 check "PG20 an atomic -r snapshot cannot leave a child out: NOT RUN" "76 " "$(pg_tree snapget.sh -s -m p_ -r tank/data)"
 check "PG21 a REMOTE tree is listed over the line's own ssh options" "0 -X ^tank/data/vm-102-disk-0(/|\$) -s -m p_ -K /k/a -k /k/kh -O HostKeyAlias=h -R zb@pveA:tank/data|1" \
       "$(pg_tree snapget.sh -s -m p_ -K /k/a -k /k/kh -O HostKeyAlias=h -R zb@pveA:tank/data)|$(grep -c -- '-i /k/a -o UserKnownHostsFile=/k/kh -o HostKeyAlias=h zb@pveA zfs list -H -o name -r -- .tank/data.' "$PG/ssh.log")"

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 61cc82730347824d -->
+<!-- status-covers-digest: d879bf2fe7fed86b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -27,6 +27,18 @@
   są tylko w `$XDG_RUNTIME_DIR` / `/run/user/<uid>`, gdy to prawdziwy, własny katalog bez zapisu dla grupy
   i innych; inaczej bez cache (świeży odczyt). Plik tymczasowy przez `mktemp` w tym katalogu, zamiana nazwy;
   odczyt tylko zwykłego, własnego pliku z jednym dowiązaniem.
+- **Kampania marudnego admina 2026-10-29/30 (właściciel; wyniki: `docs/project/KAMPANIA-1030-WYNIKI.md`).**
+  Lab pve9 → pve10 ↔ pve11 i pve9b, całe GUI sterowane przez tmux z pomiarem czasu, plus strażnicy na żywo.
+  Strażnicy przepełnienia i przyrostu zaliczeni, bez poprawek kodu. Naprawione na gałęzi `fix/kamp-1030`: eksport
+  i import relacji z zaszyfrowanym źródłem gubiły raw (K5); kreator przy 2+ datasetach gubił
+  `--own-snapshots` (i `--passive` kopii lokalnej, K14); strażnik gościa PVE nie zatrzymywał porządków
+  drzewa, bo brał `-P "__replicate_:2"` za źródło (K20); lista dysków do formatowania podawała nośnik
+  innej repliki (K27); błędny własny cron repliki wracał do menu z „auto” i nie sprawdzał zakresów
+  (K28, K29); sukces kreatora relacji, udany eksport i import „nic do zrobienia” nie zostawiają okna;
+  okno wyjścia śledzi koniec; Enter nie zamyka potwierdzenia jako „anulowano”. Otwarte (opis w pliku
+  wyników): m.in. zbędne okna kreatora „Źródło gotowe” i „Nazwa relacji”, progi monitora lustra
+  z łańcuchem (stałe 3h/5h trafiają też do monitora dobowych), 5,8–7 s po tabeli „Ręcznie” i 6,4 s
+  po menu silnika.
 - **Wydanie 1.0 i wdrożenie (2026-10-25).** Repo wydań `AdalbertKing/zfsbackup`: tag `v1.0` i strona
   wydania. Od 25.10 wszystkie 8 hostów (lab pve9, pve9b, pve10, pve11; Metropolis pve1 28.9, pve2 28.8; Dąbrowska
   pve0 11.10, pve1 11.11) i ich konta mają `origin` = repo wydań.
