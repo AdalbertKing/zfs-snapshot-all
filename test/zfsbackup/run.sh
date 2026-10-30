@@ -13170,10 +13170,12 @@ RCREG=$( [ -f "$JC/priv/zfs-snapshot-all-jobstats-snaps.$(id -u)" ] && [ ! -L "$
 RTMP="/tmp/zfs-snapshot-all-jobstats-snaps.$(id -u)"
 RD="skip"
 if [ ! -e "$RTMP" ] && [ ! -L "$RTMP" ]; then
+    # count what is already there (another run's leftovers): only the planted link may be added
+    RDBEFORE=$(ls -d /tmp/zfs-snapshot-all-jobstats-* 2>/dev/null | wc -l | tr -d ' ')
     RD=$(bash -c 'ln -s "$1" "/tmp/zfs-snapshot-all-jobstats-snaps.$(id -u).$$" || exit 2
         exec env PATH="$2/bin:$PATH" XDG_RUNTIME_DIR="$2/missing" ZFS_CRON_LOGS="$2/runs.log" bash "$3" job-stats --json --runs=2 --vol-cache=300' \
         _ "$JC/target" "$JC" "$ZFSBACKUP" 2>>"$JC/err")
-    RDLEFT=$(ls -d /tmp/zfs-snapshot-all-jobstats-* 2>/dev/null | wc -l | tr -d ' ')
+    RDLEFT=$(( $(ls -d /tmp/zfs-snapshot-all-jobstats-* 2>/dev/null | wc -l | tr -d ' ') - RDBEFORE ))
     rm -f /tmp/zfs-snapshot-all-jobstats-snaps."$(id -u)".* 2>/dev/null
 fi
 # (e) two writers at once into the same private directory
@@ -13192,7 +13194,7 @@ else
     bad "jobstats REV-183: cache safety" "sentinel same: $(same_target && echo yes || echo NO)" \
         "a: calls=$RAN (2) real empty=$([ -z "$(ls -A "$JC/real")" ] && echo yes || echo no)" \
         "b: calls=$RBN (2) open empty=$([ -z "$(ls -A "$JC/open")" ] && echo yes || echo no)" \
-        "c: calls=$RCN (1) stable regular=$RCREG links left=$RCLINK" "d: $( [ "$RD" = skip ] && echo skip || echo "valid=$(jvalid "$RD" && echo yes || echo no) left=$RDLEFT (1: the planted link)")" \
+        "c: calls=$RCN (1) stable regular=$RCREG links left=$RCLINK" "d: $( [ "$RD" = skip ] && echo skip || echo "valid=$(jvalid "$RD" && echo yes || echo no) new in /tmp=$RDLEFT (1: the planted link)")" \
         "e: json=$REJ temps=$RETMP snap 0600 regular=$RESNAP" "$(tail -5 "$JC/err")"
 fi
 # the NUMBERS, against the capture read by hand: how many "nextcloud" runs and
