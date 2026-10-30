@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 150b3ee17623a942 -->
+<!-- status-covers-digest: 26ab6000258e04bb -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,12 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Cache job-stats tylko w prywatnym katalogu (2026-10-29, REV-20261029-183, P1).** `job-stats --vol-cache`
+  (GUI, root) zapisywał cache przez przewidywalną nazwę w `/tmp`, gdy nie było katalogu uruchomieniowego, więc
+  podstawione dowiązanie dawało zapis roota do wskazanego pliku. Teraz oba cache (lista migawek i objętości)
+  są tylko w `$XDG_RUNTIME_DIR` / `/run/user/<uid>`, gdy to prawdziwy, własny katalog bez zapisu dla grupy
+  i innych; inaczej bez cache (świeży odczyt). Plik tymczasowy przez `mktemp` w tym katalogu, zamiana nazwy;
+  odczyt tylko zwykłego, własnego pliku z jednym dowiązaniem.
 - **Wydanie 1.0 i wdrożenie (2026-10-25).** Repo wydań `AdalbertKing/zfsbackup`: tag `v1.0` i strona
   wydania. Od 25.10 wszystkie 8 hostów (lab pve9, pve9b, pve10, pve11; Metropolis pve1 28.9, pve2 28.8; Dąbrowska
   pve0 11.10, pve1 11.11) i ich konta mają `origin` = repo wydań.
