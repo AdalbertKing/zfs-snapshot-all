@@ -160,6 +160,9 @@ trwający `git pull` konta (REV-20261030-185 F1). Teraz jednorazowe narzędzie, 
 jednym hoście: `release/clean-host-clone.sh <katalog stanu> <repo>...`. Nie trafia do wydania
 (`release/MANIFEST` to biała lista); na host kopiowane ręcznie.
 
+0. Jeden bieg naraz: `flock -n` na zamku katalogu stanu i na zamku każdego repo, zanim cokolwiek z
+   bariery zostanie odczytane, trzymany do końca procesu; drugi bieg odmawia (REV-20261030-185,
+   odrzucenie `680465bc`).
 1. Zamknięcie wejść: plik `update-hold` dla aktualizatora roota (sprawdzany przez `do_self_update`, zanim
    dotknie gita; ręczny `--rollback` go nie sprawdza -- w czasie biegu żadnych ręcznych poleceń
    aktualizacji); linia `cd <repo> && git pull` zdjęta z crona każdego właściciela repo, także roota
