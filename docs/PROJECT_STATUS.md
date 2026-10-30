@@ -51,8 +51,7 @@
 - **Wydanie i wdrożenie (stan 2026-10-30).** Repo wydań `AdalbertKing/zfsbackup`, ostatnie wydanie **1.0.5** =
   `3d15bc4` (tag `v1.0.5`, dev `4f26c947`). Zmierzone 30.10 po :15: pve1 28.9, pve2 28.8, pve0 11.10, pve1 11.11,
   pve9, pve10, pve11 -- root i konto `zfsbackup` mają `origin` = repo wydań, `main` = `3d15bc42`, bez blokady
-  aktualizacji. pve9b (10.98.0.2) nieosiągalny: ostatnio gałąź labowa `lab/1004-1005` z `update-hold`; po powrocie wykonać
-  `bash /root/lab-dev.sh off`.
+  aktualizacji. pve9b (192.168.28.98) wrócił na kanał wydań 30.10 wieczorem (`lab-dev.sh off`).
   - Klony na hostach niosą starą historię repo dev w `.git` (78-438 MB na klon); propozycja sprzątania czeka na
     recenzenta (`docs/project/DESIGN-REPO-WYDAN-2026-10-24.md` §9).
   - Scalenie PR-a w repo dev NIE wdraża. Hosty dostają zmianę dopiero po `release/publish.sh origin/main

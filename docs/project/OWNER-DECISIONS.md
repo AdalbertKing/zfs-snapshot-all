@@ -738,7 +738,7 @@ opublikować i zamknąć wszystko”.
   REV należy do recenzenta i nie jest tu udawane; decyzja właściciela: nie czekać na nie. Implementer
   nie bierze z rejestru nowej pracy do czasu nowego polecenia właściciela.
 - Hosty: wszystkie osiągalne na wydaniu, klony bez historii repo dev (`release/clean-host-clone.sh`,
-  §9 `DESIGN-REPO-WYDAN-2026-10-24.md`). pve9b (10.98.0.2) nieosiągalny: gałąź labowa z
-  `update-hold`; po powrocie `bash /root/lab-dev.sh off`, potem czyszczenie.
+  §9 `DESIGN-REPO-WYDAN-2026-10-24.md`), pve9b (192.168.28.98) włącznie: tego samego wieczoru
+  `lab-dev.sh off` i czyszczenie czterech klonów (rc 0).
 - Otwarte pozycje z `FINISZ-BACKLOG.md` nie są robione w tym projekcie.
 
