@@ -22,7 +22,7 @@ i odzysku, który da się przejść w konsoli — bez stawiania serwera kopii.
   `--passive`), czy to resztki (`--own-snapshots`).
 
 Zrzut ekranu GUI (okno F3 Relacje) jest w [README.md](README.md); te same ekrany po polsku pokazuje
-[tutorial](docs/tutorial/index.html).
+[tutorial](https://adalbertking.github.io/zfsbackup/tutorial/).
 
 ## Wymagania
 
@@ -68,8 +68,10 @@ To narzędzie administratora. Działa jako root, zakłada i **usuwa** migawki ZF
 ## Dokumentacja
 
 Każdy temat jest w obu językach: najpierw jednostronicowa esencja, potem pełne przewodniki
-i instrukcja techniczna. **Interaktywny tutorial** z prawdziwymi ekranami GUI:
-[docs/tutorial/index.html](docs/tutorial/index.html) — pobierz i otwórz w przeglądarce.
+i instrukcja techniczna. **Interaktywny tutorial**: złóż swój wariant z klocków (jeden host, dwa hosty, klaster
+Proxmox z pvesr, A > B <> C) i przejdź go na prawdziwych ekranach GUI albo poleceniach CLI, po polsku i po angielsku:
+[https://adalbertking.github.io/zfsbackup/tutorial/](https://adalbertking.github.io/zfsbackup/tutorial/). Ta sama strona leży w [docs/tutorial/index.html](docs/tutorial/index.html) i działa też
+pobrana, bez sieci.
 
 | | Polski | English |
 |---|---|---|
