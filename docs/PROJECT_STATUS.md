@@ -21,6 +21,12 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Cache job-stats tylko w prywatnym katalogu (2026-10-29, REV-20261029-183, P1).** `job-stats --vol-cache`
+  (GUI, root) zapisywał cache przez przewidywalną nazwę w `/tmp`, gdy nie było katalogu uruchomieniowego, więc
+  podstawione dowiązanie dawało zapis roota do wskazanego pliku. Teraz oba cache (lista migawek i objętości)
+  są tylko w `$XDG_RUNTIME_DIR` / `/run/user/<uid>`, gdy to prawdziwy, własny katalog bez zapisu dla grupy
+  i innych; inaczej bez cache (świeży odczyt). Plik tymczasowy przez `mktemp` w tym katalogu, zamiana nazwy;
+  odczyt tylko zwykłego, własnego pliku z jednym dowiązaniem.
 - **Wydanie 1.0 i wdrożenie (2026-10-25).** Repo wydań `AdalbertKing/zfsbackup`: tag `v1.0` i strona
   wydania. Od 25.10 wszystkie 8 hostów (lab pve9, pve9b, pve10, pve11; Metropolis pve1 28.9, pve2 28.8; Dąbrowska
   pve0 11.10, pve1 11.11) i ich konta mają `origin` = repo wydań.
@@ -84,6 +90,12 @@
   jak F9 na F2 (F9 zostaje Przywróć). Repliki bez nośnika i relacje bez kopii mają swój wiersz z uwagą, bez akcji.
   Stan i klawisze bez zmian (Enter/Tab do migawek, Enter przegląda, F9 przywraca). F10: większy odstęp kolumn,
   opisy łamane w trzeciej kolumnie (dalszy ciąg otwiera to samo ustawienie). Zasada na przyszłość: każde okno przeglądania w układzie F2 (backlog U121).
+- **Okno „wykonuję” bez migania; udany zapis relacji bez okna (2026-10-29, właściciel, U133).** `run_progress`
+  (`tui/wt-lib.sh`) rysował okno postępu co 2 s, a każde wywołanie whiptail zaczyna od wyczyszczenia ekranu
+  (`ESC[H ESC[J`, zmierzone na pve10). Teraz okno jest rysowane raz, a „trwa N s” co sekundę idzie w ostatni wiersz
+  ekranu, tylko gdy wyjście to terminal. Na pve10 zapis zmiany relacji (17 s) czyści ekran 2 razy: okno postępu
+  i powrót. Udany zapis w „Zmień relację” kończy się zdaniem na linii komunikatu GUI (z dziennikiem), bez okna
+  z `<Ok>`. Wcześniej druga linia „Dziennik: …” robiła z sukcesu okno.
 - **Jedna data w GUI: `RRRR.MM.DD GG:MM`; F6 czytelniej (2026-10-29, właściciel, U134).** Wszystkie formatery daty
   w `tui/zfs-tui.py` używają `DT_FMT` (`%Y.%m.%d %H:%M`, z sekundami tam, gdzie były). Krótkie formy (dziś sama godzina,
   „jutro”, dzień tygodnia, `DD.MM`) zniknęły. Daty z czasowników (`created_at`, `last_at`, `last_current` …) przechodzą

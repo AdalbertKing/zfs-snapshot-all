@@ -13146,6 +13146,57 @@ if [ "$JC0" = 1 ] && [ "$JC1" = 1 ] && [ "$JC2" = 1 ] && [ "$JC3" = 2 ] && [ -n 
 else
     bad "jobstats: snapshot listing / cache" "zfs calls: fresh=$JC0 (1) cached first=$JC1 (1) second=$JC2 (1) after log change=$JC3 (2)" "same json: $([ "$JCA" = "$JCB" ] && echo yes || echo no)" "$(cat "$JC/err" 2>/dev/null | head -5)"
 fi
+# REV-20261029-183 (P1): the cache lives ONLY in a private runtime directory and never
+# follows a link. Each case: the sentinel stays byte-for-byte, no unsafe cache object
+# survives, the JSON stays valid; where there is no safe place, no cache (zfs every call).
+jcr() { ( PATH="$JC/bin:$PATH" XDG_RUNTIME_DIR="$1" ZFS_CRON_LOGS="$JC/runs.log" bash "$ZFSBACKUP" job-stats --json --runs=2 --vol-cache=300 ) 2>>"$JC/err"; }
+jvalid() { printf '%s' "$1" | "$PY_OR_PYTHON" -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; }
+printf 'SENTINEL\n' > "$JC/target"; cp "$JC/target" "$JC/target.orig"
+same_target() { cmp -s "$JC/target" "$JC/target.orig"; }   # byte for byte
+# (a) the runtime directory is a symlink to a real private directory
+mkdir -p "$JC/real"; chmod 700 "$JC/real"; rm -f "$JC/linkrun"; ln -s "$JC/real" "$JC/linkrun"
+: > "$JC/calls"; RA=$(jcr "$JC/linkrun"); RA2=$(jcr "$JC/linkrun"); RAN=$(jcn)
+# (b) the runtime directory is writable by others
+mkdir -p "$JC/open"; chmod 777 "$JC/open"
+: > "$JC/calls"; RB=$(jcr "$JC/open"); RB2=$(jcr "$JC/open"); RBN=$(jcn)
+# (c) the stable cache names are symlinks to the sentinel inside a valid private directory
+rm -rf "$JC/priv"; mkdir -p "$JC/priv"; chmod 700 "$JC/priv"
+ln -s "$JC/target" "$JC/priv/zfs-snapshot-all-jobstats-snaps.$(id -u)"
+: > "$JC/calls"; RC=$(jcr "$JC/priv"); RCN=$(jcn)
+RCLINK=$(find "$JC/priv" -maxdepth 1 -type l | wc -l | tr -d ' ')
+RCREG=$( [ -f "$JC/priv/zfs-snapshot-all-jobstats-snaps.$(id -u)" ] && [ ! -L "$JC/priv/zfs-snapshot-all-jobstats-snaps.$(id -u)" ] && echo yes || echo no)
+# (d) no runtime directory, and a link planted at the OLD predictable /tmp temporary name of
+#     this very process (exec keeps the PID) -- the reviewer's reproducer, without a race
+RTMP="/tmp/zfs-snapshot-all-jobstats-snaps.$(id -u)"
+RD="skip"
+if [ ! -e "$RTMP" ] && [ ! -L "$RTMP" ]; then
+    # count what is already there (another run's leftovers): only the planted link may be added
+    RDBEFORE=$(ls -d /tmp/zfs-snapshot-all-jobstats-* 2>/dev/null | wc -l | tr -d ' ')
+    RD=$(bash -c 'ln -s "$1" "/tmp/zfs-snapshot-all-jobstats-snaps.$(id -u).$$" || exit 2
+        exec env PATH="$2/bin:$PATH" XDG_RUNTIME_DIR="$2/missing" ZFS_CRON_LOGS="$2/runs.log" bash "$3" job-stats --json --runs=2 --vol-cache=300' \
+        _ "$JC/target" "$JC" "$ZFSBACKUP" 2>>"$JC/err")
+    RDLEFT=$(( $(ls -d /tmp/zfs-snapshot-all-jobstats-* 2>/dev/null | wc -l | tr -d ' ') - RDBEFORE ))
+    rm -f /tmp/zfs-snapshot-all-jobstats-snaps."$(id -u)".* 2>/dev/null
+fi
+# (e) two writers at once into the same private directory
+rm -rf "$JC/par"; mkdir -p "$JC/par"; chmod 700 "$JC/par"
+jcr "$JC/par" > "$JC/p1" & jcr "$JC/par" > "$JC/p2" & wait
+REJ="$(jvalid "$(cat "$JC/p1")" && jvalid "$(cat "$JC/p2")" && echo ok)"
+RETMP=$(find "$JC/par" -name '.zfs-snapshot-all-jobstats.*' | wc -l | tr -d ' ')
+RESNAP=$( [ -f "$JC/par/zfs-snapshot-all-jobstats-snaps.$(id -u)" ] && [ ! -L "$JC/par/zfs-snapshot-all-jobstats-snaps.$(id -u)" ] && [ "$(stat -c %a "$JC/par/zfs-snapshot-all-jobstats-snaps.$(id -u)")" = 600 ] && echo yes || echo no)
+if same_target && jvalid "$RA" && jvalid "$RA2" && [ "$RAN" = 2 ] && [ -z "$(ls -A "$JC/real")" ] \
+   && jvalid "$RB" && jvalid "$RB2" && [ "$RBN" = 2 ] && [ -z "$(ls -A "$JC/open")" ] \
+   && jvalid "$RC" && [ "$RCN" = 1 ] && [ "$RCREG" = yes ] \
+   && { [ "$RD" = skip ] || { jvalid "$RD" && [ "${RDLEFT:-1}" = 1 ]; }; } \
+   && [ "$REJ" = ok ] && [ "$RETMP" = 0 ] && [ "$RESNAP" = yes ]; then
+    ok "jobstats REV-183: cache only in a private runtime dir -- symlinked or world-writable dir = no cache (zfs every call, nothing written); stable-name symlinks are replaced, never followed; no /tmp temp name; two writers leave valid JSON, one 0600 file, no temp files; sentinel unchanged"
+else
+    bad "jobstats REV-183: cache safety" "sentinel same: $(same_target && echo yes || echo NO)" \
+        "a: calls=$RAN (2) real empty=$([ -z "$(ls -A "$JC/real")" ] && echo yes || echo no)" \
+        "b: calls=$RBN (2) open empty=$([ -z "$(ls -A "$JC/open")" ] && echo yes || echo no)" \
+        "c: calls=$RCN (1) stable regular=$RCREG links left=$RCLINK" "d: $( [ "$RD" = skip ] && echo skip || echo "valid=$(jvalid "$RD" && echo yes || echo no) new in /tmp=$RDLEFT (1: the planted link)")" \
+        "e: json=$REJ temps=$RETMP snap 0600 regular=$RESNAP" "$(tail -5 "$JC/err")"
+fi
 # the NUMBERS, against the capture read by hand: how many "nextcloud" runs and
 # transfers does the log hold?
 want_runs=$(grep -c 'ZFS-JOB END pve2 hourly backup (nextcloud)' "$CAP/cron-log.pve2-2days.txt")

@@ -43,8 +43,8 @@ argumenty i robią jedną rzecz.
 ## GUI
 
 `zfs-backup gui` otwiera ekran w terminalu (whiptail), obsługiwany klawiszami
-funkcyjnymi: F3 Relacje (Ins nowa, Enter okno, `e` zmień), F6 Replika, odzysk,
-ustawienia. To te same operacje co w CLI `zfs-backup.sh`, tylko w oknach —
+funkcyjnymi: F2 Przebiegi, F3 Relacje (Ins nowa, Enter okno, `e` zmień), F4 Kopie
+(F7 albo Enter na migawce przegląda pliki, F9 przywraca, także z dysku), F6 Replika, F10 Ustawienia. To te same operacje co w CLI `zfs-backup.sh`, tylko w oknach —
 GUI woła te same czasowniki, więc config i crontab wychodzą identyczne.
 
 ## Skrypt, który pisze crontab

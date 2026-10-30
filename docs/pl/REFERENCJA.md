@@ -128,21 +128,25 @@ działają na łączu lub na danych. Wiele czasowników tylko planuje, dopóki n
 
 `zfs-backup gui` (równoważnie `./zfs-backup.sh gui`) otwiera pełnoekranowy interfejs tekstowy dla
 sesji ssh. To cienka warstwa nad powyższymi czasownikami: czyta ich wyjście `--json` i uruchamia te
-same komendy, więc wszystko, co robi, da się zrobić z linii poleceń. GUI jest po polsku.
+same komendy, więc wszystko, co robi, da się zrobić z linii poleceń. GUI startuje po angielsku;
+po polsku: F10 Ustawienia, pozycja `language` (zapisuje `[gui] language = pl` w `settings.ini`);
+jednorazowo: `ZFS_TUI_LANG=pl zfs-backup gui` albo `--lang=pl`.
 
 | Klawisz | Okno lub akcja |
 |---|---|
 | F1 | Pomoc |
 | F2 | Przebiegi (co biegło i co pobiegnie) |
 | F3 | Relacje (Ins = nowa, Del = usuń, Enter = otwórz, `e` = edytuj w oknie relacji) |
-| F4 | Kopie (Enter przegląda, F9 przywraca) |
+| F4 | Kopie (Enter/Tab do migawek, Enter na migawce albo F7 przegląda pliki, F9 przywraca) |
 | F5 | Szablony |
 | F6 | Replika |
-| F7 | Uruchom teraz |
-| F8 | Pokaż/schowaj wykonane (F2) albo pauza/wznów na relacji (F3) |
+| F7 | Uruchom teraz (F2, F3, F6), Przeglądaj (F4) |
+| F8 | Pokaż/schowaj wykonane (F2), pauza/wznów na relacji (F3), Grupuj po relacji (F4), Klucz (F6) |
 | F9 | Grupuj po relacji (F2), Plik -- eksport/import (F3), Przywróć (F4) |
 | F10 | Ustawienia (`settings.ini` hosta, zobacz [Alerty](#alerty)) |
 | F12 | Wyjście |
+
+Odzysk z dysku (dawne okno F11 Odzysk) jest od 2026-10-27 w F4 Kopie: wiersz dysku, F9. F11 jest wolne.
 
 ## Podstawowe pojęcia
 
