@@ -161,20 +161,30 @@ jednym hoście: `release/clean-host-clone.sh <katalog stanu> <repo>...`. Nie tra
 (`release/MANIFEST` to biała lista); na host kopiowane ręcznie.
 
 1. Zamknięcie wejść: plik `update-hold` dla aktualizatora roota (sprawdzany przez `do_self_update`, zanim
-   dotknie gita); linia `git pull` z crona każdego właściciela repo innego niż root zdjęta, crontab zapisany.
+   dotknie gita; ręczny `--rollback` go nie sprawdza -- w czasie biegu żadnych ręcznych poleceń
+   aktualizacji); linia `cd <repo> && git pull` zdjęta z crona każdego właściciela repo, także roota
+   (stara forma aktualizacji roota, której hold nie zatrzymuje), oryginalny crontab zapisany; inna linia
+   z `git` dla tego repo = odmowa przed zapisem crontaba; crontab przez `lib-cron.sh` (blokada na użytkownika, odczyt zwrotny). Każdy krok bariery
+   zapisany w pliku `barrier` PRZED wykonaniem; bieg po nieudanym przejmuje ten zapis (oryginalne
+   crontaby, kto założył hold).
 2. Dopiero potem czekanie, aż żaden proces nie pracuje w repo: katalog bieżący w repo, ścieżka repo albo
    wywołanie `update-control.sh` / `deploy.sh --self-update|--rollback|--resume-updates` w linii poleceń.
-   Wejścia są zamknięte, więc nic nowego nie rusza: bieg sprzed pkt 1 jest doczekany, nie ścigany.
+   Po zamknięciu wejść żaden aktualizator z crona nie rusza; bieg sprzed pkt 1 jest doczekany, nie
+   ścigany.
 3. Pozostawiony `*.lock` w `.git` = odmowa.
 4. Na każdym repo, jako jego właściciel: usunięcie refów poza `main`, `origin/main`, `origin/HEAD`;
    `reflog expire --expire=now --all`; `gc --prune=now`. Odmowa przy zmienionych plikach śledzonych,
    `stash` albo celu rollbacku spoza `origin/main`.
 5. Kontrola: `fsck --full`, `HEAD`, `origin/main`, cel rollbacku, każdy plik poza `.git` (także ignorowana
-   konfiguracja hosta) bajt w bajt z właścicielem, grupą i trybem; `fetch`, który nadal przewija się do przodu.
-6. Otwarcie wejść: zapisany crontab z powrotem, hold zdjęty tylko, gdy założył go ten bieg.
+   konfiguracja hosta): nazwa, właściciel, grupa, tryb, rozmiar i sha256 treści. Konto: jeden raz jego
+   polecenie z crona (`git pull --ff-only`); root: `fetch`, który nadal przewija się do przodu, a właściwa
+   aktualizacja to `update-control.sh` po zdjęciu holdu (odczyt `git-pull.log`).
+6. Otwarcie wejść: zapisany crontab z powrotem, hold zdjęty tylko, gdy założył go ten bieg (albo
+   przejęty bieg nieudany).
 
 Pierwszy błąd zatrzymuje bieg z barierą na miejscu: hold zostaje, linie crona zostają zdjęte, komunikat
-podaje katalog z zapisanym crontabem. Testy: `test/cleanclone`. Kolejność jak w §6: lab (pve9, pve10,
+podaje katalog z zapisanym crontabem; ponowne uruchomienie po usunięciu przyczyny przejmuje barierę
+i przywraca wejścia. Testy: `test/cleanclone`. Kolejność jak w §6: lab (pve9, pve10,
 pve11; pve9b gdy wróci), potem produkcja host po hoście za zgodą właściciela.
 
 ### 9.3 Pytania do recenzenta
