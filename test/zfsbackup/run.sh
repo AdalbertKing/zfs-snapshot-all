@@ -13150,9 +13150,9 @@ fi
 # follows a link. Each case: the sentinel stays byte-for-byte, no unsafe cache object
 # survives, the JSON stays valid; where there is no safe place, no cache (zfs every call).
 jcr() { ( PATH="$JC/bin:$PATH" XDG_RUNTIME_DIR="$1" ZFS_CRON_LOGS="$JC/runs.log" bash "$ZFSBACKUP" job-stats --json --runs=2 --vol-cache=300 ) 2>>"$JC/err"; }
-jvalid() { printf '%s' "$1" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; }
-printf 'SENTINEL\n' > "$JC/target"; touch -d '2026-01-01 00:00' "$JC/target"
-rsum() { cksum < "$JC/target"; }; RSUM0=$(rsum)
+jvalid() { printf '%s' "$1" | "$PY_OR_PYTHON" -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; }
+printf 'SENTINEL\n' > "$JC/target"; cp "$JC/target" "$JC/target.orig"
+same_target() { cmp -s "$JC/target" "$JC/target.orig"; }   # byte for byte
 # (a) the runtime directory is a symlink to a real private directory
 mkdir -p "$JC/real"; chmod 700 "$JC/real"; rm -f "$JC/linkrun"; ln -s "$JC/real" "$JC/linkrun"
 : > "$JC/calls"; RA=$(jcr "$JC/linkrun"); RA2=$(jcr "$JC/linkrun"); RAN=$(jcn)
@@ -13182,14 +13182,14 @@ jcr "$JC/par" > "$JC/p1" & jcr "$JC/par" > "$JC/p2" & wait
 REJ="$(jvalid "$(cat "$JC/p1")" && jvalid "$(cat "$JC/p2")" && echo ok)"
 RETMP=$(find "$JC/par" -name '.zfs-snapshot-all-jobstats.*' | wc -l | tr -d ' ')
 RESNAP=$( [ -f "$JC/par/zfs-snapshot-all-jobstats-snaps.$(id -u)" ] && [ ! -L "$JC/par/zfs-snapshot-all-jobstats-snaps.$(id -u)" ] && [ "$(stat -c %a "$JC/par/zfs-snapshot-all-jobstats-snaps.$(id -u)")" = 600 ] && echo yes || echo no)
-if [ "$(rsum)" = "$RSUM0" ] && jvalid "$RA" && jvalid "$RA2" && [ "$RAN" = 2 ] && [ -z "$(ls -A "$JC/real")" ] \
+if same_target && jvalid "$RA" && jvalid "$RA2" && [ "$RAN" = 2 ] && [ -z "$(ls -A "$JC/real")" ] \
    && jvalid "$RB" && jvalid "$RB2" && [ "$RBN" = 2 ] && [ -z "$(ls -A "$JC/open")" ] \
    && jvalid "$RC" && [ "$RCN" = 1 ] && [ "$RCREG" = yes ] \
    && { [ "$RD" = skip ] || { jvalid "$RD" && [ "${RDLEFT:-1}" = 1 ]; }; } \
    && [ "$REJ" = ok ] && [ "$RETMP" = 0 ] && [ "$RESNAP" = yes ]; then
     ok "jobstats REV-183: cache only in a private runtime dir -- symlinked or world-writable dir = no cache (zfs every call, nothing written); stable-name symlinks are replaced, never followed; no /tmp temp name; two writers leave valid JSON, one 0600 file, no temp files; sentinel unchanged"
 else
-    bad "jobstats REV-183: cache safety" "sentinel same: $([ "$(rsum)" = "$RSUM0" ] && echo yes || echo NO)" \
+    bad "jobstats REV-183: cache safety" "sentinel same: $(same_target && echo yes || echo NO)" \
         "a: calls=$RAN (2) real empty=$([ -z "$(ls -A "$JC/real")" ] && echo yes || echo no)" \
         "b: calls=$RBN (2) open empty=$([ -z "$(ls -A "$JC/open")" ] && echo yes || echo no)" \
         "c: calls=$RCN (1) stable regular=$RCREG links left=$RCLINK" "d: $( [ "$RD" = skip ] && echo skip || echo "valid=$(jvalid "$RD" && echo yes || echo no) left=$RDLEFT (1: the planted link)")" \
