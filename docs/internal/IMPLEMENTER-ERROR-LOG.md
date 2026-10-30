@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83, E85, E94, E109.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83, E85, E94, E109, E110.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -1935,6 +1935,22 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E110 — merged a PR while a blocking review of it was on main (2026-10-30, R2)
+**2026-10-30, PR #1007, REV-20261030-184.**
+
+*Genesis.* At about 10:20 I read the ledger: no open rows. The Owner said "Scalaj". I merged
+#1004, then #1005, then pulled `main` into `fix/kamp-1030`, and merged #1007 at 10:46. That pull
+brought in `REV-20261030-184.md`, committed at 10:29: P1, "blocking for PR #1007 and any release
+containing it". I resolved conflicts in that merge and did not look at what else it brought. The
+text check of the 1.0.5 changelog found the open row.
+
+*Cause.* R2: "no open review" was measured once, before three merges and a pull from `main`. I
+carried it to a later state of `main` without measuring again.
+
+*Rule.* R2. Immediately before each merge, and before a release, read the ledger on freshly
+fetched `main` and look for an `OPEN` row that names the PR or its head. A pull from `main` into a
+branch is a new `main`: read what it brought, not only its conflicts.
 
 ### E109 — a release finding answered with a dev SHA, nothing published (2026-10-30, R2)
 **2026-10-30, REV-20261029-183, PR #1008.**
