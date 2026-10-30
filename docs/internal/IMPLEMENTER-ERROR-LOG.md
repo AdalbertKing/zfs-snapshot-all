@@ -1936,15 +1936,15 @@ exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
 
-### E109 — a release finding answered with a dev SHA the reviewer cannot see (2026-10-30, R2)
+### E109 — a release finding answered with a dev SHA, nothing published (2026-10-30, R2)
 **2026-10-30, REV-20261029-183, PR #1008.**
 
 *Genesis.* The reviewer found the job-stats cache defect in the release repository:
 `AdalbertKing/zfsbackup` main `3dc6e1ae`, reproducer with `TARGET_REPO=/path/to/zfsbackup`. I fixed
 it in the dev repository, merged #1008 (dev `60b8b1b8`) and reported it as handed to the Reviewer,
-because the dev ledger showed `IMPLEMENTED | Reviewer` for the dev SHA `4d8e4e64`. Nothing was
-published. In the same hour a parallel session published the tutorial from dev `80250657`, which is
-older than #1008, so zfsbackup moved forward without the fix. Owner: "Recenzent nie widzi poprawki
+because the dev ledger showed `IMPLEMENTED | Reviewer` for the dev SHA `4d8e4e64`. At that point
+nothing was published. In the same minute a parallel session published zfsbackup `5e91325` from dev
+`80250657` (PR #1009, README links to the tutorial), which is older than #1008, so zfsbackup moved forward without the fix. Owner: "Recenzent nie widzi poprawki
 183."
 
 *Cause.* R2: the ledger is a fact about the dev repository; the finding was about the release
