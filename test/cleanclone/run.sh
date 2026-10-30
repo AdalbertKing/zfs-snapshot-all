@@ -357,19 +357,22 @@ else
 fi
 
 # ---- c18 two cleaners: B refuses while A, paused before gc, is alive (REV-185 reviewer) ----------
-# pausebin/git holds every `reflog` call while $WORK/pause.on exists, and fails `gc` while
-# $WORK/fail.gc exists
-mkdir -p "$WORK/pausebin"
-printf '%s\n' '#!/bin/bash' \
-    'for a in "$@"; do' \
-    '  if [ "$a" = reflog ]; then : > "'"$WORK"'/paused"; while [ -e "'"$WORK"'/pause.on" ]; do sleep 0.1; done; fi' \
-    '  if [ "$a" = gc ] && [ -e "'"$WORK"'/fail.gc" ]; then echo "injected gc failure" >&2; exit 1; fi' \
-    'done' \
-    'exec '"$REALGIT"' "$@"' > "$WORK/pausebin/git"
-chmod +x "$WORK/pausebin/git"
+# A pauses INSIDE its own shell (a `git` function from BASH_ENV), as in the reviewer's
+# reproducer: no child process names the repo, so the process scan cannot see A and only the
+# run lock keeps B out. The function holds every `reflog` call while $WORK/pause.on exists, and
+# fails `gc` while $WORK/fail.gc exists.
+printf '%s\n' \
+    'git() {' \
+    '  local a' \
+    '  for a in "$@"; do' \
+    '    if [ "$a" = reflog ]; then : > "'"$WORK"'/paused"; while [ -e "'"$WORK"'/pause.on" ]; do sleep 0.1; done; fi' \
+    '    if [ "$a" = gc ] && [ -e "'"$WORK"'/fail.gc" ]; then echo "injected gc failure" >&2; return 1; fi' \
+    '  done' \
+    '  command git "$@"' \
+    '}' > "$WORK/pause.env"
 start_paused_a() {   # A runs in the background and stops at its first `reflog`
     rm -f "$WORK/paused"; : > "$WORK/pause.on"
-    PATH="$WORK/pausebin:$PATH" CLEAN_WAIT=5 CLEAN_POLL=1 bash "$SCRIPT" "$STATE" "$R" > "$WORK/a.out" 2>&1 &
+    BASH_ENV="$WORK/pause.env" CLEAN_WAIT=5 CLEAN_POLL=1 bash "$SCRIPT" "$STATE" "$R" > "$WORK/a.out" 2>&1 &
     APID=$!; BGPIDS+=("$APID")
     local i; for i in $(seq 1 100); do [ -e "$WORK/paused" ] && return 0; sleep 0.1; done; return 1
 }
