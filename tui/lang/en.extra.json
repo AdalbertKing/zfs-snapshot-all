@@ -797,5 +797,17 @@
 "Enter szczegóły   Ins nowa   Del usuń   Tab do przebiegów": "Enter details   Ins new   Del delete   Tab to runs",
 "źródle": "the source",
 "  w mc: /kopia = ta migawka (tylko do odczytu), /odzysk = $ODZ (jedyne miejsce zapisu).": "  in mc: /kopia = this snapshot (read-only), /odzysk = $ODZ (the only place to write).",
-"sprawdzam…": "checking…"
+"sprawdzam…": "checking…",
+"Rekurencyjnie": "Recursive",
+"najnowsze migawki": "newest snapshots",
+"najnowszych migawek": "newest snapshots",
+" (ok. %d mies. wstecz)": " (about %d months back)",
+" (ok. %d tyg. wstecz)": " (about %d weeks back)",
+" (ok. %d dni wstecz)": " (about %d days back)",
+" (tyle podłączeń dysku wstecz)": " (that many disk insertions back)",
+"Ile migawek": "How many",
+"nieustawione -- tyle, ile trzyma kolektor (2)": "not set -- as many as the collector keeps (2)",
+"(z podrzędnymi, także przyszłymi)": "(with its children, future ones too)",
+"(sam dataset; podrzędne tylko wymienione)": "(the dataset itself; only the listed children)",
+" (ok. 1 dzień wstecz)": " (about 1 day back)"
 }

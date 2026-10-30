@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ef80a7496f0ca27f -->
+<!-- status-covers-digest: 61cc82730347824d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,15 @@
   ekranu, tylko gdy wyjście to terminal. Na pve10 zapis zmiany relacji (17 s) czyści ekran 2 razy: okno postępu
   i powrót. Udany zapis w „Zmień relację” kończy się zdaniem na linii komunikatu GUI (z dziennikiem), bez okna
   z `<Ok>`. Wcześniej druga linia „Dziennik: …” robiła z sukcesu okno.
+- **Jedna data w GUI: `RRRR.MM.DD GG:MM`; F6 czytelniej (2026-10-29, właściciel, U134).** Wszystkie formatery daty
+  w `tui/zfs-tui.py` używają `DT_FMT` (`%Y.%m.%d %H:%M`, z sekundami tam, gdzie były). Krótkie formy (dziś sama godzina,
+  „jutro”, dzień tygodnia, `DD.MM`) zniknęły. Daty z czasowników (`created_at`, `last_at`, `last_current` …) przechodzą
+  przez `dshow`, a okna whiptail (przeglądanie, kreator, odzysk) pokazują ten sam zapis. Wartość `--at=` dla
+  czasownika, nazwy migawek i kolumna CREATION migawek na F4 (zapis `zfs list`) zostają bez zmian. F6: „Z dziećmi” → „Rekurencyjnie” (w oknach planu „z podrzędnymi”);
+  „Na dysku” to „2 najnowsze migawki replica_ (ok. 2 dni wstecz)”, a osobny wiersz „Ile migawek” mówi, że liczba jest
+  nieustawiona i dysk trzyma tyle, ile kolektor (2). Dane w przebiegach repliki to suma `written` jej migawek
+  `replica_` na źródle i podrzędnych z tego biegu; gdy migawki już nie ma na źródle, jest „-”. F4 w grupach nie ma
+  kolumny Rodzaj (rodzaj i kierunek stoją w nagłówku relacji), bo szersza data ucinała nazwy kopii (zmierzone przy 150 i 160 kolumnach).
 - **Start GUI dwuetapowo; drobne poprawki (2026-10-29, właściciel).** Start czytał sześć czytników naraz (~14 s
   na pve10). Teraz ekran przychodzi po czterech szybkich (~1,2 s), a monitor i job-stats dochodzą drugim etapem (~11 s),
   jak przy powrocie z okna. Do tego czasu kolumna Kopie na F3 i panel mówią „sprawdzam…”, a nie „bez monitora” i „brak
@@ -121,7 +130,7 @@
   od „Na źródle <host> są już migawki naszej rodziny”. Pytanie zależy tylko od wybranych datasetów (`own.tsv` z kroku
   Datasety).
 - **F6 Replika: źródło → cel w panelu, na dole przebiegi jak na F2 (2026-10-29, właściciel, U130).** Prawy panel
-  repliki ma w grupie Co wiersze `Źródło → cel`, `Z dziećmi` i `Historia`; dawna zakładka Datasety odpadła. Dolna
+  repliki ma w grupie Co wiersze `Źródło → cel`, `Rekurencyjnie` i `Historia`; dawna zakładka Datasety odpadła. Dolna
   zakładka [Przebiegi] pokazuje biegi tej repliki w układzie F2: wykonane, kreska „teraz”, nadchodzące (Kiedy, Wynik,
   Czas, Dane). Wcześniej była to historia transferów z `progress` (na pve10 dla usb1 jeden wpis). Czytnik `job-stats` bierze
   biegi z 72 h (`--runs=72`, było 12), bo replika „pn-pt” ma przerwę od piątku do poniedziałku. F2 dalej pokazuje 12 h.

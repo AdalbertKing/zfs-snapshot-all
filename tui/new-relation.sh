@@ -585,7 +585,7 @@ chain_facts() {   # -> wiersze "  dataset: N migawek automated_*, najnowsza ... 
                 if [ "$ago" -lt 120 ]; then ago="$ago min"
                 elif [ "$ago" -lt 2880 ]; then ago="$((ago / 60)) $(T 'godz.')"
                 else ago="$((ago / 1440)) $(T dni)"; fi
-                echo "$(Tv '  $n: migawki automated_*: $f, najnowsza $when ($ago temu)' '$n' "$n" '$f' "$f" '$when' "$(date -d "@$e" '+%Y-%m-%d %H:%M')" '$ago' "$ago")"
+                echo "$(Tv '  $n: migawki automated_*: $f, najnowsza $when ($ago temu)' '$n' "$n" '$f' "$f" '$when' "$(date -d "@$e" '+%Y.%m.%d %H:%M')" '$ago' "$ago")"
             else
                 echo "$(Tv '  $n: migawki automated_*: $f' '$n' "$n" '$f' "$f")"
             fi
@@ -1049,7 +1049,7 @@ summary_text() {
         echo "$(T '   Relacja obejmie:')"
         basket_entries "$BASKET_DS_JSON" | while IFS=$'\t' read -r n r; do
             [ -n "$n" ] || continue
-            if [ "$r" = flat ]; then echo "     [x] $n  $(T '(z dziećmi, także przyszłymi)')"; else echo "     [-] $n  $(T '(sam dataset; dzieci tylko wymienione)')"; fi
+            if [ "$r" = flat ]; then echo "     [x] $n  $(T '(z podrzędnymi, także przyszłymi)')"; else echo "     [-] $n  $(T '(sam dataset; podrzędne tylko wymienione)')"; fi
         done
     else
         for i in "${!B_ROOT[@]}"; do echo "    ${B_ROOT[$i]}  -- $(describe "$i")"; done

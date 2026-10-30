@@ -164,7 +164,7 @@ def media_state_line(r, st):
     czy kopia na nim jest aktualna -- "w slocie" samo nie mowilo nic o kopii."""
     if r.get("present") in ("available", "here"):
         lc = r.get("last_current") or ""
-        return u"%s -- %s" % (_(st[0]), (_(u"kopia aktualna z %s") % lc) if lc else _(u"brak kopii"))
+        return u"%s -- %s" % (_(st[0]), (_(u"kopia aktualna z %s") % dshow(lc)) if lc else _(u"brak kopii"))
     return u"%s -- %s" % (_(st[0]), _(st[2]))
 
 
@@ -473,35 +473,26 @@ def human_bytes(n):
     return "?"
 
 
+# JEDEN ZAPIS DATY W GUI (wlasciciel 2026-10-29: "preferuję jednak wszędzie w pakiecie YYYY.MM.DD,
+# a na pewno w replikach, bo mogą być rzadko puszczane"). Rok zawsze, kropki; daty z czasownikow
+# przez dshow(). Nazwy migawek i pliki dziennikow bez zmian (to dane, nie zapis daty GUI).
+DT_FMT = "%Y.%m.%d %H:%M"
+
+
 def fmt_when(epoch, now):
-    """Czas po ludzku: dzis tylko godzina, inaczej data i godzina."""
+    """Data i godzina w zapisie GUI (DT_FMT)."""
     try:
         epoch = int(epoch)
     except (TypeError, ValueError):
         return "?"
     if epoch <= 0:
         return "?"
-    t, n = time.localtime(epoch), time.localtime(now)
-    if t[:3] == n[:3]:
-        return time.strftime("%H:%M", t)
-    return time.strftime("%Y-%m-%d %H:%M", t)
+    return time.strftime(DT_FMT, time.localtime(epoch))
 
 
 def fmt_when_short(epoch, now):
-    """Jak fmt_when(), ale dni starsze niz dzis dostaja zapis BEZ ROKU
-    (`20.09 22:00`) -- kolumna Kiedy na F4 musi zmiescic date I dlugosc biegu
-    w jednej komorce; pelna `%Y-%m-%d %H:%M` (16 znakow) nie zostawiala miejsca
-    na czas trwania i ucinala go wielokropkiem (owner brief, runda 2 ekranow)."""
-    try:
-        epoch = int(epoch)
-    except (TypeError, ValueError):
-        return "?"
-    if epoch <= 0:
-        return "?"
-    t, n = time.localtime(epoch), time.localtime(now)
-    if t[:3] == n[:3]:
-        return time.strftime("%H:%M", t)
-    return time.strftime("%d.%m %H:%M", t)
+    """Jak fmt_when(): od 2026-10-29 jeden zapis daty w calym GUI (DT_FMT)."""
+    return fmt_when(epoch, now)
 
 
 def fmt_next_short(epoch, now):
@@ -515,21 +506,9 @@ def fmt_next_short(epoch, now):
         return "?"
     if epoch <= 0:
         return "?"
-    t, n = time.localtime(epoch), time.localtime(now)
-    hhmm = time.strftime("%H:%M", t)
-    if t[:3] == n[:3]:
-        return hhmm
-    # Roznica dni liczona przez polnoc, nie przez /86400 z surowych epok --
-    # inaczej strefa/czas letni przesunie granice "jutro" o godzine.
-    midnight_t = time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, -1))
-    midnight_n = time.mktime((n.tm_year, n.tm_mon, n.tm_mday, 0, 0, 0, 0, 0, -1))
-    diff_days = int(round((midnight_t - midnight_n) / 86400.0))
-    if diff_days == 1:
-        return _(u"jutro %s") % hhmm
-    if 2 <= diff_days <= 6:
-        wd = dow_word((t.tm_wday + 1) % 7)
-        return u"%s %s" % (wd, hhmm)
-    return "%s %s" % (time.strftime("%d.%m", t), hhmm)
+    # Od 2026-10-29 (wlasciciel: "YYYY.MM.DD wszędzie w pakiecie") pelna data, bez
+    # "jutro" i dni tygodnia -- jeden zapis daty w calym GUI (DT_FMT).
+    return time.strftime(DT_FMT, time.localtime(epoch))
 
 
 def parse_last_at(s):
@@ -564,6 +543,21 @@ def last_run_epoch_for_row(data, row):
     return min(cands) if cands else None
 
 
+_ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}:\d{2}(?::\d{2})?))?")
+
+
+def dshow(v):
+    """Data z czasownika ('2026-10-29 09:20:13', '2026-10-29T09:20:13+00:00') w zapisie GUI
+    (DT_FMT: '2026.10.29 09:20:13'); reszta napisu (np. strefa) bez zmian, inny tekst --
+    bez zmian. Nazwy migawek nie przechodza tedy (to dane ZFS)."""
+    if not isinstance(v, str):
+        return v
+    m = _ISO_DATE_RE.match(v)
+    if not m:
+        return v
+    return u"%s.%s.%s" % m.group(1, 2, 3) + ((u" " + m.group(4)) if m.group(4) else u"") + v[m.end():]
+
+
 def fmt_full(epoch):
     try:
         epoch = int(epoch)
@@ -571,7 +565,7 @@ def fmt_full(epoch):
         return "?"
     if epoch <= 0:
         return "?"
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(epoch))
+    return time.strftime(DT_FMT + ":%S", time.localtime(epoch))
 
 
 def fmt_dur(sec):
@@ -775,8 +769,8 @@ def job_run_issue(data, j):
             break
     fail = None
     if srow and str(srow.get("last_rc")) not in ("0", "75", "None"):
-        fail = (srow.get("last_rc"), srow.get("last_at") or "?", ev.get("error") or "")
-    disc = (ev.get("discard_at") or "?", ev["discard"]) if ev.get("discard") else None
+        fail = (srow.get("last_rc"), dshow(srow.get("last_at") or "?"), ev.get("error") or "")
+    disc = (dshow(ev.get("discard_at") or "?"), ev["discard"]) if ev.get("discard") else None
     return fail, disc
 
 
@@ -2434,13 +2428,13 @@ def run_result(r):
 
 
 def run_when(at):
-    return time.strftime("%d.%m %H:%M", time.localtime(at)) if at else u"-"
+    return time.strftime(DT_FMT, time.localtime(at)) if at else u"-"
 
 
 def run_pairs(r, now, ch):
     """Grupa "Ten bieg" / "Nadchodzacy bieg" w panelu."""
     if r.get("past"):
-        pairs = [group(ch, _(u"Ten bieg")), (_(u"Kiedy"), time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["at"]))),
+        pairs = [group(ch, _(u"Ten bieg")), (_(u"Kiedy"), time.strftime(DT_FMT + ":%S", time.localtime(r["at"]))),
                  (_(u"Wynik"), run_result(r))]
         if r.get("start") and r.get("end"):
             pairs.append((_(u"Czas"), fmt_dur(r["end"] - r["start"])))
@@ -2455,7 +2449,7 @@ def run_pairs(r, now, ch):
     if not r.get("at"):
         return [group(ch, _(u"Nadchodzący bieg")), (_(u"Kiedy"), _(u"bez terminu (po włożeniu nośnika albo poza cronem)"))]
     return [group(ch, _(u"Nadchodzący bieg")), (_(u"Kiedy"), u"%s   %s" % (
-        time.strftime("%Y-%m-%d %H:%M", time.localtime(r["at"])), _(u"za %s") % fmt_dur(max(0, r["at"] - now))))]
+        time.strftime(DT_FMT, time.localtime(r["at"])), _(u"za %s") % fmt_dur(max(0, r["at"] - now))))]
 
 
 def transfer_detail_pairs(t, now, ch, data=None):
@@ -2633,6 +2627,30 @@ def tpl_children(tab, p, rows, now, ch):
     return {"heads": [_(u"Szczebel"), _(u"Kiedy"), _(u"Trzyma"), _(u"Prefiks migawek")], "items": items, "empty": _(u"szablon bez szczebli")}
 
 
+def replica_run_bytes(x, r, data):
+    """Ile wniosl bieg repliki: suma `written` migawek jej prefiksu (replica_) na zrodlach,
+    powstalych po poprzednim biegu i nie pozniej niz koniec tego -- to przyrost, ktory bieg
+    przeslal (wlasciciel 2026-10-29: kolumna Dane byla pusta). Replika bez wlasnej migawki
+    (prefix "-", historia kolektora) i brak danych = None ("-")."""
+    if not x.get("past") or "snaps" not in (data.stats or {}):
+        return None
+    pfx = r.get("prefix") or "replica_"
+    if pfx == "-":
+        return None
+    srcs = r.get("sources") or ([r["source"]] if r.get("source") else [])
+    hi = (x.get("end") or x["at"]) + 60
+    lo = x.get("prev_end") or ((x.get("start") or x["at"]) - 3600)
+    tot, hit = 0, False
+    for ds, lst_ in snaps_index(data).items():
+        if not any(ds == sr or ds.startswith(sr + "/") for sr in srcs):
+            continue
+        for cr, wr, sn in lst_:
+            if lo < cr <= hi and sn.startswith(pfx):
+                tot += wr
+                hit = True
+    return tot if hit else None
+
+
 def rep_children(tab, r, data, now, ch, jobrows=None):
     """F6, dolna zakladka: PRZEBIEGI tej repliki jak na F2 -- wykonane, kreska "teraz",
     nadchodzace (wlasciciel 2026-10-29, U130: "Wzór to okno jobs"). Zrodlo -> cel stoi
@@ -2652,7 +2670,7 @@ def rep_children(tab, r, data, now, ch, jobrows=None):
                           "pairs": [], "title": r.get("name") or u""})
             continue
         czas = fmt_dur(x["end"] - x["start"]) if x.get("past") and x.get("start") and x.get("end") else u"-"
-        rb = run_bytes(x, data)
+        rb = replica_run_bytes(x, r, data)
         items.append({"cells": [run_when(x["at"]), run_result(x), czas, hbytes_short(rb) if rb is not None else u"-"],
                       "pairs": run_pairs(x, now, ch), "title": _(u"%s -- bieg") % r.get("name")})
     return {"heads": [_(u"Kiedy"), _(u"Wynik"), _(u"Czas"), _(u"Dane")], "items": items, "prio": [0, 1, 3, 2],
@@ -2748,10 +2766,10 @@ def job_panel_pairs(row, data, now, ch):
         newest = max(srows, key=lambda x: x.get("last_at") or "")
         pairs.append((_(u"Wywołania"), _(u"%d, błędów %d   w %d zadaniach") % (
             sum(int(x.get("runs") or 0) for x in srows), sum(int(x.get("failures") or 0) for x in srows), len(srows))))
-        pairs.append((_(u"Ostatni"), u"%s   %s" % (newest.get("last_at", "?"), u"OK" if str(newest.get("last_rc")) == "0" else _(u"BŁĄD (rc=%s)") % newest.get("last_rc"))))
+        pairs.append((_(u"Ostatni"), u"%s   %s" % (dshow(newest.get("last_at", "?")), u"OK" if str(newest.get("last_rc")) == "0" else _(u"BŁĄD (rc=%s)") % newest.get("last_rc"))))
     elif srow and not data.failed("stats"):
         pairs.append((_(u"Wywołania"), _(u"%s, błędów %s") % (srow.get("runs", "?"), srow.get("failures", 0))))
-        pairs.append((_(u"Ostatni"), u"%s   %s" % (srow.get("last_at", "?"), u"OK" if str(srow.get("last_rc")) == "0" else _(u"BŁĄD (rc=%s)") % srow.get("last_rc"))))
+        pairs.append((_(u"Ostatni"), u"%s   %s" % (dshow(srow.get("last_at", "?")), u"OK" if str(srow.get("last_rc")) == "0" else _(u"BŁĄD (rc=%s)") % srow.get("last_rc"))))
     for sc, (rc, at, txt) in row.get("fails") or []:
         pairs.append((_(u"Błąd"), u"%s  %s  rc=%s  %s" % (at, sc, rc, txt or _(u"(szczegóły w cron.log)"))))
     for sc, (at, txt) in sorted(row.get("discards") or [], key=lambda d: d[1][0], reverse=True)[:6]:
@@ -2792,7 +2810,7 @@ def rel_panel_pairs(row, data, now, ch):
     if rel.get("state") != "active" and rel.get("state") != "removed":
         warns.append(_(u"relacja nie jest aktywna: stan %s, następny krok: %s") % (rel.get("state"), next_step(rel).replace("NAME", row["name"])))
     if rel.get("state") == "removed":
-        warns.append(_(u"rekord usunięty %s; kopie na dysku nie zostały ruszone") % (rel.get("removed_at") or "?"))
+        warns.append(_(u"rekord usunięty %s; kopie na dysku nie zostały ruszone") % dshow(rel.get("removed_at") or "?"))
     if rel.get("peer_pair_state") not in ("", "NOT_ASKED", None):
         warns.append(_(u"para po drugiej stronie: %s") % rel["peer_pair_state"])
     _seen = set()
@@ -2896,10 +2914,10 @@ def rel_panel_pairs(row, data, now, ch):
     if sends or prunes:
         pairs.append((_(u"Zadania"), _(u"%d: kopie lub migawki %d, porządki %d") % (len(sends) + len(prunes), len(sends), len(prunes))))
     if rel.get("created_at"):
-        pairs.append((_(u"Powstała"), rel["created_at"]))
+        pairs.append((_(u"Powstała"), dshow(rel["created_at"])))
     for key, fld in ((_(u"Pełna kopia"), "seed_completed_at"), (_(u"Aktywna od"), "activated_at"), (_(u"Usunięta"), "removed_at")):
         if rel.get(fld):
-            pairs.append((key, rel[fld]))
+            pairs.append((key, dshow(rel[fld])))
     return pairs
 
 
@@ -3327,7 +3345,7 @@ def rel_detail_pairs(row, data, now, ch):
     if rel.get("state") != "active" and rel.get("state") != "removed":
         warns.append(_(u"relacja nie jest aktywna: stan %s, następny krok: %s") % (rel.get("state"), next_step(rel).replace("NAME", row["name"])))
     if rel.get("state") == "removed":
-        warns.append(_(u"rekord usunięty %s; kopie na dysku nie zostały ruszone") % (rel.get("removed_at") or "?"))
+        warns.append(_(u"rekord usunięty %s; kopie na dysku nie zostały ruszone") % dshow(rel.get("removed_at") or "?"))
     # JEDNO OSTRZEZENIE NA FAKT, nie na monitor. Relacja ma monitor na kazdy
     # szczebel, wiec ta sama uwaga o innym pliku silnika wchodzila do panelu
     # cztery razy i wypychala z niego Stan, Typ i Kierunek (pve10, 2026-09-21).
@@ -3527,10 +3545,10 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
         (_("Drugi host"), host_port_words(rel) +
          ((_("   w cronie: %s") % rel.get("installed_endpoint")) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")),
         (_("Historia"), "  ".join(x for x in [
-            _(u"utworzona %s") % rel["created_at"] if rel.get("created_at") else "",
-            _(u"pełna kopia %s") % rel["seed_completed_at"] if rel.get("seed_completed_at") else "",
-            _(u"aktywowana %s") % rel["activated_at"] if rel.get("activated_at") else "",
-            _(u"usunięta %s") % rel["removed_at"] if rel.get("removed_at") else ""]) or "?"),
+            _(u"utworzona %s") % dshow(rel["created_at"]) if rel.get("created_at") else "",
+            _(u"pełna kopia %s") % dshow(rel["seed_completed_at"]) if rel.get("seed_completed_at") else "",
+            _(u"aktywowana %s") % dshow(rel["activated_at"]) if rel.get("activated_at") else "",
+            _(u"usunięta %s") % dshow(rel["removed_at"]) if rel.get("removed_at") else ""]) or "?"),
     ], w))
     out.append("")
     # "co obejmuje" (wlasciciel 2026-10-18): to samo slowo dla kopii i dla migawek.
@@ -4009,7 +4027,7 @@ def snap_cell(s, w, now):
         return " " * w
     age = max(0, now - int(s.get("creation") or 0))
     a = ("%dd" % (age // 86400)) if age >= 86400 else ("%dh" % (age // 3600)) if age >= 3600 else ("%dm" % (age // 60))
-    t = time.strftime("%m-%d %H:%M", time.localtime(int(s.get("creation") or 0)))
+    t = time.strftime(DT_FMT, time.localtime(int(s.get("creation") or 0)))
     tail = "%s %4s %6s%s" % (t, a, hbytes_short(int(s.get("used") or 0)), " [hold]" if int(s.get("holds") or 0) else "")
     name_w = max(8, w - len(tail) - 1)
     return fit("%-*s %s" % (name_w, fit(snap_short(s.get("snap", "")), name_w), tail), w)
@@ -4258,8 +4276,7 @@ def replica_last_run(srow, stats_failed=False):
     rc = srow.get("last_rc")
     word = u"OK" if rc == 0 else (_(u"pominięty") if rc == 75 else _(u"BŁĄD rc=%s") % rc)
     at = srow.get("last_at") or ""
-    m = re.match(r"\d{4}-(\d{2})-(\d{2}) (\d{2}:\d{2})", at)
-    return (u"%s %s.%s %s" % (word, m.group(2), m.group(1), m.group(3))) if m else word
+    return (u"%s %s" % (word, dshow(at))) if re.match(r"\d{4}-\d{2}-\d{2}", at) else word
 
 
 def replica_when(r, long=False):
@@ -4310,21 +4327,21 @@ def replica_disk_words(r):
     f = (r.get("schedule") or "").split()
     span = u""
     if r.get("schedule") == "on-insert":
-        span = _(u" -- tyle podłączeń dysku wstecz")
+        span = _(u" (tyle podłączeń dysku wstecz)")
     elif len(f) == 5:
         if f[2] != "*":
-            span = _(u" = ok. %d mies. wstecz") % n
+            span = _(u" (ok. %d mies. wstecz)") % n
         elif f[4] != "*":
-            span = _(u" = ok. %d tyg. wstecz") % n
+            span = _(u" (ok. %d tyg. wstecz)") % n
         elif f[1] != "*" and "/" not in f[1] and "," not in f[1]:
-            span = _(u" = ok. %d dni wstecz") % n
+            span = _(u" (ok. 1 dzień wstecz)") if n == 1 else _(u" (ok. %d dni wstecz)") % n
     if n == 1:
-        words = _(u"ostatnia migawka")
+        words = _(u"najnowsza migawka")
     elif 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
-        words = _(u"ostatnie migawki")
+        words = _(u"najnowsze migawki")
     else:
-        words = _(u"ostatnich migawek")
-    return u"%d %s%s%s" % (n, words, span, _(u" (jak kolektor)") if not str(r.get("keep") or "").strip() else u"")
+        words = _(u"najnowszych migawek")
+    return u"%d %s %s%s" % (n, words, r.get("prefix") or "replica_", span)
 
 
 def replica_crypt_words(r):
@@ -4347,24 +4364,27 @@ def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
     pairs = [group(ch, _(u"Co")),
              (_(u"Rodzaj"), replica_kind(r)[1]),
              (_(u"Na dysku"), replica_disk_words(r)),
+             ] + ([(_(u"Ile migawek"), _(u"nieustawione -- tyle, ile trzyma kolektor (2)"))]
+                  # Bez wlasnej liczby (keep) dysk trzyma tyle, ile kolektor zostawia jako baze przyrostu.
+                  if r.get("prefix") != "-" and not str(r.get("keep") or "").strip() else []) + [
              (_(u"Szyfrowane"), replica_crypt_words(r)),
              (_(u"Cel"), _(u"%s   (pula %s)") % (r.get("dst", "?"), (r.get("dst") or "?").split("/")[0]))]
     # U130 (wlasciciel 2026-10-29): zrodla repliki w panelu, nie w dolnej zakladce
     for _s in r.get("sources") or ([r["source"]] if r.get("source") else []):
         pairs.append((_(u"Źródło %s cel") % ch.right, u"%s %s %s" % (_s, ch.right, r.get("dst") or "?")))
-    pairs += [(_(u"Z dziećmi"), _(u"tak") if r.get("recursive") == "yes" else _(u"nie")),
+    pairs += [(_(u"Rekurencyjnie"), _(u"tak") if r.get("recursive") == "yes" else _(u"nie")),
               (_(u"Historia"), _(u"wszystkie migawki") if (r.get("history") or "all") == "all" else r.get("history")),
              group(ch, _(u"Kiedy")),
              (_(u"Nośnik"), media_state_line(r, MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"]))),
              (_(u"Kiedy"), when),
              (_(u"Dyski"), replica_disks_words(r)),
-             (_(u"Ostatnio podłączony"), r.get("last_seen") or _(u"nigdy (brak pliku last-seen bramy)")),
+             (_(u"Ostatnio podłączony"), dshow(r.get("last_seen")) or _(u"nigdy (brak pliku last-seen bramy)")),
              group(ch, _(u"Zdrowie"))]
     if stats_failed:
         pairs.append((_(u"Ostatni bieg"), _(u"? (job-stats nie odpowiedział)")))
     elif srow:
         _rc = srow.get("last_rc")
-        pairs.append((_(u"Ostatni bieg"), u"%s   %s" % (srow.get("last_at") or "?", u"OK" if str(_rc) == "0" else _(u"BŁĄD (rc=%s)") % _rc)))
+        pairs.append((_(u"Ostatni bieg"), u"%s   %s" % (dshow(srow.get("last_at") or "?"), u"OK" if str(_rc) == "0" else _(u"BŁĄD (rc=%s)") % _rc)))
         pairs.append((_(u"Czas"), times_words(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s"))))
         pairs.append((_(u"Wywołania"), _(u"%s, błędów %s") % (srow.get("runs"), srow.get("failures"))))
     else:
@@ -4387,7 +4407,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
     for r in reps:
         st = MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"])
         s = r.get("schedule") or "?"
-        cells.append([r.get("name") or "?", replica_type_word(r), (r.get("last_current") or _(u"brak"))[:16],
+        cells.append([r.get("name") or "?", replica_type_word(r), dshow((r.get("last_current") or _(u"brak"))[:16]),
                       replica_last_run(replica_stats_row(data, r.get("name")), data.failed("stats")),
                       _(u"po podłączeniu") if s == "on-insert" else cron_words(s) + (_(u" + po podłączeniu") if r.get("on_insert") == "yes" else "")])
     det_title, det, child = u"", [], None
@@ -4520,7 +4540,7 @@ def render_odzysk(data, rows, cursor, width, height, now, ch, message="", focus=
         if ctx and ctx.get("rel") == x.get("name") and (ctx.get("dataset") or ctx.get("at")):
             det = [group(ch, _(u"Wskazane")),
                    (_(u"Dataset"), ctx.get("dataset") or _(u"(wybierzesz w oknie)")),
-                   (_(u"Chwila"), time.strftime("%Y-%m-%d %H:%M", time.localtime(ctx["at"])) if ctx.get("at") else _(u"najnowsza migawka"))] + det
+                   (_(u"Chwila"), time.strftime(DT_FMT, time.localtime(ctx["at"])) if ctx.get("at") else _(u"najnowsza migawka"))] + det
         child.update({"name": x["name"], "tabs": TABS["odzysk"], "ti": 0})
     host = (data.jobs or {}).get("host") or ""
     return render_tabbed(data, width, height, now, ch, "odzysk", (_(u"Kopie na %s") % host).strip(),
@@ -4651,23 +4671,23 @@ def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, 
         # GRUPY jak F2 po F9: naglowek relacji z rodzajem i kierunkiem (tylko do czytania),
         # pod nim jej kopie z wcieciem. Kursor chodzi po kopiach; ccur = jego wiersz w tabeli.
         if grouped and g is not None and g is not last_g:
-            cells.append([(u"> " if ch.ascii else u"▸ ") + g["name"], u"%s  %s" % (g.get("typ") or u"", g.get("dir") or u""), u" ", u" "])
+            cells.append([u"%s%s  %s  %s" % (u"> " if ch.ascii else u"▸ ", g["name"], g.get("typ") or u"", g.get("dir") or u""), u" ", u" "])
             last_g = g
         if len(rows) == cursor:
             ccur = len(cells)
         rows.append(it)
         if it.get("any"):
-            cells.append([_(u"inny dysk -- pula spoza relacji i replik"), u" ", u" ", u" "] if grouped
+            cells.append([_(u"inny dysk -- pula spoza relacji i replik"), u" ", u" "] if grouped
                          else [u" ", u" ", _(u"inny dysk -- pula spoza relacji i replik"), u" ", u" "])
             continue
         if it.get("note"):
-            cells.append([u"  %s %s" % (bar, it["note"]), u" ", u" ", u" "] if grouped
+            cells.append([u"  %s %s" % (bar, it["note"]), u" ", u" "] if grouped
                          else [g["name"], g.get("typ") or u" ", it["note"], u" ", u" "])
             continue
         ds = it["ds"] + (u"  (zvol)" if it.get("type") == "volume" else u"")
         when = fmt_when_short(it["newest"], now) if it.get("newest") else u"-"
         if grouped:
-            cells.append([u"  %s %s" % (bar, ds), u" ", str(it.get("snaps") or 0), when])
+            cells.append([u"  %s %s" % (bar, ds), str(it.get("snaps") or 0), when])
         else:
             cells.append([g["name"], g.get("typ") or u"", ds, str(it.get("snaps") or 0), when])
     if not grouped:
@@ -4687,7 +4707,7 @@ def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, 
         if ctx and (ctx.get("dataset") or ctx.get("at")) and ctx.get("rel") == g["name"]:
             det = [group(ch, _(u"Wskazane")),
                    (_(u"Dataset"), ctx.get("dataset") or _(u"(wybierzesz w oknie)")),
-                   (_(u"Chwila"), time.strftime("%Y-%m-%d %H:%M", time.localtime(ctx["at"])) if ctx.get("at") else _(u"najnowsza migawka"))] + det
+                   (_(u"Chwila"), time.strftime(DT_FMT, time.localtime(ctx["at"])) if ctx.get("at") else _(u"najnowsza migawka"))] + det
         sitems = []
         for x in snaps or []:
             y = dict(x)
@@ -4712,11 +4732,11 @@ def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, 
         det = [(_(u"Inny dysk"), _(u"najpierw zaimportuj pulę (zpool import), potem Enter"))]
     host = (data.jobs or {}).get("host") if data is not None and data.jobs else ""
     title = (_(u"Kopie na %s") % (host or u"")).strip() + (_(u", po relacjach") if grouped else u"")
-    heads = ([_(u"Kopia"), _(u"Rodzaj"), _(u"Migawek"), _(u"Najnowsza")] if grouped
+    heads = ([_(u"Kopia"), _(u"Migawek"), _(u"Najnowsza")] if grouped
              else [_(u"Relacja"), _(u"Rodzaj"), _(u"Kopia"), _(u"Migawek"), _(u"Najnowsza")])
     return render_tabbed(data, width, height, now, ch, "odzysk", title, heads, cells, ccur,
                          _(u"Enter/Tab do migawek"), det_title, det, child, focus, scur, screen_actions("odzysk", grouped=grouped),
-                         prio=([0, 3, 2, 1] if grouped else [0, 2, 4, 3, 1]))
+                         prio=([0, 2, 1] if grouped else [0, 2, 4, 3, 1]))
 
 
 def render_kopie(data, items, sel, focus, scur, snaps, snaps_err, width, height, now, ch, ctx=None):
@@ -5472,7 +5492,7 @@ class UI(object):
         if r["kind"] != "relation":
             return None, _(u"to nie jest relacja (%s) -- akcje dotyczą rekordów relacji") % (_("zadanie bez rekordu") if r["kind"] == "job" else "nieczytelny blok")
         if r["rel"].get("state") == "removed" and not allow_removed:
-            return None, _(u"relacja '%s' jest już usunięta (removed_at %s)") % (r["name"], r["rel"].get("removed_at") or "?")
+            return None, _(u"relacja '%s' jest już usunięta (removed_at %s)") % (r["name"], dshow(r["rel"].get("removed_at") or "?"))
         return r, ""
 
     def confirm(self, title, argv, note_lines=None, redirect=None, on_yes=None, alt=None):
@@ -5856,9 +5876,9 @@ class UI(object):
                     note += ["", _(u"Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (lock):"),
                              _(u"przycisk „wyłącz na źródle” na dole; następne okno wyjaśni, co to zmienia.")]
                     alt = ("w", lambda: self.confirm(_(u"Wyłącz relację %s") % n, [self.zb(), "disable-client", n,
-                                                     _(u"--reason=wyłączona z TUI %s") % time.strftime("%Y-%m-%d %H:%M")],
+                                                     _(u"--reason=wyłączona z TUI %s") % time.strftime(DT_FMT)],
                                                      disable_note(rel)), _(u"wyłącz na źródle"))
-                self.confirm(_(u"Wstrzymaj relację %s") % n, [self.zb(), "pause-client", n, _(u"--reason=z TUI %s") % time.strftime("%Y-%m-%d %H:%M")],
+                self.confirm(_(u"Wstrzymaj relację %s") % n, [self.zb(), "pause-client", n, _(u"--reason=z TUI %s") % time.strftime(DT_FMT)],
                              note, alt=alt)
         elif k == "del":
             # CALE usuniecie (kolektor + zrodlo + zwolnienie nazwy), w oknach whiptail:
@@ -6169,7 +6189,7 @@ class UI(object):
         for i, it in enumerate(obj["items"]):
             mark = ">" if i == obj["cur"] else " "
             if it["kind"] == "file":
-                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(it["mtime"])) if it["mtime"] else "?"
+                when = time.strftime(DT_FMT, time.localtime(it["mtime"])) if it["mtime"] else "?"
                 out.append(fit(_(u"%s %-*s %s  relacja %s") % (mark, lw, fit_left(it["label"], lw, self.ch), when, it["rel"]), w))
             else:
                 out.append(fit(u"%s %s" % (mark, it["label"]), w))

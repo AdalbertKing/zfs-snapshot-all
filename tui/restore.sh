@@ -92,7 +92,7 @@ build_points() {
     PT_TIME=(); PT_AT=(); PT_NAME=(); menu=()
     while IFS=$'\t' read -r cr nm; do
         [ -n "$cr" ] || continue
-        tm=$(date -d "@$cr" '+%Y-%m-%d %H:%M:%S')
+        tm=$(date -d "@$cr" '+%Y.%m.%d %H:%M:%S')   # zapis daty GUI (RRRR.MM.DD), tylko do oczu
         if [ -n "$prev" ]; then PT_AT+=("$(date -d "@$((prev - 1))" '+%Y-%m-%d %H:%M:%S')"); else PT_AT+=(""); fi
         prev="$cr"
         # U109: pełna nazwa migawki (jak NAME w zfs list -t snapshot), nie sam szczebel --
@@ -111,7 +111,7 @@ snap_summary() {
     local sn="${PT_NAME[${idx:-0}]:-?}"
     if [ -n "$AT" ]; then
         echo "$(Tv 'Migawka: $SNAP ($PT, $TZN)' '$SNAP' "$1@$sn" '$PT' "$PT" '$TZN' "$TZN")"
-        echo "$(Tv '         pozostałe datasety: ich ostatnia migawka do $AT' '$AT' "$AT")"
+        echo "$(Tv '         pozostałe datasety: ich ostatnia migawka do $AT' '$AT' "$(printf '%s' "$AT" | sed -E 's/^([0-9]{4})-([0-9]{2})-([0-9]{2})/\1.\2.\3/')")"
     else
         echo "$(Tv 'Migawka: $SNAP ($PT, najnowsza)' '$SNAP' "$1@$sn" '$PT' "${PT_TIME[0]:-?}")"
         echo "$(T '         pozostałe datasety: ich najnowsza migawka')"

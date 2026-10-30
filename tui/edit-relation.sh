@@ -713,7 +713,7 @@ save_all() {
             echo "$(T '   Po zmianie relacja obejmuje:')"
             printf '%s\n' "$P_ENT" | while IFS=$'\t' read -r n r; do
                 [ -n "$n" ] || continue
-                if [ "$r" = flat ]; then echo "     [x] $n  $(T '(z dziećmi, także przyszłymi)')"; else echo "     [-] $n  $(T '(sam dataset; dzieci tylko wymienione)')"; fi
+                if [ "$r" = flat ]; then echo "     [x] $n  $(T '(z podrzędnymi, także przyszłymi)')"; else echo "     [-] $n  $(T '(sam dataset; podrzędne tylko wymienione)')"; fi
             done
             echo
         fi
