@@ -21,6 +21,9 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **PROJEKT ZAMKNIĘTY (2026-10-30, decyzja właściciela).** Wydanie zfsbackup `v1.0.5`; ostatnia
+  publikacja `5de1b27` (dev `f6e9bcde`, kod jak w `v1.0.5`). Szczegóły i to, co zostaje otwarte:
+  `docs/project/OWNER-DECISIONS.md`, sekcja 2026-10-30.
 - **Strażnik gości PVE: drzewo `host:dataset` jest zdalne jak `konto@host:dataset` (2026-10-30, REV-20261030-184, P1).**
   Skaner drzewa w `zfs-job.sh` pomijał źródło `host:dataset` (bez konta). Drzewo nie było listowane i
   rekurencyjne przycinanie szło po dysku gościa przeniesionego na inny węzeł. Teraz obowiązuje reguła
