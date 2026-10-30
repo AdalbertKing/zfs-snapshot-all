@@ -49,9 +49,11 @@ for r in "$@"; do
     REPOS+=("$r")
 done
 
-# A failed run leaves its barrier and a `barrier` file in its directory. The
-# next run adopts it: the original crontabs and "this tool created the hold"
-# come from that first run, so reopening restores what was there before it.
+# Every barrier step is recorded in <run dir>/barrier BEFORE it is taken, so a
+# run that dies anywhere leaves a record of what it changed. The next run
+# adopts the oldest record: the original crontabs and "this tool created the
+# hold" come from there, so reopening restores what was there before the first
+# run touched anything.
 PRIOR=""
 for d in "$STATE"/clean-host-clone.*; do
     [ -f "$d/barrier" ] && { PRIOR="$d"; break; }   # glob order = oldest first
@@ -64,16 +66,18 @@ declare -A CRON_SAVED=()
 if [ -n "$PRIOR" ]; then
     log "adopting the barrier of the failed run $PRIOR"
     grep -qx 'created_hold=1' "$PRIOR/barrier" && CREATED_HOLD=1
-    for f in "$PRIOR"/crontab.*; do
-        case "$f" in *.new|*.tmp) continue ;; esac
-        [ -f "$f" ] && CRON_SAVED[${f##*/crontab.}]="$f"
-    done
+    while IFS='=' read -r k v; do
+        [ "$k" = crontab ] || continue
+        [ -f "$v" ] || die "the barrier record $PRIOR/barrier names a missing crontab copy $v"
+        CRON_SAVED[${v##*/crontab.}]="$v"
+    done < "$PRIOR/barrier"
 fi
+record() { printf '%s\n' "$1" >> "$WORK/barrier"; }
 
 fail() {
     echo "FATAL: $*" >&2
     echo "FATAL: stopped with the barrier in place:${BARRIER:- none yet}" >&2
-    echo "FATAL: saved state and crontabs: $WORK" >&2
+    echo "FATAL: saved state and crontabs: $WORK (rerun this tool to adopt them)" >&2
     exit 1
 }
 trap 'fail "command failed at line $LINENO"' ERR
@@ -88,46 +92,55 @@ as_owner() {   # <owner> <cmd...>
 }
 cron_line() { printf 'cd %s && git pull --ff-only origin main' "$1"; }
 
+# Crontabs go through lib-cron.sh, the project's single crontab writer: its
+# per-user lock, its read (an unreadable crontab is not an empty one) and its
+# write with read-back. The host's checkout carries the library.
+LIB_CRON="${CLEAN_LIB_CRON:-$(dirname "$(readlink -f "$0")")/../lib-cron.sh}"
+[ -f "$LIB_CRON" ] || die "no lib-cron.sh at $LIB_CRON (set CLEAN_LIB_CRON to the host checkout's copy)"
+# shellcheck source=../lib-cron.sh
+. "$LIB_CRON"
+CRON_ERR=""
+
 # ---- 1. close the entry points --------------------------------------------
 [ ! -L "$HOLD" ] || fail "$HOLD is a symlink"
 if [ ! -e "$HOLD" ]; then
+    CREATED_HOLD=1
+    record "created_hold=1"
     t=$(mktemp "$STATE/.tmp.XXXXXX")
     printf 'clean-host-clone %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" > "$t"
     mv -f "$t" "$HOLD"
-    CREATED_HOLD=1
+else
+    record "created_hold=$CREATED_HOLD"
 fi
 BARRIER="$BARRIER update-hold"
 
-read_crontab() {   # <owner> <file>: "no crontab" is empty, any other failure stops
-    local err
-    if err=$(crontab -u "$1" -l 2>&1 >"$2"); then return 0; fi
-    case "$err" in *"no crontab for"*) : > "$2"; return 0 ;; esac
-    fail "cannot read the crontab of $1: $err"
-}
 declare -A CRON_DONE=()
 for r in "${REPOS[@]}"; do
     o=$(owner_of "$r")
     [ "$o" != root ] || continue
     [ -z "${CRON_DONE[$o]:-}" ] || continue
     CRON_DONE[$o]=1
-    read_crontab "$o" "$WORK/crontab.$o.now"
-    [ -n "${CRON_SAVED[$o]:-}" ] || { cp "$WORK/crontab.$o.now" "$WORK/crontab.$o"; CRON_SAVED[$o]="$WORK/crontab.$o"; }
+    cron_lock_acquire "$o" || fail "crontab lock of $o: $CRON_ERR"
+    cron_read "$o" "$WORK/crontab.$o.now" || fail "cannot read the crontab of $o: $CRON_ERR"
+    if [ -z "${CRON_SAVED[$o]:-}" ]; then
+        cp "$WORK/crontab.$o.now" "$WORK/crontab.$o"
+        CRON_SAVED[$o]="$WORK/crontab.$o"
+    fi
+    record "crontab=${CRON_SAVED[$o]}"
     cp "$WORK/crontab.$o.now" "$WORK/crontab.$o.new"
     for r2 in "${REPOS[@]}"; do
         [ "$(owner_of "$r2")" = "$o" ] || continue
         grep -vF "$(cron_line "$r2")" "$WORK/crontab.$o.new" > "$WORK/crontab.$o.tmp" || true
         mv "$WORK/crontab.$o.tmp" "$WORK/crontab.$o.new"
     done
-    crontab -u "$o" "$WORK/crontab.$o.new"
+    BARRIER="$BARRIER cron-of-$o(saved:${CRON_SAVED[$o]})"
+    cron_write "$o" "$WORK/crontab.$o.new" || fail "writing the crontab of $o: $CRON_ERR"
+    cron_lock_release "$o"
     for r2 in "${REPOS[@]}"; do
         [ "$(owner_of "$r2")" = "$o" ] || continue
-        if crontab -u "$o" -l 2>/dev/null | grep -qF "$(cron_line "$r2")"; then
-            fail "the pull line of $o for $r2 is still in its crontab"
-        fi
+        ! grep -qF "$(cron_line "$r2")" "$WORK/crontab.$o.new" || fail "the pull line of $o for $r2 is still in its crontab"
     done
-    BARRIER="$BARRIER cron-of-$o(saved:${CRON_SAVED[$o]})"
 done
-{ echo "created_hold=$CREATED_HOLD"; for o in "${!CRON_SAVED[@]}"; do echo "crontab=${CRON_SAVED[$o]}"; done; } > "$WORK/barrier"
 
 # ---- 2. wait for running writers ------------------------------------------
 busy() {   # prints the first process working in a repo, rc 0 if any
@@ -176,8 +189,10 @@ for r in "${REPOS[@]}"; do
     main=$(g rev-parse refs/heads/main)
     om=$(g rev-parse refs/remotes/origin/main)
     [ "$head" = "$main" ] || fail "$r: HEAD is not main"
-    [ -z "$(g status --porcelain --untracked-files=no)" ] || fail "$r: tracked files changed"
-    ! g rev-parse -q --verify refs/stash >/dev/null || fail "$r: has a stash -- someone's work"
+    st=$(g status --porcelain --untracked-files=no) || fail "$r: git status failed"
+    [ -z "$st" ] || fail "$r: tracked files changed"
+    st=$(g for-each-ref refs/stash) || fail "$r: git for-each-ref failed"
+    [ -z "$st" ] || fail "$r: has a stash -- someone's work"
     prev=""
     if [ "$o" = root ] && [ -s "$PREV" ]; then
         prev=$(tr -d '[:space:]' < "$PREV")
@@ -213,8 +228,9 @@ done
 # ---- 6. reopen --------------------------------------------------------------
 trap - ERR
 for o in "${!CRON_SAVED[@]}"; do
-    crontab -u "$o" "${CRON_SAVED[$o]}" || fail "restoring the crontab of $o"
-    crontab -u "$o" -l 2>/dev/null | cmp -s - "${CRON_SAVED[$o]}" || fail "the crontab of $o differs from the saved one"
+    cron_lock_acquire "$o" || fail "crontab lock of $o: $CRON_ERR"
+    cron_write "$o" "${CRON_SAVED[$o]}" || fail "restoring the crontab of $o: $CRON_ERR"
+    cron_lock_release "$o"
 done
 [ "$CREATED_HOLD" = 0 ] || rm -f "$HOLD"
 rm -f "$WORK/barrier"

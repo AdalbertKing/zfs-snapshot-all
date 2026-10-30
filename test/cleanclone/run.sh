@@ -28,18 +28,22 @@ export GIT_CONFIG_GLOBAL="$WORK/gitconfig"
 ME="$(id -un)"
 REALGIT="$(command -v git)"
 
-# stub crontab: -u USER -l prints the file, -u USER FILE installs it
-mkdir -p "$WORK/bin"
+# stub crontab: [-u USER] -l prints the file, [-u USER] FILE installs it (lib-cron.sh drops -u for
+# the calling user)
+mkdir -p "$WORK/bin" "$WORK/locks"
+export CRON_LOCK_DIR="$WORK/locks"
 printf '%s\n' \
     '#!/bin/bash' \
     'W="'"$WORK"'"' \
-    '[ "${1:-}" = "-u" ] && [ $# -eq 3 ] || exit 2' \
-    'u="$2"' \
+    'u="$(id -un)"' \
+    'if [ "${1:-}" = "-u" ]; then u="$2"; shift 2; fi' \
+    '[ $# -eq 1 ] || exit 2' \
+    'set -- "" "" "$1"' \
     'if [ "$3" = "-l" ]; then' \
     '  [ ! -e "$W/cron.fail" ] || { echo "crontab: permission denied" >&2; exit 1; }' \
     '  [ -f "$W/cron.$u" ] || { echo "no crontab for $u" >&2; exit 1; }' \
     '  cat "$W/cron.$u"; exit 0; fi' \
-    'cp "$3" "$W/cron.$u"' > "$WORK/bin/crontab"
+    '[ ! -e "$W/cron.wfail" ] || { echo "crontab: write refused" >&2; exit 1; }'     'cp "$3" "$W/cron.$u"' > "$WORK/bin/crontab"
 chmod +x "$WORK/bin/crontab"
 export PATH="$WORK/bin:$PATH"
 
@@ -298,6 +302,20 @@ kill "$SP" 2>/dev/null
 t "c13 rc != 0" rc_not
 t "c13 says still busy" has "still busy"
 t "c13 refs/heads/old untouched" has_ref refs/heads/old
+
+# ---- c14 a failure while closing the entry points is still adopted by the next run ---------------
+new_host c14
+: > "$WORK/cron.wfail"
+run_clean
+rm -f "$WORK/cron.wfail"
+t  "c14 rc != 0" rc_not
+t  "c14 the hold it created stays" test -e "$STATE/update-hold"
+t  "c14 refs/heads/old untouched" has_ref refs/heads/old
+run_clean
+t  "c14 recovery run rc 0" rc_is
+t  "c14 recovery adopts the barrier" has "adopting the barrier"
+t  "c14 crontab is the original" cron_same_as_seed
+tn "c14 the hold the first run created is removed" test -e "$STATE/update-hold"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
