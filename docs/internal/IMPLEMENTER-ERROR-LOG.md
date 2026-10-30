@@ -1939,11 +1939,11 @@ the merge, or the merge does not run.
 ### E110 — merged a PR while a blocking review of it was on main (2026-10-30, R2)
 **2026-10-30, PR #1007, REV-20261030-184.**
 
-*Genesis.* At about 10:20 I read the ledger: no open rows. The Owner said "Scalaj". I merged
+*Genesis.* Before the merges I read the ledger: no open rows. The Owner said "Scalaj". I merged
 #1004, then #1005, then pulled `main` into `fix/kamp-1030`, and merged #1007 at 10:46. That pull
 brought in `REV-20261030-184.md`, committed at 10:29: P1, "blocking for PR #1007 and any release
-containing it". I resolved conflicts in that merge and did not look at what else it brought. The
-text check of the 1.0.5 changelog found the open row.
+containing it". I resolved conflicts in that merge and did not look at what else it brought. A
+text check of the draft 1.0.5 changelog found the open row.
 
 *Cause.* R2: "no open review" was measured once, before three merges and a pull from `main`. I
 carried it to a later state of `main` without measuring again.
