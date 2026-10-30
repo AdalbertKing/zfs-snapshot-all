@@ -4,6 +4,40 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [1.0.5] — 2026-10-30
+
+- **Security: the GUI's run-statistics cache** (`job-stats --vol-cache`, run as root) is kept only
+  in the user's own runtime directory (`$XDG_RUNTIME_DIR` or `/run/user/<uid>`), and only when that
+  is a real directory owned by the user and not writable by group or others. Without one there is
+  no cache. It used to fall back to `/tmp` with a predictable name, so a planted symlink let root
+  write the snapshot listing into another file.
+- **Export and import of an encrypted (raw) relationship**: the export now carries `--raw`, so the
+  import sends raw and the encrypted target accepts it. An older export file is imported with
+  `--raw` when its dataset sections are raw.
+- **PVE guest guard on whole trees**: a recursive snapshot or prune finds its source tree in
+  every spelling: `pool/path`, `host:pool/path` and `user@host:pool/path`. A generated prune took
+  its `-P __replicate_:2` value for the dataset, and `host:pool/path` (no account) was skipped. In
+  both cases the tree was not checked and the prune could run over a pvesr replica disk.
+- **New-relationship wizard**: with two or more datasets, the "leftovers" answer keeps
+  `--own-snapshots` in the command (the summary showed it, the command lost it); a local copy
+  answered "chain" keeps `--passive`.
+- **Replica wizard**: "format a new medium" no longer offers another replica's disk; an own cron
+  schedule is checked field by field (minute 0-59, hour 0-23, …), and a wrong one asks again
+  instead of falling back to "auto".
+- **One date format in the GUI**: `YYYY.MM.DD HH:MM`, with seconds where they were shown before.
+  The short forms ("today" as a bare time, "tomorrow", a weekday, `DD.MM`) are gone. Snapshot
+  names, `--at=` values and F4's CREATION column (`zfs list` format) are unchanged.
+- **F6 Replica**: "Rekurencyjnie" (recursive) instead of "Z dziećmi"; "Na dysku" says how many
+  newest `replica_` snapshots the disk keeps and about how far back, with a separate
+  "Ile migawek" row; the runs tab estimates each run's data from the `written` of its `replica_`
+  snapshots ("-" when there is none).
+- **F4 groups** show the relationship type in the group header instead of a Rodzaj column, so
+  the longer dates no longer cut copy names.
+- **Fewer windows**: the "running" window is drawn once with a seconds counter in the last row
+  (it flashed every 2 seconds); a successful save, wizard or identical import ends with one
+  sentence on the message line instead of an Ok window; Enter in a confirmation no longer cancels
+  it; the output window follows its tail until you scroll up.
+
 ## [1.0.4] — 2026-10-29
 
 - **Browsing a copy with mc**: mc runs in its own small root. `/kopia` is the snapshot
