@@ -25,7 +25,7 @@
   Skaner drzewa w `zfs-job.sh` pomijał źródło `host:dataset` (bez konta). Drzewo nie było listowane i
   rekurencyjne przycinanie szło po dysku gościa przeniesionego na inny węzeł. Teraz obowiązuje reguła
   `delsnaps.sh` (`parse_remote`): słowo jest zdalne, gdy ma `:`, a przed pierwszym `:` nie ma `/`. Na hostach
-  od wydania 1.0.5; wydanie `630841d2` ma jeszcze starą regułę.
+  od wydania 1.0.5 (zfsbackup `3d15bc4`).
   Lokalna nazwa z `:` po puli (`tank/data:x`) zostaje lokalna. Testy: `test/cron` PG25-PG29.
 - **Cache job-stats tylko w prywatnym katalogu (2026-10-29, REV-20261029-183, P1).** `job-stats --vol-cache`
   (GUI, root) zapisywał cache przez przewidywalną nazwę w `/tmp`, gdy nie było katalogu uruchomieniowego, więc
@@ -35,7 +35,7 @@
   odczyt tylko zwykłego, własnego pliku z jednym dowiązaniem.
 - **Kampania marudnego admina 2026-10-29/30 (właściciel; wyniki: `docs/project/KAMPANIA-1030-WYNIKI.md`).**
   Lab pve9 → pve10 ↔ pve11 i pve9b, całe GUI sterowane przez tmux z pomiarem czasu, plus strażnicy na żywo.
-  Strażnicy przepełnienia i przyrostu zaliczeni, bez poprawek kodu. Naprawione na gałęzi `fix/kamp-1030`: eksport
+  Strażnicy przepełnienia i przyrostu zaliczeni, bez poprawek kodu. Naprawione na gałęzi `fix/kamp-1030` (scalone, w wydaniu 1.0.5): eksport
   i import relacji z zaszyfrowanym źródłem gubiły raw (K5); kreator przy 2+ datasetach gubił
   `--own-snapshots` (i `--passive` kopii lokalnej, K14); strażnik gościa PVE nie zatrzymywał porządków
   drzewa, bo brał `-P "__replicate_:2"` za źródło (K20); lista dysków do formatowania podawała nośnik
@@ -45,9 +45,13 @@
   wyników): m.in. zbędne okna kreatora „Źródło gotowe” i „Nazwa relacji”, progi monitora lustra
   z łańcuchem (stałe 3h/5h trafiają też do monitora dobowych), 5,8–7 s po tabeli „Ręcznie” i 6,4 s
   po menu silnika.
-- **Wydanie 1.0 i wdrożenie (2026-10-25).** Repo wydań `AdalbertKing/zfsbackup`: tag `v1.0` i strona
-  wydania. Od 25.10 wszystkie 8 hostów (lab pve9, pve9b, pve10, pve11; Metropolis pve1 28.9, pve2 28.8; Dąbrowska
-  pve0 11.10, pve1 11.11) i ich konta mają `origin` = repo wydań.
+- **Wydanie i wdrożenie (stan 2026-10-30).** Repo wydań `AdalbertKing/zfsbackup`, ostatnie wydanie **1.0.5** =
+  `3d15bc4` (tag `v1.0.5`, dev `4f26c947`). Zmierzone 30.10 po :15: pve1 28.9, pve2 28.8, pve0 11.10, pve1 11.11,
+  pve9, pve10, pve11 -- root i konto `zfsbackup` mają `origin` = repo wydań, `main` = `3d15bc42`, bez blokady
+  aktualizacji. pve9b (10.98.0.2) nieosiągalny: ostatnio gałąź labowa `lab/1004-1005` z `update-hold`; po powrocie wykonać
+  `bash /root/lab-dev.sh off`.
+  - Klony na hostach niosą starą historię repo dev w `.git` (78-438 MB na klon); propozycja sprzątania czeka na
+    recenzenta (`docs/project/DESIGN-REPO-WYDAN-2026-10-24.md` §9).
   - Scalenie PR-a w repo dev NIE wdraża. Hosty dostają zmianę dopiero po `release/publish.sh origin/main
     <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
   - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
@@ -337,7 +341,7 @@
   co na main na pve9 plus `preparesource: bundle fallback` (sieć).
 
 - **Kampania labowa 2026-10-26: kreator, okno zmiany, monitory, czasy GUI (PR #888-#901).** Na
-  `main` (repo dev), nie wydane; pve9, pve10 i pve11 stoją na `main` z `update-hold`.
+  `main` (repo dev); wydane w kolejnych wydaniach, stan hostów: punkt „Wydanie i wdrożenie”.
   - Drzewo ma trzeci stan: Spacja na zaznaczonym datasecie z dziećmi daje `[x]` -> `[-]` (obecne
     dzieci, bez przyszłych) -> `[ ]`. `DS:no` z configu wraca jako `[-]`, nie jako `[x]`. Replika i
     odzysk mają dwa stany.
