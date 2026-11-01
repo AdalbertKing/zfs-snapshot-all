@@ -61,8 +61,10 @@ dziś przy aktywacji właśnie tylko godzinową, i jej szczebel roczny od razu p
    wykonaniem a pierwszym terminem z crona; monitor w tym czasie „czeka”, nie WARNING/CRITICAL;
    pierwszy bieg z crona robi migawkę i stan przechodzi w aktualny.
 
-Do rozstrzygnięcia przy naprawie: relacje z KOPIĄ (backup, kopia lokalna) mają pierwszą kopię
-(seed) -- czy wariant C obejmuje także ją, czy tylko migawki szczebli (`activate_first_copies`).
+5. **Relacje z KOPIĄ (backup, kopia lokalna) -- także pierwsza pełna kopia czeka na swój termin
+   z crona** (właściciel 2026-11-01: „czeka na termin”). Założenie relacji trwa sekundy; do
+   pierwszego biegu kopii nie ma, a stan relacji mówi „czeka na pierwszy termin” z datą. Dziś
+   pierwszą kopię wysyła aktywacja (`activate_first_copies`, `zfs-backup.sh:13254`).
 
 ## Pozostałe
 
