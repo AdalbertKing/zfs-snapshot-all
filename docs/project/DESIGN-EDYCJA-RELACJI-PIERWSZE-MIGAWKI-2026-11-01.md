@@ -33,30 +33,36 @@ trwającego biegu (rc=75), więc niczego nie zrobiły. `gen-cron.sh` na tym conf
 
 Root „trwał szybciej”, bo jego relacja miała 2 szczeble, a nie 5.
 
-## Decyzja właściciela 2026-11-01: BŁĄD, priorytet do 1.0.6
+## Decyzja właściciela 2026-11-01: BŁĄD, priorytet do 1.0.6 -- wariant C
 
 Słowa właściciela: „to błąd. Priorytetowo do naprawy 1.06 -- założenie relacji nie może
 tworzyć wszystkich szczebli od razu, szczególnie freeze.”
 
-Wymagane zachowanie:
+~~Pierwsza wersja wymagań (najwyżej jedna migawka najdrobniejszego szczebla przy aktywacji)~~ --
+zastąpiona tego samego wieczoru. Relacja migawek lokalnych `migawki-hdd-lxc-subvol-102` robi
+dziś przy aktywacji właśnie tylko godzinową, i jej szczebel roczny od razu pokazał „stale”
+(U144). Właściciel: „U137 -- niekoniecznie”; warianty „wszystkie szczeble bez zamrażania” i
+„tylko najdrobniejszy” odrzucił („nie podobają mi się oba warianty”).
 
-1. **Założenie relacji nie robi migawek wszystkich szczebli.** Przy aktywacji najwyżej JEDNA
-   migawka -- najdrobniejszego szczebla (zwykle godzinowego) -- i **bez zamrażania**, nawet
-   jeśli szczebel je ma. Pozostałe szczeble powstają w swoim terminie z crona.
-2. **Zmiana relacji (`edit-relation`) nie robi żadnej migawki**, chyba że dochodzi szczebel,
-   którego rodzina nie ma na źródle żadnej migawki -- i wtedy też tylko według reguły z p. 1
-   (bez zamrażania). Dowód: zmiana bez nowego szczebla -- w cron.log brak `ZFS-JOB BEGIN` po
-   zmianie; mierzone na żywo.
-3. **Monitor nie może przez to alarmować.** `snaponly_first_snapshots` powstało właśnie po to,
-   żeby monitor nie zgłaszał CRITICAL („no snapshot -- age from dataset creation”,
-   `zfs-backup.sh:12647-12652`, pve9 -> pve10, 2026-10-17). Naprawa musi to rozwiązać inaczej:
-   wiek szczebla bez żadnej migawki liczony od aktywacji relacji (zapisanej w rekordzie,
-   `ACTIVATED_AT`), nie od utworzenia datasetu. Por. U131 (monitor szczebli).
-4. **GUI mówi, co robi.** Okno postępu pokazuje tę jedną migawkę i zdanie, że reszta
-   szczebli powstanie w swoich terminach.
+**Decyzja właściciela 2026-11-01: wariant C.**
 
-Dotyczy także relacji innych niż migawki zdalne, jeśli ich pierwsza kopia zamraża
-(`activate_first_copies` -- do sprawdzenia przy naprawie).
+1. **Założenie i zmiana relacji nie robią żadnej migawki** -- ani wszystkich szczebli, ani
+   najdrobniejszego, żadnego zamrażania. Każdy szczebel dostaje pierwszą migawkę w swoim
+   terminie z crona, jak każdą następną. Dotyczy migawek zdalnych (`snaponly_first_snapshots`,
+   `zfs-backup.sh:12644`, `:12653`) i migawek lokalnych (dziś jedna godzinowa przy aktywacji -- zmierzone na pve0 11-01: `automated_hourly_2026-11-01_22-36-51` na obu dyskach `subvol-102`, „Seed: OK (2 source(s) sent)”).
+2. **Monitor: „czeka na pierwszy termin”, nie „stale”.** Szczebel bez żadnej migawki swojej
+   rodziny ma stan „czeka na pierwszy termin” z datą najbliższego biegu z crona (np. „roczne:
+   czeka, pierwsza 2027-01-01 04:41”). „Stale” dopiero wtedy, gdy ten termin minął (liczony od aktywacji
+   relacji, `ACTIVATED_AT`), a migawki dalej nie ma. Dziś wiek takiego szczebla jest liczony od
+   utworzenia datasetu (`check-snap-age.sh:511`) -- to znika. Razem z U144 i U131.
+3. **Panel relacji: każdy szczebel osobno** -- jego stan, termin i próg; bez sklejania wieku
+   jednego szczebla z progiem innego (`tui/zfs-tui.py:2828-2835`, U144).
+4. **Dowód:** założenie i zmiana relacji na labie -- w cron.log brak `ZFS-JOB BEGIN` między
+   wykonaniem a pierwszym terminem z crona; monitor w tym czasie „czeka”, nie WARNING/CRITICAL;
+   pierwszy bieg z crona robi migawkę i stan przechodzi w aktualny.
+
+Do rozstrzygnięcia przy naprawie: relacje z KOPIĄ (backup, kopia lokalna) mają pierwszą kopię
+(seed) -- czy wariant C obejmuje także ją, czy tylko migawki szczebli (`activate_first_copies`).
 
 ## Pozostałe
 
