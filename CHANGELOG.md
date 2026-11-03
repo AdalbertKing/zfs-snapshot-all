@@ -4,6 +4,33 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [1.0.6] — 2026-11-03
+
+- **A new or changed relationship takes no snapshot and no first copy.** Every tier starts at its
+  own cron time; a yearly tier can be months away. Until 1.0.5 activation snapshotted every tier
+  at once, guest freeze included, and a change of a remote-snapshots relationship did it again.
+- **The monitor counts from the relationship's start.** The config keeps `<tier>.monitor_since`
+  (written once, never moved), and the age alarm is measured from the later of the newest
+  snapshot and that start. Before its first run a tier is WAITING ("czeka na pierwszy termin" in
+  the GUI), not stale; past its thresholds it alarms as before. With the start set, a recursive
+  tree with no snapshot at all is checked too, so a relationship whose cron never runs does alarm.
+  `check-snap-age.sh` v2.7: `-S EPOCH`, `-W`.
+- **Remote snapshots keep the plain `automated_*` family.** The collector-stamped family
+  (`<collector>_automated_*`) is now only made on request (`--stamp-family`, in the GUI: "another
+  collector or a cron makes them"). When the source already has snapshots of the family, the
+  relationship asks who makes them (`--own-snapshots`: leftovers, taken into its retention); the
+  answer can be given on a re-run after that question, once, before activation.
+- **New-relationship wizard**: the account is a step of the walk, not hidden in "Advanced". A
+  local copy can be made passive before the source has snapshots of the family (Advanced →
+  Passive): it only takes snapshots someone else makes (a remote-snapshots relationship plus a
+  pvesr replica), including datasets created under the source later.
+- **GUI**: local snapshot-only relationships say "only snapshot" in F2 (not "transfer
+  lsrc_hourly") and show the minute cron really runs; the relationship panel has one line per
+  tier (current / waiting with its first run / stale, with its alarm threshold).
+- **Install guard**: jobs installed before the PVE guest guard (no `--pve-guests`, several guests
+  on one line) no longer block adding a relationship to the same account, where the re-rendered
+  lines still cover every dataset; any other difference is still refused.
+
 ## [1.0.5] — 2026-10-30
 
 - **Security: the GUI's run-statistics cache** (`job-stats --vol-cache`, run as root) is kept only
