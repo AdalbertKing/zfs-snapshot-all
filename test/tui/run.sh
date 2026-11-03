@@ -3198,6 +3198,7 @@ W17D=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}root
 0${T}create
 0${T}
 " NR_FIX="$NRE" NR_TREE="$NRTK")
@@ -3333,6 +3334,7 @@ SOW="0${T}snaponly
 0${T}
 0${T}d7h24
 0${T}pve9b
+0${T}root
 0${T}create
 0${T}
 "
@@ -3370,6 +3372,7 @@ u141_ans() {   # <odpowiedz w oknie rodziny: own|stamp>
 0${T}$1
 0${T}d7h24
 0${T}pve9b
+0${T}root
 0${T}create
 0${T}
 "; }
@@ -3801,6 +3804,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__browse__
 0${T}default
 0${T}pve9b
+0${T}root
 0${T}create
 0${T}
 " NR_TREE="$NRTK|goto:hdd,enter")
@@ -3827,6 +3831,7 @@ NROUT=$(nr_run "0${T}local
 0${T}hdd/kopie
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
+0${T}root
 0${T}create
 0${T}
 " NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
@@ -3929,6 +3934,7 @@ rm -rf "$NRL"
 NROUT=$(nr_run "0${T}snap
 0${T}default
 0${T}migawki-hdd-backups-192.168.28.99-hdd-lab
+0${T}root
 0${T}create
 0${T}
 " NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
