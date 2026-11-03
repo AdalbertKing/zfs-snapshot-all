@@ -109,9 +109,22 @@ header), and it also LIES: `localbackup` gave 56/1 on Git Bash while CI was full
 green on the same SHA. A serial local battery buys nothing and blocks the session
 for the duration.
 
+**Owner, 2026-11-03 ("1-4 od razu", answering why a round now takes a day):**
+
+1. **No suite runs on this Windows box at all** -- not even an edited one. Here:
+   `bash -n`, and the new test cases cut out and run on their own (seconds, as for
+   the guest-split guard, 2026-11-03). The edited suite runs on the pve9 clone or
+   in CI. Measured that day: test/monitor 3m54s here; `impact.sh --verify` did not
+   finish in 5 minutes here -- run it on pve9 too.
+2. **Batches, not rounds.** Several fixes ride one branch; PROJECT_STATUS, the
+   text-checker pass, ENGINE-FREEZE/refreeze and the digest are done ONCE per batch,
+   just before its PR.
+3. **Lab before code.** Walk the whole GUI scenario on the lab first and write every
+   defect down; fix them as one batch afterwards. Not one fix cycle per defect.
+
 So:
 
-- run locally only a suite you **edited**, or whose subject you changed -- not
+- run an edited suite (or one whose subject you changed) on pve9/CI -- not
   running a test you just wrote is its own defect;
 - everything else: push, and read CI once. `./test/gh-api.sh GET
   "actions/runs?per_page=6"`, compare `head_sha`, move on;
