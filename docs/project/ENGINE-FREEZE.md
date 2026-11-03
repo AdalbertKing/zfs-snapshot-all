@@ -3,7 +3,7 @@
 <!-- frozen: snapsend.sh 100755 86effb8185df5d71137ba96d3ab7270957015b27 -->
 <!-- frozen: snapget.sh 100755 abd9438b16eeb2c3d082a16bf24d5dd8514a71a0 -->
 <!-- frozen: delsnaps.sh 100755 1a6d18267d93a188a586f92059509de836b5aeff -->
-<!-- frozen: check-snap-age.sh 100755 88505a6641b1ac130ef8b9d4e3161d09e3c3f8b4 -->
+<!-- frozen: check-snap-age.sh 100755 dc1d08e10e4331b87c4db42538f6d255cea086a7 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
 <!-- unfreeze: - -->
 
@@ -1201,6 +1201,16 @@ Owner-authorized refreezes:
   - `-W`: print the WAITING lines (rc unchanged); without it they are silent, as OK is.
   - Untouched: every read and its fail-closed handling, -R/-x/-L/pause, remote transport,
     thresholds and exit codes. Without -S/-W the output is byte-identical.
+  twin: none -- check-snap-age.sh is the only monitor engine.
+- 2026-11-03 (check-snap-age.sh): **U137 C2 correction -- an -R tree with no snapshot at all.**
+  Same owner direction as the entry above ("Zgoda", 2026-11-03); this completes it, found by
+  the live GUI test on pve11 the same evening: a new local-snapshots relation (`-R`, empty
+  dataset) read OK with nothing to say instead of WAITING, because the root got the -R
+  "empty container" leniency -- and it would have stayed silent had its cron never run. v2.6 -> v2.7.
+  - With -S, in -R mode, a walk that found no snapshot anywhere checks its root as an explicit
+    target; with -S, a dataset with no snapshot of the family (age from creation) is WAITING too.
+  - Untouched: a tree with any snapshot keeps the container leniency; without -S nothing changes
+    (test/monitor S7 control).
   twin: none -- check-snap-age.sh is the only monitor engine.
 
 ## How it is enforced

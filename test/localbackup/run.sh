@@ -1883,6 +1883,36 @@ refused "a changed threshold is a different job, not a merged one" "$MON_A" \
 refused "a changed schedule is a different job, not a merged one" "$MON_A" \
     '*/5 * * * * d=$(check-snap-age.sh "hdd/a,hdd/b" "automated_hourly" 90m 150m 2>&1); rc=$?'
 
+# The PVE guest guard re-renders a job that already runs: --pve-guests is added
+# and disks of different guests stop sharing a line. Measured on pve11
+# 2026-11-03 -- adding a relation to the account refused over 16 such lines of
+# two untouched relations. Shapes as gen-cron writes them.
+gsplit()  { printf '%s\n' "$3" | line_guest_split_absorbed "$2" \
+    && ok "guard/guest-split: $1" || bad "guard/guest-split: $1" "not absorbed"; }
+gkeep()   { printf '%s\n' "$3" | line_guest_split_absorbed "$2" \
+    && bad "guard/guest-split: $1" "absorbed, and must not have been" || ok "guard/guest-split: $1"; }
+G_OLD='5 * * * * zfs-job.sh "h t snapshot (vm-106+vm-100+ct-101)" --log=l -- snapsend.sh -m "automated_hourly_" -L a "hdd/vm-106,hdd/vm-100,hdd/ct-101"'
+G_106='5 * * * * zfs-job.sh "h t snapshot (vm-106)" --log=l --pve-guests=:106 -- snapsend.sh -m "automated_hourly_" -L a "hdd/vm-106"'
+G_100='5 * * * * zfs-job.sh "h t snapshot (vm-100)" --log=l --pve-guests=:100 -- snapsend.sh -m "automated_hourly_" -L a "hdd/vm-100"'
+G_101='5 * * * * zfs-job.sh "h t snapshot (ct-101)" --log=l --pve-guests=:101 -- snapsend.sh -m "automated_hourly_" -L a "hdd/ct-101"'
+P_OLD='45 * * * * zfs-job.sh "h t prune (vm-106)" --log=l -- delsnaps.sh -L a -P "vzdump:2" "hdd/vm-106" "automated_hourly" -H24'
+gsplit "a shared line split per guest, every disk still covered" "$G_OLD" "$G_106
+$G_100
+$G_101"
+gsplit "a one-disk line that only gained --pve-guests" "$P_OLD" \
+    '45 * * * * zfs-job.sh "h t prune (vm-106)" --log=l --pve-guests=:106 -- delsnaps.sh -L a -P "vzdump:2" "hdd/vm-106" "automated_hourly" -H24'
+gkeep "a split that drops one guest's disk is a DELETION" "$G_OLD" "$G_106
+$G_100"
+gkeep "the split lines without --pve-guests are not this exemption" "$G_OLD" \
+    "$(printf '%s\n' "$G_106" "$G_100" "$G_101" | sed 's/ --pve-guests=:[0-9]*//')"
+gkeep "a changed schedule is not a re-render" "$P_OLD" \
+    '46 * * * * zfs-job.sh "h t prune (vm-106)" --log=l --pve-guests=:106 -- delsnaps.sh -L a -P "vzdump:2" "hdd/vm-106" "automated_hourly" -H24'
+gkeep "a changed retention is not a re-render" "$P_OLD" \
+    '45 * * * * zfs-job.sh "h t prune (vm-106)" --log=l --pve-guests=:106 -- delsnaps.sh -L a -P "vzdump:2" "hdd/vm-106" "automated_hourly" -H12'
+gkeep "a changed prefix is not a re-render" "$G_OLD" "$(printf '%s\n' "$G_106" "$G_100" "$G_101" | sed 's/automated_hourly_/automated_daily_/')"
+gkeep "a line that already had --pve-guests gets no exemption here" "$G_106" \
+    "$(printf '%s' "$G_106" | sed 's/:106/:107/')"
+
 # ==============================================================================
 # THE DEFAULT PROFILE, HANDED TO THE SCRIPT EXPLICITLY.
 #

@@ -12091,6 +12091,17 @@ if [ "$lj_short" = "15 * * * *" ]; then
 else
     bad "listjobs: relation tier schedule from the dataset section" "got '$lj_short'"
 fi
+# ...and a LOCAL relation's source tier carries gen-cron's side stem (`__lsrc_hourly`) while
+# the override still says `send_schedule_hourly` (pve11, 2026-11-03: F2 at :01 for a :05 job).
+lj_lsrc="$( declare -A JOB_F=(
+        ["template:profile__relacja-ab__lsrc_hourly|send_schedule"]="1 * * * *"
+        ["dataset:hdd/mt/vm-1|send_schedule_hourly"]="5 * * * *" )
+    jobs_field_v _o dataset hdd/mt/vm-1 profile__relacja-ab__lsrc_hourly send_schedule; printf '%s' "$_o" )"
+if [ "$lj_lsrc" = "5 * * * *" ]; then
+    ok "listjobs: a local relation's lsrc_ tier reads the dataset's send_schedule_<tier> too"
+else
+    bad "listjobs: lsrc_ tier schedule from the dataset section" "got '$lj_lsrc'"
+fi
 
 # --- RESOLUTION: THE SECTION BEATS THE TEMPLATE -----------------------------
 # vm-999 uses the daily template (0 4 * * *) and overrides the schedule itself.

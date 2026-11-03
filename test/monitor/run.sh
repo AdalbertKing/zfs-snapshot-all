@@ -388,6 +388,22 @@ add_snap tank/left "automated_weekly_own" $((5 * H))      # the tier's own snaps
 check "S4 an own snapshot newer than the start decides (5h old, crit 4h: CRITICAL)" "2" "$(rc_of -S "$((NOW - 6 * H))" tank/left automated_weekly 2h 4h)"
 check "S5 -S that is not a number is UNKNOWN" "3" "$(rc_of -S 12x tank/left automated_weekly 2h 4h)"
 
+# ---- S6-S8. -R tree with no snapshot at all (v2.7, pve11 2026-11-03) ------------------
+# A new relationship's tree has no snapshot anywhere before its first run. The container
+# leniency read it OK with nothing to say -- not WAITING, and silent for ever had the cron
+# never run. With -S the root is held to the explicit check, from the start.
+reset_world
+add_ds tank/fresh $((500 * H)); add_ds tank/fresh/c $((500 * H))
+case "$(run -R -S "$S1" -W tank/fresh automated_ 2h 4h)" in "WAITING dataset=tank/fresh "*"since the relationship's start"*) ok "S6 -R empty tree, started 1h ago: WAITING on the root" ;;
+  *) bad "S6 -R empty tree: WAITING on the root" "$(run -R -S "$S1" -W tank/fresh automated_ 2h 4h)" ;; esac
+check "S6 -R empty tree, started 5h ago: CRITICAL (the first run never came)" "2" "$(rc_of -R -S "$S2" tank/fresh automated_ 2h 4h)"
+check "S7 control: the same empty tree WITHOUT -S keeps the container leniency (OK)" "0" "$(rc_of -R tank/fresh automated_ 2h 4h)"
+add_ds tank/young $((1 * H))                              # created AFTER a start 5h ago, no snapshot
+case "$(run -S "$S2" -W tank/young automated_ 2h 4h)" in "WAITING dataset=tank/young "*"age measured from its creation"*) ok "S6 a dataset newer than the start: WAITING, measured from its creation, and says so" ;;
+  *) bad "S6 a dataset newer than the start says creation" "$(run -S "$S2" -W tank/young automated_ 2h 4h)" ;; esac
+add_snap tank/fresh/c "other_1" $((1 * H))                # any snapshot in the tree: a container again
+check "S8 a tree with any snapshot keeps the leniency for its bare root (child decides)" "0" "$(rc_of -R -S "$S2" tank/fresh other_ 2h 4h)"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

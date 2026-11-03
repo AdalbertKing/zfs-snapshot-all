@@ -99,12 +99,17 @@ set -o pipefail
 # zfs-backup.sh and never moved, so -S cannot hide a tier that stopped.
 # -W prints a WAITING line (rc unchanged, 0) for each such dataset still under warn: the GUI asks
 # for it; the cron line does not, so the log is not filled every 15 minutes for a year.
+# With -S a dataset with no snapshot of the family is measured from the later of its creation
+# and the start. In -R mode a tree with NO snapshot at all anywhere (a relationship before its
+# first run) is not an empty container: its root is checked as an explicit target (v2.7, found
+# live on pve11 2026-11-03 -- a new relation read OK, not WAITING, and would have stayed silent
+# had its cron never run). A tree with any snapshot keeps the container leniency.
 #
 # Example:
 #   ./check-snap-age.sh "rpool/data/vm-106-disk-0" "automated_hourly" 90m 3h
 #   ./check-snap-age.sh -R "hdd/backups/pve1" "automated_daily" 30h 48h
 
-VERSION='v2.6'
+VERSION='v2.7'
 
 EXIT_OK=0
 EXIT_WARNING=1
@@ -472,7 +477,7 @@ check_one() {
             SAW_UNKNOWN=1
             return
         fi
-        any_snap=true
+        any_snap=true; WALK_SNAP=true
         snapname="${line#*@}"
         local _ex _skip=false
         for _ex in "${EXCLUDES[@]:-}"; do
@@ -515,6 +520,8 @@ check_one() {
     if [ -n "$SINCE" ] && [ "$newest_epoch" -lt "$SINCE" ]; then
         [ -n "$newest" ] && older="${newest#*@}"
         newest_epoch="$SINCE"; waiting=true
+    elif [ -n "$SINCE" ] && [ "$from_creation" = true ]; then
+        waiting=true
     fi
 
     local age=$((NOW - newest_epoch))
@@ -535,6 +542,8 @@ check_one() {
     # have to work out whether that is the age of a snapshot or of the dataset.
     if [ "$waiting" = true ]; then
         detail="pattern=${PATTERN:-(any)} -- no snapshot of this family since the relationship's start ($(date -d "@$SINCE" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$SINCE")); age measured from that start${older:+ (newest before it: $older)}"
+        # A dataset created after the start is measured from its creation -- say that one.
+        [ "$newest_epoch" != "$SINCE" ] && detail="pattern=${PATTERN:-(any)} -- no snapshot of this family since the relationship's start ($(date -d "@$SINCE" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$SINCE")); the dataset is newer, age measured from its creation"
         [ "$sev" -eq 0 ] && label="WAITING"
     elif [ "$from_creation" = true ]; then
         detail="pattern=${PATTERN:-(any)} -- no snapshot found matching this pattern; age measured from dataset creation"
@@ -564,6 +573,7 @@ for entry in "${DATASETS[@]}"; do
     parse_remote "$entry"
     ru="$R_USER"; rh="$R_HOST"; ds="$R_DS"
     if [ "$RECURSE" = true ]; then
+        WALK_SNAP=false
         check_one "$ru" "$rh" "$ds" false
         out="$(zread "$ru" "$rh" list -H -o name -t filesystem,volume -r "$ds" 2>/dev/null)"; rc=$?
         if [ "$rc" -ne 0 ]; then
@@ -589,6 +599,9 @@ for entry in "${DATASETS[@]}"; do
             fi
             check_one "$ru" "$rh" "$child" false
         done <<< "$out"
+        # -S and not one snapshot anywhere in the tree: the relationship has not run yet
+        # (or never did). The root is held to the explicit check, measured from the start.
+        [ -n "$SINCE" ] && [ "$WALK_SNAP" = false ] && check_one "$ru" "$rh" "$ds" true
     else
         check_one "$ru" "$rh" "$ds" true
     fi

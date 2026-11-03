@@ -3852,6 +3852,73 @@ line_coverage_absorbed() {   # <lost line> ; proposed lines on stdin -> 0 absorb
     ' | grep -q ABSORBED
 }
 
+# The PVE guest guard (2026-10-28) changed how gen-cron renders a job that
+# already runs: every line on a guest's disks gains --pve-guests=<host>:<id>,
+# and disks of different guarded guests no longer share a line. A block
+# installed before that holds the old shapes, so the next install into the
+# same account -- adding an unrelated relation, say -- saw every one of them as
+# "would be DELETED" and refused (measured on pve11, 2026-11-03: 16 lines of
+# two untouched local relations).
+#
+# Excused here only when the coverage provably stays: the lost line carries no
+# --pve-guests of its own, and a set of proposed lines that DO carry one are,
+# with that flag removed, identical to it except (a) the "(...)" dataset note
+# at the end of the job label and (b) at most one other quoted argument, whose
+# comma-list in each proposed line is a SUBSET of the lost one's and whose
+# union covers it. A line that loses a dataset, or differs in anything else
+# (schedule, prefix, thresholds, target), is still refused.
+line_guest_split_absorbed() {   # <lost line> ; proposed lines on stdin -> 0 absorbed
+    case "$1" in *--pve-guests=*) return 1 ;; esac
+    LOST_LINE="$1" awk '
+        function shred(s, sk, vals,   out, n, i, ch, inq, cur) {
+            out=""; n=0; inq=0; cur=""
+            for (i=1; i<=length(s); i++) {
+                ch=substr(s,i,1)
+                if (ch=="\"") {
+                    if (inq) { n++; vals[n]=cur; cur=""; out=out "\001"; inq=0 }
+                    else inq=1
+                    continue
+                }
+                if (inq) cur=cur ch; else out=out ch
+            }
+            sk[0]=out
+            return n
+        }
+        function subset(a, b,   na, nb, i, j, av, bv, hit) {
+            na=split(a, av, ","); nb=split(b, bv, ",")
+            for (i=1; i<=na; i++) {
+                hit=0
+                for (j=1; j<=nb; j++) if (av[i]==bv[j]) { hit=1; break }
+                if (!hit) return 0
+            }
+            return 1
+        }
+        function label(v) { sub(/ \([^()]*\)$/, " ()", v); return v }
+        BEGIN { nl=shred(ENVIRON["LOST_LINE"], lsk, lv); at=0 }
+        {
+            if ($0 !~ / --pve-guests=[^ ]+/) next
+            p=$0; gsub(/ --pve-guests=[^ ]+/, "", p)
+            np=shred(p, psk, pv)
+            if (np != nl || psk[0] != lsk[0] || nl < 1) next
+            if (label(pv[1]) != label(lv[1])) next
+            diff=0; idx=0
+            for (i=2; i<=nl; i++) if (lv[i] != pv[i]) { diff++; idx=i }
+            if (diff == 0) { print "ABSORBED"; exit }
+            if (diff != 1 || !subset(pv[idx], lv[idx])) next
+            if (at && at != idx) next
+            at=idx
+            n=split(pv[idx], part, ",")
+            for (i=1; i<=n; i++) got[part[i]]=1
+        }
+        END {
+            if (!at) exit
+            n=split(lv[at], part, ",")
+            for (i=1; i<=n; i++) if (!(part[i] in got)) exit
+            print "ABSORBED"
+        }
+    ' | grep -q ABSORBED
+}
+
 # THE ONE NARROWING THIS GUARD EXCUSES, and it says so out loud.
 #
 # Migrating a relationship off the peer-root ladder (2026-09-08) genuinely
@@ -4021,6 +4088,13 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
                && printf '%s\n' "$line" | grep -qF -- " -L $EDIT_RELATION_NAME " \
                && printf '%s\n' "$proposed" | grep -qF -- " -L $EDIT_RELATION_NAME "; then
                 warn "  edited relationship '$EDIT_RELATION_NAME': this job is replaced by its regenerated set:"
+                warn "    $line"
+                continue
+            fi
+            # Ninth exemption: the same job, re-rendered by the PVE guest guard
+            # (--pve-guests, one line per guest). See line_guest_split_absorbed.
+            if printf '%s\n' "$proposed" | line_guest_split_absorbed "$line"; then
+                warn "  the PVE guest guard now checks this job (--pve-guests, one line per guest), the job itself stays:"
                 warn "    $line"
                 continue
             fi
@@ -17655,7 +17729,11 @@ jobs_field_v() {   # <var> <kind> <section> <tier> <field>
     local v="${JOB_F["$k:$s|${f}_$t"]:-}"; [ -n "$v" ] && { printf -v "$_jv_var" '%s' "$v"; return 0; }
     # A relation block's tier is `profile__<rel>__<tier>`; its dataset section staggers
     # the schedule under the short name (`send_schedule_hourly`), and that is what cron runs.
-    case "$t" in *__*) v="${JOB_F["$k:$s|${f}_${t##*__}"]:-}"; [ -n "$v" ] && { printf -v "$_jv_var" '%s' "$v"; return 0; } ;; esac
+    # The block's tier carries gen-cron's side stem (`__lsrc_hourly`, `__src_hourly`), the
+    # override never does (gen-cron.sh, relation expansion: `${ovf}_${one}`) -- F2 showed
+    # every local relation at the block's :01 instead of its staggered minute (pve11, 2026-11-03).
+    local _one="${t##*__}"; _one="${_one#lsrc_}"; _one="${_one#src_}"
+    case "$t" in *__*) v="${JOB_F["$k:$s|${f}_${_one}"]:-}"; [ -n "$v" ] && { printf -v "$_jv_var" '%s' "$v"; return 0; } ;; esac
     v="${JOB_F["$k:$s|$f"]:-}";          [ -n "$v" ] && { printf -v "$_jv_var" '%s' "$v"; return 0; }
     v="${JOB_F["template:$t|$f"]:-}";      [ -n "$v" ] && { printf -v "$_jv_var" '%s' "$v"; return 0; }
     printf -v "$_jv_var" '%s' "${JOB_F["defaults:|$f"]:-}"
@@ -22457,6 +22535,22 @@ rux_remote_install() {
     else
         log "rux: resuming '$name' from state '$state'"
         rux_check_conflict "$cpath" "$host" "$dataset" "$target" "$mode"
+        # The family question (U141) is asked by a REFUSAL during activation, after the
+        # record exists -- and it said "answer with one flag". Re-running with that flag
+        # used to drop it (add-client is not called on a resume) and refuse again for
+        # ever (pve11, 2026-11-03). Taken onto the record here, only before activation,
+        # and only when the record holds no answer yet.
+        if [ "${rux_own:-0}" -eq 1 ] || [ "${rux_stamp:-0}" -eq 1 ]; then
+            [ "${rux_own:-0}" -eq 1 ] && [ "${rux_stamp:-0}" -eq 1 ] \
+                && die "rux: --own-snapshots and --stamp-family are opposite answers -- pick one. Nothing was changed."
+            [ "$state" = active ] \
+                && die "rux: '$name' is active already -- who makes the source's snapshots is decided at creation. Nothing was changed."
+            [ -n "$(record_get "$cpath" OWN_SNAPSHOTS)$(record_get "$cpath" FAMILY_STAMP)" ] \
+                && die "rux: '$name' already holds an answer to who makes the source's snapshots. Nothing was changed."
+            if [ "${rux_own:-0}" -eq 1 ]; then write_client_field OWN_SNAPSHOTS 1 >> "$cpath"
+            else write_client_field FAMILY_STAMP 1 >> "$cpath"; fi
+            log "rux: '$name' -- answer recorded: $([ "${rux_own:-0}" -eq 1 ] && echo '--own-snapshots (leftovers)' || echo '--stamp-family')"
+        fi
     fi
 
     # The grant step runs BEFORE the verification and never replaces it: what

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 266d752e34cb0e4f -->
+<!-- status-covers-digest: bc7da72800f604c0 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,22 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **1.0.6: lab pve11 ← pve9 przed wydaniem dla Dąbrowskiej (2026-11-03, gałąź `fix/guard-guest-split`).**
+  Scenariusze Dąbrowskiej na żywo: migawki lokalne na koncie zfsbackup obok dwóch starszych relacji,
+  migawki zdalne (snaponly) ze zwykłą rodziną `automated_*` przy resztkach rodziny na źródle (`--own-snapshots`),
+  kopia pasywna wymuszona bez migawek rodziny (po pojawieniu się migawek pierwszy bieg skopiował je, także nowy dataset).
+  Żadna relacja nie robi migawki przy zakładaniu (U137 C). Cztery wady znalezione i naprawione:
+  - strażnik crona brał linie zainstalowane przed strażnikiem gości PVE (bez `--pve-guests`, kilku gości w
+    jednej linii) za usuwane i odmawiał dodania relacji (pve11: 16 linii). Dziewiąty wyjątek
+    (`line_guest_split_absorbed`): ta sama praca, a linie z `--pve-guests` pokrywają wszystkie jej datasety;
+  - `check-snap-age.sh` v2.7: przy `-S` drzewo `-R` bez żadnej migawki jest WAITING (od startu), a nie
+    cichym OK -- wcześniej relacja, której cron nigdy nie ruszył, milczałaby bez końca;
+  - wznowienie relacji po odmowie U141 („kto robi te migawki?”) gubiło `--own-snapshots`/`--stamp-family` i
+    odmawiało w kółko; teraz odpowiedź trafia do rekordu (tylko przed aktywacją, tylko gdy go jeszcze nie ma);
+  - F2 pokazywał relacje lokalne o minucie bloku (`:01`) zamiast minuty z crona (`jobs_field_v`, przedrostek `lsrc_`/`src_`).
+  Jednorazowo zaobserwowane, niewyjaśnione: monitor kopii pasywnej dał raz UNKNOWN („lista potomków bez
+  korzenia”), trzy kolejne odczyty OK. Testy: `test/monitor` S6-S8; nowe przypadki strażnika i list-jobs
+  uruchomione osobno; pełne suity w CI.
 - **PROJEKT ZAMKNIĘTY (2026-10-30, decyzja właściciela).** Wydanie zfsbackup `v1.0.5`; ostatnia
   publikacja `5de1b27` (dev `f6e9bcde`, kod jak w `v1.0.5`). Szczegóły i to, co zostaje otwarte:
   `docs/project/OWNER-DECISIONS.md`, sekcja 2026-10-30.
