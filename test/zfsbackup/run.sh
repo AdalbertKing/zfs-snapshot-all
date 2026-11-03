@@ -15047,17 +15047,18 @@ fi
 # set-datasets, add-source, edit-config); each says so in its log instead. The control: the
 # same reader still finds activate_first_copies in cmd_activate_client (a COPY relationship's
 # activation, U137 step 4 -- not this step), so an empty extraction cannot pass as "absent".
-fn_body() { sed -n "/^$1() {/,/^}/p" "$ZFSBACKUP"; }
-c_bad=""
-[ -z "$(fn_body snaponly_first_snapshots)" ] || c_bad="$c_bad snaponly_first_snapshots-still-defined"
-for f in activate_snaponly cmd_set_tiers cmd_set_datasets cmd_add_source cmd_edit_config cmd_local_backup; do
-    b=$(fn_body "$f")
-    [ -n "$b" ] || { c_bad="$c_bad $f-not-found"; continue; }
-    printf '%s' "$b" | grep -qE 'snaponly_first_snapshots|add_source_first_copy|FIRST_RUN_ANY|SNAPONLY_FIRST_(ONLY|TIER)' && c_bad="$c_bad $f-runs-a-first-snapshot"
-done
-fn_body activate_snaponly | grep -q 'nothing was taken now' || c_bad="$c_bad activate_snaponly-silent"
-fn_body cmd_set_tiers | grep -q 'nothing was taken now' || c_bad="$c_bad set-tiers-silent"
-fn_body cmd_activate_client | grep -q 'activate_first_copies "\$name"' || c_bad="$c_bad control:activate_first_copies-not-found"
+# In a subshell: its loop variables must not leak into the suite's shell (they did, and a
+# later section's client_section_plan read them -- gfsshape failed only in the full run).
+c_bad=$( fn_body() { sed -n "/^$1() {/,/^}/p" "$ZFSBACKUP"; }
+         [ -z "$(fn_body snaponly_first_snapshots)" ] || printf ' snaponly_first_snapshots-still-defined'
+         for fn in activate_snaponly cmd_set_tiers cmd_set_datasets cmd_add_source cmd_edit_config cmd_local_backup; do
+             body=$(fn_body "$fn")
+             [ -n "$body" ] || { printf ' %s-not-found' "$fn"; continue; }
+             printf '%s' "$body" | grep -qE 'snaponly_first_snapshots|add_source_first_copy|FIRST_RUN_ANY|SNAPONLY_FIRST_(ONLY|TIER)' && printf ' %s-runs-a-first-snapshot' "$fn"
+         done
+         fn_body activate_snaponly | grep -q 'nothing was taken now' || printf ' activate_snaponly-silent'
+         fn_body cmd_set_tiers | grep -q 'nothing was taken now' || printf ' set-tiers-silent'
+         fn_body cmd_activate_client | grep -q 'activate_first_copies "\$name"' || printf ' control:activate_first_copies-not-found' )
 if [ -z "$c_bad" ]; then
     ok "U137 C1: no first snapshot / copy when a snaponly or local relationship is created, a tier or dataset is added, a source added, or the config edited -- each verb says so; control: the copy relationship's activation still has its first copy (step 4)"
 else

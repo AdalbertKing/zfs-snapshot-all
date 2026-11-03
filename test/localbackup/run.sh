@@ -548,6 +548,8 @@ for _r in flat:-R atomic:-r; do
     else
         bad "U137: --target='' --recursive=${_r%%:*} installs WITHOUT a first snapshot" "calls=$(cat "$WORK/seed-calls" 2>/dev/null) :: $(printf '%s' "$out" | tail -3)"
     fi
+    # A copy takes only --recursive=flat (atomic with a target is refused by the verb).
+    [ "${_r%%:*}" = flat ] || continue
     rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
     out="$(runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --recursive="${_r%%:*}" --config="$CFG")"
     if grep -qE -- "-n -m automated_hourly_ .* ${_r#*:} rpool/data hdd/backups\$" "$WORK/seed-calls" 2>/dev/null; then
