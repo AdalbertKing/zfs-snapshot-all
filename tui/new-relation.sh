@@ -579,6 +579,14 @@ is_passive_copy() {
 # swojej poprzedniczki wyszło PASYWNE i przestało robić migawki. Pyta więc kreator, a admin
 # odpowiada na podstawie faktów (ile i jak stara najnowsza); "resztki" = --own-snapshots.
 CHAIN_ANS=""; CHAIN_FOR=""
+# U138 dla backupu i lustra (wlasciciel 2026-11-03 "Rob U"): ten sam przelacznik, gdy na zrodle nie ma
+# migawek rodziny (okna lancucha wtedy nie ma). Kopia lokalna ma swoje is_passive_copy.
+passive_offered() {   # kopia bez okna lancucha: przelacznik Pasywnie i szablon pasywny sa w grze
+    { is_local_copy || [ "$MODE" = backup ] || [ "$MODE" = sync ]; } && ! sync_from_chain
+}
+passive_forced() {
+    { [ "$MODE" = backup ] || [ "$MODE" = sync ]; } && ! sync_from_chain && [ "${FORCE_PASSIVE:-0}" -eq 1 ]
+}
 step_passive() {   # U138: kopia lokalna pasywnie, choc na zrodle nie ma jeszcze migawek rodziny
     local def=no; [ "${FORCE_PASSIVE:-0}" -eq 1 ] && def=yes
     geom
@@ -687,13 +695,18 @@ step_profile() {
         # Ukryte (od 2026-10-22 także fabryczne spoza piątki) nie idą na listę -- z jednym
         # wyjątkiem: szablon polecany przy łańcuchu (passive-flat), bez którego zalecenie
         # wskazywałoby coś, czego nie da się wybrać.
-        [ "${hd:-0}" = 1 ] && ! { [ "$chain" -eq 1 ] && [ "$n" = "$REC_PROFILE" ]; } && continue
+        # U139 (wlasciciel 2026-11-01: "przydalby sie szablon pasywny"): kopia (lokalna, backup,
+        # lustro) bez migawek rodziny na zrodle tez widzi passive-flat; jego wybor = pasywnie.
+        [ "${hd:-0}" = 1 ] && ! { [ "$n" = "$REC_PROFILE" ] && { [ "$chain" -eq 1 ] || passive_offered; }; } && continue
+        # W15 (kampania 2026-11-03): migawki zdalne odrzucaja drabine GFS -- nie pokazujemy jej.
+        [ "$MODE" = snaponly ] && case "$w" in *"[GFS]"*) true ;; *) false ;; esac && continue
         # ZNACZNIKI ZARAZ ZA NAZWĄ, opis retencji na końcu: przy przycięciu
         # wiersza do okna (U5) ginie koniec opisu, nigdy [zamraża]/[drabina]/[polecany]
         # -- to one rozstrzygają wybór (kroki 8 i 9).
         local marks="" mech="" kp
         kp="$(T 'trzyma %s')"; kp="${kp%'%s'}"     # "trzyma " / "keeps "
         [ "$chain" -eq 1 ] && [ "$n" = "$REC_PROFILE" ] && marks="${marks}$(T '[polecany]') "
+        [ "$chain" -eq 0 ] && [ "$n" = "$REC_PROFILE" ] && marks="${marks}$(T '[pasywny]') "
         [ "$f" = 1 ] && marks="${marks}$(T '[zamraża]') "
         [ "$sh" = ladder ] && { marks="${marks}$(T '[drabina]') "; has_ladder=1; }
         # Kampania 3 (2026-10-22, 80x24): sposób liczenia ([N najnowszych]/[GFS]/[wg wieku])
@@ -728,8 +741,7 @@ step_profile() {
         # Szablon jest tu RETENCJĄ ŹRÓDŁA (celu nie ma). Drabina GFS na szczeblu
         # (np. default) jest odrzucana przy aktywacji -- polecany szablon liczony.
         q6="$(T 'Jak długo trzymać migawki na źródle?')"
-        lead="${lead}$(T 'Migawki zdalne: szablon z drabiną GFS na szczeblu zostanie odrzucony przy aktywacji -- wybierz szablon liczony, np. d7h24.\n\n')"
-        tl=$((tl + 3))
+        # W15: szablonow GFS juz tu nie ma (odrzucalaby je aktywacja), wiec i ostrzezenia o nich.
         [ "$def" = default ] && in_list d7h24 "${items[@]}" && def=d7h24
     fi
     wt --title "$(title 6 "$q6")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
@@ -740,6 +752,8 @@ step_profile() {
     else
         drop_manual_draft
         PROFILE="$WT_OUT"
+        # U139: szablon pasywny bez okna lancucha = przelacznik Pasywnie (Zaawansowane) na "tak".
+        passive_offered && [ "$PROFILE" = "$REC_PROFILE" ] && FORCE_PASSIVE=1
     fi
     f="$(awk -F'\t' -v n="$PROFILE" '$1==n{print $5}' "$TMPD/prof.tsv")"
     case "$f" in 1) FREEZE=1 ;; *) FREEZE=0 ;; esac
@@ -1024,7 +1038,7 @@ build_argv() {   # [install] -> ARGV[]
     # U141: migawki zdalne, rodzinę robi ktoś inny -- osobna rodzina z etykietą kolektora.
     [ "$MODE" = snaponly ] && sync_from_chain && [ "$(chain_ans)" = stamp ] && ARGV+=("--stamp-family")
     # Kopia lokalna z cudzych migawek (replika pvesr): przyjmuje, niczego na źródle nie tworzy ani nie kasuje.
-    is_passive_copy && ARGV+=("--passive")
+    if is_passive_copy || passive_forced; then ARGV+=("--passive"); fi
     a="$(account_name)"; [ -n "$a" ] && ARGV+=("--local-user=$a")
     [ "$GRANT" -eq 1 ] && ARGV+=("--grant-remotely")
     [ "$GRANT" -eq 1 ] && [ "$FREEZE" -eq 1 ] && [ "$GQUIESCE" -eq 1 ] && ARGV+=("--grant-quiesce")
@@ -1094,7 +1108,8 @@ summary_text() {
         for i in "${!B_ROOT[@]}"; do echo "    ${B_ROOT[$i]}  -- $(describe "$i")"; done
     fi
     echo "$(Tv 'Sposób:  $(mode_words).   Nazwa: $RNAME.   Konto: ${a:-root}.' '$(mode_words)' "$(mode_words)" '$RNAME' "$RNAME" '${a:-root}' "${a:-root}")"
-    echo "$(T 'Szablon:') $( [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ] && echo "$(Tv 'Ręcznie -- $PROFILE' '$PROFILE' "$PROFILE")" || echo "$PROFILE")$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" '$1==n{print "  (" $3 "; " $2 "; " $4 ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "$(Tv '; u źródła: $SRCPROF' '$SRCPROF' "$SRCPROF")")"
+    # W6 (kampania 2026-11-03): kopia pasywna niczego nie zamraża -- opis szablonu bez "zamraża".
+    echo "$(T 'Szablon:') $( [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ] && echo "$(Tv 'Ręcznie -- $PROFILE' '$PROFILE' "$PROFILE")" || echo "$PROFILE")$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" -v pas="$( { is_passive_copy || passive_forced; } && echo 1)" '$1==n{print "  (" $3 "; " $2 (pas ? "" : "; " $4) ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "$(Tv '; u źródła: $SRCPROF' '$SRCPROF' "$SRCPROF")")"
     if [ "$MODE" = snaponly ] || [ "$NOCOPY" -eq 1 ]; then :    # bez kopii: prefiksy nie dotyczą
     elif [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
     else echo "$(T 'Pomijane migawki: żadne (kopiowane wszystkie).')"; fi
@@ -1125,7 +1140,7 @@ summary_text() {
             echo "$(Tv '  Szablon $PROFILE dołoży tam WŁASNE migawki -- na kopiach innego kolektora to psuje jego kopie.' '$PROFILE' "$PROFILE")"
             echo "$(Tv '  Bez własnych migawek: pole Harmonogram -> $REC_PROFILE.' '$REC_PROFILE' "$REC_PROFILE")"
         fi
-    elif is_passive_copy; then
+    elif is_passive_copy || passive_forced; then
         echo "$(T 'PASYWNIE: migawki na źródle robi kto inny (np. replika pvesr) -- kopia je tylko przyjmuje,')"
         echo "$(T '  niczego na źródle nie tworzy ani nie kasuje (--passive); retencja dotyczy samych kopii.')"
     fi
@@ -1142,7 +1157,7 @@ summary_text() {
     fi
     [ "$RAW" -eq 1 ] && echo "$(T 'Wysyłka zaszyfrowana (raw): kopia leży w celu zaszyfrowana, ten host nie potrzebuje klucza.')"
     if [ "$MODE" = local ]; then
-        [ "$FREEZE" -eq 1 ] && ! is_passive_copy && echo "$(T 'Zamrażanie: goście tego hosta, przed migawkami dobowymi i rzadszymi.')"
+        [ "$FREEZE" -eq 1 ] && ! is_passive_copy && ! passive_forced && echo "$(T 'Zamrażanie: goście tego hosta, przed migawkami dobowymi i rzadszymi.')"
         echo
         echo "$(T 'Komenda (to samo wpisałbyś z palca):')"
         cmd_oneline; echo
@@ -1305,9 +1320,9 @@ field_applies() {   # <pole> -> 0, gdy pole jest w tej relacji
         target) [ "$MODE" = backup ] || { [ "$MODE" = local ] && [ "$NOCOPY" -eq 0 ]; } ;;
         # U32: lustro trzyma to, co źródło -- osobnej retencji "u źródła" nie ma.
         # Pasywna kopia lokalna nie ma retencji źródła -- migawki źródła nie są jej.
-        srcret) [ "$MODE" = backup ] || { is_local_copy && ! is_passive_copy; } ;;
-        # U138: pasywnie bez okna lancucha -- tylko kopia lokalna, gdy na zrodle nie ma migawek rodziny.
-        passive) is_local_copy && ! sync_from_chain ;;
+        srcret) { [ "$MODE" = backup ] && ! passive_forced; } || { is_local_copy && ! is_passive_copy; } ;;
+        # U138: pasywnie bez okna lancucha -- kopia lokalna, backup, lustro, gdy na zrodle nie ma migawek rodziny.
+        passive) passive_offered ;;
         extra)  [ "$NOCOPY" -eq 0 ] ;;
         # Tylko gdy źródło ma już migawki naszej rodziny (lustro, backup).
         chain)  { [ "$MODE" = sync ] || [ "$MODE" = backup ] || [ "$MODE" = snaponly ] || is_local_copy; } && sync_from_chain ;;
@@ -1344,6 +1359,8 @@ field_value() {   # <pole> -> wartość na karcie ("" = jeszcze nie ustawione)
         chain)  case "$(chain_ans)" in
                     chain) echo "$(T 'przyjmowane -- robi je ktoś inny (łańcuch)')" ;;
                     own)   echo "$(T 'własne -- stare to resztki')" ;;
+                    # W16 (kampania 2026-11-03): odpowiedz U141 "inny kolektor" pokazywala sie jako "…".
+                    stamp) echo "$(T 'robi je ktoś inny -- ta relacja: osobna rodzina z etykietą')" ;;
                 esac ;;
         name)   echo "$RNAME" ;;
         acct)   a="$(account_name)"; echo "${a:-root}" ;;

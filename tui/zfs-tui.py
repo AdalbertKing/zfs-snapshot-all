@@ -1308,6 +1308,11 @@ def mark_pending(rows, data):
 
 
 def worst(verdicts):
+    # W2 (kampania 2026-11-03): szczebel, ktory juz chodzi, i szczeble czekajace na pierwszy
+    # termin -- relacja jest "aktualna"; samo czekanie nie jest gorsze od pracy. "Czeka" tylko,
+    # gdy nic jeszcze nie ruszylo.
+    if "OK" in verdicts and "CZEKA" in verdicts and not set(verdicts) - {"OK", "CZEKA"}:
+        return "OK"
     for v in VERDICT_ORDER:
         if v in verdicts:
             return v

@@ -1465,6 +1465,7 @@
 "[atrapa] podgląd: ": "[stub] preview: ",
 "[drabina]": "[ladder]",
 "[obecny]": "[in use]",
+"[pasywny]": "[passive]",
 "[polecany]": "[recommended]",
 "[rc=%s]  Enter wraca do okien\n": "[rc=%s]  Enter returns to the windows\n",
 "[tryb testowy] nie uruchomiono, zapisano do dziennika:": "[test mode] not run, written to the log:",
