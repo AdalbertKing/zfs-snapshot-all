@@ -3553,9 +3553,9 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}
+0${T}zfsbackup
 0${T}profile
 0${T}d30
-0${T}zfsbackup
 0${T}adv
 0${T}extra
 0${T}grant|quies
@@ -4248,9 +4248,9 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}adv
 0${T}
 0${T}zfsbackup
+0${T}adv
 0${T}extra
 0${T}grant
 0${T}__done__
