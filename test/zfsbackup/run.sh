@@ -5103,8 +5103,9 @@ fi
 
 # 3b. --own-snapshots (2026-10-24): the admin's declaration that the family already on
 # the source is leftovers. Written as OWN_SNAPSHOTS=1 ONLY when given (proftest2 above is
-# the control: same command without the flag, no such field); opposite of --passive and
-# meaningless for --snaponly, both refused before any record exists.
+# the control: same command without the flag, no such field); opposite of --passive,
+# refused before any record exists. Since U141 (2026-11-03) it is ALSO a snaponly answer
+# (the plain family on the source is leftovers), and its opposite there is --stamp-family.
 ( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
   cmd_add_client "ownsnap" --lan=10.0.0.1 --datasets="tank/x" --own-snapshots ) >/dev/null 2>&1
 if grep -q "^OWN_SNAPSHOTS=1$" "$P53/clients/ownsnap.conf" && ! grep -q "OWN_SNAPSHOTS" "$P53/clients/proftest2.conf"; then
@@ -5119,12 +5120,21 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'opposite answers' && [ ! -e 
 else
     bad "add-client: --passive --own-snapshots" "rc=$rc" "$out"
 fi
+# U141: --snaponly --own-snapshots is no longer refused at the command line (the old
+# refusal's words must be gone); --stamp-family with --own-snapshots, and --stamp-family
+# without --snaponly, are -- before any record exists.
 out=$( ( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
   cmd_add_client "ownsnaponly" --host=10.0.0.1 --snaponly --datasets="tank/x" --own-snapshots ) 2>&1 ); rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'snaponly' && printf '%s' "$out" | grep -q -- '--own-snapshots' && [ ! -e "$P53/clients/ownsnaponly.conf" ]; then
-    ok "add-client: --snaponly together with --own-snapshots is refused, no record is created"
+o2=$( ( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
+  cmd_add_client "stampown" --host=10.0.0.1 --snaponly --datasets="tank/x" --own-snapshots --stamp-family ) 2>&1 ); rc2=$?
+o3=$( ( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
+  cmd_add_client "stampcopy" --host=10.0.0.1 --datasets="tank/x" --stamp-family ) 2>&1 ); rc3=$?
+if ! printf '%s' "$out" | grep -q "snaponly families are always this collector's own" \
+   && [ "$rc2" -ne 0 ] && printf '%s' "$o2" | grep -q 'opposite answers' && [ ! -e "$P53/clients/stampown.conf" ] \
+   && [ "$rc3" -ne 0 ] && printf '%s' "$o3" | grep -q -- '--stamp-family names the family of a snaponly' && [ ! -e "$P53/clients/stampcopy.conf" ]; then
+    ok "add-client: --snaponly --own-snapshots passes the flag check (U141); --stamp-family with --own-snapshots, or without --snaponly, is refused and no record is created"
 else
-    bad "add-client: --snaponly --own-snapshots" "rc=$rc" "$out"
+    bad "add-client: U141 flag checks" "own+snaponly rc=$rc: $out" "stamp+own rc=$rc2: $o2" "stamp copy rc=$rc3: $o3"
 fi
 
 # 4. apply_client_profile_choice: the wiring that turns the stored field into
@@ -14860,16 +14870,74 @@ printf '[defaults]\n\thost_label = pve10\n\tmonitor_schedule = 7 * * * *\n' > "$
 so_emit m12w4d7h24-age rel1 "$SO/c.conf" > "$SO/emit.out"; rc=$?
 so_emit m12w4d7h24-age rel1 "$SO/c.conf" >> "$SO/emit.out" || rc=1     # a re-render replaces, never duplicates
 bash "$REPO/gen-cron.sh" -c "$SO/c.conf" > "$SO/cron" 2> "$SO/cron.err" || rc=1
-so_snap=$(grep -c '/snapget.sh -s -m "pve10_automated_' "$SO/cron")
+# U141 (variant B): a NEW relationship's family is the plain tier prefix -- no collector stamp.
+so_snap=$(grep -c '/snapget.sh -s -m "automated_' "$SO/cron")
 so_bad=$(grep '/snapget.sh' "$SO/cron" | grep -vc 'snapget.sh -s ')
-so_prune=$(grep '/delsnaps.sh' "$SO/cron" | grep -c '"zfsbackup-pve10@10.0.0.9:hdd/so/[ab]" "pve10_automated_')
+so_prune=$(grep '/delsnaps.sh' "$SO/cron" | grep -c '"zfsbackup-pve10@10.0.0.9:hdd/so/[ab]" "automated_')
 so_prune_all=$(grep -c '/delsnaps.sh' "$SO/cron")
-so_mon=$(grep -c 'check-snap-age.sh .*"zfsbackup-pve10@10.0.0.9:hdd/so/[ab]" "pve10_automated_' "$SO/cron")
+so_mon=$(grep -c 'check-snap-age.sh .*"zfsbackup-pve10@10.0.0.9:hdd/so/[ab]" "automated_' "$SO/cron")
 if [ "$rc" -eq 0 ] && [ "$so_snap" = 8 ] && [ "$so_bad" = 0 ] && [ "$so_prune" = 8 ] && [ "$so_prune_all" = 8 ] && [ "$so_mon" = 8 ] \
    && ! grep '/snapget.sh' "$SO/cron" | grep -q '"zfsbackup-pve10@10.0.0.9:hdd/so/[ab]" "'; then
-    ok "snaponly: 2 datasets x 4 tiers -> snapget -s with the collector's own family (pve10_*), no destination argument; source prune and remote monitor of that family only; a re-render does not duplicate"
+    ok "snaponly: 2 datasets x 4 tiers -> snapget -s with the PLAIN family (automated_*, U141), no destination argument; source prune and remote monitor of that family only; a re-render does not duplicate"
 else
     bad "snaponly: emitted sections through gen-cron" "rc=$rc snap=$so_snap bad=$so_bad prune=$so_prune/$so_prune_all mon=$so_mon" "$(cat "$SO/emit.out" "$SO/cron.err")" "$(head -5 "$SO/cron")"
+fi
+# U141: the stamp. (a) FAMILY_STAMP=1 in the record -> '<label>_' families; (b) a relationship
+# installed BEFORE the field (stamped sections, no FAMILY_STAMP) keeps its stamp on a re-render;
+# (c) the control: the plain relationship above stays plain on a re-render, and its decision is 0.
+printf '[defaults]\n\thost_label = pve10\n\tmonitor_schedule = 7 * * * *\n' > "$SO/st.conf"
+( FAMILY_STAMP=1; so_emit m12w4d7h24-age rel1 "$SO/st.conf" ) > /dev/null 2>&1
+st_a=$(grep -c '^[[:space:]]*prefix[[:space:]]*= pve10_automated_' "$SO/st.conf")
+so_emit m12w4d7h24-age rel1 "$SO/st.conf" > /dev/null 2>&1           # no FAMILY_STAMP: read back from the installed sections
+st_b=$(grep -c '^[[:space:]]*prefix[[:space:]]*= pve10_automated_' "$SO/st.conf")
+st_plain=$(grep -c '^[[:space:]]*prefix[[:space:]]*= automated_' "$SO/st.conf")
+st_dec=$( ( hostname() { echo PVE10; }; LOAD_ACCOUNT=zfsbackup-pve10; snaponly_stamp_decide "$SO/st.conf" rel1 ) 2>&1 )
+st_dec0=$( ( hostname() { echo PVE10; }; LOAD_ACCOUNT=zfsbackup-pve10; snaponly_stamp_decide "$SO/c.conf" rel1 ) 2>&1 )
+st_new=$( ( hostname() { echo PVE10; }; LOAD_ACCOUNT=zfsbackup-pve10; snaponly_stamp_decide "$SO/c.conf" brandnew ) 2>&1 )
+if [ "$st_a" = 4 ] && [ "$st_b" = 4 ] && [ "$st_plain" = 0 ] && [ "$st_dec" = 1 ] && [ "$st_dec0" = 0 ] && [ "$st_new" = 0 ]; then
+    ok "snaponly U141: FAMILY_STAMP=1 stamps the 4 tier families with the collector label; a re-render without the field keeps an installed stamp; a plain relationship and a new one decide 0"
+else
+    bad "snaponly U141 stamp decision" "stamped=$st_a after-rerender=$st_b plain-in-stamped=$st_plain decide(stamped)=$st_dec decide(plain)=$st_dec0 decide(new)=$st_new" "$(grep -n 'prefix' "$SO/st.conf")"
+fi
+# U141: a PLAIN family is guarded by snaponly_assert_plain_family_free. Stub ssh answers
+# `zfs allow` and `zfs list -t snapshot`; no real host. Cases: another collector's peer
+# account with destroy (refused, names --stamp-family); a NEW relationship whose family
+# already has snapshots below a root (refused, names both answers); the same with
+# OWN_SNAPSHOTS=1, or an installed relationship (pass); a STAMPED other family only (pass,
+# the control: 'pve10_automated_hourly_' does not start with 'automated_hourly_');
+# an unreadable zfs list (refused, fails closed).
+PF="$WORK/plainfam"; mkdir -p "$PF/bin"
+cat > "$PF/bin/ssh" <<'EOF'
+#!/bin/sh
+case "$*" in
+  *"zfs allow"*"tank/foreign"*) printf '%b' '---- Permissions on tank/foreign ----\nLocal+Descendent permissions:\n\tuser zfsbackup-pve9 bookmark,destroy,snapshot\n\tuser zfsbackup-me destroy,snapshot\n' ;;
+  *"zfs allow"*) printf '%b' 'Local+Descendent permissions:\n\tuser zfsbackup-me destroy,snapshot\n\tuser zfsbackup destroy,snapshot\n' ;;
+  *"zfs list"*"tank/left"*) printf '%s\n' 'tank/left/vm-1@automated_hourly_2026-11-01_10-01-01' 'tank/left/vm-1@automated_hourly_2026-11-01_11-01-01' 'tank/left@manual' ;;
+  *"zfs list"*"tank/stamped"*) printf '%s\n' 'tank/stamped/vm-1@pve10_automated_hourly_2026-11-01_10-01-01' ;;
+  *"zfs list"*"tank/broken"*) echo 'cannot open' >&2; exit 1 ;;
+  *"zfs list"*) : ;;
+esac
+EOF
+chmod +x "$PF/bin/ssh"
+printf '[template:snaponly__rel1__hourly]\n\tprefix        = automated_hourly_\n\tpattern       = automated_hourly_\n[template:snaponly__rel1__daily]\n\tprefix        = automated_daily_\n' > "$PF/wf.conf"
+pff() {   # <new 0|1> <dataset...> -> output; rc
+    local n="$1"; shift
+    ( PATH="$PF/bin:$PATH"; hostname() { echo PVE10; }; LOAD_ACCOUNT=zfsbackup-pve10
+      snaponly_assert_plain_family_free "$PF/wf.conf" rel1 "$n" zfsbackup-me 10.0.0.9 22 /dev/null zfs-client-x /dev/null "$@" && echo FREE ) 2>&1
+}
+pf_foreign=$(pff 1 tank/foreign)
+pf_left=$(pff 1 tank/left)
+pf_own=$( OWN_SNAPSHOTS=1 pff 1 tank/left )
+pf_inst=$(pff 0 tank/left)
+pf_stamp=$(pff 1 tank/stamped)
+pf_broken=$(pff 1 tank/broken)
+if printf '%s' "$pf_foreign" | grep -q 'another collector can already DELETE' && printf '%s' "$pf_foreign" | grep -q -- '--stamp-family' && ! printf '%s' "$pf_foreign" | grep -q FREE \
+   && printf '%s' "$pf_left" | grep -q '2 x automated_hourly_' && printf '%s' "$pf_left" | grep -q -- '--own-snapshots' && printf '%s' "$pf_left" | grep -q -- '--stamp-family' && ! printf '%s' "$pf_left" | grep -q FREE \
+   && [ "$(printf '%s' "$pf_own" | tail -1)" = FREE ] && [ "$(printf '%s' "$pf_inst" | tail -1)" = FREE ] && [ "$(printf '%s' "$pf_stamp" | tail -1)" = FREE ] \
+   && printf '%s' "$pf_broken" | grep -q 'failed' && ! printf '%s' "$pf_broken" | grep -q FREE; then
+    ok "snaponly U141 plain-family guard: a foreign peer pruner and a new relationship over existing family snapshots are refused with the answers named; --own-snapshots, an installed relationship and a stamped other family pass; an unreadable zfs list fails closed"
+else
+    bad "snaponly U141 plain-family guard" "foreign: $pf_foreign" "left: $pf_left" "own: $pf_own" "installed: $pf_inst" "stamped: $pf_stamp" "broken: $pf_broken"
 fi
 # The recursive root takes -R on all three (snapshot, prune, monitor); the plain one none.
 if ! grep -q '"zfsbackup-pve10@10.0.0.9:hdd/so/b"' "$SO/cron"    || grep '"zfsbackup-pve10@10.0.0.9:hdd/so/b"' "$SO/cron" | grep -v -- ' -R ' | grep -q . \
@@ -15071,8 +15139,8 @@ out=$( ( apply_client_profile_choice() { echo "TRIPWIRE profile read"; exit 9; }
          snaponly_prepare_workfile "$RR/c.conf" rr; echo "REUSED=$SNAPONLY_REUSED DS=${SOURCE_PRUNE_EMITTED_DS[*]} PSD=$PEER_SAVED_DATASETS" ) 2>&1 ); rc=$?
 bash "$REPO/gen-cron.sh" -c "$RR/c.conf" > "$RR/cron" 2>&1
 if [ "$rc" -eq 0 ] && cmp -s "$RR/c.conf" "$RR/edited.conf" && printf '%s' "$out" | grep -q 'REUSED=1 DS=hdd/so/a hdd/so/b PSD=hdd/so/a hdd/so/b' \
-   && ! printf '%s' "$out" | grep -q TRIPWIRE && grep -q 'pve10_automated_hourly_" -H240$' "$RR/cron" \
-   && grep -q '^43 4 \* \* \* .*snapget.sh -s -m "pve10_automated_daily_"' "$RR/cron" && grep -q '"pve10_automated_hourly_" 100m ' "$RR/cron"; then
+   && ! printf '%s' "$out" | grep -q TRIPWIRE && grep -q 'automated_hourly_" -H240$' "$RR/cron" \
+   && grep -q '^43 4 \* \* \* .*snapget.sh -s -m "automated_daily_"' "$RR/cron" && grep -q '"automated_hourly_" 100m ' "$RR/cron"; then
     ok "snaponly F1.1: re-activation keeps the edited retain (-H240), schedule and monitor byte-for-byte, with the profile deleted and never read"
 else
     bad "snaponly F1.1: re-activation preserves installed policy" "rc=$rc $out" "$(diff "$RR/edited.conf" "$RR/c.conf" | head -5)" "$(grep -c . "$RR/cron") cron lines"
@@ -15197,7 +15265,7 @@ r=[j for j in d.get('jobs',[]) if j.get('label')=='rr']
 print(sum(1 for j in r if j.get('section_kind')=='snaponly' and j.get('direction')=='snaponly'),
       sum(1 for j in r if j.get('section_kind')=='prune'),
       sum(1 for j in r if j.get('section_kind')=='snaponly' and j.get('direction')=='pull'),
-      sorted({j.get('prefix') for j in r if j.get('section_kind')=='snaponly'}) == ['pve10_automated_daily_','pve10_automated_hourly_','pve10_automated_monthly_','pve10_automated_weekly_'])" 2>&1)
+      sorted({j.get('prefix') for j in r if j.get('section_kind')=='snaponly'}) == ['automated_daily_','automated_hourly_','automated_monthly_','automated_weekly_'])" 2>&1)
 if [ "$sr_rows" = "8 8 0 True" ]; then
     ok "snaponly GUI readers: list-jobs gives the 8 snapshot jobs (kind and direction 'snaponly', the four owned families) beside the 8 source prunes"
 else
@@ -15209,7 +15277,7 @@ out=$( ( cron_known_accounts() { echo root; }; cron_read() { cp "$SR/crontab.roo
 sr_mon=$(printf '%s' "$out" | python -c "
 import json,sys
 d=json.load(sys.stdin)
-m=[x for x in d.get('monitors',[]) if x.get('label')=='rr' and x.get('pattern')=='pve10_automated_hourly_' and not x.get('recursive')]
+m=[x for x in d.get('monitors',[]) if x.get('label')=='rr' and x.get('pattern')=='automated_hourly_' and not x.get('recursive')]
 x=m[0] if m else {}
 print(len(m), x.get('parsed'), x.get('datasets'), x.get('warn'), x.get('crit'), x.get('verdict'))" 2>&1)
 sr_argv=$(tr '\n' ' ' < "$SR/csa.argv" 2>/dev/null)

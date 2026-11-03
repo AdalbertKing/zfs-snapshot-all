@@ -3314,6 +3314,43 @@ if has "$SOWO" "CMD: " && has "$SOWO" " --mode=snaponly " && ! has "$SOWO" "--ta
 else
     bad "new-relation: Migawki zdalnie" "$SOWO" "$SOWP" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | head -12 | tr '\n' ';')"
 fi
+# U141 + U138 (2026-11-03): migawki zdalne bez etykiety kolektora -- gdy rodzina już jest na
+# źródle, kreator pyta, kto ją robi: resztki (--own-snapshots) albo inny twórca (osobna rodzina,
+# --stamp-family). Migawki ma tylko DZIECKO korzenia (jak repliki pvesr pod rpool/data): okno
+# i tak musi się pokazać. Kontrola: korzeń bez migawek rodziny w całym drzewie -- bez okna i flag.
+NRU="$(mktemp -d)"; cp "$P10"/*.json "$NRU/"
+"$PY" - "$NRU/list-datasets-pve9b.json" <<'PYEOF'
+import sys, json, time
+p = sys.argv[1]; d = json.load(open(p, encoding="utf-8"))
+for x in d["datasets"]:
+    hit = x["name"] == "hdd/vm-disks/vm-201-disk-0"
+    x["own_snapshots"] = 3 if hit else 0
+    x["family_snapshots"] = 3 if hit else 0
+    x["family_newest"] = int(time.time()) - 3600 if hit else 0
+json.dump(d, open(p, "w", encoding="utf-8"))
+PYEOF
+u141_ans() {   # <odpowiedz w oknie rodziny: own|stamp>
+    printf '%s' "0${T}snaponly
+0${T}192.168.28.98
+0${T}
+0${T}$1
+0${T}d7h24
+0${T}pve9b
+0${T}create
+0${T}
+"; }
+U141S=$(nr_run "$(u141_ans stamp)" NR_FIX="$NRU" NR_TREE='goto:hdd/vm-disks,space,enter'); U141SW="$(cat "$NR/wt.log")"
+U141O=$(nr_run "$(u141_ans own)" NR_FIX="$NRU" NR_TREE='goto:hdd/vm-disks,space,enter')
+U141C=$(nr_run "$SOW" NR_FIX="$NRU" NR_TREE='goto:hdd/data,space,enter'); U141CW="$(cat "$NR/wt.log")"
+if has "$U141S" 'CMD: ' && has "$U141S" ' --mode=snaponly ' && has "$U141S" ' --stamp-family' && ! has "$U141S" '--own-snapshots' \
+   && has "$U141SW" 'Robi je inny kolektor albo cron' && has "$U141SW" 'OSOBNA RODZINA' && has "$U141SW" 'hdd/vm-disks/vm-201-disk-0' \
+   && has "$U141O" 'CMD: ' && has "$U141O" ' --own-snapshots' && ! has "$U141O" '--stamp-family' \
+   && has "$U141C" 'CMD: ' && ! has "$U141C" '--stamp-family' && ! has "$U141C" '--own-snapshots' && ! has "$U141CW" 'Robi je inny kolektor albo cron'; then
+    ok "new-relation U141/U138: migawki zdalne nad rodziną, którą ma tylko dziecko korzenia -- okno pyta; 'inny twórca' = --stamp-family i OSOBNA RODZINA w planie, 'resztki' = --own-snapshots; korzeń bez rodziny -- bez okna i bez flag"
+else
+    bad "new-relation U141/U138: rodzina przy migawkach zdalnych" "stamp: $U141S" "own: $U141O" "kontrola: $U141C" "$(printf '%s' "$U141SW" | grep -E 'OSOBNA|Robi je|vm-201' | cut -c1-200)"
+fi
+rm -rf "$NRU"
 NRTS="0${T}default
 0${T}pve9b
 0${T}adv
