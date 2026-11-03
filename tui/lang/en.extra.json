@@ -833,5 +833,5 @@
 "Na źródle nie ma jeszcze migawek naszej rodziny. Pasywnie: kopia tylko PRZYJMUJE migawki,\\nktóre zrobi ktoś inny (np. relacja migawek zdalnych + replika pvesr), i niczego na źródle\\nnie tworzy ani nie kasuje. Do czasu, aż tamte się pojawią, kopia nie ma czego kopiować.": "The source has no snapshots of our family yet. Passive: the copy only TAKES snapshots\\nthat someone else makes (e.g. a remote-snapshot relation + a pvesr replica), and creates\\nor deletes nothing on the source. Until those appear, the copy has nothing to copy.",
 "                 (pozycja = popraw krok; dodatki w Zaawansowane) i": "                 (item = fix a step; extras in Advanced) and",
 "[pasywny]": "[passive]",
-"robi je ktoś inny -- ta relacja: osobna rodzina z etykietą": "someone else makes them -- this relation: a separate family with a label"
+"inny twórca -- osobna rodzina z etykietą": "another creator -- a separate family with a label"
 }

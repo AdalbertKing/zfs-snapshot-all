@@ -3449,7 +3449,7 @@ U141S=$(nr_run "$(u141_ans stamp)" NR_FIX="$NRU" NR_TREE='goto:hdd/vm-disks,spac
 U141O=$(nr_run "$(u141_ans own)" NR_FIX="$NRU" NR_TREE='goto:hdd/vm-disks,space,enter')
 U141C=$(nr_run "$SOW" NR_FIX="$NRU" NR_TREE='goto:hdd/data,space,enter'); U141CW="$(cat "$NR/wt.log")"
 if has "$U141S" 'CMD: ' && has "$U141S" ' --mode=snaponly ' && has "$U141S" ' --stamp-family' && ! has "$U141S" '--own-snapshots' \
-   && has "$U141SW" 'Robi je inny kolektor albo cron' && has "$U141SW" 'OSOBNA RODZINA' && has "$U141SW" 'robi je ktoś inny -- ta relacja: osobna rodzina z etykietą' && has "$U141SW" 'hdd/vm-disks/vm-201-disk-0' \
+   && has "$U141SW" 'Robi je inny kolektor albo cron' && has "$U141SW" 'OSOBNA RODZINA' && has "$U141SW" 'inny twórca -- osobna rodzina z etykietą' && has "$U141SW" 'hdd/vm-disks/vm-201-disk-0' \
    && has "$U141O" 'CMD: ' && has "$U141O" ' --own-snapshots' && ! has "$U141O" '--stamp-family' \
    && has "$U141C" 'CMD: ' && ! has "$U141C" '--stamp-family' && ! has "$U141C" '--own-snapshots' && ! has "$U141CW" 'Robi je inny kolektor albo cron'; then
     ok "new-relation U141/U138: migawki zdalne nad rodziną, którą ma tylko dziecko korzenia -- okno pyta; 'inny twórca' = --stamp-family i OSOBNA RODZINA w planie, 'resztki' = --own-snapshots; korzeń bez rodziny -- bez okna i bez flag"

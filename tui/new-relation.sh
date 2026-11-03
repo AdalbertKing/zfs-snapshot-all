@@ -1362,7 +1362,7 @@ field_value() {   # <pole> -> wartość na karcie ("" = jeszcze nie ustawione)
                     chain) echo "$(T 'przyjmowane -- robi je ktoś inny (łańcuch)')" ;;
                     own)   echo "$(T 'własne -- stare to resztki')" ;;
                     # W16 (kampania 2026-11-03): odpowiedz U141 "inny kolektor" pokazywala sie jako "…".
-                    stamp) echo "$(T 'robi je ktoś inny -- ta relacja: osobna rodzina z etykietą')" ;;
+                    stamp) echo "$(T 'inny twórca -- osobna rodzina z etykietą')" ;;
                 esac ;;
         name)   echo "$RNAME" ;;
         acct)   a="$(account_name)"; echo "${a:-root}" ;;
