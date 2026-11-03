@@ -5,7 +5,7 @@
 #
 # Why this exists rather than a plink call written out at each call site:
 #
-# An unattended agent needs to run suites on pve0, because they are too slow
+# An unattended agent needs to run suites on the test host (pve9), because they are too slow
 # under MSYS. Granting it `plink -batch root@<host> *` in a permission rule would
 # be the obvious way, and it is the wrong one: permission rules match a PREFIX of
 # the command string, so everything after the matched prefix is unconstrained. A
@@ -16,7 +16,7 @@
 # builds the remote command itself. The name is validated against the suites that
 # actually exist in this checkout, so it cannot carry shell metacharacters, a
 # path, or a second command -- there is no argument an unattended caller can pass
-# that turns this into "run something else on pve0".
+# that turns this into "run something else on the test host".
 #
 # What it deliberately does NOT do: no writes outside the throwaway test clone, no
 # crontab, no zpool, no zfs on production datasets. A suite that needs any of that
@@ -26,8 +26,10 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-HOST="${REMOTE_SUITE_HOST:-192.168.11.10}"
-CLONE="${REMOTE_SUITE_CLONE:-/root/zsa-test/repo}"
+# The test host is pve9 (lab). It used to default to a CUSTOMER production host (found
+# 2026-11-03) -- suites never run there.
+HOST="${REMOTE_SUITE_HOST:-192.168.28.99}"
+CLONE="${REMOTE_SUITE_CLONE:-/tmp/tt/zfs-snapshot-all}"
 
 die() { echo "remote-suite: $*" >&2; exit 1; }
 
