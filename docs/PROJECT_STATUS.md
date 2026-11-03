@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 5f38fce9bec40cc2 -->
+<!-- status-covers-digest: 7587e0c5e823d6bf -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,13 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **1.0.7: nowa relacja kopii nie wysyła „monitor BROKEN” przed pierwszym biegiem (2026-11-03, W9).**
+  Wydane 1.0.6 (zfsbackup `b6f040f`, tag `v1.0.6`) poszło na lab i na produkcję (Metropolis, Dąbrowska) o :15.
+  Kampania GUI na pve11 po wydaniu znalazła W9: relacja kopii nie robi pierwszej kopii (U137 C), więc cel
+  nie istnieje do pierwszego biegu (kopia pasywna: do pojawienia się migawek rodziny); `check-snap-age.sh`
+  dawał UNKNOWN, a linia monitora w cronie wysyłała „monitor BROKEN” co 15 minut. v2.8: przy `-S` brak
+  datasetu to WAITING od startu, po progach WARNING/CRITICAL; bez `-S` UNKNOWN jak dotąd. Test: `test/monitor` S9
+  (pve9 116/0). Drobne uwagi z tej samej kampanii (W1, W2, W6, W15-W17) czekają na paczkę.
 - **1.0.6: lab pve11 ← pve9 przed wydaniem dla Dąbrowskiej (2026-11-03, gałąź `fix/guard-guest-split`).**
   Scenariusze Dąbrowskiej na żywo: migawki lokalne na koncie zfsbackup obok dwóch starszych relacji,
   migawki zdalne (snaponly) ze zwykłą rodziną `automated_*` przy resztkach rodziny na źródle (`--own-snapshots`),

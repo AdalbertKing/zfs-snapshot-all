@@ -4,6 +4,15 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [1.0.7] — 2026-11-03
+
+- **A new copy relationship no longer mails "monitor BROKEN" before its first run.** Since 1.0.6 a
+  copy relationship takes no first copy, so its target does not exist until its first cron run (a
+  passive copy: until the family appears on the source). The monitor read that as UNKNOWN and its
+  cron line mailed every 15 minutes. `check-snap-age.sh` v2.8: with the relationship's start (`-S`)
+  a dataset that does not exist yet is WAITING, and WARNING/CRITICAL past the thresholds; without
+  `-S` a missing dataset is still UNKNOWN.
+
 ## [1.0.6] — 2026-11-03
 
 - **A new or changed relationship takes no snapshot and no first copy.** Every tier starts at its

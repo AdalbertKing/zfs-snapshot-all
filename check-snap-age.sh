@@ -104,12 +104,17 @@ set -o pipefail
 # first run) is not an empty container: its root is checked as an explicit target (v2.7, found
 # live on pve11 2026-11-03 -- a new relation read OK, not WAITING, and would have stayed silent
 # had its cron never run). A tree with any snapshot keeps the container leniency.
+# With -S a dataset that does not exist YET is not a typo: a copy relationship takes no first
+# copy (U137 C), so its target appears at the first cron run -- or, passive, after the family
+# appears on the source. It is WAITING from the start, and late past the thresholds like any
+# tier (v2.8; before it every new copy relationship read UNKNOWN and its cron line mailed
+# "monitor BROKEN" every 15 minutes until the first copy -- pve11, 2026-11-03).
 #
 # Example:
 #   ./check-snap-age.sh "rpool/data/vm-106-disk-0" "automated_hourly" 90m 3h
 #   ./check-snap-age.sh -R "hdd/backups/pve1" "automated_daily" 30h 48h
 
-VERSION='v2.7'
+VERSION='v2.8'
 
 EXIT_OK=0
 EXIT_WARNING=1
@@ -447,7 +452,12 @@ check_one() {
     if [ "$rc" -ne 0 ]; then
         # zfs answers "does not exist" with exit 1; every other status means
         # the question was never answered, and says why (255/93/124/127/...).
-        if [ "$rc" = 1 ]; then
+        if [ "$rc" = 1 ] && [ -n "$SINCE" ]; then
+            local not_yet=true waiting=true from_creation=false older=""
+            newest_epoch="$SINCE"; NOT_YET=true
+            check_age_report
+            return
+        elif [ "$rc" = 1 ]; then
             echo "UNKNOWN dataset=$shown -- does not exist (typo, or removed since the config was written)" >&2
         else
             echo "UNKNOWN dataset=$shown -- $(read_failure "$rh" "$rc"); nothing was checked" >&2
@@ -524,6 +534,12 @@ check_one() {
         waiting=true
     fi
 
+    check_age_report
+}
+
+# The age verdict and its line, for check_one. Reads check_one's locals (bash's dynamic
+# scope): newest, newest_epoch, waiting, from_creation, older, shown, not_yet.
+check_age_report() {
     local age=$((NOW - newest_epoch))
     # A timestamp in the future (clock skew, a pool imported from a host whose
     # clock ran ahead) is not negative age, it is no evidence of staleness.
@@ -544,6 +560,7 @@ check_one() {
         detail="pattern=${PATTERN:-(any)} -- no snapshot of this family since the relationship's start ($(date -d "@$SINCE" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$SINCE")); age measured from that start${older:+ (newest before it: $older)}"
         # A dataset created after the start is measured from its creation -- say that one.
         [ "$newest_epoch" != "$SINCE" ] && detail="pattern=${PATTERN:-(any)} -- no snapshot of this family since the relationship's start ($(date -d "@$SINCE" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$SINCE")); the dataset is newer, age measured from its creation"
+        [ "${not_yet:-false}" = true ] && detail="pattern=${PATTERN:-(any)} -- the dataset does not exist yet (made by the first run); age measured from the relationship's start ($(date -d "@$SINCE" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$SINCE"))"
         [ "$sev" -eq 0 ] && label="WAITING"
     elif [ "$from_creation" = true ]; then
         detail="pattern=${PATTERN:-(any)} -- no snapshot found matching this pattern; age measured from dataset creation"
@@ -573,8 +590,9 @@ for entry in "${DATASETS[@]}"; do
     parse_remote "$entry"
     ru="$R_USER"; rh="$R_HOST"; ds="$R_DS"
     if [ "$RECURSE" = true ]; then
-        WALK_SNAP=false
+        WALK_SNAP=false; NOT_YET=false
         check_one "$ru" "$rh" "$ds" false
+        [ "$NOT_YET" = true ] && continue
         out="$(zread "$ru" "$rh" list -H -o name -t filesystem,volume -r "$ds" 2>/dev/null)"; rc=$?
         if [ "$rc" -ne 0 ]; then
             echo "UNKNOWN dataset=${rh:+$ru@$rh:}$ds -- its descendants could not be listed ($(read_failure "$rh" "$rc")); none of them was checked" >&2

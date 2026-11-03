@@ -401,6 +401,17 @@ check "S7 control: the same empty tree WITHOUT -S keeps the container leniency (
 add_ds tank/young $((1 * H))                              # created AFTER a start 5h ago, no snapshot
 case "$(run -S "$S2" -W tank/young automated_ 2h 4h)" in "WAITING dataset=tank/young "*"age measured from its creation"*) ok "S6 a dataset newer than the start: WAITING, measured from its creation, and says so" ;;
   *) bad "S6 a dataset newer than the start says creation" "$(run -S "$S2" -W tank/young automated_ 2h 4h)" ;; esac
+# S9 (v2.8, pve11 2026-11-03): a copy relationship takes no first copy, so its TARGET does not
+# exist until the first run. With -S that is WAITING, late past the thresholds; without -S it
+# stays UNKNOWN (a typo). -R on a root that does not exist yet has no walk to fail.
+case "$(run -S "$S1" -W tank/notyet automated_ 2h 4h)" in "WAITING dataset=tank/notyet "*"does not exist yet"*) ok "S9 -S, target not created yet, started 1h ago: WAITING" ;;
+  *) bad "S9 -S, target not created yet: WAITING" "$(run -S "$S1" -W tank/notyet automated_ 2h 4h)" ;; esac
+check "S9 -S, target still missing 5h after the start: CRITICAL" "2" "$(rc_of -S "$S2" tank/notyet automated_ 2h 4h)"
+check "S9 control: without -S a missing dataset is UNKNOWN" "3" "$(rc_of tank/notyet automated_ 2h 4h)"
+out="$(run -R -S "$S1" -W tank/notyet automated_ 2h 4h)"; rc=$(rc_of -R -S "$S1" tank/notyet automated_ 2h 4h)
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^WAITING dataset=tank/notyet ' && ! printf '%s' "$out" | grep -q UNKNOWN; then
+    ok "S9 -R -S on a root not created yet: WAITING, and no failed walk"
+else bad "S9 -R -S root not created yet" "rc=$rc $out"; fi
 add_snap tank/fresh/c "other_1" $((1 * H))                # any snapshot in the tree: a container again
 check "S8 a tree with any snapshot keeps the leniency for its bare root (child decides)" "0" "$(rc_of -R -S "$S2" tank/fresh other_ 2h 4h)"
 

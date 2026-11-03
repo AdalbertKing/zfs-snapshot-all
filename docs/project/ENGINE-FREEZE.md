@@ -3,7 +3,7 @@
 <!-- frozen: snapsend.sh 100755 86effb8185df5d71137ba96d3ab7270957015b27 -->
 <!-- frozen: snapget.sh 100755 abd9438b16eeb2c3d082a16bf24d5dd8514a71a0 -->
 <!-- frozen: delsnaps.sh 100755 1a6d18267d93a188a586f92059509de836b5aeff -->
-<!-- frozen: check-snap-age.sh 100755 dc1d08e10e4331b87c4db42538f6d255cea086a7 -->
+<!-- frozen: check-snap-age.sh 100755 93a0f5b77b43d48d6960d7ab088550c6b83ae10d -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
 <!-- unfreeze: - -->
 
@@ -1211,6 +1211,16 @@ Owner-authorized refreezes:
     target; with -S, a dataset with no snapshot of the family (age from creation) is WAITING too.
   - Untouched: a tree with any snapshot keeps the container leniency; without -S nothing changes
     (test/monitor S7 control).
+  twin: none -- check-snap-age.sh is the only monitor engine.
+- 2026-11-03 (check-snap-age.sh): **U137 C2 correction 2 -- a target that does not exist yet.**
+  Same owner direction ("Zgoda", 2026-11-03), found by the owner-requested GUI campaign on pve11
+  after 1.0.6: a new local copy (no first copy since U137 C) has no target until its first run,
+  so the monitor read UNKNOWN and the cron line mailed "monitor BROKEN" every 15 minutes until
+  then -- for a passive copy, until the family appears on the source. v2.7 -> v2.8.
+  - With -S, a dataset that does not exist is WAITING from the start (`does not exist yet`), and
+    WARNING/CRITICAL past the thresholds; in -R mode such a root has no walk.
+  - The age verdict is factored into `check_age_report` (reads check_one's locals); the
+    computation is unchanged. Without -S a missing dataset is UNKNOWN as before (S9 control).
   twin: none -- check-snap-age.sh is the only monitor engine.
 
 ## How it is enforced
