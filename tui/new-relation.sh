@@ -569,8 +569,9 @@ is_local_copy() { [ "$MODE" = local ] && [ "$NOCOPY" -eq 0 ]; }
 # zamraża gości i nie ma retencji źródła (kampania 1.0, 2026-10-25).
 is_passive_copy() {
     is_local_copy || return 1
-    # U138 (wlasciciel 2026-11-01: "chcę, żeby punkt 3 można wymusić ad hoc, gdy migawek jeszcze
-    # nie ma"): przelacznik w Zaawansowanych, gdy okna lancucha nie ma (zrodlo bez migawek rodziny).
+    # U138 (wlasciciel 2026-11-01: odpowiedz "lancuch" z okna "Migawki naszej rodziny juz sa na
+    # zrodle" ma sie dac wymusic, gdy migawek jeszcze nie ma): przelacznik w Zaawansowanych, gdy
+    # tego okna nie ma (zrodlo bez migawek rodziny).
     if sync_from_chain; then [ "$(chain_ans)" = chain ]; else [ "${FORCE_PASSIVE:-0}" -eq 1 ]; fi
 }
 # KTO ROBI TE MIGAWKI? (właściciel 2026-10-24, wariant A). Silnik nie odróżni żywego łańcucha
@@ -1416,8 +1417,8 @@ CARD_NAMES_OF() {
 # Właściciel: "Wstecz to wstecz", "to okno jest super, ale mylące", "do kompletnej przebudowy".
 # Kroki tego rodzaju relacji po kolei, Dalej = następny, Wstecz = POPRZEDNI (z zapamiętaną
 # odpowiedzią), Wstecz w kroku 1 = pytanie o przerwanie. Po ostatnim kroku PODSUMOWANIE:
-# Enter na pozycji = ten krok jeszcze raz i od razu powrót do podsumowania; konto i dodatki
-# siedzą w "Zaawansowane" (domyślne pasują prawie zawsze); dopiero tam "Utwórz relację".
+# Enter na pozycji = ten krok jeszcze raz i od razu powrót do podsumowania; konto jest krokiem
+# przejścia (U142), dodatki i "Pasywnie" siedzą w "Zaawansowane"; "Utwórz relację" jest na podsumowaniu.
 wz_steps() {   # -> kroki bieżącego rodzaju, w kolejności
     local f out=""
     # U142 (wlasciciel 2026-11-01: "zmieniam usera, potem ten ciąg aż do okna z planem jest

@@ -7007,7 +7007,8 @@ fi
 # The implementation is the single remote `zfs list -H -t snapshot` in the file.
 # TWO probe implementations now, and they answer questions on opposite sides:
 # source_family_newest asks a REMOTE source over ssh, local_newest_snapshot asks
-# this collector's own copy (move-to-client's guid proof, 2026-08-29). The
+# this collector's own copies (move-to-client's guid proof, 2026-08-29; local-backup's
+# passive rehearsal, U138). The
 # remote one cannot serve the local case -- it always opens ssh to
 # LOAD_ACCOUNT@LOAD_HOST. Both are NAMED functions with their callers counted
 # below, so a third, hand-rolled one still trips this.

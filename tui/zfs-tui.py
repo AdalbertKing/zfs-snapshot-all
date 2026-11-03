@@ -4943,7 +4943,7 @@ HELP = [
     u"                 z odświeżonymi danymi: Ins -- kreator krok po kroku (backup: 7",
     u"                 kroków -- rodzaj, host, datasety, dokąd, szablon, ile trzyma",
     u"                 źródło, nazwa; Wstecz = poprzedni krok), potem podsumowanie",
-    u"                 (pozycja = popraw krok; konto i dodatki w Zaawansowane) i",
+    u"                 (pozycja = popraw krok; dodatki w Zaawansowane) i",
     u"                 Utwórz -> plan -> WYKONAJ z oknem postępu. Del to",
     u"                 usunięcie całej relacji (źródło, nazwa, opcjonalnie kopie).",
     u"                 Pozostałe akcje: NAJPIERW komenda bash, potem 't', potem",

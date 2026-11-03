@@ -3869,7 +3869,7 @@ else
     bad "new-relation: kopia lokalna" "rc=$NRRC" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | head -12 | tr '\n' ';')"
 fi
 # U142 + U138 (wlasciciel 2026-11-01): konto jest krokiem PRZEJSCIA (okno "Na jakim koncie"
-# przed podsumowaniem), a Zaawansowane go nie maja; kopia lokalna bez migawek rodziny na zrodle
+# przed podsumowaniem), a w Zaawansowanych go nie ma; kopia lokalna bez migawek rodziny na zrodle
 # moze byc wymuszona jako pasywna (Zaawansowane -> Pasywnie -> tak): komenda niesie --passive,
 # plan mowi PASYWNIE. Kontrola: ta sama kopia bez przelacznika -- bez --passive.
 NRPF=$(nr_run "0${T}local
