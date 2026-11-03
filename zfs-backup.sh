@@ -1233,7 +1233,8 @@ Nothing was installed."
 # snaponly's answer to assert_no_foreign_source_pruner (REV-20261017-152 round 1
 # review: the owner allows independent collectors on one source). That guard
 # exists because two collectors pruning the SAME family delete each other's
-# bases. A snaponly family is `<label>_<prefix>`: the label is unique per source
+# bases. A STAMPED snaponly family (--stamp-family, U141) is `<label>_<prefix>`; a
+# plain one is guarded by snaponly_assert_plain_family_free instead. Stamped: the label is unique per source
 # (--join refuses a second machine under it) and holds no '_', so no other
 # collector's snaponly family can match it, and an ordinary family pattern
 # (automated_hourly, ...) does not match a name that starts with a collector
@@ -9740,7 +9741,7 @@ cmd_add_client() {
     local requested=""
     # See the note in the one-command form: 'atomic' was unreachable, which made
     # the engines' -r a mode the product could describe but never install.
-    local recursion="" passive=0 own_snaps=0 exclude_family="" raw_send=0 snaponly=0 target_given=0 landing="" family_born=""
+    local recursion="" passive=0 own_snaps=0 stamp_family=0 exclude_family="" raw_send=0 snaponly=0 target_given=0 landing="" family_born=""
     # Same disease, same cure. -X lived only in a hand-edited `flags`, and the
     # anti-deletion guard then refused every future activation of that client:
     # the regenerated job has no -X, so the installed one reads as a job about
@@ -9775,6 +9776,7 @@ cmd_add_client() {
             --recursive=*) recursion="${a#*=}" ;;
             --passive)     passive=1 ;;
             --own-snapshots) own_snaps=1 ;;
+            --stamp-family) stamp_family=1 ;;
             --raw)         raw_send=1 ;;
             --exclude-family=*) exclude_family="${exclude_family:+$exclude_family,}${a#*=}" ;;
             --exclude-child=*) excludes+=("${a#*=}") ;;
@@ -9800,8 +9802,16 @@ cmd_add_client() {
     # relationship stamps and prunes its OWN. The opposite of --passive, never both.
     [ "$passive" -eq 1 ] && [ "$own_snaps" -eq 1 ] \
         && die "add-client: --passive and --own-snapshots are opposite answers (adopt what is there / make our own) -- pick one. Nothing was changed."
-    [ "$snaponly" -eq 1 ] && [ "$own_snaps" -eq 1 ] \
-        && die "add-client --snaponly: --own-snapshots is a copy relationship's answer; snaponly families are always this collector's own. Nothing was changed."
+    # FAMILY STAMP (U141, owner 2026-11-03, variant B): a snaponly family is the plain
+    # tier prefix (automated_hourly_ ...) unless --stamp-family asks for the collector's
+    # label in front (<label>_automated_hourly_ ...). The stamp is the answer for a
+    # second creator of the same family on one source; --own-snapshots is the other
+    # answer to "the source already has snapshots of this family" (they are leftovers,
+    # this relationship takes them into its retention). Opposite answers, never both.
+    [ "$stamp_family" -eq 1 ] && [ "$snaponly" -eq 0 ] \
+        && die "add-client: --stamp-family names the family of a snaponly relationship (--snaponly); a copy relationship has no such stamp. Nothing was changed."
+    [ "$stamp_family" -eq 1 ] && [ "$own_snaps" -eq 1 ] \
+        && die "add-client --snaponly: --own-snapshots (take the family on the source over) and --stamp-family (a family of our own beside it) are opposite answers -- pick one. Nothing was changed."
     if [ "$snaponly" -eq 1 ]; then
         [ "$target_given" -eq 0 ] || die "add-client --snaponly copies nothing, so it takes no --target (not even an empty one). Nothing was changed."
         [ -z "$mode" ] || die "add-client --snaponly and --mode=$mode are different relationship kinds -- pick one. Nothing was changed."
@@ -10318,6 +10328,7 @@ cmd_add_client() {
         # neither the seed nor the sync emit probe turns this relationship into a
         # consumer. Written only when given: an old record has no field and means "ask".
         [ "$own_snaps" -eq 1 ] && write_client_field OWN_SNAPSHOTS 1
+        [ "$stamp_family" -eq 1 ] && write_client_field FAMILY_STAMP 1
         [ -n "${family_born:-}" ] && write_client_field FAMILY_BORN_AT "$family_born"
         # W17: an encrypted source sent encrypted (-w). A CREATE-time decision:
         # the first copy decides whether the target is raw, and the engines refuse
@@ -12242,10 +12253,96 @@ snaponly_assert_source_free() {   # <name> <peer label> <dataset...>
 #   [snaponly:<account@host:ds>]             per source dataset
 #   [prune:<account@host:ds>]                its source retention, ssh-pinned like every remote prune
 # Needs: record + connection loaded (PEER_SAVED_DATASETS, LOAD_*), PROFILE.
+# FAMILY STAMP (U141, owner 2026-11-03, variant B). Until 1.0.5 every snaponly
+# family carried the collector's label (pve0_automated_hourly_ ...), so that two
+# collectors on one source could never prune each other's snapshots. It also made
+# one host carry two naming conventions, and every later step -- a passive copy of
+# the pvesr replica, its template, its monitors -- had to know the stamp and none
+# did (U140; found on Dabrowska 2026-11-01, U138). Now the family is the plain tier prefix, and
+# the stamp is an explicit choice (--stamp-family -> FAMILY_STAMP=1) for a second
+# creator of the same family on one source.
+#
+# snaponly_stamp_decide <config> <name> -> "1" stamped, "0" plain.
+# The record decides when it says (FAMILY_STAMP=0|1). A relationship installed
+# before the field keeps WHAT IT HAS: its installed tier sections are read, and a
+# prefix starting with this collector's label means stamped -- a re-render must
+# never move an existing family (the old snapshots would be left unpruned and the
+# monitors would watch an empty family).
+snaponly_stamp_decide() {   # <config> <name>
+    case "${FAMILY_STAMP:-}" in 1) echo 1; return 0 ;; 0) echo 0; return 0 ;; esac
+    [ -f "$1" ] || { echo 0; return 0; }
+    local tag; tag="$(snaponly_collector_tag)"
+    awk -v h="[template:snaponly__${2}__" -v t="${tag}_" '
+        /^[ \t]*\[/ { insec = (index($0, h) == 1); next }
+        insec && $1 == "prefix" { v = $0; sub(/^[^=]*=[ \t]*/, "", v); if (index(v, t) == 1) st = 1; else pl = 1 }
+        END { print ((st && !pl) ? 1 : 0) }' "$1"
+}
+
+# snaponly_assert_plain_family_free <workfile> <name> <new 0|1> <account> <host> <port> <keyfile> <alias> <alias_kh> <source-dataset>...
+# A PLAIN family has no label to keep it apart, so the two ways a second creator
+# shows up are refused, and the message names the answer:
+#   1. another collector's peer account can DELETE snapshots on these datasets
+#      (the same zfs allow reading as assert_no_foreign_source_pruner) -- its
+#      retention would count this relationship's snapshots and the other way round;
+#   2. a NEW relationship whose family already has snapshots on the source: a cron
+#      there, or a relationship made elsewhere, or leftovers. Who makes them the
+#      collector cannot see, so the admin says: --own-snapshots (leftovers, taken
+#      into this retention) or --stamp-family (a family of our own beside them).
+# Not knowing is a refusal too: a failed zfs allow / zfs list stops the activation.
+snaponly_assert_plain_family_free() {
+    local wf="$1" name="$2" new="$3" account="$4" host="$5" port="$6" keyfile="$7" alias="$8" alias_kh="$9"; shift 9
+    local -a opts; load_ssh_opts "$keyfile" "$alias" "$alias_kh" "$port"; opts=("${LOAD_SSH_OPTS[@]}")
+    local ds out rc others="" o
+    for ds in "$@"; do
+        out=$(ssh -n "${opts[@]}" "${account}@${host}" "zfs allow -- '$ds'" 2>&1); rc=$?
+        [ "$rc" -eq 0 ] || die "foreign-pruner check: 'zfs allow $ds' on $host as $account failed (ssh/zfs exit $rc) -- refusing to install a source prune without knowing who else prunes there. Output: $(printf '%s' "$out" | tail -2)"
+        o=$(printf '%s\n' "$out" | foreign_pruners_from_allow "$account" | tr '\n' ' ')
+        [ -n "$o" ] && others="$others
+  $ds: ${o% }"
+    done
+    [ -z "$others" ] || die "snaponly: another collector can already DELETE snapshots on these source datasets on $host:$others
+
+This relationship's family is plain (automated_<tier>_), so the other collector's retention would count its snapshots and this one would count the other's. Choose one:
+  * --stamp-family: this relationship keeps a family of its own, '$(snaponly_collector_tag)_<tier prefix>' (the GUI: 'Robi je inny kolektor albo cron -- osobna rodzina z etykietą');
+  * or remove the other collector's relationship first.
+Nothing was installed."
+    [ "$new" -eq 1 ] || return 0
+    [ "${OWN_SNAPSHOTS:-0}" = 1 ] && return 0
+    local prefs; prefs=$(awk -v h="[template:snaponly__${name}__" '
+        /^[ \t]*\[/ { insec = (index($0, h) == 1); next }
+        insec && $1 == "prefix" { v = $0; sub(/^[^=]*=[ \t]*/, "", v); print v }' "$wf" | sort -u)
+    [ -n "$prefs" ] || return 0
+    # Through the one remote probe (source_family_newest, test 67c): the same depth
+    # contract as every other family question, the newest match per tier prefix.
+    local found="" newest pf
+    for ds in "$@"; do
+        o=""
+        for pf in $prefs; do
+            newest=$(source_family_newest "$ds" "$pf"); rc=$?
+            [ "$rc" -eq 0 ] || die "family check: listing the snapshots of $ds on $host as $account failed (ssh/zfs) -- refusing to start a family there without knowing what is already in it."
+            [ -n "$newest" ] && o="$o
+    ${pf}*  (newest: $newest)"
+        done
+        [ -n "$o" ] && found="$found
+  $ds:$o"
+    done
+    [ -z "$found" ] && return 0
+    die "snaponly: the source $host already has snapshots of this relationship's family:$found
+
+Who makes them? This collector cannot see it, so say it with one flag (the GUI asks the same):
+  --own-snapshots   nobody now -- they are leftovers; this relationship takes them into its retention and prunes them with its own;
+  --stamp-family    another collector or a cron on $host makes them -- this relationship keeps a family of its own beside them, '$(snaponly_collector_tag)_<tier prefix>'.
+Nothing was installed."
+}
+
 emit_snaponly_sections() {   # <workfile> <name>
     local wf="$1" name="$2"
     local marker="# managed-by: zfs-backup.sh client=$name"
-    local tag; tag="$(snaponly_collector_tag)"
+    # Decided BEFORE the strip below, while the installed sections still say what
+    # the family is (U141). Left in SNAPONLY_STAMP for the caller's guards and record.
+    SNAPONLY_STAMP="$(snaponly_stamp_decide "$wf" "$name")"
+    local tag=""
+    [ "$SNAPONLY_STAMP" = 1 ] && tag="$(snaponly_collector_tag)"
     local pf; pf="$(profile_file "${PROFILE:-$PROFILE_DEFAULT_NAME}")"
     [ -r "$pf" ] || die "snaponly: profile '${PROFILE:-$PROFILE_DEFAULT_NAME}' not found ($pf)"
     local spf="$pf"
@@ -12277,7 +12374,7 @@ emit_snaponly_sections() {   # <workfile> <name>
         # here until gen-cron read a tier's gfs in [prune:] (2026-10-18).
         local sgfs=0
         case "$(printf '%s' "${SRC_GFS[$t]:-no}" | tr '[:upper:]' '[:lower:]')" in yes) sgfs=1 ;; esac
-        fam="${tag}_${prefix}"
+        if [ -n "$tag" ]; then fam="${tag}_${prefix}"; else fam="$prefix"; fi
         sched="$(snaponly_retime "$sched" "$base")" \
             || die "snaponly: tier '$t' has send_schedule '${PROF_F[template:$t|send_schedule]}' -- its minute must be a single number to be moved off the multiples of five"
         q="${PROF_F[template:$t|quiesce]:-}"
@@ -12578,7 +12675,13 @@ activate_snaponly() {   # <name> <yes> <plan_only> <verbose> [rerender 0|1]
         write_fresh_config_defaults "$workfile" || { rm -f "$workfile"; die "could not create working copy $workfile"; }
     fi
     chmod 0644 "$workfile" || { rm -f "$workfile"; die "could not set the mode on $workfile"; }
+    local _so_new=1
+    [ -n "$(snaponly_installed_scopes "$workfile" "$name")" ] && _so_new=0
+    SNAPONLY_STAMP=""
     snaponly_prepare_workfile "$workfile" "$name" "$rerender"
+    # An unchanged relationship is reused without a re-render (SNAPONLY_REUSED): its
+    # installed sections still say what the family is.
+    [ -n "$SNAPONLY_STAMP" ] || SNAPONLY_STAMP="$(snaponly_stamp_decide "$workfile" "$name")"
 
     log "dry-run of each source dataset (snapget.sh -n -s, read-only)..."
     if ! snaponly_probe; then
@@ -12594,9 +12697,15 @@ $PROBE_DETAIL"
     ( assert_source_prune_grant "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
           "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
         || { rm -f "$workfile"; die "source-prune grant check failed -- $cronfile was NOT touched, nothing installed."; }
-    ( snaponly_note_foreign_pruners "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
-          "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
-        || { rm -f "$workfile"; die "could not find out who else prunes these source datasets -- $cronfile was NOT touched, nothing installed."; }
+    if [ "$SNAPONLY_STAMP" = 1 ]; then
+        ( snaponly_note_foreign_pruners "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
+              "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
+            || { rm -f "$workfile"; die "could not find out who else prunes these source datasets -- $cronfile was NOT touched, nothing installed."; }
+    else
+        ( snaponly_assert_plain_family_free "$workfile" "$name" "$_so_new" "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
+              "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
+            || { rm -f "$workfile"; die "the snapshot family is not free on $LOAD_HOST (above) -- $cronfile was NOT touched, nothing installed."; }
+    fi
 
     echo
     echo "Client:              $name"
@@ -12604,7 +12713,11 @@ $PROBE_DETAIL"
     echo "Peer:                $PEER_HOST"
     echo "Active endpoint:     $(endpoint_display)"
     echo "Sources:             $PEER_SAVED_DATASETS"
-    echo "Family:              $(snaponly_collector_tag)_<tier prefix> -- only this collector creates and prunes it"
+    if [ "$SNAPONLY_STAMP" = 1 ]; then
+        echo "Family:              $(snaponly_collector_tag)_<tier prefix> -- stamped: only this collector creates and prunes it"
+    else
+        echo "Family:              <tier prefix> (e.g. automated_hourly_) -- plain; a second creator of it on the source is refused"
+    fi
     echo "Profile:             ${PROFILE:-${PROFILE_ACTIVE:-?}}${SOURCE_PROFILE:+, source retention: $SOURCE_PROFILE}"
     echo "Warning:             when this collector is down, no snapshots are created on the source"
     echo "                     or pruned; the age monitor alarms from this host."
@@ -12631,6 +12744,7 @@ $PROBE_DETAIL"
         write_client_field MANAGED_DATASETS   ""
         write_client_field MANAGED_PRUNE_SCOPE ""
         write_client_field MANAGED_SOURCES    "$srcs"
+        write_client_field FAMILY_STAMP       "$SNAPONLY_STAMP"
         if [ "$rerender" -eq 1 ]; then
             write_client_field PROFILE        "${PROFILE:-}"
             write_client_field SOURCE_PROFILE "${SOURCE_PROFILE:-}"
@@ -18377,7 +18491,8 @@ EXPORT_RELATION_LIST_FIELD="REQUESTED_DATASETS"
 # Declarations that are true and have no create flag. PASSIVE is here for a
 # different reason than the endpoints: it HAS a flag (--passive) but it is a
 # bare switch, so it is emitted by the composer below rather than as key=value.
-# OWN_SNAPSHOTS (--own-snapshots) is the same kind of switch and rides the same way.
+# OWN_SNAPSHOTS (--own-snapshots) is the same kind of switch and rides the same way,
+# and so is FAMILY_STAMP (--stamp-family, U141).
 EXPORT_RELATION_UNREPLAYABLE="ENDPOINT_LAN_HOST ENDPOINT_LAN_PORT ENDPOINT_VPN_HOST ENDPOINT_VPN_PORT ENDPOINT_KNOWN ACTIVE_ENDPOINT"
 # Derived, historical or host-local. Never exported: carrying them would carry
 # claims that stop being true the moment the file moves.
@@ -19004,7 +19119,7 @@ SCOPE
             --mode=*) _has_mode=1 ;;
             # Only flags the one-command form takes; anything else (e.g. --bandwidth)
             # keeps the ordinary replay, which says what to do by hand.
-            --host=*|--target=*|--landing=*|--recursive=*|--passive|--own-snapshots|--raw|--exclude-family=*|--exclude-child=*|--profile=*|--source-profile=*|--local-user=*|--family-born=*) ;;
+            --host=*|--target=*|--landing=*|--recursive=*|--passive|--own-snapshots|--stamp-family|--raw|--exclude-family=*|--exclude-child=*|--profile=*|--source-profile=*|--local-user=*|--family-born=*) ;;
             *) _rux_ok=0 ;;
         esac
     done
@@ -19200,6 +19315,15 @@ cmd_export_relation() {
         first=0
         decl_json="$decl_json\"OWN_SNAPSHOTS\":\"1\""
         argv+=(--own-snapshots)
+    fi
+    # FAMILY_STAMP (U141): the same bare switch. A relationship from before the field
+    # has none and exports as unstamped -- its family is read back from the config at
+    # activation (snaponly_stamp_decide), not from this declaration.
+    if [ "${FAMILY_STAMP:-0}" = "1" ]; then
+        [ "$first" -eq 1 ] || decl_json="$decl_json,"
+        first=0
+        decl_json="$decl_json\"FAMILY_STAMP\":\"1\""
+        argv+=(--stamp-family)
     fi
     # RAW: add-client --raw writes RAW_SEND=1, but set-transfer --raw writes only the config
     # line (raw = yes) of the relation's [dataset:] sections. Either way the copy is raw and
@@ -22364,6 +22488,7 @@ rux_remote_install() {
         [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
         [ "$passive" -eq 1 ] && add_args+=(--passive)
         [ "${rux_own:-0}" -eq 1 ] && add_args+=(--own-snapshots)
+        [ "${rux_stamp:-0}" -eq 1 ] && add_args+=(--stamp-family)
         [ "${rux_raw:-0}" -eq 1 ] && add_args+=(--raw)
         [ -n "$exclude_family" ] && add_args+=(--exclude-family="$exclude_family")
         for _x in ${excludes[@]+"${excludes[@]}"}; do add_args+=(--exclude-child="$_x"); done
@@ -22470,7 +22595,7 @@ rux_entry() {
     # config grammar but no command could produce it -- reaching it meant hand
     # editing a generated config, and the first re-activation wrote the edit
     # back out. A mode the product cannot install is a mode nobody can operate.
-    local recursion="" passive=0 rux_own=0 exclude_family="" rux_raw=0
+    local recursion="" passive=0 rux_own=0 rux_stamp=0 exclude_family="" rux_raw=0
     # THE SOURCE PRESET REACHES THIS ENTRY POINT TOO, and it is a pure
     # passthrough: cmd_add_client already parses, validates and records it
     # (--profile's own treatment here is the same shape). Its absence was not a
@@ -22494,6 +22619,7 @@ rux_entry() {
             --recursive=*) recursion="${a#*=}" ;;
             --passive)     passive=1 ;;
             --own-snapshots) rux_own=1 ;;   # passed to add-client: the family on the source is leftovers
+            --stamp-family) rux_stamp=1 ;;  # passed to add-client: snaponly family stamped with this collector's label (U141)
             --raw)         rux_raw=1 ;;
             --exclude-family=*) exclude_family="${exclude_family:+$exclude_family,}${a#*=}" ;;
             --exclude-child=*) excludes+=("${a#*=}") ;;

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d879bf2fe7fed86b -->
+<!-- status-covers-digest: 2469c03f13fee16a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1701,8 +1701,12 @@
   Parowanie idzie kształtem sync (jedyny bez celu po obu stronach paczki): źródło szkicuje i podpisuje zakres,
   `--requested` go zawęża. `gen-cron.sh` ma sekcję `[snaponly:<konto@host:ds>]`, która emituje `snapget.sh -s` i odmawia
   wszystkiego, co kształtuje transfer albo cel (dst/src/flags/autotune/retencja celu nazwane wprost; kompresja, szyfr,
-  pasmo -- spoza listy pól sekcji). Rodzina migawek to `<kolektor>_<prefiks>` (np. `pve9_automated_hourly_`), więc
-  rodziny różnych kolektorów są rozłączne; retencja źródła to osobny `[prune:]` z tą rodziną, przypięty kluczem
+  pasmo -- spoza listy pól sekcji). Rodzina migawek (od U141, decyzja właściciela 2026-11-03,
+  wariant B) to sam prefiks szczebla (`automated_hourly_`); etykieta kolektora z przodu (`pve9_automated_hourly_`) tylko
+  na żądanie (`--stamp-family`, rekord `FAMILY_STAMP=1`), dla drugiego twórcy tej samej rodziny na jednym źródle. Relacja
+  sprzed pola zachowuje swoją rodzinę (odczyt z zainstalowanych sekcji). Rodzina bez etykiety odmawia, gdy inny kolektor
+  ma `destroy` na źródle, a nowa relacja także wtedy, gdy rodzina ma już migawki na źródle (odpowiedź: `--own-snapshots`
+  -- resztki, albo `--stamp-family`; kreator pyta o to samo). Retencja źródła to osobny `[prune:]` z tą rodziną, przypięty kluczem
   relacji. Minuty, które pisze `zfs-backup.sh`, nie są wielokrotnością 5 (ręczna sekcja w `gen-cron.sh` nie jest tu
   sprawdzana). Aktywacja robi pierwszą migawkę KAŻDEGO szczebla (rc 8 = degrade quiesce liczy się jako zrobiona,
   spójność awaryjna). Odmowy: profil bez prefiksu; profil z drabiną GFS na szczeblu -- w tym wbudowany `default`
@@ -1710,7 +1714,7 @@
   zakres nakładający się na źródło innej relacji tego kolektora; `seed`/`restore`/`edit-relation`/`add-source`/
   `remove-source`/`set-tiers`/`export-relation`/`import-relation`/`delete-relation --destroy-copies`. `remove-client`
   usuwa jej sekcje po znaczniku; `status` ma własny widok, `status --json` daje `mode: snaponly`.
-  Test: `test/zfsbackup --section snaponly` 14/0 (sekcje przez prawdziwy `gen-cron.sh`); mutant bez czterech
+  Test: `test/zfsbackup --section snaponly` 37/0 (2026-11-03, z U141; sekcje przez prawdziwy `gen-cron.sh`); runda REV-152 (2026-10-17): mutant bez czterech
   strażników (odmowa w `snapget_local_base`, odmowa GFS, `snaponly_strip` przed emisją, odmowa `--target`): 5 PASS, 6 FAIL (na 11 sprawdzeniach sprzed testów pierwszej migawki).
   Na żywo pve9 (kolektor) -> pve10 (źródło), konto `zfsbackup`, profil `d7h24`, jednorazowy `hdd/solab` z dzieckiem:
   migawka `pve9_automated_hourly_…` na źródle, na kolektorze zero datasetów; linia przycinania z crona dosłownie rc 0;

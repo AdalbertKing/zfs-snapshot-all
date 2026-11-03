@@ -814,5 +814,10 @@
 "%s: gotowe": "%s: done",
 "   zapisano: %s": "   saved: %s",
 "Import z %s: relacja już jest na tym hoście, identyczna -- nic do zrobienia": "Import from %s: the relation is already on this host, identical -- nothing to do",
-"t wykonuje, Esc wraca (Enter nic tu nie robi)": "t runs it, Esc goes back (Enter does nothing here)"
+"t wykonuje, Esc wraca (Enter nic tu nie robi)": "t runs it, Esc goes back (Enter does nothing here)",
+"Na $HOST są już migawki naszej rodziny:\\n$facts\\n\\nKto je dziś robi? Najnowsza sprzed godziny-dwóch zwykle znaczy, że ktoś je robi.\\nResztki: ta relacja przejmuje je do swojej retencji i robi dalej te same.\\nInny twórca: ta relacja robi osobną rodzinę, z etykietą tego kolektora na początku nazwy.": "$HOST already has snapshots of our family:\\n$facts\\n\\nWho makes them today? A newest one an hour or two old usually means someone does.\\nLeftovers: this relation takes them into its retention and goes on making the same family.\\nAnother creator: this relation makes a separate family, with this collector's label at the start of the name.",
+"Nikt -- to resztki starej relacji, przejmuję je": "Nobody -- leftovers of an old relation, take them over",
+"Robi je inny kolektor albo cron -- osobna rodzina z etykietą": "Another collector or a cron makes them -- separate family with a label",
+"OSOBNA RODZINA: migawki naszej rodziny na źródle robi kto inny -- ta relacja robi swoje": "SEPARATE FAMILY: someone else makes our family's snapshots on the source -- this relation makes its own",
+"  z etykietą tego kolektora na początku nazwy (--stamp-family); tamtych nie rusza.": "  with this collector's label at the start of the name (--stamp-family); it leaves those alone."
 }
