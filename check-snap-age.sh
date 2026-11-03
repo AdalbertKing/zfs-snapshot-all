@@ -542,6 +542,8 @@ check_one() {
     # have to work out whether that is the age of a snapshot or of the dataset.
     if [ "$waiting" = true ]; then
         detail="pattern=${PATTERN:-(any)} -- no snapshot of this family since the relationship's start ($(date -d "@$SINCE" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$SINCE")); age measured from that start${older:+ (newest before it: $older)}"
+        # A dataset created after the start is measured from its creation -- say that one.
+        [ "$newest_epoch" != "$SINCE" ] && detail="pattern=${PATTERN:-(any)} -- no snapshot of this family since the relationship's start ($(date -d "@$SINCE" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$SINCE")); the dataset is newer, age measured from its creation"
         [ "$sev" -eq 0 ] && label="WAITING"
     elif [ "$from_creation" = true ]; then
         detail="pattern=${PATTERN:-(any)} -- no snapshot found matching this pattern; age measured from dataset creation"

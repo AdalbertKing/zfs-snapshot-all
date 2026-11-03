@@ -122,6 +122,9 @@ for the duration.
 3. **Lab before code.** Walk the whole GUI scenario on the lab first and write every
    defect down; fix them as one batch afterwards. Not one fix cycle per defect.
 
+Point 4 of the same answer is a change, not a rule: the cron install guard is to compare
+job IDENTITY (relation, tier, kind, datasets) instead of line text -- after 1.0.6.
+
 So:
 
 - run an edited suite (or one whose subject you changed) on pve9/CI -- not

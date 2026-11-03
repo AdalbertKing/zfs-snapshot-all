@@ -398,6 +398,9 @@ case "$(run -R -S "$S1" -W tank/fresh automated_ 2h 4h)" in "WAITING dataset=tan
   *) bad "S6 -R empty tree: WAITING on the root" "$(run -R -S "$S1" -W tank/fresh automated_ 2h 4h)" ;; esac
 check "S6 -R empty tree, started 5h ago: CRITICAL (the first run never came)" "2" "$(rc_of -R -S "$S2" tank/fresh automated_ 2h 4h)"
 check "S7 control: the same empty tree WITHOUT -S keeps the container leniency (OK)" "0" "$(rc_of -R tank/fresh automated_ 2h 4h)"
+add_ds tank/young $((1 * H))                              # created AFTER a start 5h ago, no snapshot
+case "$(run -S "$S2" -W tank/young automated_ 2h 4h)" in "WAITING dataset=tank/young "*"age measured from its creation"*) ok "S6 a dataset newer than the start: WAITING, measured from its creation, and says so" ;;
+  *) bad "S6 a dataset newer than the start says creation" "$(run -S "$S2" -W tank/young automated_ 2h 4h)" ;; esac
 add_snap tank/fresh/c "other_1" $((1 * H))                # any snapshot in the tree: a container again
 check "S8 a tree with any snapshot keeps the leniency for its bare root (child decides)" "0" "$(rc_of -R -S "$S2" tank/fresh other_ 2h 4h)"
 
