@@ -1898,7 +1898,8 @@ refused "a changed schedule is a different job, not a merged one" "$MON_A" \
 plan_config() {   # <extra args...> -> the candidate CONFIG, normalised
     run "$@" 2>&1 \
         | sed -n '/--- candidate CONFIG v4/,/--- generated cron block/p' \
-        | sed -E 's#/tmp/[A-Za-z0-9._]+#<TMP>#g'
+        | sed -E 's#/tmp/[A-Za-z0-9._]+#<TMP>#g' \
+        | sed -E 's/(monitor_since[[:space:]]*=[[:space:]]*)[0-9]+/\1<NOW>/'   # U137 C2: the start is "now", per run
 }
 
 imp="$(plan_config --source=rpool/data --target=hdd/backups --config="$WORK/id1.conf")"
