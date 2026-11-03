@@ -124,8 +124,70 @@ VERDICTS = {
     "BEZ MONITORA": ("bez monitora",  4),
     # Start dwuetapowy (2026-10-29): monitor jeszcze nie odpowiedzial -- NIE "bez monitora".
     "SPRAWDZAM":    (u"sprawdzam…",   4),
+    # U137 C3 (wariant C wlasciciela, 2026-11-01): relacja przy zalozeniu nie robi migawek,
+    # szczebel czeka na swoj pierwszy termin z crona -- monitor (check-snap-age -S/-W) pisze
+    # WAITING. Nie "stare" i nie "aktualne": jeszcze nic nie ma, i tak ma byc.
+    "CZEKA":        (u"czeka na pierwszy termin", 4),
 }
-VERDICT_ORDER = ["BLAD", "CRITICAL", "WARNING", "UNKNOWN", "SPRAWDZAM", "BEZ MONITORA", "OK"]
+VERDICT_ORDER = ["BLAD", "CRITICAL", "WARNING", "UNKNOWN", "SPRAWDZAM", "BEZ MONITORA", "CZEKA", "OK"]
+
+
+def mark_waiting(doc):
+    """U137 C3: monitor z rc 0, ktorego wynik ma linie WAITING (szczebel przed pierwszym
+    biegiem), to CZEKA, nie OK. Zmienia doc monitor --json w miejscu."""
+    for m in (doc or {}).get("monitors", []) or []:
+        if m.get("verdict") == "OK" and any(ln.strip().startswith("WAITING dataset=")
+                                             for ln in (m.get("reason") or "").splitlines()):
+            m["verdict"] = "CZEKA"
+    return doc
+
+
+def tier_of_pattern(pat):
+    """automated_hourly_ / pve0_automated_daily -> hourly / daily; inna rodzina -> ona sama."""
+    p = (pat or "").rstrip("_")
+    return p.split("automated_", 1)[1] if "automated_" in p else (p or "?")
+
+
+def tier_monitors(monitors):
+    """Monitory relacji w kolejnosci szczebli (godzinowe pierwsze)."""
+    rank = {"hourly": 0, "daily": 1, "weekly": 2, "monthly": 3, "yearly": 4, "annual": 4}
+    return sorted(monitors, key=lambda m: rank.get(tier_of_pattern(m.get("pattern")), 9))
+
+
+def tier_word(m):
+    return _(tier_of_pattern(m.get("pattern")))
+
+
+def tier_line(m, rel, data, now):
+    """Jedna linia szczebla: stan, wiek najnowszej albo termin pierwszej migawki, prog."""
+    v = m.get("verdict", "UNKNOWN")
+    out = _(VERDICTS.get(v, (v, 0))[0])
+    if v == "CZEKA":
+        fam = (m.get("pattern") or "").rstrip("_")
+        nxt = None
+        for j in (data.jobs or {}).get("jobs", []) or []:
+            if j.get("label") == rel.get("name") and j.get("section_kind") in SEND_KINDS and family_of(j) == fam:
+                n = cron_next(j.get("schedule", ""), now)
+                if n and (nxt is None or n < nxt):
+                    nxt = n
+        out += (_(u"   pierwsza: %s") % fmt_when(nxt, now)) if nxt else ""
+    else:
+        a = reason_age(m.get("reason"))
+        if a:
+            out += _(u"   najnowsza sprzed %s") % a
+    return out + _(u"   alarm po %s") % (m.get("crit") or "?")
+
+
+def reason_age(reason):
+    """Wiek najnowszej migawki z wyniku monitora -- z linii OK/WARNING/CRITICAL, nigdy z
+    WAITING (tam wiek liczy sie od startu relacji, nie od migawki)."""
+    for ln in (reason or "").splitlines():
+        if ln.strip().startswith("WAITING "):
+            continue
+        a = re.search(r"age=(\S+)", ln)
+        if a:
+            return a.group(1)
+    return None
 
 # Stan transferu z progress --json -> slowo. `verified` to `ok` podniesione po
 # weryfikacji GUID (lib-zfs-snap.sh), wiec dla operatora to to samo "OK".
@@ -1090,6 +1152,8 @@ def collect(repo, files, only=None):
             doc, err = got[key]
         else:
             doc, err = run_verb(repo, args)
+        if key == "monitors":
+            mark_waiting(doc)
         setattr(data, key, doc)
         data.pending.discard(key)
         if key == "status":
@@ -1250,7 +1314,7 @@ def worst(verdicts):
     return "BEZ MONITORA"
 
 
-_DS_LINE = re.compile(r"^(OK|WARNING|CRITICAL|UNKNOWN) dataset=(\S+)(.*)$")
+_DS_LINE = re.compile(r"^(OK|WARNING|CRITICAL|UNKNOWN|WAITING) dataset=(\S+)(.*)$")
 
 
 def dataset_verdict(m, names):
@@ -1271,9 +1335,10 @@ def dataset_verdict(m, names):
             continue
         any_line = True
         ds = mm.group(2).split(":", 1)[-1]
+        w = "CZEKA" if mm.group(1) == "WAITING" else mm.group(1)
         if any(n and (ds == n or ds.startswith(n + "/")) for n in names):
-            if best is None or order.get(mm.group(1), 99) < order.get(best[0], 99):
-                best = (mm.group(1), ln.strip())
+            if best is None or order.get(w, 99) < order.get(best[0], 99):
+                best = (w, ln.strip())
     if best is None and any_line:
         return ("OK", "")
     return best
@@ -1693,6 +1758,8 @@ def build_jobs(data, now):
         tier = j.get("tier", "")
         if "__" in tier:
             tier = tier.rsplit("__", 1)[-1]
+        # U143: wewnetrzny przedrostek zrodla relacji lokalnej (lsrc_) to nie nazwa szczebla.
+        tier = re.sub(r"^lsrc_", "", tier)
         kind = j.get("section_kind", "")
         ret = j.get("retain") or j.get("keep") or ""
         # R4-4 (wlasciciel 2026-09-24): Zadanie to SAMO slowo; rodzina, retencja
@@ -1712,7 +1779,10 @@ def build_jobs(data, now):
             # ("wysylka" = cos stad wychodzi). Kierunek jest w linii crona,
             # wiec nie trzeba go zgadywac (pve10, 2026-09-21).
             _d = j.get("direction", "")
-            task = {"pull": _(u"pobranie"), "push": _(u"wysyłka"), "local": _(u"kopia"), "snaponly": _(u"migawka")}.get(_d, _(u"transfer"))
+            # U143 (wlasciciel 2026-11-01: "wystarczy only snapshot"): zadanie bez zrodla i celu
+            # (list-jobs: direction=snapshot) robi same migawki -- nie "transfer".
+            task = {"pull": _(u"pobranie"), "push": _(u"wysyłka"), "local": _(u"kopia"), "snaponly": _(u"migawka"),
+                    "snapshot": _(u"tylko migawka")}.get(_d, _(u"transfer"))
             if _d == "pull" and job_is_mirror(j):
                 keep = _(u"lustro")
         mode = (rels_by_name.get(j.get("label") or "") or {}).get("mode")
@@ -2561,9 +2631,9 @@ def pair_detail_pairs(pr, row, data, now, ch):
     j = pr.get("job")
     if j is not None:
         _v, reason = verdict_for_job(j, (data.monitors or {}).get("monitors", []))
-        age = re.search(r"age=(\S+)", reason or "")
+        age = reason_age(reason) if _v != "CZEKA" else None
         if age:
-            v += u"   najnowsza sprzed %s" % age.group(1)
+            v += _(u"   najnowsza sprzed %s") % age
     out.append((_(u"Migawki") if pr.get("dst") is None else _(u"Kopie"), v))
     last = None
     want = (pr.get("dst") or "").split()[0] if pr.get("dst") else pr["src"].split()[0].rsplit(":", 1)[-1]
@@ -2823,18 +2893,17 @@ def rel_panel_pairs(row, data, now, ch):
     for w_ in warns:
         pairs.append((_(u"Uwaga"), w_))
     pairs.append(group(ch, _(u"Teraz")))
+    # "Migawki" przy relacji bez kopii: zdalne i lokalne bez celu (U144).
+    _label = _(u"Migawki") if (rel.get("mode") == "snaponly" or (rel.get("mode") == "local" and not rel.get("client_target"))) else _(u"Kopie")
     mon = row["vword"]
-    if row["reasons"]:
-        # Tylko wiek najnowszej -- surowy tekst monitora (po angielsku) jest w oknie (Enter).
-        age = re.search(r"age=(\S+)", row["reasons"][0])
-        if age:
-            mon += u"   najnowsza sprzed %s" % age.group(1)
-    elif row["verdict"] == "BEZ MONITORA" and rel.get("state") == "active":
+    if row["verdict"] == "BEZ MONITORA" and rel.get("state") == "active" and not row["reasons"]:
         mon += _(u"   nikt nie sprawdza, czy kopia dalej się robi")
-    if row["monitors"]:
-        m0 = row["monitors"][0]
-        mon += _(u"   alarm po %s") % (m0.get("crit") or "?")
-    pairs.append((_(u"Migawki") if rel.get("mode") == "snaponly" else _(u"Kopie"), mon))
+    pairs.append((_label, mon))
+    # U144 (wlasciciel 2026-11-01): KAZDY szczebel osobno -- jego stan, wiek albo pierwszy
+    # termin, i jego prog. Dawniej wiek pierwszego powodu stal obok progu pierwszego monitora
+    # ("najnowsza sprzed 49092h, alarm po 150m": roczny wiek, godzinowy prog).
+    for m in tier_monitors(row["monitors"]):
+        pairs.append(("  " + tier_word(m), tier_line(m, rel, data, now)))
     last = row["last"]
     # U61: "Ostatni bieg OK" (historia transferow) stal obok "błąd biegu" (job-stats).
     # Nieudany ostatni bieg ktoregos zadania wygrywa i panel mowi, KTORY dataset i dlaczego.
@@ -3358,7 +3427,7 @@ def rel_detail_pairs(row, data, now, ch):
                 warns.append(w)
     if warns:
         pairs.append((_("Uwaga"), "  |  ".join(warns)))
-    pairs.append((_(u"Migawki") if row.get("mode") == "snaponly" else _("Kopie"), mon))
+    pairs.append((_(u"Migawki") if (row.get("mode") == "snaponly" or (row.get("mode") == "local" and not (row.get("rel") or {}).get("client_target"))) else _("Kopie"), mon))
     return pairs
 
 

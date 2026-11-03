@@ -161,11 +161,47 @@ if has "$S4" 'lab-vm101 -- relacja' && hasE "$S4" 'Następny +2026\.09\.09 [0-9]
 else
     bad "relacje: kursor i nastepny bieg" "$S4" "$S4Z"
 fi
-if hasE "$S4" 'Kopie +aktualne   alarm po 150m'; then
-    ok "relacje: panel nazywa prog alarmu przy werdykcie"
+if hasE "$S4" 'Kopie +aktualne' && hasE "$S4" 'hourly +aktualne   alarm po 150m'; then
+    ok "relacje: panel -- werdykt relacji, a pod nim szczebel z wlasnym progiem alarmu (U144)"
 else
     bad "relacje: progi w panelu" "$S4"
 fi
+# U137 C3 / U144 / U143 (wlasciciel 2026-11-01): szczebel przed pierwszym biegiem (monitor pisze
+# WAITING, check-snap-age -S/-W) to "czeka na pierwszy termin" z data pierwszej migawki, nie
+# "stare"; kazdy szczebel osobno, z wlasnym progiem. Zadanie samych migawek w F2 to "tylko
+# migawka" i bez przedrostka lsrc_. Kontrola: ten sam ekran bez linii WAITING -- "aktualne".
+C3D="$(mktemp -d)"
+"$PY" - "$P10/monitor.json" "$P10/list-jobs.json" "$C3D" <<'PYEOF'
+import json, sys, copy
+mon = json.load(open(sys.argv[1], encoding="utf-8"))
+jobs = json.load(open(sys.argv[2], encoding="utf-8"))
+out = sys.argv[3]
+h = [m for m in mon["monitors"] if m.get("label") == "lab-vm101"][0]
+d = copy.deepcopy(h)
+d.update(pattern="automated_daily", warn="30h", crit="48h", verdict="OK",
+         reason="WAITING dataset=hdd/backups/192.168.28.99/hdd/lab/vm-101 pattern=automated_daily -- no snapshot of this family since the relationship's start (2026-09-01 10:00); age measured from that start age=2h (warn=30h crit=48h)")
+mon["monitors"].append(d)
+json.dump(mon, open(out + "/monitor.json", "w", encoding="utf-8"))
+hj = [j for j in jobs["jobs"] if j.get("label") == "lab-vm101" and j.get("section_kind") == "dataset"][0]
+dj = copy.deepcopy(hj)
+dj.update(tier="profile__default__standard_daily", schedule="34 1 * * *", prefix="automated_daily_")
+jobs["jobs"].append(dj)
+sj = copy.deepcopy(hj)
+sj.update(label="lab-vm101", direction="snapshot", tier="profile__relacja-lab__lsrc_hourly", schedule="7 * * * *",
+          prefix="automated_hourly_", scope="hdd/lab/vm-101")
+jobs["jobs"].append(sj)
+json.dump(jobs, open(out + "/list-jobs.json", "w", encoding="utf-8"))
+PYEOF
+S4W="$(screen relacje down,down,down,down --width 200 --height 40 --monitors "$C3D/monitor.json" --jobs "$C3D/list-jobs.json")"
+F2W="$(screen zadania '' --width 220 --height 400 --monitors "$C3D/monitor.json" --jobs "$C3D/list-jobs.json")"
+if hasE "$S4W" 'Kopie +czeka na pierwszy termin' && hasE "$S4W" 'hourly +aktualne   alarm po 150m' \
+   && hasE "$S4W" 'daily +czeka na pierwszy termin   pierwsza: .*alarm po 48h' && ! hasE "$S4W" 'daily +.*najnowsza sprzed' \
+   && has "$F2W" 'tylko migawka' && ! has "$F2W" 'lsrc_' && ! hasE "$S4" 'czeka na pierwszy'; then
+    ok "U137 C3: szczebel przed pierwszym biegiem -- 'czeka na pierwszy termin' z data pierwszej migawki, kazdy szczebel osobno z progiem; F2: 'tylko migawka' bez lsrc_; kontrola bez WAITING -- aktualne"
+else
+    bad "U137 C3: stan czeka / F2" "$(printf '%s' "$S4W" | grep -E 'Kopie|hourly|daily' | head -6)" "$(printf '%s' "$F2W" | grep -E 'migawk|lsrc|transfer' | head -4)"
+fi
+rm -rf "$C3D"
 if hasE "$S4Z" 'lokalny prune +automated_hourly +co godzinę \(:44\) +24 godz\.' && hasE "$S4Z" 'zdalny prune +automated_hourly +co godzinę \(:03\) +24 godz\.' \
    && ! has "$S4Z" 'Porządki' && ! has "$S4Z" 'U źródła'; then
     ok "relacje: zakladka Zadania -- lokalny i zdalny prune w OSOBNYCH wierszach: harmonogram slowami, retencja z jednostka (U21)"
