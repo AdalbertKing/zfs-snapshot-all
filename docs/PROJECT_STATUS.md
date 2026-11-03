@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1a0889c26941b6a8 -->
+<!-- status-covers-digest: 84ed1734d3d97184 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1714,7 +1714,7 @@
   zakres nakładający się na źródło innej relacji tego kolektora; `seed`/`restore`/`edit-relation`/`add-source`/
   `remove-source`/`set-tiers`/`export-relation`/`import-relation`/`delete-relation --destroy-copies`. `remove-client`
   usuwa jej sekcje po znaczniku; `status` ma własny widok, `status --json` daje `mode: snaponly`.
-  Test: `test/zfsbackup --section snaponly` 14/0 (sekcje przez prawdziwy `gen-cron.sh`); mutant bez czterech
+  Test: `test/zfsbackup --section snaponly` 37/0 (2026-11-03, z U141; sekcje przez prawdziwy `gen-cron.sh`); runda REV-152 (2026-10-17): mutant bez czterech
   strażników (odmowa w `snapget_local_base`, odmowa GFS, `snaponly_strip` przed emisją, odmowa `--target`): 5 PASS, 6 FAIL (na 11 sprawdzeniach sprzed testów pierwszej migawki).
   Na żywo pve9 (kolektor) -> pve10 (źródło), konto `zfsbackup`, profil `d7h24`, jednorazowy `hdd/solab` z dzieckiem:
   migawka `pve9_automated_hourly_…` na źródle, na kolektorze zero datasetów; linia przycinania z crona dosłownie rc 0;

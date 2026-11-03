@@ -12258,7 +12258,7 @@ snaponly_assert_source_free() {   # <name> <peer label> <dataset...>
 # collectors on one source could never prune each other's snapshots. It also made
 # one host carry two naming conventions, and every later step -- a passive copy of
 # the pvesr replica, its template, its monitors -- had to know the stamp and none
-# did (U140, Dabrowska 2026-11-01). Now the family is the plain tier prefix, and
+# did (U140; found on Dabrowska 2026-11-01, U138). Now the family is the plain tier prefix, and
 # the stamp is an explicit choice (--stamp-family -> FAMILY_STAMP=1) for a second
 # creator of the same family on one source.
 #
@@ -12303,7 +12303,7 @@ snaponly_assert_plain_family_free() {
     [ -z "$others" ] || die "snaponly: another collector can already DELETE snapshots on these source datasets on $host:$others
 
 This relationship's family is plain (automated_<tier>_), so the other collector's retention would count its snapshots and this one would count the other's. Choose one:
-  * --stamp-family: this relationship keeps a family of its own, '$(snaponly_collector_tag)_<tier prefix>' (the GUI: 'another creator -- a separate family');
+  * --stamp-family: this relationship keeps a family of its own, '$(snaponly_collector_tag)_<tier prefix>' (the GUI: 'Robi je inny kolektor albo cron -- osobna rodzina z etykietą');
   * or remove the other collector's relationship first.
 Nothing was installed."
     [ "$new" -eq 1 ] || return 0
