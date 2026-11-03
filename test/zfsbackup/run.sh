@@ -7022,7 +7022,7 @@ n_calls=$(grep -c 'source_family_exists "\$' "$ZFSBACKUP")
 # guard of a snaponly relationship (U141: does the family already exist on the source).
 n_newest=$(grep -c 'source_family_newest "\$' "$ZFSBACKUP")
 if [ "$n_impl" -eq 2 ] && [ "$n_local" -eq 1 ] && [ "$n_inline" -eq 0 ] &&    [ "$n_calls" -eq 3 ] && [ "$n_newest" -eq 3 ]; then
-    ok "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"
+    ok "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal, snaponly plain-family guard)"
 else
     bad "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"         "impl=$n_impl local-callers=$n_local inline=$n_inline exists-callers=$n_calls newest-callers=$n_newest"
 fi
@@ -15040,46 +15040,30 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'takes no --target' && printf
 else
     bad "add-client --snaponly refusals" "target: $out" "mode: $o2" "datasets: $o3"
 fi
-# Activation takes the first snapshot of EVERY tier of THIS relationship once
-# (each tier is its own family on the source; the finest-only first copy left an
-# old dataset's daily monitor CRITICAL until the first daily tick). Never a prune
-# line, never another relationship's job; a job whose END rc is not 0 is "not done".
-printf '#!/bin/sh\nprintf "%%s ZFS-JOB END %%s rc=%%s\n" now "$1" "$ZJ_RC" >> "%s"\nexit 0\n' "$SO/job.log" > "$SO/zfs-job.sh"
-chmod +x "$SO/zfs-job.sh"
-cat > "$SO/tab" <<TAB
-# BEGIN zfs-backup-managed
-16 * * * * $SO/zfs-job.sh "h hourly snapshot (so)" --log=$SO/job.log -- /x/snapget.sh -s -m "h_" -L so1 "u@h:hdd/a"
-26 1 * * * $SO/zfs-job.sh "h daily snapshot (so)" --log=$SO/job.log -- /x/snapget.sh -s -m "d_" -L so1 "u@h:hdd/a"
-56 * * * * $SO/zfs-job.sh "h prune (so)" --log=$SO/job.log -- /x/delsnaps.sh -L so1 "u@h:hdd/a" "h_" -H24
-16 * * * * $SO/zfs-job.sh "h hourly snapshot (other)" --log=$SO/job.log -- /x/snapget.sh -s -m "h_" -L so10 "u@h:hdd/b"
-# END zfs-backup-managed
-TAB
-sf_fn=$(sed -n '/^snaponly_first_snapshots() {/,/^}/p' "$ZFSBACKUP")
-[ -n "$sf_fn" ] || bad "snaponly: could not lift snaponly_first_snapshots -- anchor changed"
-for zr in 0 1 8; do
-    : > "$SO/job.log"
-    out=$(ZJ_RC=$zr bash -c "crontab_for_target() { cat '$SO/tab'; }; cron_target_user() { echo root; }
-log() { echo \"LOG \$*\"; }; warn() { echo \"WARN \$*\"; }; $sf_fn
-snaponly_first_snapshots so1" 2>&1)
-    ran=$(sed -nE 's/.* ZFS-JOB END (.*) rc=.*/\1/p' "$SO/job.log" | tr '\n' '|')
-    if [ "$zr" = 0 ]; then
-        if [ "$ran" = "h hourly snapshot (so)|h daily snapshot (so)|" ] && printf '%s' "$out" | grep -q 'LOG activate-client: first snapshot of each tier: 2 done, 0 not done'; then
-            ok "snaponly: activation snapshots every tier of THIS relationship once -- no prune line, not '-L so10'"
-        else
-            bad "snaponly: first snapshot of each tier" "ran=[$ran]" "$out"
-        fi
-    elif [ "$zr" = 8 ]; then
-        if printf '%s' "$out" | grep -q '2 done, 0 not done' && printf '%s' "$out" | grep -q 'crash-consistent (quiesce degraded, rc=8)'; then
-            ok "snaponly: rc 8 (quiesce degraded) counts as a first snapshot taken, and says it is crash-consistent"
-        else
-            bad "snaponly: rc 8 verdict" "$out"
-        fi
-    elif printf '%s' "$out" | grep -q '0 done, 2 not done' && printf '%s' "$out" | grep -q "WARN activate-client: first snapshot 'h daily snapshot (so)' did not finish (rc=1)"; then
-        ok "snaponly: a first snapshot whose END rc is not 0 is reported as not done"
-    else
-        bad "snaponly: first snapshot failure verdict" "$out"
-    fi
-done
+# U137, variant C (owner 2026-11-01): creating or changing a relationship takes NO snapshot
+# and sends NO copy -- each tier's first snapshot is its first cron run. Read off the code,
+# because the point is an ABSENCE: snaponly_first_snapshots is gone, and none of the verbs
+# that used to run a first snapshot / copy calls one (activate_snaponly, set-tiers,
+# set-datasets, add-source, edit-config); each says so in its log instead. The control: the
+# same reader still finds activate_first_copies in cmd_activate_client (a COPY relationship's
+# activation, U137 step 4 -- not this step), so an empty extraction cannot pass as "absent".
+# In a subshell: its loop variables must not leak into the suite's shell (they did, and a
+# later section's client_section_plan read them -- gfsshape failed only in the full run).
+c_bad=$( fn_body() { sed -n "/^$1() {/,/^}/p" "$ZFSBACKUP"; }
+         [ -z "$(fn_body snaponly_first_snapshots)" ] || printf ' snaponly_first_snapshots-still-defined'
+         for fn in activate_snaponly cmd_set_tiers cmd_set_datasets cmd_add_source cmd_edit_config cmd_local_backup; do
+             body=$(fn_body "$fn")
+             [ -n "$body" ] || { printf ' %s-not-found' "$fn"; continue; }
+             printf '%s' "$body" | grep -qE 'snaponly_first_snapshots|add_source_first_copy|FIRST_RUN_ANY|SNAPONLY_FIRST_(ONLY|TIER)' && printf ' %s-runs-a-first-snapshot' "$fn"
+         done
+         fn_body activate_snaponly | grep -q 'nothing was taken now' || printf ' activate_snaponly-silent'
+         fn_body cmd_set_tiers | grep -q 'nothing was taken now' || printf ' set-tiers-silent'
+         fn_body cmd_activate_client | grep -q 'activate_first_copies "\$name"' || printf ' control:activate_first_copies-not-found' )
+if [ -z "$c_bad" ]; then
+    ok "U137 C1: no first snapshot / copy when a snaponly or local relationship is created, a tier or dataset is added, a source added, or the config edited -- each verb says so; control: the copy relationship's activation still has its first copy (step 4)"
+else
+    bad "U137 C1: first snapshots gone" "$c_bad"
+fi
 
 # The family tag is the PAIRING LABEL the source knows (round 1 review): read
 # from the peer account zfsbackup-<label>, not from today's hostname, case kept
@@ -15378,55 +15362,6 @@ if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -qx 'add-client|rr|--host=10.0
 else
     bad "snaponly import" "rc=$rc" "$out"
 fi
-# add-source on a snaponly relationship (Metropolis pve2 -> pve1, 2026-10-25): the
-# re-activation stamped the first snapshot of every tier on EVERY dataset again, once per
-# add-source. SNAPONLY_FIRST_ONLY=<dataset> limits snaponly_first_snapshots to the new one;
-# without it (a plain activate-client) every dataset still gets its first snapshots.
-AFS="$WORK/afs"; rm -rf "$AFS"; mkdir -p "$AFS"
-cat > "$AFS/tab" <<'TAB'
-# BEGIN zfs-backup-managed
-24 * * * * echo RAN-old # snapget.sh -s -m "c_automated_hourly_" -L rel "u@h:pool/old" ""
-34 1 * * * echo RAN-old-d # snapget.sh -s -m "c_automated_daily_" -L rel "u@h:pool/old" ""
-24 * * * * echo RAN-new # snapget.sh -s -m "c_automated_hourly_" -L rel "u@h:pool/new" ""
-34 1 * * * echo RAN-new-d # snapget.sh -s -m "c_automated_daily_" -L rel "u@h:pool/new" ""
-24 * * * * echo RAN-other # snapget.sh -s -m "c_automated_hourly_" -L other "u@h:pool/x" ""
-# END zfs-backup-managed
-TAB
-afs_fn=$(sed -n '/^snaponly_first_snapshots() {/,/^}/p' "$ZFSBACKUP")
-[ -n "$afs_fn" ] || bad "snaponly: could not lift snaponly_first_snapshots -- anchor changed"
-afs_run() { bash -c "crontab_for_target() { cat '$AFS/tab'; }; cron_target_user() { echo root; }
-log() { :; }; warn() { :; }; $afs_fn
-snaponly_first_snapshots rel" 2>&1 | grep -o 'RAN-[a-z-]*' | sort | tr '\n' ' '; }
-got=$(SNAPONLY_FIRST_ONLY=pool/new afs_run)
-if [ "$got" = "RAN-new RAN-new-d " ]; then
-    ok "snaponly: add-source's re-activation stamps the first snapshot of every tier on the NEW dataset only"
-else
-    bad "snaponly: first snapshots after add-source" "$got"
-fi
-got=$(afs_run)
-if [ "$got" = "RAN-new RAN-new-d RAN-old RAN-old-d " ]; then
-    ok "snaponly: control -- a plain activate-client still stamps every dataset of the relationship (and no other one)"
-else
-    bad "snaponly: first snapshots, plain activation" "$got"
-fi
-# set-tiers --add-src-tier=<t> runs the added tier's first snapshot (SNAPONLY_FIRST_TIER).
-# A local relationship's source tier is labelled "__lsrc_<t> snapshot" (pve10, 2026-10-29:
-# "first snapshot of each tier: 0 done" -- the filter wanted "__<t>" or " <t>").
-cat > "$AFS/tab" <<'TAB'
-# BEGIN zfs-backup-managed
-24 * * * * echo RAN-lsrc-h # zfs-job.sh "h __lsrc_hourly snapshot (rel)" -- snapget.sh -s -L rel "u@h:pool/a"
-34 1 * * * echo RAN-lsrc-d # zfs-job.sh "h __lsrc_daily snapshot (rel)" -- snapget.sh -s -L rel "u@h:pool/a"
-24 * * * * echo RAN-h # zfs-job.sh "h hourly snapshot (rel)" -- snapget.sh -s -L rel "u@h:pool/b"
-24 * * * * echo RAN-2h # zfs-job.sh "h twohourly snapshot (rel)" -- snapget.sh -s -L rel "u@h:pool/b"
-# END zfs-backup-managed
-TAB
-got=$(FIRST_RUN_ANY=1 SNAPONLY_FIRST_TIER=hourly afs_run)
-if [ "$got" = "RAN-h RAN-lsrc-h " ]; then
-    ok "set-tiers: an added tier's first snapshot runs on a local relationship's __lsrc_ line too -- not another tier, not 'twohourly'"
-else
-    bad "set-tiers: first snapshot of an added tier" "$got"
-fi
-
 # status "sources" of a snaponly relationship = its [snaponly:] sections (a narrowed root and its
 # enumerated children), not the requested roots -- the GUI change window rebuilds [-] from it
 # (owner 2026-10-25: an excluded child showed as still selected).

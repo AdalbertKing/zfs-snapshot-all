@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2469c03f13fee16a -->
+<!-- status-covers-digest: db436401dc2e7222 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1708,8 +1708,8 @@
   ma `destroy` na źródle, a nowa relacja także wtedy, gdy rodzina ma już migawki na źródle (odpowiedź: `--own-snapshots`
   -- resztki, albo `--stamp-family`; kreator pyta o to samo). Retencja źródła to osobny `[prune:]` z tą rodziną, przypięty kluczem
   relacji. Minuty, które pisze `zfs-backup.sh`, nie są wielokrotnością 5 (ręczna sekcja w `gen-cron.sh` nie jest tu
-  sprawdzana). Aktywacja robi pierwszą migawkę KAŻDEGO szczebla (rc 8 = degrade quiesce liczy się jako zrobiona,
-  spójność awaryjna). Odmowy: profil bez prefiksu; profil z drabiną GFS na szczeblu -- w tym wbudowany `default`
+  sprawdzana). Aktywacja NIE robi żadnej migawki (U137, wariant C właściciela 2026-11-01; do 1.0.5 robiła
+  pierwszą migawkę każdego szczebla, z zamrażaniem): każdy szczebel dostaje pierwszą w swoim terminie z crona. Odmowy: profil bez prefiksu; profil z drabiną GFS na szczeblu -- w tym wbudowany `default`
   (źródłowy `[prune:]` nie niesie drabiny na szczebel, płaskie liczenie byłoby inną polityką); przy aktywacji --
   zakres nakładający się na źródło innej relacji tego kolektora; `seed`/`restore`/`edit-relation`/`add-source`/
   `remove-source`/`set-tiers`/`export-relation`/`import-relation`/`delete-relation --destroy-copies`. `remove-client`
