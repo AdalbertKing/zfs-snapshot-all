@@ -1202,6 +1202,16 @@ Owner-authorized refreezes:
   - Untouched: every read and its fail-closed handling, -R/-x/-L/pause, remote transport,
     thresholds and exit codes. Without -S/-W the output is byte-identical.
   twin: none -- check-snap-age.sh is the only monitor engine.
+- 2026-11-03 (check-snap-age.sh): **U137 C2 correction -- an -R tree with no snapshot at all.**
+  Same owner direction as the entry above ("Zgoda", 2026-11-03); this completes it, found by
+  the live GUI test on pve11 the same evening: a new local-snapshots relation (`-R`, empty
+  dataset) read OK with nothing to say instead of WAITING, because the root got the -R
+  "empty container" leniency -- and it would have stayed silent had its cron never run. v2.6 -> v2.7.
+  - With -S, in -R mode, a walk that found no snapshot anywhere checks its root as an explicit
+    target; with -S, a dataset with no snapshot of the family (age from creation) is WAITING too.
+  - Untouched: a tree with any snapshot keeps the container leniency; without -S nothing changes
+    (test/monitor S7 control).
+  twin: none -- check-snap-age.sh is the only monitor engine.
 
 ## How it is enforced
 
