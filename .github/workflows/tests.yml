@@ -60,6 +60,20 @@ jobs:
       # script fails here, which is one of F5's acceptance criteria.
       - run: ./test/impact.sh --verify
 
+  release:
+    name: release package builds (manifest, scrub)
+    runs-on: ubuntu-latest
+    steps:
+      # Owner 2026-11-03: the publish scrub refused 1.0.6 only AFTER the merge (a customer
+      # guest's name in a comment) and cost another PR. The same publish.sh, into a throwaway
+      # repository, on every PR: a name the release may not carry fails here instead.
+      - uses: actions/checkout@v4
+      - run: |
+          git init -q "$RUNNER_TEMP/rel"
+          git -C "$RUNNER_TEMP/rel" config user.email ci@example.invalid
+          git -C "$RUNNER_TEMP/rel" config user.name ci
+          bash release/publish.sh HEAD "$RUNNER_TEMP/rel"
+
   discover:
     name: which suites need nothing but bash
     runs-on: ubuntu-latest
