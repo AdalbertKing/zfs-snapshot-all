@@ -1212,6 +1212,16 @@ Owner-authorized refreezes:
   - Untouched: a tree with any snapshot keeps the container leniency; without -S nothing changes
     (test/monitor S7 control).
   twin: none -- check-snap-age.sh is the only monitor engine.
+- 2026-11-03 (check-snap-age.sh): **U137 C2 correction 2 -- a target that does not exist yet.**
+  Same owner direction ("Zgoda", 2026-11-03), found by the owner-requested GUI campaign on pve11
+  after 1.0.6: a new local copy (no first copy since U137 C) has no target until its first run,
+  so the monitor read UNKNOWN and the cron line mailed "monitor BROKEN" every 15 minutes until
+  then -- for a passive copy, until the family appears on the source. v2.7 -> v2.8.
+  - With -S, a dataset that does not exist is WAITING from the start (`does not exist yet`), and
+    WARNING/CRITICAL past the thresholds; in -R mode such a root has no walk.
+  - The age verdict is factored into `check_age_report` (reads check_one's locals); the
+    computation is unchanged. Without -S a missing dataset is UNKNOWN as before (S9 control).
+  twin: none -- check-snap-age.sh is the only monitor engine.
 
 ## How it is enforced
 
