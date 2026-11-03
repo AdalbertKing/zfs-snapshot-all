@@ -17729,7 +17729,11 @@ jobs_field_v() {   # <var> <kind> <section> <tier> <field>
     local v="${JOB_F["$k:$s|${f}_$t"]:-}"; [ -n "$v" ] && { printf -v "$_jv_var" '%s' "$v"; return 0; }
     # A relation block's tier is `profile__<rel>__<tier>`; its dataset section staggers
     # the schedule under the short name (`send_schedule_hourly`), and that is what cron runs.
-    case "$t" in *__*) v="${JOB_F["$k:$s|${f}_${t##*__}"]:-}"; [ -n "$v" ] && { printf -v "$_jv_var" '%s' "$v"; return 0; } ;; esac
+    # The block's tier carries gen-cron's side stem (`__lsrc_hourly`, `__src_hourly`), the
+    # override never does (gen-cron.sh, relation expansion: `${ovf}_${one}`) -- F2 showed
+    # every local relation at the block's :01 instead of its staggered minute (pve11, 2026-11-03).
+    local _one="${t##*__}"; _one="${_one#lsrc_}"; _one="${_one#src_}"
+    case "$t" in *__*) v="${JOB_F["$k:$s|${f}_${_one}"]:-}"; [ -n "$v" ] && { printf -v "$_jv_var" '%s' "$v"; return 0; } ;; esac
     v="${JOB_F["$k:$s|$f"]:-}";          [ -n "$v" ] && { printf -v "$_jv_var" '%s' "$v"; return 0; }
     v="${JOB_F["template:$t|$f"]:-}";      [ -n "$v" ] && { printf -v "$_jv_var" '%s' "$v"; return 0; }
     printf -v "$_jv_var" '%s' "${JOB_F["defaults:|$f"]:-}"
