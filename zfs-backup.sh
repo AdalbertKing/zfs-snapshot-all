@@ -22531,6 +22531,22 @@ rux_remote_install() {
     else
         log "rux: resuming '$name' from state '$state'"
         rux_check_conflict "$cpath" "$host" "$dataset" "$target" "$mode"
+        # The family question (U141) is asked by a REFUSAL during activation, after the
+        # record exists -- and it said "answer with one flag". Re-running with that flag
+        # used to drop it (add-client is not called on a resume) and refuse again for
+        # ever (pve11, 2026-11-03). Taken onto the record here, only before activation,
+        # and only when the record holds no answer yet.
+        if [ "${rux_own:-0}" -eq 1 ] || [ "${rux_stamp:-0}" -eq 1 ]; then
+            [ "${rux_own:-0}" -eq 1 ] && [ "${rux_stamp:-0}" -eq 1 ] \
+                && die "rux: --own-snapshots and --stamp-family are opposite answers -- pick one. Nothing was changed."
+            [ "$state" = active ] \
+                && die "rux: '$name' is active already -- who makes the source's snapshots is decided at creation. Nothing was changed."
+            [ -n "$(record_get "$cpath" OWN_SNAPSHOTS)$(record_get "$cpath" FAMILY_STAMP)" ] \
+                && die "rux: '$name' already holds an answer to who makes the source's snapshots. Nothing was changed."
+            if [ "${rux_own:-0}" -eq 1 ]; then write_client_field OWN_SNAPSHOTS 1 >> "$cpath"
+            else write_client_field FAMILY_STAMP 1 >> "$cpath"; fi
+            log "rux: '$name' -- answer recorded: $([ "${rux_own:-0}" -eq 1 ] && echo '--own-snapshots (leftovers)' || echo '--stamp-family')"
+        fi
     fi
 
     # The grant step runs BEFORE the verification and never replaces it: what
