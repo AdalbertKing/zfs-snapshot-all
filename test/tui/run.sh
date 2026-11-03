@@ -3133,7 +3133,9 @@ nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienn
       # Tabela retencji zrodla (tui/grid.py, curses) bez terminala: klawisze z NR_GRID_KEYS,
       # domyslnie Enter = Dalej bez zmian (zrodlo jak cel).
       export ZFS_GRID="$PY $REPO/tui/grid.py --keys ${NR_GRID_KEYS:-enter}"
-      bash "$NRS" ) 2>"$NR/err" </dev/null
+      # Limit (2026-11-03): sekwencja odpowiedzi, ktora nie pasuje do krokow kreatora, konczy sie
+      # bledem po minucie, zamiast krazyc bez konca (tak zawisla cala suita na pve9).
+      timeout 60 bash "$NRS" ) 2>"$NR/err" </dev/null
     local rc=$?
     grep -- ' --install --yes$' "$NR/zb.log" 2>/dev/null | sed 's/^/CMD: /; s/$/ /'
     return "$rc"
