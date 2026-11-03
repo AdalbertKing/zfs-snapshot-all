@@ -3352,6 +3352,61 @@ if has "$SOWO" "CMD: " && has "$SOWO" " --mode=snaponly " && ! has "$SOWO" "--ta
 else
     bad "new-relation: Migawki zdalnie" "$SOWO" "$SOWP" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | head -12 | tr '\n' ';')"
 fi
+# W15 (kampania 2026-11-03): migawki zdalne odrzucaja drabine GFS przy aktywacji -- lista
+# szablonow tego rodzaju jej nie pokazuje (kontrola: backup ponizej -- [GFS] jest).
+if ! has "$SOWP" '[GFS]'; then
+    ok "new-relation W15: migawki zdalne -- na liscie szablonow nie ma szablonu GFS"
+else
+    bad "new-relation W15: GFS na liscie migawek zdalnych" "$(printf '%s' "$SOWP" | cut -c1-600)"
+fi
+
+# U138/U139/W6 (wlasciciel 2026-11-03 "Rob U"): backup bez migawek rodziny na zrodle.
+# (a) Zaawansowane -> Pasywnie -> tak: --passive, bez retencji zrodla, opis szablonu bez "zamraża";
+# (b) szablon passive-flat jest na liscie (z [pasywny]) i jego wybor = --passive;
+# kontrola: ten sam backup bez przelacznika -- bez --passive, a [GFS] na liscie jest.
+U138A=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/backups
+0${T}default
+0${T}pve9b
+0${T}root
+0${T}adv
+0${T}passive
+0${T}yes
+1${T}
+0${T}create
+0${T}
+" NR_TREE="$NRTK"); U138AW="$(cat "$NR/wt.log")"
+U138B=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/backups
+0${T}passive-flat
+0${T}pve9b
+0${T}root
+0${T}create
+0${T}
+" NR_TREE="$NRTK"); U138BW="$(cat "$NR/wt.log")"
+U138C=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/backups
+0${T}default
+0${T}pve9b
+0${T}root
+0${T}create
+0${T}
+" NR_TREE="$NRTK"); U138CW="$(cat "$NR/wt.log")"
+u138_szablon="$(printf '%s\n' "$U138AW" | grep -o 'Szablon: default[^~]*' | head -1)"
+if has "$U138A" 'CMD: ' && has "$U138A" ' --passive ' && has "$U138AW" 'PASYWNIE: migawki na źródle robi kto inny' \
+   && [ -n "$u138_szablon" ] && ! printf '%s' "$u138_szablon" | grep -q 'zamraża' \
+   && has "$U138B" 'CMD: ' && has "$U138B" ' --passive ' && has "$U138B" '--profile=passive-flat' && has "$U138BW" 'passive-flat' && has "$U138BW" '[pasywny]' \
+   && has "$U138C" 'CMD: ' && ! has "$U138C" '--passive' && has "$U138CW" '[GFS]'; then
+    ok "new-relation U138/U139/W6: backup bez migawek rodziny -- Pasywnie w Zaawansowanych daje --passive i plan bez 'zamraża'; szablon passive-flat [pasywny] na liscie daje --passive; bez przelacznika -- bez --passive"
+else
+    bad "new-relation U138/U139/W6" "A: $U138A" "szablon: $u138_szablon" "B: $U138B" "C: $U138C" "$(printf '%s' "$U138BW" | grep -o -e '--title ~ [^~]*' | head -12 | tr '\n' ';')"
+fi
 # U141 + U138 (2026-11-03): migawki zdalne bez etykiety kolektora -- gdy rodzina już jest na
 # źródle, kreator pyta, kto ją robi: resztki (--own-snapshots) albo inny twórca (osobna rodzina,
 # --stamp-family). Migawki ma tylko DZIECKO korzenia (jak repliki pvesr pod rpool/data): okno
