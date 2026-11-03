@@ -93,10 +93,11 @@ set -o pipefail
 # cron run, which for a yearly tier can be months away. With -S the age is measured from
 # the LATER of the newest matching snapshot and that start, so a tier that has not reached
 # its first run -- or a family whose newest snapshot predates the relationship (leftovers,
-# an old cron's) -- is not late. Once the tier's own first snapshot exists it is newer than
+# an old cron's) -- is not late while its age FROM THE START is under warn (past warn/crit it
+# alarms like any other: a first run that never came). Once the tier's own first snapshot exists it is newer than
 # the start and the check is exactly as without -S. The start is written once by
 # zfs-backup.sh and never moved, so -S cannot hide a tier that stopped.
-# -W prints a WAITING line (rc unchanged, 0) for each dataset in that state: the GUI asks
+# -W prints a WAITING line (rc unchanged, 0) for each such dataset still under warn: the GUI asks
 # for it; the cron line does not, so the log is not filled every 15 minutes for a year.
 #
 # Example:

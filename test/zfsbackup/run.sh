@@ -14915,7 +14915,7 @@ else
     bad "snaponly U141 stamp decision" "stamped=$st_a after-rerender=$st_b plain-in-stamped=$st_plain decide(stamped)=$st_dec decide(plain)=$st_dec0 decide(new)=$st_new" "$(grep -n 'prefix' "$SO/st.conf")"
 fi
 # U137 C2: every monitored snaponly tier carries its start (monitor_since); a re-render keeps
-# the value (read before the strip), a brand-new relationship gets "now".
+# the value (read before the strip). ("now" for a new one: localbackup's set-tiers --add-tier test.)
 so_since() { awk '/^\[template:snaponly__rel1__/{f=1;next} /^\[/{f=0} f && $1=="monitor_since"{print $3}' "$1" | paste -sd, -; }
 ms_a=$(so_since "$SO/st.conf")
 sed -i 's/^\(\s*monitor_since\s*=\s*\).*/\11700000000/' "$SO/st.conf"

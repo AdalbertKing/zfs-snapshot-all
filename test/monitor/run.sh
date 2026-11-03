@@ -385,7 +385,7 @@ check "S3 a leftover older than the start: OK (waiting)" "0" "$(rc_of -S "$S1" t
 case "$(run -S "$S1" -W tank/left automated_weekly 2h 4h)" in *"WAITING dataset=tank/left "*"(newest before it: automated_weekly_old)"*) ok "S3 names the leftover" ;;
   *) bad "S3 names the leftover" "$(run -S "$S1" -W tank/left automated_weekly 2h 4h)" ;; esac
 add_snap tank/left "automated_weekly_own" $((5 * H))      # the tier's own snapshot, after its start, now stale
-check "S4 an own snapshot newer than the start is judged as without -S" "2" "$(rc_of -S "$((NOW - 6 * H))" tank/left automated_weekly 2h 4h)"
+check "S4 an own snapshot newer than the start decides (5h old, crit 4h: CRITICAL)" "2" "$(rc_of -S "$((NOW - 6 * H))" tank/left automated_weekly 2h 4h)"
 check "S5 -S that is not a number is UNKNOWN" "3" "$(rc_of -S 12x tank/left automated_weekly 2h 4h)"
 
 echo "--------------------------------------------"

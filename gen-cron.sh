@@ -4359,7 +4359,7 @@ emit_gfs_prune_sections() {
 # tier's first cron run there is nothing to measure; with -S the monitor measures from
 # whichever is later, the newest matching snapshot or this start. A family older than the
 # relationship (leftovers, an old cron's weekly) then reads as WAITING, not stale, until the
-# first own snapshot. Absent = empty = no -S, the line exactly as before.
+# first own snapshot -- unless its age from the start passes warn/crit (a first run that never came). Absent = empty = no -S, the line exactly as before.
 resolve_monitor_since() {   # <section> <template> <context> -> epoch or ""
     local v; v="$(resolve_field_or_omit monitor_since "$1" "$2" "")" || v=""
     case "$v" in ''|*[!0-9]*) [ -z "$v" ] || die "$3: monitor_since = '$v' -- an epoch (seconds), written by zfs-backup.sh" ;; esac
