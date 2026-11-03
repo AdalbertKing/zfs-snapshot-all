@@ -1701,8 +1701,12 @@
   Parowanie idzie kształtem sync (jedyny bez celu po obu stronach paczki): źródło szkicuje i podpisuje zakres,
   `--requested` go zawęża. `gen-cron.sh` ma sekcję `[snaponly:<konto@host:ds>]`, która emituje `snapget.sh -s` i odmawia
   wszystkiego, co kształtuje transfer albo cel (dst/src/flags/autotune/retencja celu nazwane wprost; kompresja, szyfr,
-  pasmo -- spoza listy pól sekcji). Rodzina migawek to `<kolektor>_<prefiks>` (np. `pve9_automated_hourly_`), więc
-  rodziny różnych kolektorów są rozłączne; retencja źródła to osobny `[prune:]` z tą rodziną, przypięty kluczem
+  pasmo -- spoza listy pól sekcji). Rodzina migawek (od U141, decyzja właściciela 2026-11-03,
+  wariant B) to sam prefiks szczebla (`automated_hourly_`); etykieta kolektora z przodu (`pve9_automated_hourly_`) tylko
+  na żądanie (`--stamp-family`, rekord `FAMILY_STAMP=1`), dla drugiego twórcy tej samej rodziny na jednym źródle. Relacja
+  sprzed pola zachowuje swoją rodzinę (odczyt z zainstalowanych sekcji). Rodzina bez etykiety odmawia, gdy inny kolektor
+  ma `destroy` na źródle, a nowa relacja także wtedy, gdy rodzina ma już migawki na źródle (odpowiedź: `--own-snapshots`
+  -- resztki, albo `--stamp-family`; kreator pyta o to samo). Retencja źródła to osobny `[prune:]` z tą rodziną, przypięty kluczem
   relacji. Minuty, które pisze `zfs-backup.sh`, nie są wielokrotnością 5 (ręczna sekcja w `gen-cron.sh` nie jest tu
   sprawdzana). Aktywacja robi pierwszą migawkę KAŻDEGO szczebla (rc 8 = degrade quiesce liczy się jako zrobiona,
   spójność awaryjna). Odmowy: profil bez prefiksu; profil z drabiną GFS na szczeblu -- w tym wbudowany `default`
