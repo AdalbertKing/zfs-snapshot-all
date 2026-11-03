@@ -742,7 +742,9 @@ step_profile() {
         # (np. default) jest odrzucana przy aktywacji -- polecany szablon liczony.
         q6="$(T 'Jak długo trzymać migawki na źródle?')"
         # W15: szablonow GFS juz tu nie ma (odrzucalaby je aktywacja), wiec i ostrzezenia o nich.
-        [ "$def" = default ] && in_list d7h24 "${items[@]}" && def=d7h24
+        # Domyslny d7h24 takze wtedy, gdy "default" (GFS) wypadl z listy (W15) i def spadl na
+        # pierwsza pozycje -- nie, gdy admin juz cos tu wybral.
+        [ "$PROFILE" != "$def" ] && { [ "$def" = default ] || [ "$def" = "${items[2]}" ]; } && in_list d7h24 "${items[@]}" && def=d7h24
     fi
     wt --title "$(title 6 "$q6")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
        --menu "${lead}$(T 'Gotowy szablon albo "Ręcznie" (tabela szczebli). [zamraża] = przed migawkami dobowymi i rzadszymi goście są zamrażani (zgoda w Zaawansowanych podsumowania).')$([ "$has_ladder" -eq 1 ] && printf '%s' "$(T ' [drabina] = jedna rodzina migawek liczona drabiną GFS (sprawdzane przy Utwórz).')") $(T 'Zmienisz później.')" "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \

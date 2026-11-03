@@ -194,7 +194,8 @@ json.dump(jobs, open(out + "/list-jobs.json", "w", encoding="utf-8"))
 PYEOF
 S4W="$(screen relacje down,down,down,down --width 260 --height 40 --monitors "$C3D/monitor.json" --jobs "$C3D/list-jobs.json")"
 F2W="$(screen zadania '' --width 220 --height 400 --monitors "$C3D/monitor.json" --jobs "$C3D/list-jobs.json")"
-if hasE "$S4W" 'Kopie +czeka na pierwszy termin' && hasE "$S4W" 'hourly +aktualne   alarm po 150m' \
+# W2 (kampania 2026-11-03): szczebel chodzi, drugi czeka -- relacja "aktualne", nie "czeka".
+if hasE "$S4W" 'Kopie +aktualne' && hasE "$S4W" 'hourly +aktualne   alarm po 150m' \
    && hasE "$S4W" 'daily +czeka na pierwszy termin   pierwsza: .*alarm po 48h' && ! hasE "$S4W" 'daily +.*najnowsza sprzed' \
    && has "$F2W" 'tylko migawka' && ! has "$F2W" 'lsrc_' && ! hasE "$S4" 'czeka na pierwszy'; then
     ok "U137 C3: szczebel przed pierwszym biegiem -- 'czeka na pierwszy termin' z data najblizszego biegu z crona, kazdy szczebel osobno z progiem; F2: 'tylko migawka' bez lsrc_; kontrola bez WAITING -- bez 'czeka'"
@@ -3202,9 +3203,10 @@ W17D=$(nr_run "0${T}backup
 0${T}create
 0${T}
 " NR_FIX="$NRE" NR_TREE="$NRTK")
-# Karta przycina wartosc (szerokosc 76); na main po 'zamrażanie,' stoi 'pomijane', tu 'zaszyfrowane'.
+# U138 (2026-11-03): backup bez migawek rodziny ma w Zaawansowanych "Pasywnie" -- karta zaczyna
+# sie od "pasywnie: nie;", a przycieta wartosc (szerokosc 76) nie siega juz 'zaszyfrowane'.
 if has "$W17D" "CMD: " && has "$W17D" " --raw " && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log" \
-   && grep -qF 'zamrażanie, zas' "$NR/wt.log"; then
+   && grep -qF 'pasywnie: nie; ' "$NR/wt.log"; then
     ok "new-relation: W17 zaszyfrowane zrodlo bez wchodzenia w Zaawansowane -- komenda i tak z --raw"
 else
     bad "new-relation: W17 raw bez Zaawansowanych" "$W17D" "$(grep -F "Zaawansowane" "$NR/wt.log" | head -1 | cut -c1-700)"

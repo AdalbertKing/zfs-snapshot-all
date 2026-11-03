@@ -1877,6 +1877,7 @@
 "replika %s nie ma zaszyfrowanego nośnika -- nie ma klucza do pokazania": "replica %s has no encrypted medium -- no key to show",
 "replika bez źródeł": "replica without sources",
 "restore: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny": "restore: $HERE/tui/wt-lib.sh is missing -- the checkout is incomplete",
+"robi je ktoś inny -- ta relacja: osobna rodzina z etykietą": "someone else makes them -- this relation: a separate family with a label",
 "roczne": "yearly",
 "rocznych": "yearly",
 "rodzaj nośnika": "medium type",
