@@ -7012,6 +7012,7 @@ fi
 # LOAD_ACCOUNT@LOAD_HOST. Both are NAMED functions with their callers counted
 # below, so a third, hand-rolled one still trips this.
 n_impl=$(grep -c 'zfs list -H -t snapshot' "$ZFSBACKUP")
+# move-to-client's guid proof and local-backup's passive rehearsal (U138: is the family there yet).
 n_local=$(grep -c 'local_newest_snapshot "\$' "$ZFSBACKUP")
 # The old idiom must be gone entirely, not merely reduced -- a lingering
 # `grep -q '@automated_'` would be a second existence test with its own depth.
@@ -7021,7 +7022,7 @@ n_calls=$(grep -c 'source_family_exists "\$' "$ZFSBACKUP")
 # the wrapper itself, activate-client's rehearsal (the ex-copy), and the plain-family
 # guard of a snaponly relationship (U141: does the family already exist on the source).
 n_newest=$(grep -c 'source_family_newest "\$' "$ZFSBACKUP")
-if [ "$n_impl" -eq 2 ] && [ "$n_local" -eq 1 ] && [ "$n_inline" -eq 0 ] &&    [ "$n_calls" -eq 3 ] && [ "$n_newest" -eq 3 ]; then
+if [ "$n_impl" -eq 2 ] && [ "$n_local" -eq 2 ] && [ "$n_inline" -eq 0 ] &&    [ "$n_calls" -eq 3 ] && [ "$n_newest" -eq 3 ]; then
     ok "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal, snaponly plain-family guard)"
 else
     bad "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"         "impl=$n_impl local-callers=$n_local inline=$n_inline exists-callers=$n_calls newest-callers=$n_newest"
