@@ -3133,7 +3133,9 @@ nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienn
       # Tabela retencji zrodla (tui/grid.py, curses) bez terminala: klawisze z NR_GRID_KEYS,
       # domyslnie Enter = Dalej bez zmian (zrodlo jak cel).
       export ZFS_GRID="$PY $REPO/tui/grid.py --keys ${NR_GRID_KEYS:-enter}"
-      bash "$NRS" ) 2>"$NR/err" </dev/null
+      # Limit (2026-11-03): sekwencja odpowiedzi, ktora nie pasuje do krokow kreatora, konczy sie
+      # bledem po minucie, zamiast krazyc bez konca (tak zawisla cala suita na pve9).
+      timeout 60 bash "$NRS" ) 2>"$NR/err" </dev/null
     local rc=$?
     grep -- ' --install --yes$' "$NR/zb.log" 2>/dev/null | sed 's/^/CMD: /; s/$/ /'
     return "$rc"
@@ -3144,9 +3146,8 @@ T=$'\t'
 NRT="0${T}hdd/backups
 0${T}default
 0${T}pve9b
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}grant
 0${T}__done__
@@ -3176,9 +3177,8 @@ w17_ans() {   # <odpowiedz checklisty "Ustawienia dodatkowe">
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}$1
 0${T}__done__
@@ -3198,6 +3198,7 @@ W17D=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}root
 0${T}create
 0${T}
 " NR_FIX="$NRE" NR_TREE="$NRTK")
@@ -3254,9 +3255,8 @@ nrc_ans() {   # <odpowiedz w oknie migawek: chain|own> [tryb: backup] -> odpowie
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}grant
 0${T}__done__
@@ -3278,9 +3278,8 @@ NRCS=$(nr_run "0${T}sync
 0${T}chain
 0${T}default
 0${T}pve9b
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}grant
 0${T}__done__
@@ -3335,6 +3334,7 @@ SOW="0${T}snaponly
 0${T}
 0${T}d7h24
 0${T}pve9b
+0${T}root
 0${T}create
 0${T}
 "
@@ -3372,6 +3372,7 @@ u141_ans() {   # <odpowiedz w oknie rodziny: own|stamp>
 0${T}$1
 0${T}d7h24
 0${T}pve9b
+0${T}root
 0${T}create
 0${T}
 "; }
@@ -3389,9 +3390,8 @@ fi
 rm -rf "$NRU"
 NRTS="0${T}default
 0${T}pve9b
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}grant
 0${T}__done__
@@ -3553,11 +3553,10 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}
+0${T}zfsbackup
 0${T}profile
 0${T}d30
 0${T}adv
-0${T}acct
-0${T}zfsbackup
 0${T}extra
 0${T}grant|quies
 0${T}__done__
@@ -3636,9 +3635,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}grant
 0${T}__done__
@@ -3664,9 +3662,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}d7h24-age
 0${T}pve9b
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}grant
 0${T}__done__
@@ -3696,9 +3693,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}d30h24
 0${T}pve9b
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}grant
 0${T}__done__
@@ -3719,9 +3715,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}grant
 0${T}__done__
@@ -3745,9 +3740,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}grant
 0${T}__done__
@@ -3810,6 +3804,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__browse__
 0${T}default
 0${T}pve9b
+0${T}root
 0${T}create
 0${T}
 " NR_TREE="$NRTK|goto:hdd,enter")
@@ -3836,6 +3831,7 @@ NROUT=$(nr_run "0${T}local
 0${T}hdd/kopie
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
+0${T}root
 0${T}create
 0${T}
 " NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
@@ -3853,9 +3849,8 @@ NROUT=$(nr_run "0${T}local
 0${T}hdd/kopie
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}__done__
 1${T}
@@ -3872,6 +3867,34 @@ if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=hdd/backups/192.168.28.99/hd
     ok "new-relation: kopia lokalna -- bez hosta i diagnozy, datasety tego hosta, zawsze -R, bez praw/parowania, komenda local-backup z --name"
 else
     bad "new-relation: kopia lokalna" "rc=$NRRC" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | head -12 | tr '\n' ';')"
+fi
+# U142 + U138 (wlasciciel 2026-11-01): konto jest krokiem PRZEJSCIA (okno "Na jakim koncie"
+# przed podsumowaniem), a w Zaawansowanych go nie ma; kopia lokalna bez migawek rodziny na zrodle
+# moze byc wymuszona jako pasywna (Zaawansowane -> Pasywnie -> tak): komenda niesie --passive,
+# plan mowi PASYWNIE. Kontrola: ta sama kopia bez przelacznika -- bez --passive.
+NRPF=$(nr_run "0${T}local
+0${T}__other__
+0${T}hdd/kopie
+0${T}default
+0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
+0${T}root
+0${T}adv
+0${T}passive
+0${T}yes
+1${T}
+0${T}create
+0${T}
+" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRPFW="$(cat "$NR/wt.log")"
+pf_acct_before=$(printf '%s\n' "$NRPFW" | grep -n 'Na jakim koncie' | head -1 | cut -d: -f1)
+pf_sum=$(printf '%s\n' "$NRPFW" | grep -n 'Nowa relacja -- podsumowanie' | head -1 | cut -d: -f1)
+pf_adv=$(printf '%s\n' "$NRPFW" | grep -F 'Nowa relacja: zaawansowane' | head -1)
+if has "$NROUT" 'CMD: ' && ! has "$NROUT" '--passive' \
+   && has "$NRPF" 'CMD: ' && has "$NRPF" ' --passive ' && has "$NRPFW" 'PASYWNIE: migawki na źródle robi kto inny' \
+   && [ -n "$pf_acct_before" ] && [ -n "$pf_sum" ] && [ "$pf_acct_before" -lt "$pf_sum" ] \
+   && printf '%s' "$pf_adv" | grep -qF 'Pasywnie' && ! printf '%s' "$pf_adv" | grep -qF 'Konto'; then
+    ok "new-relation U142/U138: konto to krok przejscia (przed podsumowaniem, nie w Zaawansowanych); kopia lokalna wymuszona jako pasywna -- --passive i PASYWNIE w planie; bez przelacznika -- bez --passive"
+else
+    bad "new-relation U142/U138" "$NRPF" "acct@$pf_acct_before sum@$pf_sum" "adv: $(printf '%s' "$pf_adv" | cut -c1-300)"
 fi
 # 3h'. KOPIA LOKALNA ze zrodla, na ktorym sa juz migawki NASZEJ rodziny (family_snapshots>0 w
 #      list-datasets, bez hosta -> list-datasets.json): to samo okno "Migawki naszej rodziny
@@ -3906,9 +3929,8 @@ nrl_ans() {   # <chain|own> -> odpowiedzi kreatora kopii lokalnej ze zrodlem z r
 0${T}hdd/kopie
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}__done__
 1${T}
@@ -3940,6 +3962,7 @@ rm -rf "$NRL"
 NROUT=$(nr_run "0${T}snap
 0${T}default
 0${T}migawki-hdd-backups-192.168.28.99-hdd-lab
+0${T}root
 0${T}create
 0${T}
 " NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
@@ -3964,9 +3987,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}grant
 0${T}__done__
@@ -4253,11 +4275,10 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
-0${T}adv
-0${T}acct
 0${T}root
 0${T}
 0${T}zfsbackup
+0${T}adv
 0${T}extra
 0${T}grant
 0${T}__done__
@@ -4279,9 +4300,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}
 0${T}__done__
@@ -4324,9 +4344,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}
 0${T}__del__
@@ -5212,9 +5231,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}__manual__
 0${T}pve9b
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}grant
 0${T}__done__
@@ -5234,9 +5252,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}__manual__
 0${T}
-0${T}adv
-0${T}acct
 0${T}root
+0${T}adv
 0${T}extra
 0${T}grant
 0${T}__done__

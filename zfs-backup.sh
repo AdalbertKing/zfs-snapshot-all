@@ -9622,6 +9622,12 @@ Taking over older jobs (a v4 config written manually): remove their sections fir
         for sr in "${roots[@]}"; do
             if [ "$lb_replace" -eq 1 ] && zfs list -H -o name "$target/$sr" >/dev/null 2>&1; then
                 log "  already copied: $sr -> $target/$sr"
+            # A PASSIVE copy whose family has no snapshot on the source yet (U138: forced in the
+            # wizard before the snapshot relationship's first run, e.g. a pvesr replica that has
+            # not received one): there is nothing to pick up, so the engine's dry-run can only
+            # refuse. Nothing to rehearse yet -- the first cron run after the family appears copies it.
+            elif [ "$lb_passive" -eq 1 ] && [ -z "$(local_newest_snapshot "$sr" "$seed_prefix" r)" ]; then
+                log "  passive, no '${seed_prefix}*' snapshot under $sr yet -- nothing to rehearse; the first cron run after the family appears copies it"
             elif bash "$SNAPGET" -n -m "$seed_prefix" -v 3 ${lb_name:+-L "$lb_name"} $([ "$lb_raw" -eq 1 ] && printf -- '-w') $([ "$lb_passive" -eq 1 ] && printf -- '-e') ${seed_rec[@]+"${seed_rec[@]}"} ${seed_x[@]+"${seed_x[@]}"} "$sr" "$target"; then
                 log "  OK: $sr -> $target (first copy at its cron time)"
             else
@@ -12235,7 +12241,7 @@ snaponly_assert_source_free() {   # <name> <peer label> <dataset...>
 # collectors on one source could never prune each other's snapshots. It also made
 # one host carry two naming conventions, and every later step -- a passive copy of
 # the pvesr replica, its template, its monitors -- had to know the stamp and none
-# did (U140; found on Dabrowska 2026-11-01, U138). Now the family is the plain tier prefix, and
+# did (U140, Dabrowska 2026-11-01). Now the family is the plain tier prefix, and
 # the stamp is an explicit choice (--stamp-family -> FAMILY_STAMP=1) for a second
 # creator of the same family on one source.
 #
@@ -20937,8 +20943,11 @@ remove_managed_sections() {   # <file> <client name> <target-path>...
 # move_guid_proof needs is the collector's own copy, on this machine. So this is
 # a second probe -- named, in one place, rather than inlined, so the assertion
 # that pins "one probe implementation per side" keeps biting if a third appears.
-local_newest_snapshot() {   # <dataset> -> newest snapshot name, or nothing
-    zfs list -H -t snapshot -o name -s creation -d 1 "$1" 2>/dev/null | tail -1
+local_newest_snapshot() {   # <dataset> [family prefix] [r] -> newest snapshot name (of that family when a prefix is given), or nothing
+    # r: the dataset and everything below it (U138: a passive copy's root before its first run).
+    local depth='-d 1'; [ "${3:-}" = r ] && depth='-r'
+    zfs list -H -t snapshot -o name -s creation $depth "$1" 2>/dev/null \
+        | { if [ -n "${2:-}" ]; then grep -F "@$2" || :; else cat; fi; } | tail -1
 }
 
 move_guid_proof() {   # <copy dataset> <destination path> <account@host>
