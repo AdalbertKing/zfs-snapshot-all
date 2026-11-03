@@ -194,7 +194,8 @@ json.dump(jobs, open(out + "/list-jobs.json", "w", encoding="utf-8"))
 PYEOF
 S4W="$(screen relacje down,down,down,down --width 260 --height 40 --monitors "$C3D/monitor.json" --jobs "$C3D/list-jobs.json")"
 F2W="$(screen zadania '' --width 220 --height 400 --monitors "$C3D/monitor.json" --jobs "$C3D/list-jobs.json")"
-if hasE "$S4W" 'Kopie +czeka na pierwszy termin' && hasE "$S4W" 'hourly +aktualne   alarm po 150m' \
+# W2 (kampania 2026-11-03): szczebel chodzi, drugi czeka -- relacja "aktualne", nie "czeka".
+if hasE "$S4W" 'Kopie +aktualne' && hasE "$S4W" 'hourly +aktualne   alarm po 150m' \
    && hasE "$S4W" 'daily +czeka na pierwszy termin   pierwsza: .*alarm po 48h' && ! hasE "$S4W" 'daily +.*najnowsza sprzed' \
    && has "$F2W" 'tylko migawka' && ! has "$F2W" 'lsrc_' && ! hasE "$S4" 'czeka na pierwszy'; then
     ok "U137 C3: szczebel przed pierwszym biegiem -- 'czeka na pierwszy termin' z data najblizszego biegu z crona, kazdy szczebel osobno z progiem; F2: 'tylko migawka' bez lsrc_; kontrola bez WAITING -- bez 'czeka'"
@@ -3202,9 +3203,10 @@ W17D=$(nr_run "0${T}backup
 0${T}create
 0${T}
 " NR_FIX="$NRE" NR_TREE="$NRTK")
-# Karta przycina wartosc (szerokosc 76); na main po 'zamrażanie,' stoi 'pomijane', tu 'zaszyfrowane'.
+# U138 (2026-11-03): backup bez migawek rodziny ma w Zaawansowanych "Pasywnie" -- karta zaczyna
+# sie od "pasywnie: nie;", a przycieta wartosc (szerokosc 76) nie siega juz 'zaszyfrowane'.
 if has "$W17D" "CMD: " && has "$W17D" " --raw " && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log" \
-   && grep -qF 'zamrażanie, zas' "$NR/wt.log"; then
+   && grep -qF 'pasywnie: nie; ' "$NR/wt.log"; then
     ok "new-relation: W17 zaszyfrowane zrodlo bez wchodzenia w Zaawansowane -- komenda i tak z --raw"
 else
     bad "new-relation: W17 raw bez Zaawansowanych" "$W17D" "$(grep -F "Zaawansowane" "$NR/wt.log" | head -1 | cut -c1-700)"
@@ -3350,6 +3352,73 @@ if has "$SOWO" "CMD: " && has "$SOWO" " --mode=snaponly " && ! has "$SOWO" "--ta
 else
     bad "new-relation: Migawki zdalnie" "$SOWO" "$SOWP" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | head -12 | tr '\n' ';')"
 fi
+# W15 (kampania 2026-11-03): migawki zdalne odrzucaja drabine GFS przy aktywacji -- lista
+# szablonow tego rodzaju jej nie pokazuje (kontrola: backup ponizej -- [GFS] jest).
+if ! has "$SOWP" '[GFS]'; then
+    ok "new-relation W15: migawki zdalne -- na liscie szablonow nie ma szablonu GFS"
+else
+    bad "new-relation W15: GFS na liscie migawek zdalnych" "$(printf '%s' "$SOWP" | cut -c1-600)"
+fi
+
+# U138/U139/W6 (wlasciciel 2026-11-03 "Rob U"): backup bez migawek rodziny na zrodle.
+# (a) Zaawansowane -> Pasywnie -> tak: --passive, bez retencji zrodla, opis szablonu bez "zamraża";
+# (b) szablon passive-flat jest na liscie (z [pasywny]) i jego wybor = --passive;
+# kontrola: ten sam backup bez przelacznika -- bez --passive, a [GFS] na liscie jest.
+U138A=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/backups
+0${T}default
+0${T}pve9b
+0${T}root
+0${T}adv
+0${T}passive
+0${T}yes
+1${T}
+0${T}create
+0${T}
+" NR_TREE="$NRTK"); U138AW="$(cat "$NR/wt.log")"
+# passive-flat jest na kazdym hoscie (ukryty) -- w fixture go nie ma; ta sama dopiska co w A>B>C.
+NRP="$(mktemp -d)"; cp "$P10"/*.json "$NRP/"
+"$PY" - "$NRP/list-profiles.json" <<'PYEOF'
+import sys, json, copy
+p = sys.argv[1]; d = json.load(open(p, encoding="utf-8"))
+if not any(x.get("name") == "passive-flat" for x in d["profiles"]):
+    x = copy.deepcopy(d["profiles"][0]); x["name"] = "passive-flat"; d["profiles"].append(x)
+for x in d["profiles"]:
+    if x.get("name") == "passive-flat":
+        x["hidden"] = "yes"
+json.dump(d, open(p, "w", encoding="utf-8"))
+PYEOF
+U138B=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/backups
+0${T}passive-flat
+0${T}pve9b
+0${T}root
+0${T}create
+0${T}
+" NR_FIX="$NRP" NR_TREE="$NRTK"); U138BW="$(cat "$NR/wt.log")"; rm -rf "$NRP"
+U138C=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/backups
+0${T}default
+0${T}pve9b
+0${T}root
+0${T}create
+0${T}
+" NR_TREE="$NRTK"); U138CW="$(cat "$NR/wt.log")"
+u138_szablon="$(printf '%s\n' "$U138AW" | grep -o 'Szablon: default[^~]*' | head -1)"
+if has "$U138A" 'CMD: ' && has "$U138A" ' --passive ' && has "$U138AW" 'PASYWNIE: migawki na źródle robi kto inny' \
+   && [ -n "$u138_szablon" ] && ! printf '%s' "$u138_szablon" | grep -q 'zamraża' \
+   && has "$U138B" 'CMD: ' && has "$U138B" ' --passive ' && has "$U138B" '--profile=passive-flat' && has "$U138BW" 'passive-flat' && has "$U138BW" '[pasywny]' \
+   && has "$U138C" 'CMD: ' && ! has "$U138C" '--passive' && has "$U138CW" '[GFS]'; then
+    ok "new-relation U138/U139/W6: backup bez migawek rodziny -- Pasywnie w Zaawansowanych daje --passive i plan bez 'zamraża'; szablon passive-flat [pasywny] na liscie daje --passive; bez przelacznika -- bez --passive"
+else
+    bad "new-relation U138/U139/W6" "A: $U138A" "szablon: $u138_szablon" "B: $U138B" "C: $U138C" "$(printf '%s' "$U138BW" | grep -o -e '--title ~ [^~]*' | head -12 | tr '\n' ';')"
+fi
 # U141 + U138 (2026-11-03): migawki zdalne bez etykiety kolektora -- gdy rodzina już jest na
 # źródle, kreator pyta, kto ją robi: resztki (--own-snapshots) albo inny twórca (osobna rodzina,
 # --stamp-family). Migawki ma tylko DZIECKO korzenia (jak repliki pvesr pod rpool/data): okno
@@ -3380,7 +3449,7 @@ U141S=$(nr_run "$(u141_ans stamp)" NR_FIX="$NRU" NR_TREE='goto:hdd/vm-disks,spac
 U141O=$(nr_run "$(u141_ans own)" NR_FIX="$NRU" NR_TREE='goto:hdd/vm-disks,space,enter')
 U141C=$(nr_run "$SOW" NR_FIX="$NRU" NR_TREE='goto:hdd/data,space,enter'); U141CW="$(cat "$NR/wt.log")"
 if has "$U141S" 'CMD: ' && has "$U141S" ' --mode=snaponly ' && has "$U141S" ' --stamp-family' && ! has "$U141S" '--own-snapshots' \
-   && has "$U141SW" 'Robi je inny kolektor albo cron' && has "$U141SW" 'OSOBNA RODZINA' && has "$U141SW" 'hdd/vm-disks/vm-201-disk-0' \
+   && has "$U141SW" 'Robi je inny kolektor albo cron' && has "$U141SW" 'OSOBNA RODZINA' && has "$U141SW" 'inny twórca -- osobna rodzina z etykietą' && has "$U141SW" 'hdd/vm-disks/vm-201-disk-0' \
    && has "$U141O" 'CMD: ' && has "$U141O" ' --own-snapshots' && ! has "$U141O" '--stamp-family' \
    && has "$U141C" 'CMD: ' && ! has "$U141C" '--stamp-family' && ! has "$U141C" '--own-snapshots' && ! has "$U141CW" 'Robi je inny kolektor albo cron'; then
     ok "new-relation U141/U138: migawki zdalne nad rodziną, którą ma tylko dziecko korzenia -- okno pyta; 'inny twórca' = --stamp-family i OSOBNA RODZINA w planie, 'resztki' = --own-snapshots; korzeń bez rodziny -- bez okna i bez flag"

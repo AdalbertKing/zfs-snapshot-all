@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 7587e0c5e823d6bf -->
+<!-- status-covers-digest: 1e4c4c9649ff50bd -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,14 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Paczka U po 1.0.7 (2026-11-03, gałąź `feat/u-batch`, niewydane).** Kreator: kopia pasywna także dla
+  backupu i lustra, gdy na źródle nie ma migawek rodziny (Zaawansowane -> Pasywnie; U138), szablon
+  `passive-flat` widoczny z [pasywny] (U139). Uwagi z kampanii GUI: W2 (relacja, w której jeden szczebel
+  jest aktualny, a reszta czeka, jest „aktualna”), W6 (plan kopii pasywnej bez „zamraża”), W15 (migawki zdalne
+  bez szablonów GFS), W16 (odpowiedź „inny twórca” widoczna w podsumowaniu). Otwarte: W1 (`list-jobs` nie
+  podaje czyszczenia relacji lokalnej, więc licznik „porządki” = 0), W17 (łamanie tekstu planu), U136
+  (fastprune w GUI), U144 p. 2 (cudze rodziny w kreatorze), punkt c (wstrzymanie aktualizacji produkcji).
+  Testy: `test/tui` na pve9 471/0.
 - **1.0.7: nowa relacja kopii nie wysyła „monitor BROKEN” przed pierwszym biegiem (2026-11-03, W9).**
   Wydane 1.0.6 (zfsbackup `b6f040f`, tag `v1.0.6`) poszło na lab i na produkcję (Metropolis, Dąbrowska) o :15.
   Kampania GUI na pve11 po wydaniu znalazła W9: relacja kopii nie robi pierwszej kopii (U137 C), więc cel
