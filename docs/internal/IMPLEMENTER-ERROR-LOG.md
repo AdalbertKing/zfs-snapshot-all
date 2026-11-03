@@ -85,7 +85,7 @@ Before adding a flag, a parser or a knob: grep for one. Before using a test
 helper, confirm the suite defines it. Before writing a resolver, check what the
 renderer already uses.
 
-*Evidence: E7, E3, E12, E29, E32, E34, E40, E55, E86, E107 (2026-10-29, a global replace and a `sed` regex where an exact-string edit with a count check was the established helper), E108 (2026-10-29, new browsing windows one by one instead of the agreed single design, U68/U121).*
+*Evidence: E7, E3, E12, E29, E32, E34, E40, E55, E86, E111 (2026-11-03, a hand-rolled remote snapshot probe beside `source_family_newest`), E107 (2026-10-29, a global replace and a `sed` regex where an exact-string edit with a count check was the established helper), E108 (2026-10-29, new browsing windows one by one instead of the agreed single design, U68/U121).*
 
 ### R12 — A pass proves the shapes it ran, and the report must name them
 
@@ -1935,6 +1935,46 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E111 — a second remote snapshot probe instead of the existing one (2026-11-03, R8)
+**2026-11-03, PR #1035 (U141).**
+
+*Genesis.* The new plain-family guard (`snaponly_assert_plain_family_free`) asked the source
+"does this family already have snapshots" with its own `ssh ... zfs list -H -t snapshot`. CI
+went red on test 67c, "one probe implementation, every consumer through it": the project
+already had `source_family_newest`, with the recursion contract every other family question
+uses.
+
+*Cause.* I wrote the query before grepping for one. The guard's question (newest snapshot of a
+family on the source) is exactly what the helper answers.
+
+*Rule.* R8. Before a remote `zfs list` in `zfs-backup.sh`, grep `source_family_newest` /
+`local_newest_snapshot`; a new caller is counted in 67c.
+
+### E112 — PROJECT_STATUS digest refreshed before the last code commit (2026-11-03, R6)
+**2026-11-03, PR #1035.**
+
+*Genesis.* I ran `impact.sh --refresh-status`, then fixed the guard (E111) in a later commit.
+The next CI run was red on "dependency graph matches the tree": the recorded digest no longer
+described the tree. One more push only for the digest.
+
+*Cause.* The digest is of the whole tree; any later commit makes it stale.
+
+*Rule.* R6. `--refresh-status` is the LAST commit before the push that asks for the merge, and
+`impact.sh --verify` runs right before that push.
+
+### E113 — a test's loop variables leaked into the suite and broke a later section (2026-11-03, R5)
+**2026-11-03, branch fix/u137-wariant-c.**
+
+*Genesis.* A new structural test in the `snaponly` section looped with plain `for f ...; b=...`
+in the suite's own shell. On pve9 the full `zfsbackup` run then failed three `gfsshape` checks
+(`client_section_plan` returned success with no output); `--section gfsshape` alone was 28/0.
+
+*Cause.* The suite is one shell; a later section's code read a global the test had set.
+
+*Rule.* R5. A test block that computes in loops runs in a subshell (`x=$( ... )`), and a new
+FAIL that appears only in the full run is checked against `--section <it>` alone before it is
+called environmental.
 
 ### E110 — merged a PR while a blocking review of it was on main (2026-10-30, R2)
 **2026-10-30, PR #1007, REV-20261030-184.**
