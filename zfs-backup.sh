@@ -12824,7 +12824,7 @@ $PROBE_DETAIL"
     # relationship takes nothing and freezes nothing -- each tier's first snapshot is its
     # first cron run. Until 1.0.5 every tier was snapshotted here, one after another and
     # each with the guests' freeze: an edit of five tiers took over four minutes and froze
-    # VM 100 (vsql2) on pve1 again and again (Dabrowska 2026-11-01).
+    # a database VM on a customer host again and again (Dabrowska 2026-11-01).
     log "activate-client: each tier takes its first snapshot at its own cron time -- nothing was taken now"
 }
 
