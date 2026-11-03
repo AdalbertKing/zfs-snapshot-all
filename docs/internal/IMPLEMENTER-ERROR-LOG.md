@@ -1972,9 +1972,9 @@ in the suite's own shell. On pve9 the full `zfsbackup` run then failed three `gf
 
 *Cause.* The suite is one shell; a later section's code read a global the test had set.
 
-*Rule.* R5. A test block that computes in loops runs in a subshell (`x=$( ... )`), and a new
-FAIL that appears only in the full run is checked against `--section <it>` alone before it is
-called environmental.
+*Rule.* R5, widened: the suite's own shell is shared state too. A test block that computes in
+loops runs in a subshell (`x=$( ... )`), and a new FAIL that appears only in the full run is
+checked against `--section <it>` alone before it is called environmental.
 
 ### E110 — merged a PR while a blocking review of it was on main (2026-10-30, R2)
 **2026-10-30, PR #1007, REV-20261030-184.**

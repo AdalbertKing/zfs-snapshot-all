@@ -7631,7 +7631,7 @@ cmd_set_tiers() {
     atomic_replace_and_install "$cronfile" "$workfile"
     # A tier ADDED here takes NO snapshot now (variant C, owner 2026-11-01 (U137)): changing a
     # relationship freezes nothing and creates nothing; the tier's first snapshot is its
-    # first cron run. Until then the monitor reads the tier as waiting, not stale.
+    # first cron run. (The monitor reading such a tier as waiting, not stale, is U137 C2.)
     log "set-tiers: an added tier takes its first snapshot at its own cron time -- nothing was taken now"
 }
 
@@ -9585,9 +9585,10 @@ Taking over older jobs (a v4 config written manually): remove their sections fir
 
     # NO FIRST RUN HERE (variant C, owner 2026-11-01, U137): creating a relationship takes no
     # snapshot and sends no copy -- each tier's first snapshot, and the first (full) copy,
-    # come from the cron line at its own time, which creates a missing target itself
-    # ("Target does not exist yet -- the receive will create it", snapsend/snapget). Until
-    # 1.0.5 a seed ran here, and a snapshot-only relationship stamped the finest tier at once.
+    # come from the cron line at its own time; the engine receives into a missing target
+    # and creates it ("Target does not exist yet -- the receive will create it",
+    # snapsend/snapget, the leaf-by-receive path). Until this change a seed ran here, and a
+    # snapshot-only relationship snapshotted the finest tier at once.
     #
     # What the seed also PROVED stays: a COPY is rehearsed with the engine's dry-run (-n:
     # no snapshot, nothing sent), the same flags as its cron line, before anything is

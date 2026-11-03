@@ -48,8 +48,8 @@ dziś przy aktywacji właśnie tylko godzinową, i jej szczebel roczny od razu p
 
 1. **Założenie i zmiana relacji nie robią żadnej migawki** -- ani wszystkich szczebli, ani
    najdrobniejszego, żadnego zamrażania. Każdy szczebel dostaje pierwszą migawkę w swoim
-   terminie z crona, jak każdą następną. Dotyczy migawek zdalnych (`snaponly_first_snapshots`,
-   `zfs-backup.sh:12644`, `:12653`) i migawek lokalnych (dziś jedna godzinowa przy aktywacji -- zmierzone na pve0 11-01: `automated_hourly_2026-11-01_22-36-51` na obu dyskach `subvol-102`, „Seed: OK (2 source(s) sent)”).
+   terminie z crona, jak każdą następną. Dotyczy migawek zdalnych (dawne `snaponly_first_snapshots`,
+   usunięte w C1) i migawek lokalnych (dziś jedna godzinowa przy aktywacji -- zmierzone na pve0 11-01: `automated_hourly_2026-11-01_22-36-51` na obu dyskach `subvol-102`, „Seed: OK (2 source(s) sent)”).
 2. **Monitor: „czeka na pierwszy termin”, nie „stale”.** Szczebel bez żadnej migawki swojej
    rodziny ma stan „czeka na pierwszy termin” z datą najbliższego biegu z crona (np. „roczne:
    czeka, pierwsza 2027-01-01 04:41”). „Stale” dopiero wtedy, gdy ten termin minął (liczony od aktywacji

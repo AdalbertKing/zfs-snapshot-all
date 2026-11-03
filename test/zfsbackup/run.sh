@@ -7022,7 +7022,7 @@ n_calls=$(grep -c 'source_family_exists "\$' "$ZFSBACKUP")
 # guard of a snaponly relationship (U141: does the family already exist on the source).
 n_newest=$(grep -c 'source_family_newest "\$' "$ZFSBACKUP")
 if [ "$n_impl" -eq 2 ] && [ "$n_local" -eq 1 ] && [ "$n_inline" -eq 0 ] &&    [ "$n_calls" -eq 3 ] && [ "$n_newest" -eq 3 ]; then
-    ok "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"
+    ok "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal, snaponly plain-family guard)"
 else
     bad "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"         "impl=$n_impl local-callers=$n_local inline=$n_inline exists-callers=$n_calls newest-callers=$n_newest"
 fi
