@@ -46,6 +46,8 @@ mkdir -p "$WORK/bin"
 # `zfs list -H -o name -- <ds>`.
 cat > "$WORK/bin/zfs" <<'EOF'
 #!/bin/sh
+# U138: `zfs list -t snapshot` answers LB_SNAPS (space-separated names), else nothing.
+case " $* " in *" snapshot "*) [ -n "${LB_SNAPS:-}" ] && printf '%s\n' $LB_SNAPS; exit 0 ;; esac
 for a in "$@"; do ds="$a"; done
 case "$ds" in rpool/data|rpool/existing|rpool/other|rpool/db|rpool/vmstore|hdd/dokumenty|rpool/a|rpool/a/child) exit 0 ;;
              *) echo "cannot open '$ds': dataset does not exist" >&2; exit 1 ;; esac
@@ -2270,12 +2272,22 @@ if ! command -v flock >/dev/null 2>&1; then
 else
     PVC="$WORK/pvclients"; rm -rf "$PVC"
     rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
-    pv_i="$(CLIENTS_DIR="$PVC" runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --profile=d7h24 --passive --name=pvi --config="$CFG")"
+    pv_i="$(LB_SNAPS="rpool/data/vm-1@automated_hourly_2026-11-01_10-01-01" CLIENTS_DIR="$PVC" runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --profile=d7h24 --passive --name=pvi --config="$CFG")"
     if grep -qE -- '(^|[ ])-e([ ]|$)' "$WORK/seed-calls" 2>/dev/null && grep -qE -- '-m automated_ ' "$WORK/seed-calls" 2>/dev/null \
        && ! grep -qE -- '-m automated_hourly_' "$WORK/seed-calls" 2>/dev/null && grep -qx 'PASSIVE=1' "$PVC/pvi.conf" 2>/dev/null; then
-        ok "local-backup --passive: the seed runs snapget -e with the family root -m automated_, and the record says PASSIVE=1"
+        ok "local-backup --passive: the rehearsal runs snapget -e with the family root -m automated_, and the record says PASSIVE=1"
     else
-        bad "local-backup --passive: seed / record" "calls=$(cat "$WORK/seed-calls" 2>/dev/null)" "record=$(grep -E 'PASSIVE' "$PVC/pvi.conf" 2>/dev/null)" "$(printf '%s' "$pv_i" | tail -3)"
+        bad "local-backup --passive: rehearsal / record" "calls=$(cat "$WORK/seed-calls" 2>/dev/null)" "record=$(grep -E 'PASSIVE' "$PVC/pvi.conf" 2>/dev/null)" "$(printf '%s' "$pv_i" | tail -3)"
+    fi
+    # U138: a passive copy forced before its family exists on the source -- nothing to rehearse,
+    # the install still goes through and says why (control: the run above, family present).
+    PVC2="$WORK/pvclients2"; rm -rf "$PVC2"
+    rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+    pv_n="$(CLIENTS_DIR="$PVC2" runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --profile=d7h24 --passive --name=pvn --config="$CFG")"
+    if [ ! -s "$WORK/seed-calls" ] && printf '%s' "$pv_n" | grep -q 'nothing to rehearse' && grep -qx 'PASSIVE=1' "$PVC2/pvn.conf" 2>/dev/null; then
+        ok "local-backup --passive U138: no family on the source yet -- no rehearsal, installed, the log says why"
+    else
+        bad "local-backup --passive U138: no family yet" "calls=$(cat "$WORK/seed-calls" 2>/dev/null)" "$(printf '%s' "$pv_n" | tail -4)"
     fi
 fi
 

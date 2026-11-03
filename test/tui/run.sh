@@ -3868,6 +3868,34 @@ if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=hdd/backups/192.168.28.99/hd
 else
     bad "new-relation: kopia lokalna" "rc=$NRRC" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | head -12 | tr '\n' ';')"
 fi
+# U142 + U138 (wlasciciel 2026-11-01): konto jest krokiem PRZEJSCIA (okno "Na jakim koncie"
+# przed podsumowaniem), a Zaawansowane go nie maja; kopia lokalna bez migawek rodziny na zrodle
+# moze byc wymuszona jako pasywna (Zaawansowane -> Pasywnie -> tak): komenda niesie --passive,
+# plan mowi PASYWNIE. Kontrola: ta sama kopia bez przelacznika -- bez --passive.
+NRPF=$(nr_run "0${T}local
+0${T}__other__
+0${T}hdd/kopie
+0${T}default
+0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
+0${T}root
+0${T}adv
+0${T}passive
+0${T}yes
+1${T}
+0${T}create
+0${T}
+" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRPFW="$(cat "$NR/wt.log")"
+pf_acct_before=$(printf '%s\n' "$NRPFW" | grep -n 'Na jakim koncie' | head -1 | cut -d: -f1)
+pf_sum=$(printf '%s\n' "$NRPFW" | grep -n 'Nowa relacja -- podsumowanie' | head -1 | cut -d: -f1)
+pf_adv=$(printf '%s\n' "$NRPFW" | grep -F 'Nowa relacja: zaawansowane' | head -1)
+if has "$NROUT" 'CMD: ' && ! has "$NROUT" '--passive' \
+   && has "$NRPF" 'CMD: ' && has "$NRPF" ' --passive ' && has "$NRPFW" 'PASYWNIE: migawki na źródle robi kto inny' \
+   && [ -n "$pf_acct_before" ] && [ -n "$pf_sum" ] && [ "$pf_acct_before" -lt "$pf_sum" ] \
+   && printf '%s' "$pf_adv" | grep -qF 'Pasywnie' && ! printf '%s' "$pf_adv" | grep -qF 'Konto'; then
+    ok "new-relation U142/U138: konto to krok przejscia (przed podsumowaniem, nie w Zaawansowanych); kopia lokalna wymuszona jako pasywna -- --passive i PASYWNIE w planie; bez przelacznika -- bez --passive"
+else
+    bad "new-relation U142/U138" "$NRPF" "acct@$pf_acct_before sum@$pf_sum" "adv: $(printf '%s' "$pf_adv" | cut -c1-300)"
+fi
 # 3h'. KOPIA LOKALNA ze zrodla, na ktorym sa juz migawki NASZEJ rodziny (family_snapshots>0 w
 #      list-datasets, bez hosta -> list-datasets.json): to samo okno "Migawki naszej rodziny
 #      już są na źródle" co przy backupie. chain -> kopia PASYWNA (--passive, bez kroku
