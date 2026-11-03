@@ -534,17 +534,26 @@ grep -q -- '-m automated_hourly_' "$WORK/seed-calls" 2>/dev/null \
     && ok "slice2: the seed uses the prefix read back out of the rendered cron line" \
     || bad "slice2: the seed uses the prefix read back out of the rendered cron line" "$(cat "$WORK/seed-calls" 2>/dev/null)"
 
-# ---- A' seed: --recursive reaches the FIRST snapshot too ----------------------
-# Measured on pve9 2026-09-25: the cron lines had -R, the install-time seed did
-# not, so the first snapshots landed on the roots only. `--yes` is refused with
-# --target='' (confirmed by eye), so the answer comes on stdin.
+# ---- U137 variant C: no first snapshot when a relationship is created ------------------
+# Until 1.0.5 a snapshot-only relationship (--target='') was seeded here with -R/-r, the
+# way its cron line runs (pve9 2026-09-25). Now NOTHING runs for it at install: its first
+# snapshot is the first cron run. A COPY is still rehearsed -- dry-run (-n), the same
+# recursion flag as its line -- before the install. `--yes` is refused with --target=''
+# (confirmed by eye), so the answer comes on stdin.
 for _r in flat:-R atomic:-r; do
     rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
     out="$(runi snapsend-ok "t" --install --source=rpool/data --target='' --recursive="${_r%%:*}" --config="$CFG")"
-    if grep -qE -- "-m automated_hourly_ .* ${_r#*:} rpool/data\$" "$WORK/seed-calls" 2>/dev/null; then
-        ok "A'/seed: --recursive=${_r%%:*} seeds with ${_r#*:}, like the installed line"
+    if [ ! -s "$WORK/seed-calls" ] && printf '%s' "$out" | grep -q "nothing was snapshotted or sent now"; then
+        ok "U137: --target='' --recursive=${_r%%:*} installs WITHOUT a first snapshot (first one at its cron time)"
     else
-        bad "A'/seed: --recursive=${_r%%:*} seeds with ${_r#*:}, like the installed line" "calls=$(cat "$WORK/seed-calls" 2>/dev/null) :: $(printf '%s' "$out" | tail -3)"
+        bad "U137: --target='' --recursive=${_r%%:*} installs WITHOUT a first snapshot" "calls=$(cat "$WORK/seed-calls" 2>/dev/null) :: $(printf '%s' "$out" | tail -3)"
+    fi
+    rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+    out="$(runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --recursive="${_r%%:*}" --config="$CFG")"
+    if grep -qE -- "-n -m automated_hourly_ .* ${_r#*:} rpool/data hdd/backups\$" "$WORK/seed-calls" 2>/dev/null; then
+        ok "U137: a copy with --recursive=${_r%%:*} is rehearsed as a dry-run (-n) with ${_r#*:}, like the installed line"
+    else
+        bad "U137: a copy with --recursive=${_r%%:*} is rehearsed as a dry-run with ${_r#*:}" "calls=$(cat "$WORK/seed-calls" 2>/dev/null) :: $(printf '%s' "$out" | tail -3)"
     fi
 done
 
