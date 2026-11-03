@@ -361,6 +361,33 @@ done
 # F9 read-only: across every remote case above the zfs trace holds list/get only.
 only_reads && ok "F9 the remote mode only ever ran 'zfs list' and 'zfs get'" || bad "F9 only list/get" "$(grep -vE '^([^ ]+:)?zfs (list|get) ' "$ZSTUB_TRACE")"
 
+# ---- S. the relationship's start (-S EPOCH, -W) -- U137 C2, v2.6 --------------------
+# warn=2h crit=4h. A relationship takes no snapshot at creation: until a tier's first run the
+# monitor measures from the start, not from the dataset's creation or an older snapshot.
+reset_world
+add_ds tank/new $((500 * H))                        # an old dataset, no snapshot of the family
+S1=$((NOW - 1 * H))                                 # started an hour ago
+check "S1 no snapshot, started 1h ago: OK" "0" "$(rc_of -S "$S1" tank/new automated_ 2h 4h)"
+out="$(run -S "$S1" tank/new automated_ 2h 4h)"
+[ -z "$out" ] && ok "S1 silent without -W (the cron line)" || bad "S1 silent without -W" "$out"
+out="$(run -S "$S1" -W tank/new automated_ 2h 4h)"
+case "$out" in "WAITING dataset=tank/new "*"since the relationship's start"*"age measured from that start"*) ok "S1 -W prints WAITING with its reason" ;;
+  *) bad "S1 -W prints WAITING with its reason" "$out" ;; esac
+check "S1 control: the same dataset WITHOUT -S is CRITICAL (age from creation)" "2" "$(rc_of tank/new automated_ 2h 4h)"
+S2=$((NOW - 5 * H))                                 # started 5h ago and still nothing: late
+check "S2 started 5h ago, still no snapshot: CRITICAL" "2" "$(rc_of -S "$S2" tank/new automated_ 2h 4h)"
+case "$(run -S "$S2" -W tank/new automated_ 2h 4h)" in "CRITICAL dataset=tank/new "*"since the relationship's start"*) ok "S2 says it is measured from the start" ;;
+  *) bad "S2 says it is measured from the start" "$(run -S "$S2" -W tank/new automated_ 2h 4h)" ;; esac
+reset_world
+add_ds tank/left $((500 * H))
+add_snap tank/left "automated_weekly_old" $((200 * H))    # a leftover, older than the start
+check "S3 a leftover older than the start: OK (waiting)" "0" "$(rc_of -S "$S1" tank/left automated_weekly 2h 4h)"
+case "$(run -S "$S1" -W tank/left automated_weekly 2h 4h)" in *"WAITING dataset=tank/left "*"(newest before it: automated_weekly_old)"*) ok "S3 names the leftover" ;;
+  *) bad "S3 names the leftover" "$(run -S "$S1" -W tank/left automated_weekly 2h 4h)" ;; esac
+add_snap tank/left "automated_weekly_own" $((5 * H))      # the tier's own snapshot, after its start, now stale
+check "S4 an own snapshot newer than the start is judged as without -S" "2" "$(rc_of -S "$((NOW - 6 * H))" tank/left automated_weekly 2h 4h)"
+check "S5 -S that is not a number is UNKNOWN" "3" "$(rc_of -S 12x tank/left automated_weekly 2h 4h)"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

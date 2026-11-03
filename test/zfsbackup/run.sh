@@ -11431,6 +11431,20 @@ if grep -qF '"hourly.notify_word":"snap\"shot"' "$RT/q.json" && grep -qF '"daily
 else
     bad "importrel (REV-168): exact round trip" "same=$rt_same diff=$rt_diff restore=$rt_rc" "before: $rt_before" "after:  $rt_after" "$(tail -3 "$RT/out")"
 fi
+# U137 C2: a tier's start is this host's history. The file's monitor_since is dropped, this
+# host's is kept, and --check does not call two blocks different for it.
+cp "$RT/wiped.conf" "$RT/since.conf"
+sed -i 's/^\(\s*hourly\.monitor\s*=.*\)$/\1\n\thourly.monitor_since = 111/' "$RT/since.conf"
+sed 's/"hourly.monitor":"\([^"]*\)"/"hourly.monitor":"\1","hourly.monitor_since":"999"/' "$RT/q.json" > "$RT/since.json"
+rt_restore "$RT/since.conf" "$RT/since.json" --check; rt_sc=$?
+sed -i 's/^\(\s*hourly\.notify_word\s*=\).*/\1 zmienione/' "$RT/since.conf"
+rt_restore "$RT/since.conf" "$RT/since.json"; rt_sr=$?
+rt_sv=$(rt_dump "$RT/since.conf" | awk -F'\t' '$1=="hourly.monitor_since"{print $2}')
+if grep -q '"hourly.monitor_since":"999"' "$RT/since.json" && [ "$rt_sc" -eq 0 ] && [ "$rt_sr" -eq 0 ] && [ "$rt_sv" = 111 ]; then
+    ok "importrel U137 C2: the file's monitor_since is ignored -- --check calls the blocks equal, a restore keeps this host's start (111, not 999)"
+else
+    bad "importrel U137 C2: monitor_since" "check=$rt_sc restore=$rt_sr kept=[$rt_sv]" "$(tail -3 "$RT/out")"
+fi
 # malformed: an escape json_escape never writes (\n) and a non-string value -- refused,
 # config untouched
 cp "$RT/wiped.conf" "$RT/mal.conf"; rt_mal_before="$(cat "$RT/mal.conf")"
@@ -14900,6 +14914,19 @@ if [ "$st_a" = 4 ] && [ "$st_b" = 4 ] && [ "$st_plain" = 0 ] && [ "$st_dec" = 1 
 else
     bad "snaponly U141 stamp decision" "stamped=$st_a after-rerender=$st_b plain-in-stamped=$st_plain decide(stamped)=$st_dec decide(plain)=$st_dec0 decide(new)=$st_new" "$(grep -n 'prefix' "$SO/st.conf")"
 fi
+# U137 C2: every monitored snaponly tier carries its start (monitor_since); a re-render keeps
+# the value (read before the strip), a brand-new relationship gets "now".
+so_since() { awk '/^\[template:snaponly__rel1__/{f=1;next} /^\[/{f=0} f && $1=="monitor_since"{print $3}' "$1" | paste -sd, -; }
+ms_a=$(so_since "$SO/st.conf")
+sed -i 's/^\(\s*monitor_since\s*=\s*\).*/\11700000000/' "$SO/st.conf"
+so_emit m12w4d7h24-age rel1 "$SO/st.conf" > /dev/null 2>&1
+ms_b=$(so_since "$SO/st.conf")
+if [ -n "$ms_a" ] && [ "$(printf '%s' "$ms_a" | tr ',' '\n' | grep -c '^[0-9][0-9]*$')" = 4 ] && [ "$ms_b" = "1700000000,1700000000,1700000000,1700000000" ]; then
+    ok "snaponly U137 C2: each of the 4 monitored tiers carries monitor_since; a re-render keeps an installed value instead of moving it to now"
+else
+    bad "snaponly U137 C2: monitor_since" "first=[$ms_a] after re-render=[$ms_b]"
+fi
+
 # U141: a PLAIN family is guarded by snaponly_assert_plain_family_free. Stub ssh answers
 # `zfs allow` and `zfs list -t snapshot`; no real host. Cases: another collector's peer
 # account with destroy (refused, names --stamp-family); a NEW relationship whose family
@@ -15271,6 +15298,10 @@ case "$sr_mon|$sr_argv" in
     "1 True ['zfsbackup-pve10@10.0.0.9:hdd/so/a'] 100m 150m OK|"*"-K /k -k /kh -O HostKeyAlias=pve9b"*"zfsbackup-pve10@10.0.0.9:hdd/so/"*)
         ok "snaponly GUI readers: monitor --json reads the remote line (dataset, family, thresholds) and the re-run carries -K/-k/-O" ;;
     *) bad "snaponly GUI readers: monitor --json on a remote line" "monitor: $sr_mon" "argv: $sr_argv" ;;
+esac
+case "$sr_argv" in
+    *"-S "[0-9]*" -W "*) ok "U137 C2: monitor --json re-runs the line with its -S <start> and -W (the GUI's WAITING lines)" ;;
+    *) bad "U137 C2: monitor --json carries -S/-W" "argv: $sr_argv" "$(grep -o 'check-snap-age.sh [^\"]*' "$SR/crontab.root" | head -2)" ;;
 esac
 
 # THE SAME LIFECYCLE AS EVERY RELATIONSHIP (owner 2026-10-18: one GUI path, 'e'
