@@ -12312,17 +12312,19 @@ Nothing was installed."
         /^[ \t]*\[/ { insec = (index($0, h) == 1); next }
         insec && $1 == "prefix" { v = $0; sub(/^[^=]*=[ \t]*/, "", v); print v }' "$wf" | sort -u)
     [ -n "$prefs" ] || return 0
-    local found="" list
+    # Through the one remote probe (source_family_newest, test 67c): the same depth
+    # contract as every other family question, the newest match per tier prefix.
+    local found="" newest pf
     for ds in "$@"; do
-        list=$(ssh -n "${opts[@]}" "${account}@${host}" "zfs list -H -t snapshot -o name -s creation -r -- '$ds'" 2>&1); rc=$?
-        [ "$rc" -eq 0 ] || die "family check: 'zfs list -t snapshot -r $ds' on $host as $account failed (ssh/zfs exit $rc) -- refusing to start a family there without knowing what is already in it. Output: $(printf '%s' "$list" | tail -2)"
-        o=$(printf '%s\n' "$list" | awk -v P="$prefs" '
-            BEGIN { n = split(P, pp, "\n") }
-            { s = $0; sub(/^[^@]*@/, "", s); for (i = 1; i <= n; i++) if (pp[i] != "" && index(s, pp[i]) == 1) { c[pp[i]]++; last[pp[i]] = $0 } }
-            END { for (k in c) printf "    %d x %s*  (newest: %s)\n", c[k], k, last[k] }')
+        o=""
+        for pf in $prefs; do
+            newest=$(source_family_newest "$ds" "$pf"); rc=$?
+            [ "$rc" -eq 0 ] || die "family check: listing the snapshots of $ds on $host as $account failed (ssh/zfs) -- refusing to start a family there without knowing what is already in it."
+            [ -n "$newest" ] && o="$o
+    ${pf}*  (newest: $newest)"
+        done
         [ -n "$o" ] && found="$found
-  $ds (and below):
-$o"
+  $ds:$o"
     done
     [ -z "$found" ] && return 0
     die "snaponly: the source $host already has snapshots of this relationship's family:$found

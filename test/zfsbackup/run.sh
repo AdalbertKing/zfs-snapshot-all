@@ -7018,9 +7018,10 @@ n_local=$(grep -c 'local_newest_snapshot "\$' "$ZFSBACKUP")
 n_inline=$(grep -c "grep -q '@automated_'" "$ZFSBACKUP")
 # seed, catch-up, emit-time passivity -- unchanged, still through the wrapper.
 n_calls=$(grep -c 'source_family_exists "\$' "$ZFSBACKUP")
-# the wrapper itself, plus activate-client's rehearsal (the ex-copy).
+# the wrapper itself, activate-client's rehearsal (the ex-copy), and the plain-family
+# guard of a snaponly relationship (U141: does the family already exist on the source).
 n_newest=$(grep -c 'source_family_newest "\$' "$ZFSBACKUP")
-if [ "$n_impl" -eq 2 ] && [ "$n_local" -eq 1 ] && [ "$n_inline" -eq 0 ] &&    [ "$n_calls" -eq 3 ] && [ "$n_newest" -eq 2 ]; then
+if [ "$n_impl" -eq 2 ] && [ "$n_local" -eq 1 ] && [ "$n_inline" -eq 0 ] &&    [ "$n_calls" -eq 3 ] && [ "$n_newest" -eq 3 ]; then
     ok "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"
 else
     bad "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"         "impl=$n_impl local-callers=$n_local inline=$n_inline exists-callers=$n_calls newest-callers=$n_newest"
@@ -14912,8 +14913,8 @@ cat > "$PF/bin/ssh" <<'EOF'
 case "$*" in
   *"zfs allow"*"tank/foreign"*) printf '%b' '---- Permissions on tank/foreign ----\nLocal+Descendent permissions:\n\tuser zfsbackup-pve9 bookmark,destroy,snapshot\n\tuser zfsbackup-me destroy,snapshot\n' ;;
   *"zfs allow"*) printf '%b' 'Local+Descendent permissions:\n\tuser zfsbackup-me destroy,snapshot\n\tuser zfsbackup destroy,snapshot\n' ;;
-  *"zfs list"*"tank/left"*) printf '%s\n' 'tank/left/vm-1@automated_hourly_2026-11-01_10-01-01' 'tank/left/vm-1@automated_hourly_2026-11-01_11-01-01' 'tank/left@manual' ;;
-  *"zfs list"*"tank/stamped"*) printf '%s\n' 'tank/stamped/vm-1@pve10_automated_hourly_2026-11-01_10-01-01' ;;
+  *"zfs list"*"tank/left"*) printf '%b' 'tank/left/vm-1@automated_hourly_2026-11-01_10-01-01\t100\ntank/left/vm-1@automated_hourly_2026-11-01_11-01-01\t200\ntank/left@manual\t300\n' ;;
+  *"zfs list"*"tank/stamped"*) printf '%b' 'tank/stamped/vm-1@pve10_automated_hourly_2026-11-01_10-01-01\t100\n' ;;
   *"zfs list"*"tank/broken"*) echo 'cannot open' >&2; exit 1 ;;
   *"zfs list"*) : ;;
 esac
@@ -14922,7 +14923,8 @@ chmod +x "$PF/bin/ssh"
 printf '[template:snaponly__rel1__hourly]\n\tprefix        = automated_hourly_\n\tpattern       = automated_hourly_\n[template:snaponly__rel1__daily]\n\tprefix        = automated_daily_\n' > "$PF/wf.conf"
 pff() {   # <new 0|1> <dataset...> -> output; rc
     local n="$1"; shift
-    ( PATH="$PF/bin:$PATH"; hostname() { echo PVE10; }; LOAD_ACCOUNT=zfsbackup-pve10
+    ( PATH="$PF/bin:$PATH"; hostname() { echo PVE10; }; LOAD_ACCOUNT=zfsbackup-me LOAD_HOST=10.0.0.9 LOAD_PORT=22
+      LOAD_KEYFILE=/dev/null LOAD_ALIAS=zfs-client-x LOAD_ALIAS_KH=/dev/null PEER_SAVED_RECURSIVE_ROOTS="tank/left tank/stamped tank/broken"
       snaponly_assert_plain_family_free "$PF/wf.conf" rel1 "$n" zfsbackup-me 10.0.0.9 22 /dev/null zfs-client-x /dev/null "$@" && echo FREE ) 2>&1
 }
 pf_foreign=$(pff 1 tank/foreign)
@@ -14932,7 +14934,7 @@ pf_inst=$(pff 0 tank/left)
 pf_stamp=$(pff 1 tank/stamped)
 pf_broken=$(pff 1 tank/broken)
 if printf '%s' "$pf_foreign" | grep -q 'another collector can already DELETE' && printf '%s' "$pf_foreign" | grep -q -- '--stamp-family' && ! printf '%s' "$pf_foreign" | grep -q FREE \
-   && printf '%s' "$pf_left" | grep -q '2 x automated_hourly_' && printf '%s' "$pf_left" | grep -q -- '--own-snapshots' && printf '%s' "$pf_left" | grep -q -- '--stamp-family' && ! printf '%s' "$pf_left" | grep -q FREE \
+   && printf '%s' "$pf_left" | grep -q 'automated_hourly_\*  (newest: tank/left/vm-1@automated_hourly_2026-11-01_11-01-01)' && printf '%s' "$pf_left" | grep -q -- '--own-snapshots' && printf '%s' "$pf_left" | grep -q -- '--stamp-family' && ! printf '%s' "$pf_left" | grep -q FREE \
    && [ "$(printf '%s' "$pf_own" | tail -1)" = FREE ] && [ "$(printf '%s' "$pf_inst" | tail -1)" = FREE ] && [ "$(printf '%s' "$pf_stamp" | tail -1)" = FREE ] \
    && printf '%s' "$pf_broken" | grep -q 'failed' && ! printf '%s' "$pf_broken" | grep -q FREE; then
     ok "snaponly U141 plain-family guard: a foreign peer pruner and a new relationship over existing family snapshots are refused with the answers named; --own-snapshots, an installed relationship and a stamped other family pass; an unreadable zfs list fails closed"
