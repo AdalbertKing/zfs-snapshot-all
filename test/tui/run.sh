@@ -3378,6 +3378,18 @@ U138A=$(nr_run "0${T}backup
 0${T}create
 0${T}
 " NR_TREE="$NRTK"); U138AW="$(cat "$NR/wt.log")"
+# passive-flat jest na kazdym hoscie (ukryty) -- w fixture go nie ma; ta sama dopiska co w A>B>C.
+NRU="$(mktemp -d)"; cp "$P10"/*.json "$NRU/"
+"$PY" - "$NRU/list-profiles.json" <<'PYEOF'
+import sys, json, copy
+p = sys.argv[1]; d = json.load(open(p, encoding="utf-8"))
+if not any(x.get("name") == "passive-flat" for x in d["profiles"]):
+    x = copy.deepcopy(d["profiles"][0]); x["name"] = "passive-flat"; d["profiles"].append(x)
+for x in d["profiles"]:
+    if x.get("name") == "passive-flat":
+        x["hidden"] = "yes"
+json.dump(d, open(p, "w", encoding="utf-8"))
+PYEOF
 U138B=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
@@ -3387,7 +3399,7 @@ U138B=$(nr_run "0${T}backup
 0${T}root
 0${T}create
 0${T}
-" NR_TREE="$NRTK"); U138BW="$(cat "$NR/wt.log")"
+" NR_FIX="$NRU" NR_TREE="$NRTK"); U138BW="$(cat "$NR/wt.log")"; rm -rf "$NRU"
 U138C=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
