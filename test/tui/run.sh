@@ -192,7 +192,7 @@ sj.update(label="lab-vm101", direction="snapshot", tier="profile__relacja-lab__l
 jobs["jobs"].append(sj)
 json.dump(jobs, open(out + "/list-jobs.json", "w", encoding="utf-8"))
 PYEOF
-S4W="$(screen relacje down,down,down,down --width 200 --height 40 --monitors "$C3D/monitor.json" --jobs "$C3D/list-jobs.json")"
+S4W="$(screen relacje down,down,down,down --width 260 --height 40 --monitors "$C3D/monitor.json" --jobs "$C3D/list-jobs.json")"
 F2W="$(screen zadania '' --width 220 --height 400 --monitors "$C3D/monitor.json" --jobs "$C3D/list-jobs.json")"
 if hasE "$S4W" 'Kopie +czeka na pierwszy termin' && hasE "$S4W" 'hourly +aktualne   alarm po 150m' \
    && hasE "$S4W" 'daily +czeka na pierwszy termin   pierwsza: .*alarm po 48h' && ! hasE "$S4W" 'daily +.*najnowsza sprzed' \
