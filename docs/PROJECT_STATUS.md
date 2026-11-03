@@ -1713,7 +1713,7 @@
   liczy wiek od jego startu (`<szczebel>.monitor_since` w bloku relacji / w szablonie migawek zdalnych, zapisane raz
   przy tworzeniu relacji albo szczebla; `check-snap-age.sh` v2.6 `-S`), więc przed pierwszym biegiem nie jest „stale”,
   dopóki wiek od startu nie przekroczy progu; `zfs-backup monitor` dokłada `-W` i dostaje linie `WAITING` -- GUI
-  pokazuje szczebel jako „czeka na pierwszy termin” z datą pierwszej migawki, a panel relacji ma osobną linię na każdy
+  pokazuje szczebel jako „czeka na pierwszy termin” z datą najbliższego biegu z crona, a panel relacji ma osobną linię na każdy
   szczebel z jego progiem (U137 C3, U144). Odmowy: profil bez prefiksu; profil z drabiną GFS na szczeblu -- w tym wbudowany `default`
   (źródłowy `[prune:]` nie niesie drabiny na szczebel, płaskie liczenie byłoby inną polityką); przy aktywacji --
   zakres nakładający się na źródło innej relacji tego kolektora; `seed`/`restore`/`edit-relation`/`add-source`/

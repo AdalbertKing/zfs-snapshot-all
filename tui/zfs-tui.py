@@ -159,7 +159,7 @@ def tier_word(m):
 
 
 def tier_line(m, rel, data, now):
-    """Jedna linia szczebla: stan, wiek najnowszej albo termin pierwszej migawki, prog."""
+    """Jedna linia szczebla: stan, wiek najnowszej migawki albo termin pierwszego biegu z crona, prog."""
     v = m.get("verdict", "UNKNOWN")
     out = _(VERDICTS.get(v, (v, 0))[0])
     if v == "CZEKA":
@@ -3427,7 +3427,7 @@ def rel_detail_pairs(row, data, now, ch):
                 warns.append(w)
     if warns:
         pairs.append((_("Uwaga"), "  |  ".join(warns)))
-    pairs.append((_(u"Migawki") if (row.get("mode") == "snaponly" or (row.get("mode") == "local" and not (row.get("rel") or {}).get("client_target"))) else _("Kopie"), mon))
+    pairs.append((_(u"Migawki") if row.get("mode") == "snaponly" else _("Kopie"), mon))
     return pairs
 
 

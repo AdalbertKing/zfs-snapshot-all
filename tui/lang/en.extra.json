@@ -821,7 +821,7 @@
 "OSOBNA RODZINA: migawki naszej rodziny na źródle robi kto inny -- ta relacja robi swoje": "SEPARATE FAMILY: someone else makes our family's snapshots on the source -- this relation makes its own",
 "  z etykietą tego kolektora na początku nazwy (--stamp-family); tamtych nie rusza.": "  with this collector's label at the start of the name (--stamp-family); it leaves those alone.",
 "czeka na pierwszy termin": "waiting for the first run",
-"   pierwsza: %s": "   first: %s",
+"   pierwsza: %s": "   first run: %s",
 "tylko migawka": "only snapshot",
 "   najnowsza sprzed %s": "   newest %s ago"
 }

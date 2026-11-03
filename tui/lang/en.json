@@ -119,7 +119,7 @@
 "   najnowsza sprzed %s": "   newest %s ago",
 "   nikt nie sprawdza, czy kopia dalej się robi": "   nobody checks that the copy is still being made",
 "   odświeżenie w tle nie wyszło: %s": "   background refresh failed: %s",
-"   pierwsza: %s": "   first: %s",
+"   pierwsza: %s": "   first run: %s",
 "   trzyma %s": "   keeps %s",
 "   w cronie: %s": "   in cron: %s",
 "   zapisano: %s": "   saved: %s",

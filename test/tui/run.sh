@@ -167,9 +167,9 @@ else
     bad "relacje: progi w panelu" "$S4"
 fi
 # U137 C3 / U144 / U143 (wlasciciel 2026-11-01): szczebel przed pierwszym biegiem (monitor pisze
-# WAITING, check-snap-age -S/-W) to "czeka na pierwszy termin" z data pierwszej migawki, nie
+# WAITING, check-snap-age -S/-W) to "czeka na pierwszy termin" z data najblizszego biegu z crona, nie
 # "stare"; kazdy szczebel osobno, z wlasnym progiem. Zadanie samych migawek w F2 to "tylko
-# migawka" i bez przedrostka lsrc_. Kontrola: ten sam ekran bez linii WAITING -- "aktualne".
+# migawka" i bez przedrostka lsrc_. Kontrola: ten sam ekran bez linii WAITING -- bez "czeka".
 C3D="$(mktemp -d)"
 "$PY" - "$P10/monitor.json" "$P10/list-jobs.json" "$C3D" <<'PYEOF'
 import json, sys, copy
@@ -197,7 +197,7 @@ F2W="$(screen zadania '' --width 220 --height 400 --monitors "$C3D/monitor.json"
 if hasE "$S4W" 'Kopie +czeka na pierwszy termin' && hasE "$S4W" 'hourly +aktualne   alarm po 150m' \
    && hasE "$S4W" 'daily +czeka na pierwszy termin   pierwsza: .*alarm po 48h' && ! hasE "$S4W" 'daily +.*najnowsza sprzed' \
    && has "$F2W" 'tylko migawka' && ! has "$F2W" 'lsrc_' && ! hasE "$S4" 'czeka na pierwszy'; then
-    ok "U137 C3: szczebel przed pierwszym biegiem -- 'czeka na pierwszy termin' z data pierwszej migawki, kazdy szczebel osobno z progiem; F2: 'tylko migawka' bez lsrc_; kontrola bez WAITING -- aktualne"
+    ok "U137 C3: szczebel przed pierwszym biegiem -- 'czeka na pierwszy termin' z data najblizszego biegu z crona, kazdy szczebel osobno z progiem; F2: 'tylko migawka' bez lsrc_; kontrola bez WAITING -- bez 'czeka'"
 else
     bad "U137 C3: stan czeka / F2" "$(printf '%s' "$S4W" | grep -E 'Kopie|hourly|daily' | head -6)" "$(printf '%s' "$F2W" | grep -E 'migawk|lsrc|transfer' | head -4)"
 fi
