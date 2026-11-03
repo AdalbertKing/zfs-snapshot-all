@@ -1489,7 +1489,7 @@ _allow_fields() {
 # template allow-list are the same set by construction.
 POLICY_FIELDS="send_schedule prune_schedule prefix pattern keep retain
                tier_label notify notify_raw notify_raw_prune notify_word
-               monitor_warn monitor_crit monitor_schedule monitor_exclude
+               monitor_warn monitor_crit monitor_schedule monitor_exclude monitor_since
                dst src autotune quiesce flags passive exclude_family gfs"
 # The subset whose lookup actually reaches [defaults] as its last layer.
 # Deliberately absent: keep/retain and monitor_warn/monitor_crit (per-tier by
@@ -1562,7 +1562,7 @@ _allow_fields template  $POLICY_FIELDS
 # notify_raw_prune (the prune line's literal text, likewise).
 DATASET_POLICY_FIELDS="send_schedule prune_schedule prefix pattern keep retain
                        tier_label notify notify_raw
-                       monitor_warn monitor_crit monitor_schedule monitor_exclude
+                       monitor_warn monitor_crit monitor_schedule monitor_exclude monitor_since
                        dst src autotune quiesce flags gfs"
 # A [prune:] section does not send. send_schedule, prefix, dst, src, autotune,
 # quiesce and flags are transfer-side fields build_prune_section never looks at,
@@ -1571,7 +1571,7 @@ DATASET_POLICY_FIELDS="send_schedule prune_schedule prefix pattern keep retain
 # read. notify_word is template-only here as well.
 PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
                      tier_label notify notify_raw_prune
-                     monitor_warn monitor_crit monitor_schedule monitor_exclude"
+                     monitor_warn monitor_crit monitor_schedule monitor_exclude monitor_since"
 # bandwidth/compression/cipher are the LINK fields (see link_flag_letter_present):
 # [dataset:] only, never POLICY_FIELDS -- a policy carrier is shared by datasets
 # that do not share a destination, so there is no layer above the section where
@@ -2734,7 +2734,8 @@ build_dataset() {
                 # template); absent = empty = the monitor sees everything,
                 # exactly as before.
                 local mexcl; mexcl="$(resolve_field_or_omit monitor_exclude "$ds" "$tmpl" "")" || mexcl=""
-                MONITOR_ENTITIES+=("${ds_path}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${rec_scope}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}${SEP}${mexcl}")
+                local msince; msince="$(resolve_monitor_since "$ds" "$tmpl" "[dataset:$ds_path] tier=$tier")" || exit 1
+                MONITOR_ENTITIES+=("${ds_path}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${rec_scope}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}${SEP}${mexcl}${SEP}${SEP}${msince}")
             fi
         fi
     done
@@ -2863,7 +2864,8 @@ build_snaponly_section() {
             mnotify="$(notify_text "$host_label" "$ntier" "stale" "$mlabel")"
             mbroken="$(notify_text "$host_label" "$ntier" "monitor BROKEN" "$mlabel")"
             mwarntext="$(notify_text "$host_label" "$ntier" "getting stale" "$mlabel")"
-            MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${rec_scope}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}${SEP}${SEP}${ssh_flags}")
+            local msince; msince="$(resolve_monitor_since "$sec" "$tmpl" "$tctx")" || exit 1
+            MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${rec_scope}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}${SEP}${SEP}${ssh_flags}${SEP}${msince}")
             emitted=1
         fi
     done
@@ -3072,7 +3074,8 @@ build_prune_section() {
             mbroken="$(notify_text "$host_label" "$ntier" "monitor BROKEN" "$plabel")"
             mwarntext="$(notify_text "$host_label" "$ntier" "getting stale" "$plabel")"
             local mexcl; mexcl="$(resolve_field_or_omit monitor_exclude "$sec" "$tmpl" "")" || mexcl=""
-            MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${recursive}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}${SEP}${mexcl}${SEP}${mssh}")
+            local msince; msince="$(resolve_monitor_since "$sec" "$tmpl" "[prune:$scope] tier=$tier")" || exit 1
+            MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${recursive}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}${SEP}${mexcl}${SEP}${mssh}${SEP}${msince}")
         fi
     done
 
@@ -3567,7 +3570,7 @@ group_monitor() {
     declare -ga MONITOR_GROUP_ORDER=()
     local e scope pattern warn crit schedule recursive notify broken warntext pairlbl key
     for e in "${MONITOR_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext pairlbl mexcl mssh <<< "$e"
+        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext pairlbl mexcl mssh msince <<< "$e"
         # pair_label is IN the key (REV-045): two relationships sharing a
         # threshold shape must not merge into one check-snap-age line --
         # pausing one would silence the staleness alarm of the other.
@@ -3580,7 +3583,9 @@ group_monitor() {
         # -- the second would be read with the first one's identity. The host
         # (the scope's part before ':') is in the key for the same reason.
         local mhost=""; case "$scope" in *:*) mhost="${scope%%:*}" ;; esac
-        key="${schedule}${SEP}${pattern}${SEP}${warn}${SEP}${crit}${SEP}${recursive}${SEP}${pairlbl}${SEP}${mexcl}${SEP}${mssh}${SEP}${mhost}"
+        # monitor_since is IN the key (U137 C2): one line carries ONE -S, and a tier
+        # started later must not be measured from an earlier tier's start.
+        key="${schedule}${SEP}${pattern}${SEP}${warn}${SEP}${crit}${SEP}${recursive}${SEP}${pairlbl}${SEP}${mexcl}${SEP}${mssh}${SEP}${mhost}${SEP}${msince}"
         [ -z "${MONITOR_GROUPS[$key]+x}" ] && MONITOR_GROUP_ORDER+=("$key")
         MONITOR_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -4348,13 +4353,26 @@ emit_gfs_prune_sections() {
 # same applies to the "|| notify" job and prune lines above, for the same reason.
 # Do not drop these redirects; a host with MAILTO="" set merely hides the
 # symptom, and not every host has it.
+# monitor_since (U137 C2, owner 2026-11-01, variant C): the epoch at which this tier of the
+# relationship STARTED -- written once by zfs-backup.sh when the relationship or the tier is
+# created and never moved. Relationships take no snapshot at creation any more, so until a
+# tier's first cron run there is nothing to measure; with -S the monitor measures from
+# whichever is later, the newest matching snapshot or this start. A family older than the
+# relationship (leftovers, an old cron's weekly) then reads as WAITING, not stale, until the
+# first own snapshot -- unless its age from the start passes warn/crit (a first run that never came). Absent = empty = no -S, the line exactly as before.
+resolve_monitor_since() {   # <section> <template> <context> -> epoch or ""
+    local v; v="$(resolve_field_or_omit monitor_since "$1" "$2" "")" || v=""
+    case "$v" in ''|*[!0-9]*) [ -z "$v" ] || die "$3: monitor_since = '$v' -- an epoch (seconds), written by zfs-backup.sh" ;; esac
+    printf '%s' "$v"
+}
+
 emit_monitor() {
     local key list scope pattern warn crit schedule recursive notify broken warntext pairlbl
     for key in "${MONITOR_GROUP_ORDER[@]}"; do
         list="${MONITOR_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext pairlbl mexcl mssh <<< "${members[0]}"
+        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext pairlbl mexcl mssh msince <<< "${members[0]}"
 
         local -a targets=()
         local m mscope mpat mwarn mcrit msch mrec mnot mbrk mwtxt mplbl
@@ -4382,6 +4400,9 @@ emit_monitor() {
         # ssh options (a remote scope only, REV-20261017-152): the section's
         # ssh_flags, already linted to the five options check-snap-age.sh accepts.
         local sflags=""; [ -n "${mssh:-}" ] && sflags="$mssh "
+        # -S <epoch> (U137 C2): measured from the later of the newest snapshot and the
+        # tier's start. Absent = the line exactly as before.
+        local sinceflag=""; [ -n "${msince:-}" ] && sinceflag="-S $msince "
         # One line per group, unless the dataset list makes it longer than cron
         # takes (1000 bytes per command): then the list is split over as many lines
         # as it needs, each with the same flags, thresholds and alerts. A remote
@@ -4391,7 +4412,7 @@ emit_monitor() {
         local -a chunk=() lines_out=()
         local t try line=""
         monitor_line() {   # <comma list> -> the whole cron line in $REPLY
-            local c="$REPO_DIR/check-snap-age.sh ${flag}${lflag}${xflags}${sflags}\"$1\" \"$pattern\" $warn $crit"
+            local c="$REPO_DIR/check-snap-age.sh ${flag}${lflag}${xflags}${sinceflag}${sflags}\"$1\" \"$pattern\" $warn $crit"
             # The verdict is CAPTURED and handed to the notify script, not just
             # appended to the log. check-snap-age.sh already prints the dataset, the
             # pattern, the newest snapshot, its real age and both thresholds -- all

@@ -3,7 +3,7 @@
 <!-- frozen: snapsend.sh 100755 86effb8185df5d71137ba96d3ab7270957015b27 -->
 <!-- frozen: snapget.sh 100755 abd9438b16eeb2c3d082a16bf24d5dd8514a71a0 -->
 <!-- frozen: delsnaps.sh 100755 1a6d18267d93a188a586f92059509de836b5aeff -->
-<!-- frozen: check-snap-age.sh 100755 dfd5bdd3e3af9e8659d8e74b290f203e88159983 -->
+<!-- frozen: check-snap-age.sh 100755 88505a6641b1ac130ef8b9d4e3161d09e3c3f8b4 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
 <!-- unfreeze: - -->
 
@@ -1190,6 +1190,18 @@ Owner-authorized refreezes:
   - Untouched: bucket selection, reserved-prefix protection, holds, dry run, `run_zfs` (remote
     transport), clear-cut, age and count modes.
   twin: none -- `delsnaps.sh` has no twin; snapget/snapsend do not compute GFS ladders.
+- 2026-11-03 (check-snap-age.sh): **U137 C2 -- the monitor measures from the relationship's
+  start.** Owner direction in chat, 2026-11-03, answering "check-snap-age.sh jest zamrożonym
+  silnikiem ... Zmiana C2 musi go dotknąć: dochodzi opcja -S <data startu szczebla> ... i -W":
+  "Zgoda". It implements the owner's variant C (U137, 2026-11-01): a relationship takes no
+  snapshot when it is created, so a tier is not late before its first cron run. v2.5 -> v2.6.
+  - `-S EPOCH`: the age is measured from the later of the newest matching snapshot and EPOCH;
+    when EPOCH is the later one the line says so (`no snapshot of this family since the
+    relationship's start ...`) and, at OK severity, is labelled `WAITING`.
+  - `-W`: print the WAITING lines (rc unchanged); without it they are silent, as OK is.
+  - Untouched: every read and its fail-closed handling, -R/-x/-L/pause, remote transport,
+    thresholds and exit codes. Without -S/-W the output is byte-identical.
+  twin: none -- check-snap-age.sh is the only monitor engine.
 
 ## How it is enforced
 

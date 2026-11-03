@@ -897,15 +897,18 @@ if [ "$r1t" = -H24 ] && [ "$r1s" = -H12 ] && [ -z "$r1c" ] && [ "$r1f" = -H24 ] 
 else
     bad "set-tiers: count on one side" "split t=[$r1t] s=[$r1s] common=[$r1c]" "folded=[$r1f] left=[$r1g]" "$o1" "$o1b"
 fi
-st_conf; o2=$(st_run --add-tier=weekly --yes)
+st_conf; w_t0=$(date +%s); o2=$(st_run --add-tier=weekly --yes)
 w_tiers=$(st_f relation:sl tiers); w_ret=$(st_f relation:sl weekly.retain); w_pre=$(st_f relation:sl weekly.prefix); w_mon=$(st_f relation:sl weekly.monitor)
+w_since=$(st_f relation:sl weekly.monitor_since)
 o3=$(st_run --drop-tier=hourly --yes); d_tiers=$(st_f relation:sl tiers); d_left=$(grep -c '^	hourly\.' "$ST/c.conf")
 st_conf; o4=$(st_run --drop-tier=hourly --drop-tier=daily --yes); r4=$?
-if [ "$w_tiers" = "hourly, daily, weekly" ] && [ "$w_ret" = -W4 ] && [ "$w_pre" = automated_weekly_ ] && [ "$w_mon" = "8d 10d" ] \
+# U137 C2: the added tier gets its start (monitor_since = now) -- it takes no snapshot now.
+case "$w_since" in ''|*[!0-9]*) w_since_ok=0 ;; *) [ "$w_since" -ge "$w_t0" ] && w_since_ok=1 || w_since_ok=0 ;; esac
+if [ "$w_tiers" = "hourly, daily, weekly" ] && [ "$w_ret" = -W4 ] && [ "$w_pre" = automated_weekly_ ] && [ "$w_mon" = "8d 10d" ] && [ "$w_since_ok" = 1 ] \
    && [ "$d_tiers" = "daily, weekly" ] && [ "$d_left" = 0 ] && [ "$r4" -ne 0 ] && printf '%s' "$o4" | grep -q 'is the last tier'; then
     ok "set-tiers: --add-tier in cadence order (weekly -W4, its own family and monitor), --drop-tier takes every field of the tier, the last tier refused"
 else
-    bad "set-tiers: add / drop" "add: tiers=[$w_tiers] ret=$w_ret pre=$w_pre mon=[$w_mon]" "drop: tiers=[$d_tiers] left=$d_left rc4=$r4" "$o2" "$o3" "$o4"
+    bad "set-tiers: add / drop" "add: tiers=[$w_tiers] ret=$w_ret pre=$w_pre mon=[$w_mon] since=[$w_since]" "drop: tiers=[$d_tiers] left=$d_left rc4=$r4" "$o2" "$o3" "$o4"
 fi
 st_conf; o5=$(st_run --drop-src-tier=daily --method=age --yes)
 r5off=$(st_f relation:sl daily.source); r5h=$(st_f relation:sl hourly.retain); r5d=$(st_f relation:sl daily.retain)
@@ -1895,7 +1898,8 @@ refused "a changed schedule is a different job, not a merged one" "$MON_A" \
 plan_config() {   # <extra args...> -> the candidate CONFIG, normalised
     run "$@" 2>&1 \
         | sed -n '/--- candidate CONFIG v4/,/--- generated cron block/p' \
-        | sed -E 's#/tmp/[A-Za-z0-9._]+#<TMP>#g'
+        | sed -E 's#/tmp/[A-Za-z0-9._]+#<TMP>#g' \
+        | sed -E 's/(monitor_since[[:space:]]*=[[:space:]]*)[0-9]+/\1<NOW>/'   # U137 C2: the start is "now", per run
 }
 
 imp="$(plan_config --source=rpool/data --target=hdd/backups --config="$WORK/id1.conf")"

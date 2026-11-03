@@ -7154,7 +7154,7 @@ relblock_render() {   # <name> <has target 0|1> <has source 0|1> -> the block fr
             for b in target source; do [ "${RB[$t.$b]:-}" = no ] && printf '\t%s.%s = no\n' "$t" "$b"; done
             # every base field this tier mentions, canonical order first
             local -a bases=() ; local seen=" "
-            for b in send_schedule prefix notify_word tier_label prune_schedule pattern retain keep gfs quiesce monitor monitor_warn monitor_crit monitor_schedule; do bases+=("$b"); done
+            for b in send_schedule prefix notify_word tier_label prune_schedule pattern retain keep gfs quiesce monitor monitor_warn monitor_crit monitor_schedule monitor_since; do bases+=("$b"); done
             for f in "${RB_KEYS[@]}"; do
                 case "$f" in "$t".*) ;; *) continue ;; esac
                 b="${f#"$t".}"; b="${b#target_}"; b="${b#source_}"
@@ -7199,6 +7199,9 @@ relblock_engine_keep() {   # <config> <name> -> RB_ENGINE_KEEP: "key<TAB>value" 
     RB_ENGINE_KEEP=""
     while IFS=$'\t' read -r k v; do
         case "$k" in history|compression|cipher|autotune|raw) RB_ENGINE_KEEP+="$k"$'\t'"$v"$'\n' ;; esac
+        # A tier's start (U137 C2) survives a rebuild too: it is written once and never moved,
+        # or a profile change would make every tier "waiting" again and hide a stopped one.
+        case "$k" in *.monitor_since) RB_ENGINE_KEEP+="$k"$'\t'"$v"$'\n' ;; esac
     done < <(relblock_dump "$cfg" "$name")
     # raw is NOT taken from a section: a local relationship keeps it there on purpose
     # (local-backup writes it per [dataset:] and local_relation_argv reads it back).
@@ -7254,6 +7257,12 @@ relblock_from_profile() {   # <name> <has target 0|1> <has source 0|1> [remote] 
             done <<<"$frag"
         done
     done < <(profile_prune_ref_ids "$PROFILE_DS_FILE")
+    # U137 C2: each tier's start, for its monitor (-S). Kept when the block is rebuilt
+    # (RB_ENGINE_KEEP above), now for a tier the relationship did not have.
+    local _now; _now=$(date +%s)
+    for t in "${RB_TIERS[@]}"; do
+        [ -n "${RB[$t.monitor_since]:-}" ] || rb_set "$t" "" monitor_since "$_now"
+    done
     relblock_render "$name" "$hasT" "$hasS"
 }
 
@@ -7520,6 +7529,8 @@ tiers_apply_ops() {   # <config working copy> <name> <ops...> -> TIERS_CHANGES; 
                 [ "$mech" = gfs ] && [ -z "${RB[gfs]:-}" ] && rb_set "$v" "" gfs yes
                 [ -n "$q" ] && rb_set "$v" "" quiesce "$q"
                 rb_set "$v" "" monitor "$warn $crit"
+                # its start (U137 C2): no snapshot is taken now, so the monitor waits for its first run
+                rb_set "$v" "" monitor_since "$(date +%s)"
                 # in cadence order (finest first), as gen-cron and the GUI table expect
                 local -a nt=(); local done_=0 rk; rk=$(tiers_cadence_rank "$v")
                 for t in "${RB_TIERS[@]}"; do
@@ -12307,6 +12318,13 @@ emit_snaponly_sections() {   # <workfile> <name>
     # Decided BEFORE the strip below, while the installed sections still say what
     # the family is (U141). Left in SNAPONLY_STAMP for the caller's guards and record.
     SNAPONLY_STAMP="$(snaponly_stamp_decide "$wf" "$name")"
+    # U137 C2: each tier's start, read BEFORE the strip -- written once, never moved.
+    local -A SO_SINCE=()
+    local _sk _sv
+    while IFS=$'\t' read -r _sk _sv; do [ -n "$_sk" ] && SO_SINCE[$_sk]="$_sv"; done < <(awk -v h="[template:snaponly__${name}__" '
+        /^[ \t]*\[/ { t = $0; sub(/^[ \t]*/, "", t); insec = (index(t, h) == 1); if (insec) { tier = substr(t, length(h) + 1); sub(/\][ \t]*$/, "", tier) } next }
+        insec && $1 == "monitor_since" { v = $0; sub(/^[^=]*=[ \t]*/, "", v); print tier "\t" v }' "$wf")
+    local _so_now; _so_now=$(date +%s)
     local tag=""
     [ "$SNAPONLY_STAMP" = 1 ] && tag="$(snaponly_collector_tag)"
     local pf; pf="$(profile_file "${PROFILE:-$PROFILE_DEFAULT_NAME}")"
@@ -12358,6 +12376,7 @@ emit_snaponly_sections() {   # <workfile> <name>
             if [ -n "$mw" ] && [ -n "$mc" ]; then
                 echo "	monitor_warn  = $mw"
                 echo "	monitor_crit  = $mc"
+                echo "	monitor_since = ${SO_SINCE[$t]:-$_so_now}"
             fi
         } >> "$wf"
         send_ids+=("snaponly__${name}__$t")
@@ -14558,7 +14577,7 @@ cmd_monitor() {
     fi
     local mi=0
     local -a M_ACCT=() M_SCHED=() M_LABEL=() M_DS=() M_PAT=() M_WARN=() M_CRIT=() M_REC=() \
-        M_EXCL=() M_ENGN=() M_ENGR=() M_PARSED=() M_GATE=()
+        M_EXCL=() M_ENGN=() M_ENGR=() M_PARSED=() M_GATE=() M_SINCE=()
 
     local acct blk line
     while IFS= read -r acct; do
@@ -14581,7 +14600,7 @@ cmd_monitor() {
                 engine_named=$(monitor_engine_path "$line")
             fi
             schedule=$(printf '%s' "$line" | awk '{print $1, $2, $3, $4, $5}')
-            local rec=no label="" excl="" ds="" pat="" warn="" crit=""
+            local rec=no label="" excl="" since="" ds="" pat="" warn="" crit=""
             local parsed=true reason=""
             if [ "$is_gate" = yes ]; then
                 local _g
@@ -14606,6 +14625,10 @@ cmd_monitor() {
                         -v|--verbose)   : ;;
                         -L) j=$((j + 1)); label="${argv[$j]:-}" ;;
                         -x) j=$((j + 1)); excl="$excl${excl:+,}${argv[$j]:-}" ;;
+                        # -S <epoch> (check-snap-age.sh v2.6, U137 C2): the tier's start.
+                        # The re-run must carry it, or a tier waiting for its first run
+                        # reads as stale here while the cron line calls it fine.
+                        -S) j=$((j + 1)); since="${argv[$j]:-}" ;;
                         # The REMOTE monitor's ssh options (check-snap-age.sh
                         # v2.4, REV-20261017-152 F4): each takes a value, and the
                         # re-run below must carry them, or it reads nothing on
@@ -14637,7 +14660,7 @@ cmd_monitor() {
             mi=$((mi + 1))
             M_ACCT[$mi]="$acct"; M_SCHED[$mi]="$schedule"; M_LABEL[$mi]="$label"; M_DS[$mi]="$ds"
             M_PAT[$mi]="$pat"; M_WARN[$mi]="$warn"; M_CRIT[$mi]="$crit"; M_REC[$mi]="$rec"
-            M_EXCL[$mi]="$excl"; M_ENGN[$mi]="$engine_named"; M_ENGR[$mi]="$engine_run"
+            M_EXCL[$mi]="$excl"; M_ENGN[$mi]="$engine_named"; M_ENGR[$mi]="$engine_run"; M_SINCE[$mi]="${since:-}"
             M_PARSED[$mi]="$parsed"; M_GATE[$mi]="$is_gate"
             if [ "$parsed" = true ] && [ "$is_gate" = yes ]; then
                 { bash "$engine_run" age "$ds" "$label" --warn "$warn" --crit "$crit" >"$mtmp/$mi.out" 2>&1
@@ -14648,6 +14671,8 @@ cmd_monitor() {
                 [ -n "$label" ] && runargs+=(-L "$label")
                 local _x
                 for _x in ${excl//,/ }; do [ -n "$_x" ] && runargs+=(-x "$_x"); done
+                # -W: the GUI wants the WAITING lines (a tier before its first run); cron does not.
+                [ -n "${since:-}" ] && runargs+=(-S "$since" -W)
                 runargs+=(${sshargs[@]+"${sshargs[@]}"})
                 [ -n "$mux" ] && [ "${#sshargs[@]}" -gt 0 ]                     && runargs+=(-O ControlMaster=auto -O "ControlPath=$mux/%C" -O ControlPersist=60)
                 runargs+=("$ds" "$pat" "$warn" "$crit")
@@ -18671,8 +18696,17 @@ import_restore_relblock() {   # <name> <export document> [--check: rc 1 = differ
       want=$(json_flat_object "$rel") \
           || die "import-relation: the relation block of '$name' in the file is not a flat object of strings this build can restore exactly (an escape other than \\\" \\\\ \\/, a tab or newline in a value, or a non-string value) -- nothing was installed; set the values with set-tiers / set-transfer"
       [ -n "$want" ] || exit 0
-      [ "$(relblock_dump "$cronfile" "$name")" = "$want" ] && { [ -n "$check" ] || log "import-relation: [relation:$name] already as in the file"; exit 0; }
+      # A tier's start (monitor_since, U137 C2) is THIS host's history, not the file's: the
+      # imported relationship started here, at its activation. The file's values are dropped,
+      # this host's kept, and the comparison ignores them both.
+      local _nos='^[^'$'\t'']*[.]monitor_since'$'\t'
+      want=$(printf '%s\n' "$want" | grep -v "$_nos" || :)
+      local _cur _since
+      _cur=$(relblock_dump "$cronfile" "$name")
+      _since=$(printf '%s\n' "$_cur" | grep "$_nos" || :)
+      [ "$(printf '%s\n' "$_cur" | grep -v "$_nos" || :)" = "$want" ] && { [ -n "$check" ] || log "import-relation: [relation:$name] already as in the file"; exit 0; }
       [ -z "$check" ] || exit 1
+      [ -n "$_since" ] && want="$want"$'\n'"$_since"
       workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
       workfile_track "$workfile"
       cp -p "$cronfile" "$workfile" && chmod 0644 "$workfile" 2>/dev/null

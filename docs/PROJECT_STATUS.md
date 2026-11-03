@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: db436401dc2e7222 -->
+<!-- status-covers-digest: 6780f55687fe3428 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1709,7 +1709,11 @@
   -- resztki, albo `--stamp-family`; kreator pyta o to samo). Retencja źródła to osobny `[prune:]` z tą rodziną, przypięty kluczem
   relacji. Minuty, które pisze `zfs-backup.sh`, nie są wielokrotnością 5 (ręczna sekcja w `gen-cron.sh` nie jest tu
   sprawdzana). Aktywacja NIE robi żadnej migawki (U137, wariant C właściciela 2026-11-01; do 1.0.5 robiła
-  pierwszą migawkę każdego szczebla, z zamrażaniem): każdy szczebel dostaje pierwszą w swoim terminie z crona. Odmowy: profil bez prefiksu; profil z drabiną GFS na szczeblu -- w tym wbudowany `default`
+  pierwszą migawkę każdego szczebla, z zamrażaniem): każdy szczebel dostaje pierwszą w swoim terminie z crona. Monitor szczebla
+  liczy wiek od jego startu (`<szczebel>.monitor_since` w bloku relacji / w szablonie migawek zdalnych, zapisane raz
+  przy tworzeniu relacji albo szczebla; `check-snap-age.sh` v2.6 `-S`), więc przed pierwszym biegiem nie jest „stale”,
+  dopóki wiek od startu nie przekroczy progu; `zfs-backup monitor` dokłada `-W` i dostaje linie `WAITING` (pokazanie
+  stanu „czeka” w GUI to dopiero C3). Odmowy: profil bez prefiksu; profil z drabiną GFS na szczeblu -- w tym wbudowany `default`
   (źródłowy `[prune:]` nie niesie drabiny na szczebel, płaskie liczenie byłoby inną polityką); przy aktywacji --
   zakres nakładający się na źródło innej relacji tego kolektora; `seed`/`restore`/`edit-relation`/`add-source`/
   `remove-source`/`set-tiers`/`export-relation`/`import-relation`/`delete-relation --destroy-copies`. `remove-client`
