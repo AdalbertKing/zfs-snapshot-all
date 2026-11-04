@@ -363,7 +363,7 @@ new_target_name() {   # <rodzic>
     local t
     geom
     wt --title "$(title 5 "$(T 'Dokąd -- nowy dataset')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
-       --inputbox "$(Tv 'Nazwa nowego datasetu pod $NEW_UNDER (powstanie przy instalacji relacji):' '$NEW_UNDER' "$1")" 10 "$W" "backups" || return 1
+       --inputbox "$(Tv 'Nazwa nowego datasetu pod $NEW_UNDER (powstanie przy instalacji relacji):' '$NEW_UNDER' "$1")" 10 "$W" "" || return 1
     t="${WT_OUT// /}"; t="${t#/}"; t="${t%/}"
     case "$t" in ''|*[!A-Za-z0-9._:/-]*) wt --title "$(T 'Zła nazwa')" --msgbox "$(Tv ''\''$WT_OUT'\'' nie wygląda na nazwę datasetu.' '$WT_OUT' "$WT_OUT")" 8 "$W"; return 1 ;; esac
     TARGET="$1/$t"
