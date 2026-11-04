@@ -219,7 +219,7 @@ step_diag() {   # 0 = dalej, 1 = wróć do hosta
             DIAG_OK_FOR="$(hostport)"
             return 0
         fi
-        # A-TASSA, 2026-11-04: stare skrypty bez .git w katalogu pakietu. prepare-source
+        # Pierwsza instalacja 2026-11-04: stare skrypty bez .git w katalogu pakietu. prepare-source
         # odmawia przed jakąkolwiek zmianą; okno mówi to od razu, bez przycisku Zainstaluj.
         if [ -n "$C_BLK" ]; then
             wt --title "$(title 3 "$(T 'Katalog pakietu zajęty')")" --msgbox "${facts}$(Tv '  [-] Pakiet  $C_DIR istnieje, ale to nie pakiet (stare skrypty?)\n\ngit clone tam nie wejdzie. Na $HOST, jako root: sprawdź w crontabie\nroota, czy coś stamtąd chodzi, potem odsuń katalog, np.:\n\n  mv $C_DIR $C_DIR.old-RRRRMMDD\n\nPo naprawie wróć tutaj.' '$C_DIR' "$C_DIR" '$HOST' "$HOST")" 17 "$W"

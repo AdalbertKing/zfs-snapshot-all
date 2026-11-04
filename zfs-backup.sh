@@ -15069,7 +15069,7 @@ source_probe() {   # <host> <port> -> sets PROBE_* ; returns 0 when ssh answered
     PROBE_SSH_ERR=""; PROBE_HOSTNAME=""; PROBE_POOLS=""; PROBE_ZFS=0; PROBE_GIT=0; PROBE_APT=0; PROBE_DIR=""; PROBE_PKG=""; PROBE_REV=""
     # DIR= is what stands in the way of a clone when there is no package: a
     # non-empty directory (old zfs-snapshot-all scripts without .git, found on
-    # A-TASSA 2026-11-04) or a file. An empty directory is fine for git clone.
+    # a first install, 2026-11-04) or a file. An empty directory is fine for git clone.
     out=$(rux_root_ssh "$host" "$port" "echo HOSTNAME=\$(hostname); command -v zfs >/dev/null 2>&1 && echo ZFS=yes; command -v git >/dev/null 2>&1 && echo GIT=yes; command -v apt-get >/dev/null 2>&1 && echo APT=yes; if [ -d '$SOURCE_REPO_DIR' ]; then [ -z \"\$(ls -A '$SOURCE_REPO_DIR' 2>/dev/null)\" ] || echo DIR=notempty; elif [ -e '$SOURCE_REPO_DIR' ]; then echo DIR=notadir; fi; zpool list -H -o name,size,free 2>/dev/null | while IFS=\$(printf '\\t') read -r n sz fr; do echo POOL=\$n,\$sz,\$fr; done; [ -x '$SOURCE_REPO_DIR/zfs-backup.sh' ] && { echo PKG=$SOURCE_REPO_DIR; echo REV=\$(git -C '$SOURCE_REPO_DIR' rev-parse --short HEAD 2>/dev/null); }; echo PROBE=done" 2>&1) || rc=$?
     if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^PROBE=done$'; then
         # OpenSSH ends its diagnostics with CR LF. A raw CR inside a JSON string
