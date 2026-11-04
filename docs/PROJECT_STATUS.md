@@ -21,7 +21,23 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **U136 fastprune w kreatorze (2026-11-04, gałąź `feat/u136-fastprune`, niewydane).** Migawki zdalne,
+- **Wydanie bieżące: v1.0.7 (zfsbackup `1ff4177`), na wszystkich hostach produkcji i labu od
+  2026-11-03 (sprawdzone po :15, także klony kont `zfsbackup` na 11.10 i 11.11).** W dev `main`, niewydane:
+  paczka U (PR #1045) i U136 (#1046). Lab posprzątany 2026-11-04: relacje i datasety testowe U137/U138/U141
+  usunięte z pve11, pve9 i pve9b; pve11 wrócił na wydanie bez wstrzymania aktualizacji.
+- **Punkt c: wstrzymanie aktualizacji obejmuje też konta (2026-11-04, gałąź `feat/prod-hold`, niewydane).**
+  Dotąd blokada roota (`update-hold` w katalogu stanu roota) nie zatrzymywała godzinnego `git pull`
+  konta delegowanego, bo konto nie widzi `/root` -- root stał, konto się aktualizowało. Teraz
+  `update-control.sh` (i jego kopia startowa w `deploy.sh`) pisze kopię blokady
+  `/etc/zfs-snapshot-all/update-hold` przy każdym zapisie blokady, przy jej zdjęciu przez `--resume-updates` i przy
+  każdym biegu godzinnym; `deploy.sh` (faza 8e) pisze linię `git pull` konta ze sprawdzeniem tego pliku i zostawia
+  harmonogram istniejącej zwykłej linii (pięć pól; inaczej `15 * * * *`). Nowe `update-control.sh --hold-updates` (i `deploy.sh --hold-updates`) wstrzymuje ręcznie,
+  `--resume-updates` zwalnia. `deploy.sh --check-only` ostrzega o linii konta bez sprawdzenia. Na żywo
+  pve11: przy blokadzie linia konta nie pobiera; bez pliku blokady próbuje `git pull`; `--hold-updates` /
+  `--resume-updates` tworzy i usuwa oba pliki. Testy na pve9: `selfupdate` 74/0, `cleanclone` 112/0
+  (jako `tester`). Działa od wydania, które tę zmianę zawiera: hosty muszą ją najpierw pobrać.
+  `deploy.sh` utrzymuje jedno konto na host -- produkcja ma po jednym (`zfsbackup`), lab pve9 ma trzy.
+- **U136 fastprune w kreatorze (2026-11-04, PR #1046, niewydane).** Migawki zdalne,
   Zaawansowane -> Fastprune: jedna liczba godzin N (najmniej 4, ostrzeżenie poniżej 24) dla wszystkich
   szczebli wybranego szablonu, które robią migawki. Kreator zapisuje ukryty szablon
   `relacja-<nazwa>-fastprune`: w każdym takim szczeblu `retain = -h<N>` bez `keep` i czyszczenie co godzinę; progi monitora zdejmuje szczeblom,
@@ -35,7 +51,7 @@
   `passive-flat` widoczny z [pasywny] (U139). Uwagi z kampanii GUI: W2 (relacja, w której jeden szczebel
   jest aktualny, a reszta czeka, jest „aktualna”), W6 (plan kopii pasywnej bez „zamraża”), W15 (migawki zdalne
   bez szablonów GFS), W16 (odpowiedź „inny twórca” widoczna w podsumowaniu). Otwarte: W1 (`list-jobs` nie
-  podaje czyszczenia relacji lokalnej, więc licznik „porządki” = 0), W17 (łamanie tekstu planu), U144 p. 2 (cudze rodziny w kreatorze), punkt c (wstrzymanie aktualizacji produkcji).
+  podaje czyszczenia relacji lokalnej, więc licznik „porządki” = 0), W17 (łamanie tekstu planu), U144 p. 2 (cudze rodziny w kreatorze), punkt c -- zrobiony, patrz wyżej.
   Testy: `test/tui` na pve9 471/0.
 - **1.0.7: nowa relacja kopii nie wysyła „monitor BROKEN” przed pierwszym biegiem (2026-11-03, W9).**
   Wydane 1.0.6 (zfsbackup `b6f040f`, tag `v1.0.6`) poszło na lab i na produkcję (Metropolis, Dąbrowska) o :15.
@@ -60,9 +76,9 @@
   Jednorazowo zaobserwowane, niewyjaśnione: monitor kopii pasywnej dał raz UNKNOWN („lista potomków bez
   korzenia”), trzy kolejne odczyty OK. Testy: `test/monitor` S6-S8; nowe przypadki strażnika i list-jobs
   uruchomione osobno; pełne suity w CI.
-- **PROJEKT ZAMKNIĘTY (2026-10-30, decyzja właściciela).** Wydanie zfsbackup `v1.0.5`; ostatnia
-  publikacja `5de1b27` (dev `f6e9bcde`, kod jak w `v1.0.5`). Szczegóły i to, co zostaje otwarte:
-  `docs/project/OWNER-DECISIONS.md`, sekcja 2026-10-30.
+- **1.0.5 (2026-10-30): projekt ogłoszony zamkniętym (decyzja właściciela)** -- publikacja `5de1b27`
+  (dev `f6e9bcde`). Od 2026-11-01 prace wróciły na zgłoszenia z wdrożeń (Dąbrowska): wydania 1.0.6 i
+  1.0.7, paczka U, U136. Decyzja z 10-30: `docs/project/OWNER-DECISIONS.md`, sekcja 2026-10-30.
 - **Strażnik gości PVE: drzewo `host:dataset` jest zdalne jak `konto@host:dataset` (2026-10-30, REV-20261030-184, P1).**
   Skaner drzewa w `zfs-job.sh` pomijał źródło `host:dataset` (bez konta). Drzewo nie było listowane i
   rekurencyjne przycinanie szło po dysku gościa przeniesionego na inny węzeł. Teraz obowiązuje reguła
