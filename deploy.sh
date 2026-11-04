@@ -7811,6 +7811,8 @@ elif [ "$CHECK_ONLY" -eq 1 ]; then
         [ -x "/home/$BACKUP_USER/notify-fail.sh" ] || warn "  /home/$BACKUP_USER/notify-fail.sh missing -- that account cannot report findings"
         [ -r "/home/$BACKUP_USER/alert-env.sh" ] || warn "  /home/$BACKUP_USER/alert-env.sh missing -- that account's notify scripts refuse to start"
         [ -f "/etc/logrotate.d/zfs-snapshot-all-$BACKUP_USER" ] || warn "  no logrotate stanza for $BACKUP_USER"
+        # Point c: a pull line from before 2026-11-04 does not see root's update hold.
+        crontab -u "$BACKUP_USER" -l 2>/dev/null | grep -F "/home/$BACKUP_USER/zfs-snapshot-all && git pull" | grep -qF "$UPDATE_HOLD_MARKER"             || warn "  $BACKUP_USER's auto-pull line does not check $UPDATE_HOLD_MARKER -- a held host would still pull this account (re-run without --check-only)"
     else
         warn "  account $BACKUP_USER does not exist -- re-run without --check-only to create it"
     fi
