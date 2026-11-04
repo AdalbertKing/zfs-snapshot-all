@@ -818,7 +818,8 @@ rm -rf "$L4"
 if grep -q '^do_uninstall() {' "$DEPLOY_SRC"; then
 UN=$(mktemp -d)
 un_tree() {
-    rm -rf "$UN/t"; mkdir -p "$UN/t/clients" "$UN/t/peers" "$UN/t/scripts" "$UN/t/var/locks" "$UN/t/qallow" "$UN/t/upd" "$UN/t/repo" "$UN/t/keys"
+    rm -rf "$UN/t"; mkdir -p "$UN/t/clients" "$UN/t/peers" "$UN/t/scripts" "$UN/t/var/locks" "$UN/t/qallow" "$UN/t/upd" "$UN/t/repo" "$UN/t/keys" "$UN/t/scripts/pairing" "$UN/t/linktune"
+    : > "$UN/t/scripts/pairing/pve1-to-pve0.tgz"; : > "$UN/t/scripts/cron.log"
     for s in alert-env notify-fail notify-warn alert-digest check-pool-capacity capacity-guard growth-guard; do : > "$UN/t/scripts/$s.sh"; done
     : > "$UN/t/scripts/someone-elses.sh"; : > "$UN/t/alert.conf"; : > "$UN/t/logrotate"; : > "$UN/t/logrotate-zfsbackup"
     : > "$UN/t/repo/zfs-backup.sh"; ln -s "$UN/t/repo/zfs-backup.sh" "$UN/t/link"
@@ -836,7 +837,7 @@ un_run() {   # <yes> -> rc; output in $UN/out, calls in $UN/calls
                         [ -e "$UN/peer-account" ] && echo "zfsbackup-pve1:x:1002:1002:zfs-snapshot-all peer account for pve1:/home/zfsbackup-pve1:/bin/bash"
                         echo "bkp:x:1004:1004:zfs-snapshot-all collector account:/home/bkp:/bin/bash"
                         echo "alice:x:1003:1003:Alice:/home/alice:/bin/bash" ;;
-                group)  [ -e "$UN/group-gone" ] || echo "zfsalert:x:999:" ;;
+                group)  [ -e "$UN/group-gone" ] || echo "zfsalert:x:999:root" ;;
             esac
         }
         zfs() {
@@ -863,7 +864,7 @@ un_run() {   # <yes> -> rc; output in $UN/out, calls in $UN/calls
         ZFS_CMD_LINK="$UN/t/link" PAIR_GATE_PATH="$UN/t/gate" QUIESCE_HELPER_PATH="$UN/t/helper"
         QUIESCE_ALLOW_DIR="$UN/t/qallow" HOST_SCRIPTS_DEST="$UN/t/scripts" UNINSTALL_ETC_DIR="$UN/t/clients"
         ALERT_CONF="$UN/t/alert.conf" LOGROTATE_CONF="$UN/t/logrotate" ALERT_SHARED_DIR="$UN/t/var"
-        UPDATE_STATE_DIR="$UN/t/upd" PAUSE_STATE_DIR="$UN/t/pause"
+        UPDATE_STATE_DIR="$UN/t/upd" PAUSE_STATE_DIR="$UN/t/pause" UNINSTALL_LINKTUNE_DIR="$UN/t/linktune"
         do_uninstall "$1"
     ) > "$UN/out" 2>&1
 }
@@ -897,7 +898,8 @@ if [ "$u4" -eq 0 ] && grep -qx 'cron_block_remove root zfs-backup-host' "$UN/cal
         && grep -qx 'groupdel zfsalert' "$UN/calls" && ! grep -q 'zfs destroy' "$UN/calls" \
         && [ ! -e "$UN/t/link" ] && [ ! -e "$UN/t/scripts/notify-fail.sh" ] && [ -e "$UN/t/scripts/someone-elses.sh" ] \
         && [ ! -e "$UN/t/alert.conf" ] && [ ! -e "$UN/t/logrotate" ] && [ ! -e "$UN/t/logrotate-zfsbackup" ] \
-        && [ ! -e "$UN/t/var" ] && [ ! -e "$UN/t/upd" ] && [ ! -e "$UN/t/clients" ] && [ ! -e "$UN/t/keys" ] && [ -d "$UN/t/repo" ]; then
+        && [ ! -e "$UN/t/var" ] && [ ! -e "$UN/t/upd" ] && [ ! -e "$UN/t/clients" ] && [ ! -e "$UN/t/keys" ] && [ -d "$UN/t/repo" ] \
+        && [ ! -e "$UN/t/scripts/pairing" ] && [ ! -e "$UN/t/linktune" ] && [ -e "$UN/t/scripts/cron.log" ]; then
     u4_ok=1
 fi
 # 5. re-run after it: nothing left to do is success

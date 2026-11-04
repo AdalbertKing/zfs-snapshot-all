@@ -4879,7 +4879,9 @@ do_uninstall() {
         files+=("$scripts/$s.sh")
     done
     files+=("${ALERT_CONF:-/etc/zfs-alert.conf}" "${LOGROTATE_CONF:-/etc/logrotate.d/zfs-snapshot-all}" "$gate" "$helper")
-    dirs=("$qallow" "$etc_dir" "${ALERT_SHARED_DIR:-/var/lib/zfs-snapshot-all}" "${UPDATE_STATE_DIR:-/root/.zfs-snapshot-all-update-state}" "${PAUSE_STATE_DIR:-/root/.zfs-snapshot-all-pause-state}")
+    # pairing: deploy.sh's outdir for peer packages (they carry keys); zfs-snap:
+    # lib-zfs-snap.sh's link-tuning cache (both found left behind, lab 2026-11-05).
+    dirs=("$qallow" "$etc_dir" "$scripts/pairing" "${UNINSTALL_LINKTUNE_DIR:-/var/lib/zfs-snap}" "${ALERT_SHARED_DIR:-/var/lib/zfs-snapshot-all}" "${UPDATE_STATE_DIR:-/root/.zfs-snapshot-all-update-state}" "${PAUSE_STATE_DIR:-/root/.zfs-snapshot-all-pause-state}")
 
     log "PLAN (--uninstall) on $(hostname):"
     log "  cron: the $CRON_HOST_BLOCK and zfs-backup-managed blocks of root$(for acct in $accounts; do printf ', %s' "$acct"; done)"
@@ -4890,8 +4892,8 @@ do_uninstall() {
     for f in "${files[@]}"; do [ -e "$f" ] && log "  file $f"; done
     for f in "${dirs[@]}"; do [ -e "$f" ] && log "  directory $f (whole)"; done
     [ -d "$PEER_KEY_DIR" ] && log "  directory $PEER_KEY_DIR, if empty"
-    getent group zfsalert >/dev/null 2>&1 && log "  group zfsalert, once no account is in it"
-    log "  KEPT: every dataset and snapshot, installed packages, /root/.ssh/known_hosts, and the checkout ${REPO_DIR} (remove it by hand: rm -rf ${REPO_DIR})"
+    getent group zfsalert >/dev/null 2>&1 && log "  group zfsalert"
+    log "  KEPT: every dataset and snapshot, installed packages, /root/.ssh/known_hosts, the logs ($scripts/*.log, ~/.zfs-tui), and the checkout ${REPO_DIR} (remove it by hand: rm -rf ${REPO_DIR})"
 
     if [ -n "$blockers" ]; then
         warn "refusing --uninstall: this host still takes part in relationships -- remove each with its own verb first:$blockers"
@@ -4937,14 +4939,14 @@ do_uninstall() {
         log "removed $f"
     done
     [ -d "$PEER_KEY_DIR" ] && rmdir "$PEER_KEY_DIR" 2>/dev/null && log "removed $PEER_KEY_DIR (empty)"
+    # deploy.sh creates the group; a member left in it (lab 2026-11-05: root, put
+    # there by hand) is no reason to keep it -- the queue it guarded is gone.
     if getent group zfsalert >/dev/null 2>&1; then
-        if [ -z "$(getent group zfsalert | cut -d: -f4)" ]; then
-            groupdel zfsalert && log "removed group zfsalert"
-        else
-            warn "group zfsalert kept -- still has members: $(getent group zfsalert | cut -d: -f4)"
-        fi
+        s=$(getent group zfsalert | cut -d: -f4)
+        groupdel zfsalert || die "--uninstall: groupdel zfsalert failed"
+        log "removed group zfsalert${s:+ (its members were: $s)}"
     fi
-    log "uninstalled. Left on purpose: datasets, snapshots, packages, and ${REPO_DIR} (rm -rf ${REPO_DIR})"
+    log "uninstalled. Left on purpose: datasets, snapshots, packages, logs, and ${REPO_DIR} (rm -rf ${REPO_DIR})"
 }
 
 if [ "$UNINSTALL_YES" -eq 1 ] && [ "$UNINSTALL_MODE" -eq 0 ]; then
