@@ -776,9 +776,25 @@ delete_snapshots() {
     else
         local snapshot creation_date_sec
         for snapshot in "${filtered[@]}"; do
-            creation_date_sec=$(run_zfs "$ruser" "$rhost" get -H -p -o value creation "${snapshot}")
+            # REV-20261104-186 F2: the read is checked like the GFS one above -- its status
+            # AND a numeric answer. An unreadable creation time used to make `[ -lt ]` fail,
+            # which took the "keep" arm and ended the run with EXIT_CODE 0. Now the snapshot
+            # is kept (nothing is deleted on a guess) and the run is not successful.
+            if ! creation_date_sec=$(run_zfs "$ruser" "$rhost" get -H -p -o value creation "${snapshot}"); then
+                creation_date_sec=""
+            fi
+            creation_date_sec="${creation_date_sec%$'\r'}"
 
             dbg "Snapshot = $snapshot, creation_date_sec = $creation_date_sec"
+
+            case "$creation_date_sec" in
+                ''|*[!0-9]*)
+                    echo "Error: creation time unreadable for snapshot ${snapshot} (got '${creation_date_sec}') -- kept; the run is not successful" >&2
+                    kept_count=$((kept_count + 1))
+                    EXIT_CODE=1
+                    ds_failed=1
+                    continue ;;
+            esac
 
             if [ "${creation_date_sec}" -lt "${param}" ]; then
                 if is_held_by_us "${snapshot}" "$ruser" "$rhost"; then
@@ -875,9 +891,22 @@ delete_bookmarks() {
 
     local mark creation_date_sec
     for mark in "${filtered[@]}"; do
-        creation_date_sec=$(run_zfs "$ruser" "$rhost" get -H -p -o value creation "${mark}")
+        # REV-20261104-186 F2: the same contract as the snapshot age path.
+        if ! creation_date_sec=$(run_zfs "$ruser" "$rhost" get -H -p -o value creation "${mark}"); then
+            creation_date_sec=""
+        fi
+        creation_date_sec="${creation_date_sec%$'\r'}"
 
         dbg "Bookmark = $mark, creation_date_sec = $creation_date_sec"
+
+        case "$creation_date_sec" in
+            ''|*[!0-9]*)
+                echo "Error: creation time unreadable for bookmark ${mark} (got '${creation_date_sec}') -- kept; the run is not successful" >&2
+                kept_count=$((kept_count + 1))
+                EXIT_CODE=1
+                ds_failed=1
+                continue ;;
+        esac
 
         if [ "${creation_date_sec}" -lt "${threshold}" ]; then
             if [ "$DRY_RUN" = true ]; then
@@ -936,18 +965,47 @@ process_datasets_recursively() {
     local ruser="${5:-}"
     local rhost="${6:-}"
 
-    prune_one "${base_ds}" "${pat}" "${mode}" "${param}" "${ruser}" "${rhost}"
-
     # Fetch the full descendant list (local or over ssh) and drop base_ds itself
     # in bash rather than piping the remote output through grep -- keeps the
     # remote command a single quoted zfs call with no shell metacharacters.
-    local all_datasets child
+    #
+    # REV-20261104-186 F3: ALL OR EXPLICITLY FAILED, and BEFORE anything is deleted.
+    # The status of the listing used to be discarded, so a failed or truncated walk
+    # (ssh 255 halfway, a pool error) pruned the root and whatever children happened
+    # to be printed, and the run ended 0. Now: the listing must succeed, must name
+    # the root itself (`zfs list -r <root>` always does -- the same test as
+    # check-snap-age's walk), and every line must be the root or under it. Anything
+    # else: nothing in this tree is pruned, and the run is not successful.
+    local all_datasets child walk_rc walk_bad=""
     all_datasets=$(run_zfs "$ruser" "$rhost" list -H -o name -t filesystem,volume -r "${base_ds}")
-    for child in ${all_datasets}; do
+    walk_rc=$?
+    all_datasets="${all_datasets//$'\r'/}"
+    if [ "$walk_rc" -ne 0 ]; then
+        walk_bad="the listing failed (rc=$walk_rc)"
+    elif ! printf '%s\n' "$all_datasets" | grep -qxF -- "$base_ds"; then
+        walk_bad="the listing does not contain the root itself, so it is not a complete walk"
+    else
+        while IFS= read -r child; do
+            [ -z "$child" ] && continue
+            case "$child" in
+                "$base_ds"|"$base_ds"/*) ;;
+                *) walk_bad="the listing names '${child}', which is not under the root"; break ;;
+            esac
+        done <<< "$all_datasets"
+    fi
+    if [ -n "$walk_bad" ]; then
+        echo "Error: -R on ${rhost:+$ruser@$rhost:}${base_ds}: ${walk_bad} -- nothing in this tree was pruned" >&2
+        EXIT_CODE=1
+        return 1
+    fi
+
+    prune_one "${base_ds}" "${pat}" "${mode}" "${param}" "${ruser}" "${rhost}"
+    while IFS= read -r child; do
+        [ -z "$child" ] && continue
         [ "$child" = "$base_ds" ] && continue
         dbg "Processing child dataset = $child"
         prune_one "${child}" "${pat}" "${mode}" "${param}" "${ruser}" "${rhost}"
-    done
+    done <<< "$all_datasets"
 }
 
 # Main function to process datasets

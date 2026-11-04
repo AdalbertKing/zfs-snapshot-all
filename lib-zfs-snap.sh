@@ -775,6 +775,106 @@ remote_refused_by_gate() {   # <rc> [captured output] -> 0 when the gate refused
 #   1  ssh worked (or the check was local) and the dataset genuinely is not there
 #   2  the question could not be answered -- the reason is already logged at
 #      level 0. A caller must NEVER treat this as 1.
+# REV-20261104-186 (F1/F4/F5): does a dataset exist -- three answers, never two.
+# probe_dataset's LOCAL branch reads every failure of `zfs list` as "absent" (1), and over
+# ssh a remote `zfs list` rc 1 is also "absent"; a permission or pool error then looks
+# like a missing dataset. The decisions REV-186 names (destroy, upgrade to full, an empty
+# list) need the difference, so "absent" here requires zfs's own words.
+#   dataset_presence <dataset> [remote_user] [remote_host]
+#   0 exists   1 does not exist (zfs said so)   2 unknown -- logged at level 0
+dataset_presence() {
+    local ds="$1" ru="${2:-}" rh="${3:-}" errf rc why
+    errf=$(mktemp) || { log 0 "mktemp failed while checking whether '$ds' exists"; return 2; }
+    if [ -n "$rh" ]; then
+        ssh -n "${SSH_OPTS[@]}" "$ru@$rh" "zfs list -H -o name -- '$ds'" >/dev/null 2>"$errf"
+    else
+        zfs list -H -o name -- "$ds" >/dev/null 2>"$errf"
+    fi
+    rc=$?
+    why=$(head -c 400 "$errf" | tr '\n' ' '); rm -f "$errf"
+    [ $rc -eq 0 ] && return 0
+    if [ $rc -ne 255 ] && printf '%s' "$why" | grep -q 'dataset does not exist'; then
+        return 1
+    fi
+    log 0 "Could not establish whether '$ds'${rh:+ on $ru@$rh} exists (exit $rc) -- treating this as UNKNOWN, not as a missing dataset.${why:+ Said: $why}"
+    return 2
+}
+
+# REV-20261104-186 F1: the protected-snapshot check before a force-full destroy is a
+# FAIL-CLOSED precondition. It used to be `zfs list ... 2>/dev/null | grep ... || true`,
+# so a listing that failed (ssh 255, a pool error, no zfs in PATH) produced the same
+# empty answer as "nothing reserved by Proxmox VE here", and `zfs destroy -R` followed.
+#   list_protected_snaps <dataset> [remote_user] [remote_host]
+#   0  the answer is known: PROTECTED_SNAPS holds the reserved snapshots (may be empty;
+#      a target that genuinely does not exist has none)
+#   1  the answer is NOT known -- already logged at level 0; the caller must not destroy
+list_protected_snaps() {
+    local ds="$1" ru="${2:-}" rh="${3:-}" out rc errf line
+    PROTECTED_SNAPS=""
+    dataset_presence "$ds" "$ru" "$rh"
+    case $? in
+        0) ;;
+        1) return 0 ;;
+        *) log 0 "Refusing the destructive full transfer: it could not be established whether '$ds' exists, so it cannot be proven that nothing reserved by Proxmox VE would be destroyed."
+           return 1 ;;
+    esac
+    errf=$(mktemp) || { log 0 "Refusing the destructive full transfer: mktemp failed before the protected-snapshot check of '$ds'."; return 1; }
+    if [ -n "$rh" ]; then
+        out=$(ssh -n "${SSH_OPTS[@]}" "$ru@$rh" "zfs list -t snapshot -H -o name -r '$ds'" 2>"$errf")
+        rc=$?
+    else
+        out=$(zfs list -t snapshot -H -o name -r -- "$ds" 2>"$errf")
+        rc=$?
+    fi
+    if [ $rc -ne 0 ]; then
+        local why; why=$(head -c 400 "$errf" | tr '\n' ' ')
+        rm -f "$errf"
+        log 0 "Refusing the destructive full transfer: listing the snapshots under '$ds'${rh:+ on $ru@$rh} failed (exit $rc) -- without that list it cannot be proven that nothing reserved by Proxmox VE (replication/migration/vzdump) would be destroyed.${why:+ zfs/ssh said: $why}"
+        return 1
+    fi
+    rm -f "$errf"
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        case "$line" in
+            "$ds"@*|"$ds"/*@*) ;;
+            *) log 0 "Refusing the destructive full transfer: the snapshot list of '$ds' contains a line that is not a snapshot under it ('$line') -- the answer cannot be trusted."
+               return 1 ;;
+        esac
+    done <<< "$out"
+    PROTECTED_SNAPS=$(printf '%s\n' "$out" | grep -E '@(__replicate_|__migration__|vzdump)') || PROTECTED_SNAPS=""
+    return 0
+}
+
+# REV-20261104-186 F4: the -F collision scan's target -> source mapping. The scan used
+# to take the BASENAME of every line of `zfs list -r` and hang it under the source root,
+# so tgt/a/b was compared with src/b -- on a nested tree a false "collision", and -F
+# upgraded to a destroying full transfer. Every descendant now maps by its COMPLETE
+# path relative to the target root; a line that is not the root or under it is refused.
+#   collision_scan_pairs <src_root> <tgt_root> <listing of zfs list -r tgt_root>
+#   0  COLLISION_PAIRS = "tgt_child<TAB>src_child" lines (root excluded)
+#   1  the listing cannot be trusted (no root, or a line outside it) -- logged
+collision_scan_pairs() {
+    local src="$1" tgt="$2" listing="$3" line rel seen_root=0
+    COLLISION_PAIRS=""
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        if [ "$line" = "$tgt" ]; then seen_root=1; continue; fi
+        case "$line" in
+            "$tgt"/*) rel="${line#"$tgt"/}" ;;
+            *) log 0 "-F collision scan: '$line' is not under the target root '$tgt' -- the listing cannot be trusted"; return 1 ;;
+        esac
+        case "$rel" in
+            ''|/*|*/|*//*) log 0 "-F collision scan: malformed child path '$line' under '$tgt'"; return 1 ;;
+        esac
+        COLLISION_PAIRS+="${line}"$'\t'"${src}/${rel}"$'\n'
+    done <<< "$listing"
+    if [ "$seen_root" -ne 1 ]; then
+        log 0 "-F collision scan: the listing of '$tgt' does not contain the root itself -- not a complete walk"
+        return 1
+    fi
+    return 0
+}
+
 probe_dataset() {
     local dataset="$1" remote_user="${2:-}" remote_host="${3:-}" role="${4:-dataset}"
     REMOTE_PROBE_ERR=""
