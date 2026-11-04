@@ -3381,7 +3381,7 @@ FPO=$(nr_run "$FPA" NR_TREE="$NRTK"); FPW="$(cat "$NR/wt.log")"; FPZ="$(grep '^s
 FPH='--tier=hourly --retain=-h24 --keep= --prune_schedule=21 * * * * --tier=daily'
 FPD='--tier=daily --retain=-h24 --keep= --prune_schedule=21 * * * * --monitor_warn= --monitor_crit='
 if has "$FPO" 'CMD: ' && has "$FPO" '--profile=relacja-pve9b-fastprune' && has "$FPZ" '--from=d7h24 --as=relacja-pve9b-fastprune --hidden --force' \
-   && has "$FPZ" "$FPH" && has "$FPZ" "$FPD" && has "$FPW" 'fastprune 24 h' \
+   && has "$FPZ" "$FPH" && has "$FPZ" "$FPD" && has "$FPW" 'd7h24 -- fastprune 24 h' \
    && has "$SOWO" '--profile=d7h24' && ! has "$SOWO" 'fastprune'; then
     ok "new-relation U136: migawki zdalne, Zaawansowane -> fastprune 24 -- szablon relacja-pve9b-fastprune z d7h24: retain -h24 i czyszczenie co godzine w kazdym szczeblu, monitor zdjety z dobowego, godzinowy zostaje; bez fastprune --profile=d7h24"
 else
