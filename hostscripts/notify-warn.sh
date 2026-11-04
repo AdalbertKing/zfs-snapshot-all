@@ -26,10 +26,15 @@ DETAIL="${2:-}"
 QUEUE="${ZFS_ALERT_QUEUE:-/var/lib/zfs-snapshot-all/alert-queue.log}"
 if [ "${ZFS_WARN_MODE:-daily}" = "immediate" ]; then
     HOST=$(hostname -f 2>/dev/null || hostname)
+    # U158: as notify-fail.sh -- relation and what happened in the subject, meaning in the body.
+    alert_words "$JOB" "$DETAIL"
     {
-        printf "ZFS warning: '%s' na %s o %s.\n" "${JOB}" "${HOST}" "$(date '+%Y-%m-%d %H:%M:%S')"
-        [ -n "$DETAIL" ] && { printf '\nCo zglosil monitor:\n\n'; printf '%s\n' "$DETAIL" | sed 's/^/    /'; }
-    } | mail -s "[ZFS BACKUP] WARNING: ${JOB} na ${HOST}" "${ZFS_ALERT_EMAIL:-root}"
+        printf 'Ostrzezenie: %s%s.\n' "${AW_REL:+$AW_REL -- }" "$AW_WHAT"
+        [ -n "$AW_SAY" ] && printf '%s\n' "$AW_SAY"
+        printf '\nHost: %s   czas: %s\nZadanie: %s\n' "${HOST}" "$(date '+%Y-%m-%d %H:%M:%S')" "${JOB}"
+        [ -n "$DETAIL" ] && { printf '\nSzczegoly:\n\n'; printf '%s\n' "$DETAIL" | sed 's/^/    /'; }
+        printf '\nPelny log: %s/cron.log na %s\n' "$(cd "$(dirname "$0")" && pwd)" "${HOST}"
+    } | alert_mail "[ZFS] ${HOST%%.*}: ${AW_REL:+$AW_REL -- }${AW_WHAT} ($(date '+%d.%m %H:%M'))" "${ZFS_ALERT_EMAIL:-root}"
     exit 0
 fi
 # See notify-fail.sh: keep a recreated queue writable by BOTH accounts.

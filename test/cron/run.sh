@@ -1008,6 +1008,11 @@ check "X8b ...and the END marker still records the real status" \
 : > "$X_N/calls"
 bash "$REPO/zfs-job.sh" "lbl" --log="$X_N/log" --notify="$X_N/notify-fail.sh" -- "$X_N/engine.sh" 1
 check "X9 control: exit 1 still goes to notify-fail.sh only" "FAIL|lbl" "$(cat "$X_N/calls")"
+# X9b (U159): exit 8 -- snapshots taken without quiescing the guest -- is a warning too.
+: > "$X_N/calls"
+bash "$REPO/zfs-job.sh" "lbl" --log="$X_N/log" --notify="$X_N/notify-fail.sh" -- "$X_N/engine.sh" 8
+check "X9b exit 8 calls notify-warn.sh (without quiescing), never notify-fail" \
+      "WARN|lbl -- without quiescing the guest (rc=8)" "$(cat "$X_N/calls")"
 # 2026-10-12: started by a human (run-replicas, F8 on F2) the wrapper hands back the
 # command's status; for cron (variable unset) it stays 0.
 ZFS_JOB_PROPAGATE_RC=1 bash "$REPO/zfs-job.sh" "lbl" --log="$X_N/log" --notify="$X_N/notify-fail.sh" -- "$X_N/engine.sh" 3; x10=$?

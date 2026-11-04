@@ -101,3 +101,98 @@ _restore_env() {
     return 0
 }
 _restore_env
+
+# ---------------------------------------------------------------------------
+# U158 (Dabrowska pve0 2026-11-04): a single alert in the admin's words. The subject
+# was the job's internal label ("profile__relacja-X__lsrc_yearly stale (...)"), with
+# no sentence of what it means, and a monitor counting from the dataset's creation
+# could not be told from a real failure. Plain ASCII: these go out through mail -s
+# where there is no sendmail, as they always have.
+#
+# alert_words <label> <detail> -> AW_REL (relation, or the label's own words), AW_WHAT
+# (what happened, for the subject), AW_SAY (what it means / what to do, one or two lines).
+alert_words() {
+    local k="$1" det="$2" note="" scope="" tier="" word="" t f g m age
+    case "$k" in *" -- "*) note="${k#* -- }"; k="${k%% -- *}" ;; esac
+    case "$k" in *" profile__"*) k="profile__${k#* profile__}" ;; esac
+    case "$k" in *" ("*")") scope="${k##* (}"; scope="${scope%)}"; k="${k% (*}" ;; esac
+    AW_REL=""
+    case "$k" in
+        profile__relacja-*__*) AW_REL="${k#profile__relacja-}"; AW_REL="${AW_REL%__*}"; k="${k##*__}" ;;
+        profile__*__*) k="${k##*__}" ;;
+        # notify_text is "HOST TIER WORD": the host goes when two words remain after it.
+        *" "*" "*) k="${k#* }" ;;
+    esac
+    tier="${k%% *}"; word="${k#* }"
+    [ "$word" = "$k" ] && word=""
+    t="${tier##*_}"
+    case "$t" in
+        hourly) f=godzinowa; g=godzinowej; m=godzinowy ;; daily) f=dobowa; g=dobowej; m=dobowy ;;
+        weekly) f=tygodniowa; g=tygodniowej; m=tygodniowy ;; monthly) f=miesieczna; g=miesiecznej; m=miesieczny ;;
+        yearly|annual) f=roczna; g=rocznej; m=roczny ;; *) f="$t"; g="$t"; m="$t" ;;
+    esac
+    [ -n "$AW_REL" ] || AW_REL="$scope"
+    age=$(printf '%s\n' "$det" | sed -n 's/.*age=\([^ ]*\).*/\1/p' | head -1)
+    case "$note" in
+        "without quiescing the guest"*)
+            AW_WHAT="migawka $f bez zamrozenia goscia"
+            AW_SAY="Migawka jest, ale zrobiona bez zamrozenia goscia -- spojna jak po naglym wylaczeniu.
+Powod jest w logu biegu (ponizej): zwykle agent goscia albo konto bez dostepu do gosci." ;;
+        skipped*)
+            AW_WHAT="bieg pominiety, poprzedni jeszcze trwa"
+            AW_SAY="Poprzedni bieg tego zadania trzymal blokade; ten nie ruszyl. Jednorazowo to nic; stale -- bieg trwa dluzej niz odstep." ;;
+        "guest disks left out"*)
+            AW_WHAT="dyski goscia pominiete"
+            AW_SAY="Czesc gosci ma tu tylko replike pvesr -- ich dyski pominieto, reszta drzewa poszla. Kopie takich gosci rob tam, gdzie dzialaja." ;;
+        *)
+            case "$word" in
+                snapshot) AW_WHAT="migawka $f nie powiodla sie" ;;
+                backup)   AW_WHAT="kopia $f nie powiodla sie" ;;
+                prune)    AW_WHAT="czyszczenie (szczebel $m) nie powiodlo sie" ;;
+                stale)    AW_WHAT="brak swiezej migawki $g${age:+ (najnowsza sprzed $age)}"
+                          case "$det" in *"no snapshot found"*) AW_WHAT="brak jakiejkolwiek migawki $g" ;; esac ;;
+                "getting stale") AW_WHAT="migawka $f spozniona${age:+ (najnowsza sprzed $age)}" ;;
+                "monitor BROKEN") AW_WHAT="monitor nie odpowiada" ;;
+                *) AW_WHAT="${word:-$tier}" ;;
+            esac
+            case "$word" in
+                snapshot|backup|prune)
+                    AW_SAY="Ostatni bieg skonczyl sie bledem; to, co juz bylo, zostaje. Ostatnie linie bledu ponizej.
+Sprawdz: zfs-backup gui -> F2 (przebiegi)." ;;
+                stale|"getting stale")
+                    AW_SAY="Najnowsza migawka tego szczebla jest starsza niz prog -- nowe nie powstaja albo nie docieraja.
+Sprawdz: zfs-backup gui -> F3 (relacja) i F2 (przebiegi)."
+                    case "$det" in *"age measured from dataset creation"*)
+                        AW_SAY="$AW_SAY
+Tego szczebla nie ma jeszcze ani jednej migawki, a monitor liczy wiek od utworzenia datasetu
+(monitor bez startu relacji, relacja sprzed 1.0.6). Jesli szczebel nie mial jeszcze pierwszego
+terminu (np. roczna), to nie jest awaria." ;;
+                    esac ;;
+                "monitor BROKEN")
+                    AW_SAY="Monitor nie mogl sprawdzic wieku migawek (dataset, uprawnienia, polaczenie) -- powod ponizej." ;;
+                *) AW_SAY="" ;;
+            esac ;;
+    esac
+}
+
+# alert_sendmail -> the sendmail binary, or nothing. ZFS_SENDMAIL overrides ("none" = do not use).
+alert_sendmail() {
+    local s="${ZFS_SENDMAIL:-}"
+    [ -n "$s" ] || s=$(command -v sendmail 2>/dev/null)
+    [ -n "$s" ] || { [ -x /usr/sbin/sendmail ] && s=/usr/sbin/sendmail; }
+    [ -n "$s" ] && [ "$s" != none ] && printf '%s' "$s"
+}
+
+# alert_mail <subject> <to> < body -- with a sender the admin recognises ("zfs-backup <host>")
+# when there is a sendmail; plain mail -s otherwise. ASCII subject and body.
+alert_mail() {
+    local sm h
+    sm=$(alert_sendmail)
+    h=$(hostname -f 2>/dev/null || hostname)
+    if [ -n "$sm" ]; then
+        { printf 'From: zfs-backup %s <%s@%s>\nTo: %s\nSubject: %s\nMIME-Version: 1.0\nContent-Type: text/plain; charset=us-ascii\n\n' \
+              "${h%%.*}" "$(id -un 2>/dev/null || echo root)" "$h" "$2" "$1"; cat; } | "$sm" -t -oi
+    else
+        mail -s "$1" "$2"
+    fi
+}
