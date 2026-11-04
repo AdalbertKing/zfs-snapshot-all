@@ -304,8 +304,10 @@ def x(v): return v if v else "-"
 try: d = json.load(sys.stdin)
 except Exception: sys.exit(0)
 for r in d.get("relations", []):
-    print("%s\t%s\t%s\t%s\t%s\t%s" % (x(r.get("name")), x(r.get("peer_host")), x(r.get("client_target")),
-          x(r.get("state")), x(r.get("profile")), x(r.get("local_user"))))' | tr -d '\r' >"$TMPD/rel.all"
+    print("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" % (x(r.get("name")), x(r.get("peer_host")), x(r.get("client_target")),
+          x(r.get("state")), x(r.get("profile")), x(r.get("local_user")),
+          # 7-8 (U136): pasywna? i zrodla -- kopia pasywna na tym hoscie jako archiwum fastprune
+          "1" if str(r.get("passive") or "") == "1" else "0", x(",".join(r.get("sources") or []))))' | tr -d '\r' >"$TMPD/rel.all"
     awk -F'\t' '$4!="removed"' "$TMPD/rel.all" >"$TMPD/rel.tsv"
     awk -F'\t' '$4=="removed"{print $1}' "$TMPD/rel.all" >"$TMPD/rel.removed"
 }
@@ -523,10 +525,10 @@ FREEZE=1
 # sekcji prune), więc zostaje; znacznik idzie na tę stronę, która ma
 # ograniczenie: [drabina] (od X27 zadnego szablonu fabrycznego w tym ksztalcie).
 account_is_flat() {    # <konto: "" = root> -> 0, gdy żywa relacja NA TYM KONCIE używa szablonu płaskiego
-    local want="$1" n p t st pr lu fp
+    local want="$1" n p t st pr lu fp _rest
     [ "$want" != root ] || want=""
     status_tsv
-    while IFS=$'\t' read -r n p t st pr lu; do
+    while IFS=$'\t' read -r n p t st pr lu _rest; do      # _rest: kolumny 7+ (U136), nie konto
         [ "$st" = removed ] && continue
         case "$pr" in ''|-) continue ;; esac
         case "$lu" in ''|-) lu="" ;; esac
@@ -604,6 +606,16 @@ step_passive() {   # U138: kopia lokalna pasywnie, choc na zrodle nie ma jeszcze
 # U136 (właściciel 2026-11-04: Zaawansowane, „jedno pole”): migawki zdalne, źródło bez miejsca.
 # Każdy szczebel wybranego szablonu: retain = -h<N>, czyszczenie co godzinę; monitor zostaje
 # tylko szczeblom częstszym niż N -- wieku rzadszych pilnuje archiwum (kopia pasywna z repliki).
+fp_archives() {   # -> nazwy aktywnych kopii pasywnych na tym hoście, których źródło obejmuje B_ROOT
+    status_tsv
+    local IFS=' '
+    awk -F'\t' -v roots="${B_ROOT[*]}" '
+        $4 == "removed" || $7 != "1" || ($2 != "-" && $2 != "") { next }
+        { n = split($8, s, ","); m = split(roots, r, " ")
+          for (i = 1; i <= n; i++) for (j = 1; j <= m; j++)
+              if (s[i] == r[j] || index(r[j], s[i] "/") == 1 || index(s[i], r[j] "/") == 1) { print $1; next } }' \
+        "$TMPD/rel.all" | sort -u | paste -sd, - | sed 's/,/, /g'
+}
 step_fastprune() { fp_ask "$FASTPRUNE" || return 1; FASTPRUNE="$FP_ANS"; }
 fp_build() {   # FASTPRUNE -> ukryty szablon FP_P (kopia PROFILE); 1 = błąd (okno pokazane)
     if [ -z "$FASTPRUNE" ] || [ "$MODE" != snaponly ]; then
@@ -1132,7 +1144,14 @@ summary_text() {
     echo "$(Tv 'Sposób:  $(mode_words).   Nazwa: $RNAME.   Konto: ${a:-root}.' '$(mode_words)' "$(mode_words)" '$RNAME' "$RNAME" '${a:-root}' "${a:-root}")"
     # W6 (kampania 2026-11-03): kopia pasywna niczego nie zamraża -- opis szablonu bez "zamraża".
     echo "$(T 'Szablon:') $( [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ] && echo "$(Tv 'Ręcznie -- $PROFILE' '$PROFILE' "$PROFILE")" || echo "$PROFILE")$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" -v pas="$( { is_passive_copy || passive_forced; } && echo 1)" -v fp="$([ "$MODE" = snaponly ] && [ -n "$FASTPRUNE" ] && echo 1)" '$1==n{print "  (" $3 (fp ? "" : "; " $2) (pas ? "" : "; " $4) ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "$(Tv '; u źródła: $SRCPROF' '$SRCPROF' "$SRCPROF")")"
-    [ "$MODE" = snaponly ] && [ -n "$FASTPRUNE" ] && echo "$(Tv 'Źródło: fastprune $FASTPRUNE h -- każda migawka żyje tyle godzin, czyszczenie co godzinę; bez monitorów szczebli rzadszych niż $FASTPRUNE h -- ich wiek pilnuje archiwum. Bez kopii pasywnej na kolektorze starszych migawek nie będzie nigdzie.' '$FASTPRUNE' "$FASTPRUNE")"
+    if [ "$MODE" = snaponly ] && [ -n "$FASTPRUNE" ]; then
+        echo "$(Tv 'Źródło: fastprune $FASTPRUNE h -- każda migawka żyje tyle godzin, czyszczenie co godzinę; bez monitorów szczebli rzadszych niż $FASTPRUNE h -- ich wiek pilnuje archiwum. Bez kopii pasywnej na kolektorze starszych migawek nie będzie nigdzie.' '$FASTPRUNE' "$FASTPRUNE")"
+        # Warunek uczciwości (projekt fastprune): archiwum = kopia pasywna NA TYM HOŚCIE, której
+        # źródło obejmuje te datasety (replika pvesr ląduje pod tą samą nazwą).
+        local _arc; _arc="$(fp_archives)"
+        if [ -n "$_arc" ]; then echo "$(Tv 'Archiwum na tym hoście: $_arc (kopia pasywna).' '$_arc' "$_arc")"
+        else echo "$(Tv 'UWAGA: na tym hoście NIE MA kopii pasywnej z ${B_ROOT[*]} -- załóż ją (kopia lokalna, Pasywnie), zanim migawki starsze niż $FASTPRUNE h znikną.' '${B_ROOT[*]}' "${B_ROOT[*]}" '$FASTPRUNE' "$FASTPRUNE")"; fi
+    fi
     if [ "$MODE" = snaponly ] || [ "$NOCOPY" -eq 1 ]; then :    # bez kopii: prefiksy nie dotyczą
     elif [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
     else echo "$(T 'Pomijane migawki: żadne (kopiowane wszystkie).')"; fi

@@ -3424,6 +3424,23 @@ FPA="0${T}snaponly
 0${T}
 "
 FPO=$(nr_run "$FPA" NR_TREE="$NRTK"); FPW="$(cat "$NR/wt.log")"; FPZ="$(grep '^save-profile ' "$NR/zb.log")"
+# Archiwum (warunek uczciwosci): bez kopii pasywnej z hdd/test-kreator na tym hoscie plan to mowi;
+# z nia (rekord: lokalna, passive=1, zrodlo hdd -- obejmuje hdd/test-kreator) -- nazywa ja.
+FPST="$(mktemp)"
+"$PY" - "$P10/status.json" "$FPST" <<'PYEOF'
+import sys, json
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["relations"].append({"name": "arch-hdd", "state": "active", "peer_host": "", "client_target": "hdd/backups",
+                       "passive": "1", "sources": ["hdd"], "profile": "passive-flat"})
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+FPO2=$(nr_run "$FPA" NR_TREE="$NRTK" NR_STATUS="$FPST"); FPW2="$(cat "$NR/wt.log")"; rm -f "$FPST"
+if has "$FPW" 'UWAGA: na tym hoście NIE MA kopii pasywnej z hdd/test-kreator' && ! has "$FPW" 'Archiwum na tym hoście:' \
+   && has "$FPW2" 'Archiwum na tym hoście: arch-hdd (kopia pasywna).' && ! has "$FPW2" 'NIE MA kopii pasywnej'; then
+    ok "new-relation U136: plan fastprune mowi, czy na tym hoscie jest archiwum (kopia pasywna obejmujaca datasety) -- nazywa ja albo ostrzega"
+else
+    bad "new-relation U136: archiwum w planie" "$(printf '%s' "$FPW" | grep -oE '(UWAGA: na tym|Archiwum na tym)[^~]{0,120}' | head -2)" "$(printf '%s' "$FPW2" | grep -oE '(UWAGA: na tym|Archiwum na tym)[^~]{0,120}' | head -2)"
+fi
 FPH='--tier=hourly --retain=-h24 --keep= --prune_schedule=21 * * * * --tier=daily'
 FPD='--tier=daily --retain=-h24 --keep= --prune_schedule=21 * * * * --monitor_warn= --monitor_crit='
 if has "$FPO" 'CMD: ' && has "$FPO" '--profile=relacja-pve9b-fastprune' && has "$FPZ" '--from=d7h24 --as=relacja-pve9b-fastprune --hidden --force' \
