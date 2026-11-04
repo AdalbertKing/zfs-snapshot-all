@@ -1147,7 +1147,7 @@ summary_text() {
     # W6 (kampania 2026-11-03): kopia pasywna niczego nie zamraża -- opis szablonu bez "zamraża".
     echo "$(T 'Szablon:') $( [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ] && echo "$(Tv 'Ręcznie -- $PROFILE' '$PROFILE' "$PROFILE")" || echo "$PROFILE")$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" -v pas="$( { is_passive_copy || passive_forced; } && echo 1)" -v fp="$([ "$MODE" = snaponly ] && [ -n "$FASTPRUNE" ] && echo 1)" '$1==n{print "  (" $3 (fp ? "" : "; " $2) (pas ? "" : "; " $4) ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "$(Tv '; u źródła: $SRCPROF' '$SRCPROF' "$SRCPROF")")"
     if [ "$MODE" = snaponly ] && [ -n "$FASTPRUNE" ]; then
-        echo "$(Tv 'Źródło: fastprune $FASTPRUNE h -- każda migawka żyje tyle godzin, czyszczenie co godzinę; bez monitorów szczebli rzadszych niż $FASTPRUNE h -- ich wiek pilnuje archiwum. Bez kopii pasywnej na kolektorze starszych migawek nie będzie nigdzie.' '$FASTPRUNE' "$FASTPRUNE")"
+        echo "$(Tv 'Źródło: krótka retencja $FASTPRUNE h -- każda migawka żyje tyle godzin, czyszczenie co godzinę; bez monitorów szczebli rzadszych niż $FASTPRUNE h -- ich wiek pilnuje archiwum. Bez kopii pasywnej na kolektorze starszych migawek nie będzie nigdzie.' '$FASTPRUNE' "$FASTPRUNE")"
         # Warunek uczciwości (projekt fastprune): archiwum = kopia pasywna NA TYM HOŚCIE, której
         # źródło obejmuje te datasety (replika pvesr ląduje pod tą samą nazwą).
         local _arc; _arc="$(fp_archives)"
@@ -1278,7 +1278,7 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
           if [ "$NOCOPY" -eq 1 ]; then echo "$(Tv 'Cel: brak (same migawki).  Szablon: $PROFILE.' '$PROFILE' "$PROFILE")"
           # Kampania 2026-10-22: migawki zdalne dostawały zdanie lustra ("ta sama ścieżka").
           elif [ "$MODE" = snaponly ]; then echo "$(Tv 'Bez kopii: migawki na $HOST, jego datasety.  Szablon: $PROFILE.' '$HOST' "$(hostw)" '$PROFILE' "$PROFILE")"
-               [ -n "$FP_P" ] && echo "$(Tv 'Fastprune $FASTPRUNE h: szablon relacji $FP_P (kopia $PROFILE).' '$FASTPRUNE' "$FASTPRUNE" '$FP_P' "$FP_P" '$PROFILE' "$PROFILE")"
+               [ -n "$FP_P" ] && echo "$(Tv 'Krótka retencja $FASTPRUNE h: szablon relacji $FP_P (kopia $PROFILE).' '$FASTPRUNE' "$FASTPRUNE" '$FP_P' "$FP_P" '$PROFILE' "$PROFILE")"
           else echo "$(T 'Cel:') ${TARGET:-$(T '(lustro: ta sama ścieżka)')}.  $(Tv 'Trzyma tutaj: $PROFILE.  U źródła:' '$PROFILE' "$PROFILE") $(if is_passive_copy; then T 'nic (pasywnie)'; else printf '%s' "${SRCPROF:-$(T 'jak tutaj')}"; fi)."; fi
           if [ "$MODE" = snaponly ] || [ "$NOCOPY" -eq 1 ]; then :
           elif [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
@@ -1407,7 +1407,7 @@ field_value() {   # <pole> -> wartość na karcie ("" = jeszcze nie ustawione)
             if [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ]; then echo "$(T 'własne (tabela szczebli)')"; return; fi
             a="$(awk -F'\t' -v n="$PROFILE" '$1==n{print $2; exit}' "$TMPD/prof.tsv" 2>/dev/null)"
             # U136: z fastprune szablon daje szczeble, nie czas życia -- "trzyma 24 h, 7 dni" byłoby nieprawdą
-            [ "$MODE" = snaponly ] && [ -n "$FASTPRUNE" ] && a="$(Tv 'fastprune $FASTPRUNE h' '$FASTPRUNE' "$FASTPRUNE")"
+            [ "$MODE" = snaponly ] && [ -n "$FASTPRUNE" ] && a="$(Tv 'krótka retencja $FASTPRUNE h' '$FASTPRUNE' "$FASTPRUNE")"
             echo "$PROFILE${a:+ -- $a}" ;;
         srcret) case "$VIS" in *" srcret "*) src_words ;; esac ;;
         chain)  case "$(chain_ans)" in
@@ -1482,7 +1482,7 @@ CARD_NAMES_OF() {
         mode) echo "$(T 'Rodzaj')" ;; host) echo "$(T 'Źródło')" ;; ds) echo "$(T 'Datasety')" ;; target) echo "$(T 'Cel')" ;;
         profile) echo "$(T 'Harmonogram')" ;; srcret) echo "$(T 'Retencja źródła')" ;; silnik) echo "$(T 'Silnik')" ;;
         chain) echo "$(T 'Migawki na źródle')" ;;
-        name) echo "$(T 'Nazwa')" ;; acct) echo "$(T 'Konto')" ;; passive) echo "$(T 'Pasywnie')" ;; fastprune) echo "$(T 'Fastprune')" ;; extra) echo "$(T 'Dodatkowe')" ;;
+        name) echo "$(T 'Nazwa')" ;; acct) echo "$(T 'Konto')" ;; passive) echo "$(T 'Pasywnie')" ;; fastprune) echo "$(T 'Krótka retencja źródła')" ;; extra) echo "$(T 'Dodatkowe')" ;;
     esac
 }
 
@@ -1526,12 +1526,14 @@ wz_adv() {   # Zaawansowane: dodatki i pasywnie; wraca do podsumowania
         WZ_SN=""
         CARD_TAGS=(); CARD_NAMES=(); CARD_VALUES=(); CARD_FIXED=()
         field_applies passive && { CARD_TAGS+=(passive); CARD_NAMES+=("$(T 'Pasywnie')"); CARD_VALUES+=("$(field_value passive)"); CARD_FIXED+=(0); }
-        field_applies fastprune && { CARD_TAGS+=(fastprune); CARD_NAMES+=("$(T 'Fastprune')"); CARD_VALUES+=("$(field_value fastprune)"); CARD_FIXED+=(0); }
+        field_applies fastprune && { CARD_TAGS+=(fastprune); CARD_NAMES+=("$(T 'Krótka retencja źródła')"); CARD_VALUES+=("$(field_value fastprune)"); CARD_FIXED+=(0); }
         field_applies extra && { CARD_TAGS+=(extra); CARD_NAMES+=("$(T 'Dodatkowe')"); CARD_VALUES+=("$(field_value extra)"); CARD_FIXED+=(0); }
         [ "${#CARD_TAGS[@]}" -gt 0 ] || return 0
         [ -n "$pick" ] || pick="${CARD_TAGS[0]}"
         CARD_ACT_TAGS=(); CARD_ACT_LABELS=()
-        card_menu "$(T 'Nowa relacja: zaawansowane')" "$(T 'Rzeczy, których zwykle się nie zmienia.')" "$pick" "$(T Wstecz)" || return 0
+        # U145 (właściciel 2026-11-04: „ekran nieintuicyjny”): wyjście z tego okna NIE cofa zmian --
+        # przycisk mówi „Gotowe”, a opis mówi, co tu jest.
+        card_menu "$(T 'Nowa relacja: zaawansowane')" "$(T 'Prawa i zamrażanie na źródle, tryb pasywny, krótka retencja źródła -- zwykle bez zmian.')" "$pick" "$(T Gotowe)" || return 0
         pick="$WT_OUT"
         case "$pick" in passive|fastprune|extra) run_field "$pick" ;; *) return 0 ;; esac
     done
@@ -1552,7 +1554,7 @@ while :; do
     done
     CARD_TAGS+=(adv); CARD_NAMES+=("$(T 'Zaawansowane')")
     a=""; field_applies passive && a="$(T 'pasywnie:') $(field_value passive)"
-    field_applies fastprune && [ -n "$FASTPRUNE" ] && a="$(Tv 'fastprune $FASTPRUNE h' '$FASTPRUNE' "$FASTPRUNE")"
+    field_applies fastprune && [ -n "$FASTPRUNE" ] && a="$(Tv 'krótka retencja $FASTPRUNE h' '$FASTPRUNE' "$FASTPRUNE")"
     [ "$NOCOPY" -eq 0 ] && a="${a:+$a; }$(field_value extra)"
     CARD_VALUES+=("$a"); CARD_FIXED+=(0)
     miss="$(missing_fields)"

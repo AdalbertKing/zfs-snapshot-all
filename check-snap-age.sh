@@ -114,7 +114,7 @@ set -o pipefail
 #   ./check-snap-age.sh "rpool/data/vm-106-disk-0" "automated_hourly" 90m 3h
 #   ./check-snap-age.sh -R "hdd/backups/pve1" "automated_daily" 30h 48h
 
-VERSION='v2.8'
+VERSION='v2.9'
 
 EXIT_OK=0
 EXIT_WARNING=1
@@ -496,9 +496,18 @@ check_one() {
         [ "$_skip" = true ] && continue
         [[ "$snapname" == "${PATTERN}"* ]] && newest="$line"
     done <<< "$out"
+    [ -n "$newest" ] && FAM_SEEN=true
 
     local from_creation=false detail
     if [ -z "$newest" ]; then
+        # U164 (v2.9, Dabrowska pve0 2026-11-04): an -R root with snapshots, none of this
+        # family (a marker, a pvesr leftover), is a container like a bare one when the family
+        # lives below it. Deferred: the walk decides, and the root is held to the explicit
+        # check only if no snapshot of the family turns up anywhere in the tree.
+        if [ "$RECURSE" = true ] && [ "$explicit" != true ] && [ "$ds" = "${CUR_ROOT:-}" ] && [ "$any_snap" = true ]; then
+            ROOT_NOFAM=true
+            return
+        fi
         if [ "$any_snap" = false ] && [ "$explicit" != true ]; then
             [ "$VERBOSE" = true ] && echo "SKIP dataset=$shown -- no snapshots at all (not an explicit target, likely a container node)" >&2
             return
@@ -590,7 +599,7 @@ for entry in "${DATASETS[@]}"; do
     parse_remote "$entry"
     ru="$R_USER"; rh="$R_HOST"; ds="$R_DS"
     if [ "$RECURSE" = true ]; then
-        WALK_SNAP=false; NOT_YET=false
+        WALK_SNAP=false; NOT_YET=false; FAM_SEEN=false; ROOT_NOFAM=false; CUR_ROOT="$ds"
         check_one "$ru" "$rh" "$ds" false
         [ "$NOT_YET" = true ] && continue
         out="$(zread "$ru" "$rh" list -H -o name -t filesystem,volume -r "$ds" 2>/dev/null)"; rc=$?
@@ -620,6 +629,16 @@ for entry in "${DATASETS[@]}"; do
         # -S and not one snapshot anywhere in the tree: the relationship has not run yet
         # (or never did). The root is held to the explicit check, measured from the start.
         [ -n "$SINCE" ] && [ "$WALK_SNAP" = false ] && check_one "$ru" "$rh" "$ds" true
+        # U164: the deferred root -- no snapshot of the family anywhere in the tree, so the
+        # root answers for it (as before v2.9); otherwise it was a container, said under -v.
+        if [ "$ROOT_NOFAM" = true ]; then
+            if [ "$FAM_SEEN" = false ]; then
+                check_one "$ru" "$rh" "$ds" true
+            else
+                [ "$VERBOSE" = true ] && echo "SKIP dataset=${rh:+$ru@$rh:}$ds -- no snapshot of this family here, the family lives below (a container)" >&2
+            fi
+        fi
+        CUR_ROOT=""
     else
         check_one "$ru" "$rh" "$ds" true
     fi
