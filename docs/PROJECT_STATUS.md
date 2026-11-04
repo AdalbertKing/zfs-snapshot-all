@@ -21,7 +21,7 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **Krok „Dokąd” i drzewo datasetów w układzie F2 (2026-11-04, gałąź `feat/drzewo-f2`, niewydane; U147, U155,
+- **Krok „Dokąd” i drzewo datasetów w układzie F2 (2026-11-04, #1063, wydane w 1.0.10; U147, U155,
   U156).** Makieta zaakceptowana przez właściciela („Tak, koduj”).
   - `tui/tree.py`: od 110 kolumn terminala okno wygląda jak F2 -- tabela w ramce ╔═ z kolumnami (Użyte, Wolne,
     Migawki, Uwagi), wcięcie „│”, panel faktów o wierszu z prawej, zakładka na dole. Fakty i zakładkę liczy
@@ -39,7 +39,7 @@
     klon gałęzi w /tmp, bez instalacji): kursor sam na `gwlive/replica` z kopią `hdd/archive`, „PRZYROSTOWO,
     wszystkie 4”; na `hdd/backups` -- „PEŁNA” i ostrzeżenie; Ins pyta o nazwę, Wstecz wraca do drzewa.
 
-- **Maile admina, wariant A (2026-11-04, gałąź `feat/maile-a`, niewydane).** Wybór właściciela z dwóch makiet:
+- **Maile admina, wariant A (2026-11-04, #1062, wydane w 1.0.10).** Wybór właściciela z dwóch makiet:
   tabela relacji bez kolumny rodzaju (STAN mówi, ile zadań relacji ma błąd), a „DO ZROBIENIA” wymienia zadania
   z błędem z obiektem (źródła -> cel; nazwy datasetów, rodzeństwo skrócone do ostatniego członu) i PRZYCZYNĄ z `cron.log` (stderr, który `zfs-job.sh`
   dopisuje przed linią END) -- także gdy alerty idą od razu i kolejka jest pusta. Przy rc=8 przyczyną jest pierwsza
@@ -48,8 +48,8 @@
   Załącznik HTML ma kolumnę „obiekt”. Testy (pve9, `59f9c3d3`): `test/alertmail` 185/1 (ten sam środowiskowy FAIL
   co na `main`); kontrola negatywna: test U160 pada na `alert-digest.sh` z `main`. Na żywo na pve11 (kopia w /tmp,
   sendmail zastąpiony plikiem): przyczyna pve10 i powód rc=8 z prawdziwego `cron.log`.
-- **Maile admina (2026-11-04, gałąź `feat/maile`, scalone #1061, niewydane; U157-U160).**
-  - Raport dzienny (`hostscripts/alert-digest.sh`): tabela RELACJI (nazwa, rodzaj, najnowsza, stan słowami
+- **Maile admina (2026-11-04, gałąź `feat/maile`, scalone #1061, wydane w 1.0.10; U157-U160).**
+  - Raport dzienny (`hostscripts/alert-digest.sh`): tabela RELACJI (nazwa, rodzaj -- usunięty w wariancie A, najnowsza, stan słowami
     GUI, błędy na górze), „DO ZROBIENIA” tylko gdy coś jest (co, kiedy, rc, ostatnia linia błędu z kolejki,
     gdzie sprawdzić), w nagłówku wszystkie pule hosta (DEGRADED albo >= 80% także w DO ZROBIENIA), jedna linia
     „Tydzień”, bez usuniętych relacji. Temat: „OK, N relacji” albo „K z N relacji wymaga uwagi”, a pula
@@ -72,7 +72,7 @@
     Na żywo na pve11 (kopia skryptu w /tmp, sendmail zastąpiony plikiem): treść, temat i załącznik z prawdziwych
     danych hosta; do skrzynki właściciela nic nie wysłano.
 
-- **Paczka po wdrożeniu Dąbrowskiej (2026-11-04, gałąź `feat/paczka-x`, niewydane).**
+- **Paczka po wdrożeniu Dąbrowskiej (2026-11-04, #1060, wydane w 1.0.10).**
   - U164: `check-snap-age.sh` v2.9 -- korzeń `-R` z migawką innej rodziny (np. znacznik łańcucha) nad
     dziećmi z rodziną jest kontenerem; bez rodziny nigdzie w drzewie korzeń odpowiada jak dotąd.
     Tak archiwum na pve0 „czekało” godzinami. Test: `test/monitor` S10 + dwie kontrole.
@@ -89,11 +89,10 @@
   - Testy (pve9, `74e8f1c0`): `test/monitor` 120/0, `test/tui` 477/0, `test/localbackup` (tester) 184/0,
     `test/zfsbackup` 1067/6 (te same 6 środowiskowych co na main: mirrorguard x2, rev175 x4). Kontrole
     negatywne przeciw `main`: S10 (U164), „delrel U154” i „U161” padają na main.
-  - Nadal otwarte z tej listy: maile (U157/U158/U160; w nich U159: raport dzienny pokazuje rc=8 z pve11
-    jako „PADŁ”, a to bieg bez zamrożenia gościa, migawka `_crash_`), drzewo
-    celu (U147/U155/U156, najpierw makieta), obserwacja U149, decyzja właściciela U148.
+  - Z tej listy zostały: obserwacja U149 i decyzja właściciela U148. Maile (U157-U160) i drzewo celu
+    (U147/U155/U156) weszły później tego dnia i są w 1.0.10.
 
-- **REV-20261104-186 (2026-11-04, gałąź `fix/rev186-delsnaps`, niewydane): błędy, które udawały
+- **REV-20261104-186 (2026-11-04, #1055, wydane w 1.0.10): błędy, które udawały
   sukces w silnikach.** F1 (P1): lista migawek zarezerwowanych przez Proxmox VE przed niszczącą pełną
   kopią jest warunkiem „fail-closed” (`list_protected_snaps`); F4 (P1): skan kolizji `-F` mapuje
   potomków po pełnej ścieżce (`collision_scan_pairs`), niepełny skan nie podnosi do pełnej kopii;
@@ -102,10 +101,15 @@
   kasuje przy niepełnej liście. pve9: `test/snapsend` 329/0, `test/delsnaps` 94/0, `test/remote` 145/0;
   kontrole negatywne na silnikach z `main` padają (34 i 11 przypadków). Kampania `test/remote` z konta delegowanego
   `zfsbackup` (pve9 -> pve9b): 145/0, jeden SKIP (G3, środowisko).
-- **Wydanie bieżące: v1.0.7 (zfsbackup `1ff4177`), na wszystkich hostach produkcji i labu od
-  2026-11-03 (sprawdzone po :15, także klony kont `zfsbackup` na 11.10 i 11.11).** W dev `main`, niewydane:
-  paczka U (PR #1045) i U136 (#1046). Lab posprzątany 2026-11-04: relacje i datasety testowe U137/U138/U141
-  usunięte z pve11, pve9 i pve9b; pve11 wrócił na wydanie bez wstrzymania aktualizacji.
+- **Wydanie bieżące: v1.0.10 (zfsbackup `b48ae26`, tag `v1.0.10`, dev `4b716aa8`), na wszystkich ośmiu hostach
+  od 2026-11-04 ~22:25 CET (root i klony kont `zfsbackup`, sprawdzone `--version` i `git log` na każdym).**
+  Kolejność: wstrzymanie aktualizacji na produkcji (pve2/pve1 Metropolis, pve0/pve1 Dąbrowska), lab (pve9, pve9b,
+  pve10, pve11) na dev `main` `99904b40` z wstrzymaniem i `deploy.sh`, krótki test (monitor v2.9 wszędzie, GUI
+  rysuje pięć ekranów na pve10), publikacja, lab z powrotem na wydanie (`lab-dev.sh off`, `--resume-updates`,
+  `deploy.sh` rc 0, godzinna aktualizacja „already at”), wznowienie produkcji (aktualizacja od razu, apply bez
+  FATAL, nowe `alert-digest.sh` i `alert-env.sh` u roota i kont). W 1.0.10: #1051, #1053, #1055 (REV-186),
+  #1060, #1061, #1062, #1063, #1065 (CHANGELOG). Pierwszy prawdziwy mail dzienny w nowym układzie spodziewany 05.11 o 07:00 (jeszcze nie widziany).
+  Nie sprawdzone na żywo: przeglądanie kopii i odzysk w układzie F2, U161 na kolektorze z pvesr.
 - **Dąbrowska 2026-11-04 (1.0.9):** archiwum `archiwum-pve1` (kopia pasywna pve0 `rpool/data` ->
   `hdd/backups/pve1`, szablon `full`, root) zainstalowane; pierwsza kopia przyrostowa od 1 listopada 13:01
   rc=0. Relacja `pve1` (migawki zdalne, konto `zfsbackup`) założona od nowa ze zwykłą rodziną
