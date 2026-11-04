@@ -15083,8 +15083,9 @@ SOURCE_REPO_DIR="${SOURCE_REPO_DIR:-/root/scripts/zfs-snapshot-all}"
 
 # remote_apt_install_cmd <package> -> a command for a remote root shell
 #
-# The same tries as deploy.sh's apt_install_with_fallback: plain install, then
-# apt-get update and once more, then -- when apt answered 404 -- the newest
+# The tries of deploy.sh's apt_install_with_fallback except its
+# --no-install-recommends step: plain install, then apt-get update and once
+# more, then -- when apt answered 404 -- the newest
 # version from a non-security origin (first install on Debian 11, 2026-11-04:
 # security.debian.org no longer served the bullseye debs the lists named; the
 # main-archive version installed). Runs in a subshell, so `exit` ends only it;

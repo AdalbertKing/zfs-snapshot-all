@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ed76f8c5b8aabb5c -->
+<!-- status-covers-digest: 0e4d078b7398eac8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,30 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Pierwsza instalacja, trzecia paczka (2026-11-05, `e31a6e80`, `49089baf`, `--uninstall`; NIEWYDANE).**
+  (A) apt i 404: na Debianie 11 listy pakietów wskazywały pakiety .deb z bullseye-security (git deb11u5, sudo
+  deb11u4), których security.debian.org już nie podawał, więc każda próba apt kończyła się błędem.
+  Ten sam pakiet z głównego archiwum instalował się bez problemu. `apt_install_with_fallback` w `deploy.sh` i zdalna instalacja
+  (`remote_apt_install_cmd`: git w `prepare-source`, sudo przed pierwszą zmianą przebiegu `--grant-quiesce`) robią przy 404 jeszcze jedną
+  próbę: najnowsza wersja spoza archiwum security, z komunikatem. Gdy wszystko zawiedzie, `check_dep`
+  podaje ostatnią linię `E:` z apt zamiast ją gubić. sudo jest w fazie zależności `deploy.sh`, więc
+  `--join` instaluje je przed pierwszą zmianą (zależność opcjonalna: nieudana instalacja to ostrzeżenie). Skutek uboczny: `--check-only` na hoście bez sudo
+  zgłasza `[missing] sudo`. (B) Delegacja kolektora (#12 z listy uwag pierwszej instalacji), ocena: grant fazy 8g na
+  `rpool/data rpool/ROOT/pve-1` to prawo konta delegowanego do WŁASNYCH datasetów hosta; pętla grantu nie
+  sprawdza roli hosta. Cel kopii dostaje grant osobno, per relacja (`--pair --local-user`, `activate`). Zachowanie
+  bez zmian, a linia `grant-datasets: using the list recorded` mówi teraz, czyje to datasety. (C)
+  `deploy.sh --uninstall [--yes]`: odwrotność zwykłego wdrożenia. Usuwa dwa bloki crona narzędzia (root i
+  konta delegowane), konto delegowane rozpoznane po GECOS z `useradd` (granty zfs, zgoda na
+  zamrażanie, logrotate, `userdel -r`), siedem skryptów hosta z `/root/scripts` (po nazwie), link `zfs-backup`, konfigurację alertów i
+  logrotate, bramkę par, helper zamrażania, `/etc/zfs-snapshot-all`, `/var/lib/zfs-snapshot-all`,
+  stan aktualizacji i pauzy, pusty katalog kluczy par oraz grupę `zfsalert`, gdy nie ma już członków. Bez `--yes`
+  i bez blokad pokazuje tylko plan. Relacji nie rozbiera: dopóki na hoście jest żywy rekord relacji, manifest pary albo
+  konto peera, wypisuje czasownik dla każdego (`delete-relation`, `--leave`, `--unpair`) i odmawia
+  wykonania (rc 1, także bez `--yes`). Zostają datasety, migawki, pakiety, `known_hosts` i checkout. Testy: test/zfsbackup
+  „apt 404” x2, test/joinmanifest „--uninstall”, czerwone na origin/main. NA ŻYWO: plan
+  `--uninstall` na pve11 (odmowa z listą relacji, crontab bez zmian); `deploy.sh --check-only` z drzewa gałęzi na
+  pve10 i pve11 (oba z kontem delegowanym): `[ok] sudo`, jedyny problem to bramka par różna od checkoutu (hosty na 1.0.10). NIE na żywo: `--uninstall --yes`
+  na prawdziwym hoście i instalacja apt przy prawdziwym 404.
 - **Pierwsza instalacja, druga paczka (2026-11-04, `41a7ce62` + `77e758be`, NIEWYDANE).** Też z pierwszej
   instalacji pary PVE 7.4. (A) `--grant-quiesce` na źródle bez sudo (domyślny Proxmox go nie ma):
   `deploy.sh` instalował sudo dopiero w `--commit-scope`, po joinie i grancie replikacji, apt tam
