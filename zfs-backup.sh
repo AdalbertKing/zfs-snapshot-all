@@ -9590,18 +9590,21 @@ Taking over older jobs (a v4 config written manually): remove their sections fir
             _pvi="${_pv%%$'\t'*}"; _pvids="${_pv#*$'\t'}"
             local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
             relblock_load "$cand" "$lb_name"
-            for _t in "${RB_TIERS[@]}"; do
-                _w=$(rb_get "$_t" target monitor_warn) || continue
-                _c=$(rb_get "$_t" target monitor_crit) || continue
+            # Both sides: the source of a passive copy IS the pvesr replica, so its own
+            # monitor (on the same tier) runs on the same clock.
+            local _sd
+            for _t in "${RB_TIERS[@]}"; do for _sd in target source; do
+                _w=$(rb_get "$_t" "$_sd" monitor_warn) || continue
+                _c=$(rb_get "$_t" "$_sd" monitor_crit) || continue
                 _ws=$(dur_seconds "$_w"); _cs=$(dur_seconds "$_c")
                 [ -n "$_ws" ] && [ -n "$_cs" ] || continue
                 _nw="$_w"; _nc="$_c"
                 [ "$_ws" -lt $(( 2 * _pvi )) ] && _nw=$(seconds_dur $(( 2 * _pvi )))
                 [ "$_cs" -lt $(( 3 * _pvi )) ] && _nc=$(seconds_dur $(( 3 * _pvi )))
                 [ "$_nw $_nc" = "$_w $_c" ] && continue
-                rb_set "$_t" target monitor_warn "$_nw"; rb_set "$_t" target monitor_crit "$_nc"
-                _pvch+=("$_t: $_w/$_c -> $_nw/$_nc")
-            done
+                rb_set "$_t" "$_sd" monitor_warn "$_nw"; rb_set "$_t" "$_sd" monitor_crit "$_nc"
+                _pvch+=("$_t ($_sd): $_w/$_c -> $_nw/$_nc")
+            done; done
             if [ "${#_pvch[@]}" -gt 0 ]; then
                 relblock_write "$cand" "$lb_name" || die "local-backup: could not write the [relation:$lb_name] block of the candidate"
             fi

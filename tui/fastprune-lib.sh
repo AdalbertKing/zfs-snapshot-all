@@ -16,7 +16,7 @@ fp_ask() {   # <obecne N albo ""> -> FP_ANS (N albo "" = wyłączone); rc 1 = Ws
     local v="$1"
     while :; do
         geom
-        wt --title "$(T 'Krótka retencja źródła')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
+        wt --title "$(T 'Szybkie czyszczenie źródła (fastprune)')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
            --inputbox "$(T 'Ile godzin żyje na źródle każda migawka (wszystkie szczeble). Puste = wyłączone.\nCzyszczenie co godzinę; monitor zostaje tylko szczeblom częstszym niż ta liczba --\nwieku rzadszych pilnuje archiwum (kopia pasywna z repliki na kolektorze).')" 12 "$W" "$v" || return 1
         v="${WT_OUT// /}"
         case "$v" in

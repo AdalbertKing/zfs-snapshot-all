@@ -13906,16 +13906,16 @@ printf '#!/bin/sh\ncase "$*" in *"-L e"*) echo "4242 bash /x/snapget.sh -m autom
 printf '#!/bin/sh\necho "$@" >>"%s"\nexit 0\n' "$DR/zfs154.calls" > "$DR/pg/zfs"
 chmod +x "$DR/pg/pgrep" "$DR/pg/zfs"
 : > "$DR/zfs154.calls"
-U154Y=$( PATH="$DR/pg:$PATH" dr_run e --destroy-copies --yes 2>&1 ); u154y=$?
+U154Y=$( PATH="$DR/pg:$PATH" dr_run e --destroy-copies --yes 2>&1 ); u154y=$?; U154E=$(cat "$DR/err" 2>/dev/null)
 U154P=$( PATH="$DR/pg:$PATH" dr_run e 2>&1 )
 U154C=$( dr_run e 2>&1 )
-if [ "$u154y" -ne 0 ] && printf '%s%s' "$U154Y" "$(cat "$DR/err" 2>/dev/null)" | grep -q "has a run in progress" \
+if [ "$u154y" -ne 0 ] && printf '%s%s' "$U154Y" "$U154E" | grep -q "has a run in progress" \
    && [ -f "$DR/clients/e.conf" ] && [ ! -s "$DR/zfs154.calls" ] \
    && printf '%s' "$U154P" | grep -q "is in progress RIGHT NOW" && printf '%s' "$U154P" | grep -q "4242" \
    && ! printf '%s' "$U154C" | grep -q "in progress RIGHT NOW"; then
     ok "delrel U154: a run of the relationship in flight -- --yes refused, record kept, no zfs call; the plan names the run; nothing running -> no note"
 else
-    bad "delrel U154: running run" "rc=$u154y" "$U154Y" "plan: $U154P" "control: $U154C" "zfs: $(cat "$DR/zfs154.calls")"
+    bad "delrel U154: running run" "rc=$u154y" "$U154Y" "err: $U154E" "plan: $U154P" "control: $U154C" "zfs: $(cat "$DR/zfs154.calls")"
 fi
 # REV-144: THE RECORD IS THE RETRY STATE. A source half that did not complete used to
 # be logged as rc=1 and then walked straight into `--purge` -- which deleted the peer,

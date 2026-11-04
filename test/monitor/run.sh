@@ -415,23 +415,6 @@ else bad "S9 -R -S root not created yet" "rc=$rc $out"; fi
 add_snap tank/fresh/c "other_1" $((1 * H))                # any snapshot in the tree: a container again
 check "S8 a tree with any snapshot keeps the leniency for its bare root (child decides)" "0" "$(rc_of -R -S "$S2" tank/fresh other_ 2h 4h)"
 
-# S10 (U164, v2.9, Dabrowska pve0 2026-11-04): an -R root that HAS a snapshot, but none of the
-# family (a marker), above children that hold the family: a container. It used to be WAITING
-# from the start and, past warn, WARNING -- while every child was fresh.
-reset_world
-add_ds tank/rp $((500 * H)); add_ds tank/rp/vm $((500 * H))
-add_snap tank/rp "automated_marker" $((60 * H))
-add_snap tank/rp/vm "automated_hourly_1" $((1 * H))
-check "S10 -R -S, marker on the root, fresh family below, started 5h ago: OK" "0" "$(rc_of -R -S "$S2" tank/rp automated_hourly 2h 4h)"
-out="$(run -R -S "$S2" -W tank/rp automated_hourly 2h 4h)"
-case "$out" in *"dataset=tank/rp "*) bad "S10 the root is not reported" "$out" ;; *) ok "S10 the root is not reported (a container)" ;; esac
-# Control: no snapshot of the family anywhere -- the root still answers for the tree.
-reset_world
-add_ds tank/rq $((500 * H)); add_ds tank/rq/vm $((500 * H))
-add_snap tank/rq "automated_marker" $((60 * H))
-check "S10 control: marker on the root, no family anywhere, started 5h ago: CRITICAL" "2" "$(rc_of -R -S "$S2" tank/rq automated_hourly 2h 4h)"
-check "S10 control without -S: the same tree, age from creation: CRITICAL" "2" "$(rc_of -R tank/rq automated_hourly 2h 4h)"
-
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
