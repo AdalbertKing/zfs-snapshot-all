@@ -6007,6 +6007,22 @@ if [ "$ERRC" -eq 0 ] && printf '%s' "$ERT2" | grep -qE '\[X\] dobowe +5 ' && gre
 else
     bad "edit-relation: X20 zmiana w tabeli celu po ponownym otwarciu" "rc=$ERRC" "druga tabela: $ERT2" "$(grep '^set-tiers' "$ER/zb.log")"
 fi
+# REV-20261104-187: migawki zdalne (snaponly) -- harmon -> __manual__ to ta sama tabela z configu
+# (show-tiers) i jeden set-tiers; zadnego save-profile ani edit-relation --profile= (na main:
+# ukryty szablon relacja-r1 i edit-relation r1 --profile=relacja-r1).
+EROUT=$(ER_MODE=snaponly er_run "0${T}harmon
+0${T}__manual__
+0${T}wykonaj
+0${T}
+" "down,down,right,bs,5,enter"); ERRC=$?
+if [ "$ERRC" -eq 0 ] && grep -qx 'show-tiers r1 --json' "$ER/zb.log" \
+   && grep -qx 'set-tiers r1 --tier=daily --keep=5 --yes' "$ER/zb.log" \
+   && ! grep -qE '^(save-profile|delete-profile|edit-relation)' "$ER/zb.log" \
+   && printf '%s' "$EROUT" | grep -q 'MIGAWKI NA ŹRÓDLE'; then
+    ok "edit-relation: REV-187 -- migawki zdalne: tabela z configu (show-tiers), jeden set-tiers, bez ukrytego szablonu"
+else
+    bad "edit-relation: REV-187 snaponly harmonogram" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(tail -3 "$ER/err")"
+fi
 # X15 (wlasciciel 2026-10-13): szczebel DODANY w tabeli celu (harmon -> __manual__) jest w oknie
 # zrodla (srcret, z liczba jak w celu) -- okno zrodla widzi szczeble po zmianach w celu.
 # set-tiers dostaje dodanie i liczbe zrodla tego szczebla, bez drugiego dodawania.

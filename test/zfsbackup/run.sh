@@ -15541,6 +15541,30 @@ if [ -z "$st_ref" ]; then
 else
     bad "REV-187 set-tiers on snaponly refusals" "not refused cleanly:$st_ref"
 fi
+# The VERB: cmd_set_tiers on the installed config, the real gen-cron.sh validating the working
+# copy, the install step replaced by a copy. The cron rendered from the result carries the new
+# weekly count and the hand-edited hourly -H240; a failing generator leaves the config as it was.
+so_st_run() {   # <args...> -> output; installed config $ED/vt.conf
+    ( CLIENTS_DIR="$ED/clients"; PROFILE_USER_ROOT="$ED/no-profiles"
+      cron_context_resolve() { CRON_CTX_FILE="$ED/vt.conf"; }
+      assert_cron_config_matches_installed() { :; }
+      gencron_as_target() { [ -n "${ST_GEN_FAILS:-}" ] && return 1; bash "$REPO/gen-cron.sh" "$@" >/dev/null 2>&1; }
+      show_activation_proposal() { :; }
+      atomic_replace_and_install() { cp "$2" "$1"; }
+      cmd_set_tiers rr "$@" ) 2>&1
+}
+printf 'CLIENT_NAME=rr\nSTATE=active\nRUX_MODE=snaponly\nPROFILE=relacja-rr\nCRON_CONFIG=%s\n' "$ED/vt.conf" > "$ED/clients/rr.conf"
+cp "$RR/edited.conf" "$ED/vt.conf"
+vt_out=$(so_st_run --tier=weekly --keep=6 --yes); vt_rc=$?
+bash "$REPO/gen-cron.sh" -c "$ED/vt.conf" > "$ED/vt.cron" 2>&1
+cp "$RR/edited.conf" "$ED/vt.conf"
+vt_out2=$(ST_GEN_FAILS=1 so_st_run --tier=weekly --keep=6 --yes); vt_rc2=$?
+if [ "$vt_rc" -eq 0 ] && grep -q 'automated_weekly_" -w6$' "$ED/vt.cron" && grep -q 'automated_hourly_" -H240$' "$ED/vt.cron" \
+   && [ "$vt_rc2" -ne 0 ] && cmp -s "$RR/edited.conf" "$ED/vt.conf"; then
+    ok "REV-187 set-tiers verb on snaponly: the cron from the result has weekly -w6 and the hand-edited hourly -H240; a failing generator changes nothing"
+else
+    bad "REV-187 set-tiers verb on snaponly" "rc=$vt_rc $vt_out" "gen-fails rc=$vt_rc2 $vt_out2" "$(grep -E 'weekly|hourly' "$ED/vt.cron" | head -4)"
+fi
 # EXPORT / IMPORT (owner campaign 2026-10-18: export refused "not supported yet").
 # The replay is add-client --snaponly with the host and the source datasets, then
 # activate -- never --mode=snaponly (add-client refuses it beside --snaponly), never
