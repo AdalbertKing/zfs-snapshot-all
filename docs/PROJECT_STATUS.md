@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9c3acaaf8b899df2 -->
+<!-- status-covers-digest: 5c45e4ca597df08f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -25,6 +25,13 @@
   2026-11-03 (sprawdzone po :15, także klony kont `zfsbackup` na 11.10 i 11.11).** W dev `main`, niewydane:
   paczka U (PR #1045) i U136 (#1046). Lab posprzątany 2026-11-04: relacje i datasety testowe U137/U138/U141
   usunięte z pve11, pve9 i pve9b; pve11 wrócił na wydanie bez wstrzymania aktualizacji.
+- **Dąbrowska 2026-11-04 (1.0.9):** archiwum `archiwum-pve1` (kopia pasywna pve0 `rpool/data` ->
+  `hdd/backups/pve1`, szablon `full`, root) zainstalowane; pierwsza kopia przyrostowa od 1 listopada 13:01
+  rc=0. Relacja `pve1` (migawki zdalne, konto `zfsbackup`) założona od nowa ze zwykłą rodziną
+  `automated_*` (`--own-snapshots`, quiesce=no, H24 D7 W4 M12 Y1); pierwsza migawka 10:19. Zostaje:
+  sprzątanie `pve0_automated_*` i znacznika po dobie. Przy wznowieniu wyszła wada: ponowienie tej samej
+  komendy z tą samą odpowiedzią (`--own-snapshots`) było odrzucane -- poprawione na `main`
+  (`rux_record_family_answer`), niewydane.
 - **Próba kopii lokalnej a archiwum z dłuższą historią (2026-11-04, Dąbrowska).** Silnik `snapget.sh -n`
   z założenia kończy się rc=1, gdy w celu są migawki, których źródło już nie ma; instalator kopii lokalnej
   brał to za porażkę i kopia pasywna do archiwum pve0 `hdd/backups/pve1` (historia dobowa i tygodniowa z

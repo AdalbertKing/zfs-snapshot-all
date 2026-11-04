@@ -5113,6 +5113,22 @@ if grep -q "^OWN_SNAPSHOTS=1$" "$P53/clients/ownsnap.conf" && ! grep -q "OWN_SNA
 else
     bad "add-client: --own-snapshots record field" "with: $(cat "$P53/clients/ownsnap.conf" 2>&1)" "without: $(cat "$P53/clients/proftest2.conf" 2>&1)"
 fi
+# 3c. A RESUME with the family answer (Dabrowska 2026-11-04): the stop says "re-run the exact
+# command", so the SAME answer already on the record passes (once, no second line); the
+# OTHER answer and an active relationship are refused; an empty record takes the answer.
+RFA="$P53/rfa.conf"; printf 'NAME=rfa\n' > "$RFA"
+rfa1=$( ( rux_record_family_answer "$RFA" rfa added 1 0 ) 2>&1 ); rfa1_rc=$?
+rfa2=$( ( rux_record_family_answer "$RFA" rfa added 1 0 ) 2>&1 ); rfa2_rc=$?
+rfa3=$( ( rux_record_family_answer "$RFA" rfa added 0 1 ) 2>&1 ); rfa3_rc=$?
+rfa4=$( ( rux_record_family_answer "$RFA" rfa active 1 0 ) 2>&1 ); rfa4_rc=$?
+if [ "$rfa1_rc" -eq 0 ] && [ "$rfa2_rc" -eq 0 ] && printf '%s' "$rfa2" | grep -q 'the same answer is already recorded' \
+   && [ "$(grep -c '^OWN_SNAPSHOTS=1$' "$RFA")" -eq 1 ] && ! grep -q FAMILY_STAMP "$RFA" \
+   && [ "$rfa3_rc" -ne 0 ] && printf '%s' "$rfa3" | grep -q 'OTHER answer' \
+   && [ "$rfa4_rc" -ne 0 ] && printf '%s' "$rfa4" | grep -q 'active already'; then
+    ok "rux resume: the same family answer again passes (one record line); the other answer and an active relationship are refused"
+else
+    bad "rux resume: family answer" "1:$rfa1_rc 2:$rfa2_rc $rfa2" "3:$rfa3_rc $rfa3" "4:$rfa4_rc $rfa4" "$(cat "$RFA")"
+fi
 out=$( ( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
   cmd_add_client "ownpas" --lan=10.0.0.1 --datasets="tank/x" --passive --own-snapshots ) 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'opposite answers' && [ ! -e "$P53/clients/ownpas.conf" ]; then

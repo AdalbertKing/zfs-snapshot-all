@@ -22540,21 +22540,8 @@ rux_remote_install() {
         log "rux: resuming '$name' from state '$state'"
         rux_check_conflict "$cpath" "$host" "$dataset" "$target" "$mode"
         # The family question (U141) is asked by a REFUSAL during activation, after the
-        # record exists -- and it said "answer with one flag". Re-running with that flag
-        # used to drop it (add-client is not called on a resume) and refuse again for
-        # ever (pve11, 2026-11-03). Taken onto the record here, only before activation,
-        # and only when the record holds no answer yet.
-        if [ "${rux_own:-0}" -eq 1 ] || [ "${rux_stamp:-0}" -eq 1 ]; then
-            [ "${rux_own:-0}" -eq 1 ] && [ "${rux_stamp:-0}" -eq 1 ] \
-                && die "rux: --own-snapshots and --stamp-family are opposite answers -- pick one. Nothing was changed."
-            [ "$state" = active ] \
-                && die "rux: '$name' is active already -- who makes the source's snapshots is decided at creation. Nothing was changed."
-            [ -n "$(record_get "$cpath" OWN_SNAPSHOTS)$(record_get "$cpath" FAMILY_STAMP)" ] \
-                && die "rux: '$name' already holds an answer to who makes the source's snapshots. Nothing was changed."
-            if [ "${rux_own:-0}" -eq 1 ]; then write_client_field OWN_SNAPSHOTS 1 >> "$cpath"
-            else write_client_field FAMILY_STAMP 1 >> "$cpath"; fi
-            log "rux: '$name' -- answer recorded: $([ "${rux_own:-0}" -eq 1 ] && echo '--own-snapshots (leftovers)' || echo '--stamp-family')"
-        fi
+        # record exists; add-client is not called on a resume (pve11, 2026-11-03).
+        rux_record_family_answer "$cpath" "$name" "$state" "${rux_own:-0}" "${rux_stamp:-0}"
     fi
 
     # The grant step runs BEFORE the verification and never replaces it: what
@@ -22616,6 +22603,31 @@ needs no peer at all:
     zfs-backup.sh --source=<dataset> --target=<dataset> [--install]
 Nothing was created."
     done
+}
+
+# The family answer on a RESUME (U141): asked by a refusal during activation, after the
+# record exists. Taken onto the record only before activation. The SAME answer again is
+# the "re-run the exact command" every stop prints (Dabrowska 2026-11-04: --own-snapshots,
+# then a missing --grant-remotely, then the same command refused); only the OPPOSITE
+# answer is a change, and refused.
+rux_record_family_answer() {   # <cpath> <name> <state> <own 0|1> <stamp 0|1>
+    local cpath="$1" name="$2" state="$3" own="$4" stamp="$5" rec_own rec_stamp
+    [ "$own" -eq 1 ] || [ "$stamp" -eq 1 ] || return 0
+    [ "$own" -eq 1 ] && [ "$stamp" -eq 1 ] \
+        && die "rux: --own-snapshots and --stamp-family are opposite answers -- pick one. Nothing was changed."
+    [ "$state" = active ] \
+        && die "rux: '$name' is active already -- who makes the source's snapshots is decided at creation. Nothing was changed."
+    rec_own="$(record_get "$cpath" OWN_SNAPSHOTS)"; rec_stamp="$(record_get "$cpath" FAMILY_STAMP)"
+    if [ -n "$rec_own$rec_stamp" ]; then
+        if { [ "$own" -eq 1 ] && [ -n "$rec_own" ]; } || { [ "$stamp" -eq 1 ] && [ -n "$rec_stamp" ]; }; then
+            log "rux: '$name' -- the same answer is already recorded"
+            return 0
+        fi
+        die "rux: '$name' already holds the OTHER answer to who makes the source's snapshots ($([ -n "$rec_own" ] && echo '--own-snapshots' || echo '--stamp-family')). Nothing was changed."
+    fi
+    if [ "$own" -eq 1 ]; then write_client_field OWN_SNAPSHOTS 1 >> "$cpath"
+    else write_client_field FAMILY_STAMP 1 >> "$cpath"; fi
+    log "rux: '$name' -- answer recorded: $([ "$own" -eq 1 ] && echo '--own-snapshots (leftovers)' || echo '--stamp-family')"
 }
 
 rux_entry() {
