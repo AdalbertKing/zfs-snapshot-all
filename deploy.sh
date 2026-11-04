@@ -7914,6 +7914,9 @@ else
     # ------------------------------------------------------------------------------
     log "Phase 8e: auto-pull cron line (this account's own crontab)"
     # ------------------------------------------------------------------------------
+    # The copy the line checks is written HERE too, not only by the next hourly run: a
+    # host held before this revision would otherwise leave its accounts pulling until :15.
+    sync_hold_marker || :
     # Point c (2026-11-04): the line checks the world-readable copy of root's update hold,
     # so a held host does not pull the account's checkout either. Rewritten, not adopted --
     # the old text had no check -- but the SCHEDULE of an existing line is kept: that is
@@ -7931,7 +7934,7 @@ else
         elif [ "${CRON_ADOPTED:-0}" -gt 0 ]; then
             log "moved $USERNAME's auto-pull cron line into the '$CRON_HOST_BLOCK' block (schedule unchanged)"
         else
-            log "added auto-pull cron line to $USERNAME's crontab"
+            log "wrote $USERNAME's auto-pull cron line (it skips the pull while updates are held)"
         fi
     else
         warn "could not install auto-pull cron line for $USERNAME: $CRON_ERR -- add it manually"
