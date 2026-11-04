@@ -4,6 +4,35 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [1.0.10] — 2026-11-04
+
+- **The daily mail is a table of relations.** Subject (Polish, like the mail): "OK, N relacji" or
+  "K z N relacji wymaga uwagi", plus any pool that is not ONLINE or is at least 80% full. Body:
+  every relation with its newest run and its state in the GUI's words; DO ZROBIENIA only when
+  something needs action -- failed jobs with the datasets they act on and the cause, read from the
+  run's own lines in cron.log (for exit 8, the first "Quiesce:" line); runs without quiescing;
+  stale or unanswering monitors; pools. All pools of the host in the header; one line for the week. Removed relations are not shown. The full statistics come as an HTML attachment,
+  one section per relation. Sent with `sendmail -t` as "zfs-backup <host>"; without sendmail an
+  ASCII body by `mail -s`; without python3, or with `ZFS_DIGEST_LAYOUT=jobs`, the job-table mail.
+- **Alerts in plain words** (immediate mode): subject "[ZFS] host: relation -- what happened (when)",
+  a sentence on what it means and what to do; a monitor that measures from the dataset's creation
+  (no relation start) says so. Exit 8 -- snapshots taken without quiescing the guest -- goes to the
+  warning script, not the alert one; the daily mail still lists it under DO ZROBIENIA.
+- **Wizard, "Where to":** opens the dataset tree directly. From 110 terminal columns every dataset
+  tree window has the F2 layout (table with Used/Avail/Snapshots/Notes, a facts panel, a bottom tab).
+  The facts say where the copies will land and which relation copies there; for a local copy also
+  what is already there and whether the first copy is incremental (common snapshot) or full (and
+  how big). On first entry the cursor starts on a target that already holds a copy of this data
+  with a common snapshot, if there is one. Ins creates a new dataset under the highlighted one.
+- **Passive local copy:** monitor thresholds follow the pvesr replica that feeds it (at least 2x/3x
+  its interval). **Monitor** (`check-snap-age.sh` v2.9): an `-R` root holding only snapshots of
+  another family, above children that hold the family, is a container, not "waiting".
+- `delete-relation` refuses `--yes` while a run of the relation is in progress; the plan of
+  `edit-relation` for a local relation says `--yes`; "Short source retention" replaces "Fastprune" in the GUI.
+- Engines (REV-20261104-186): the protected-snapshot check before a forced full copy and the `-F`
+  collision scan fail closed; remote snapshot lists run no awk on the far side; `-m` is a literal
+  prefix; `delsnaps` keeps what it cannot read and lists an `-R` tree before pruning it.
+
 ## [1.0.9] — 2026-11-04
 
 - **A local copy into an archive that keeps longer than its source installs.** The rehearsal before
