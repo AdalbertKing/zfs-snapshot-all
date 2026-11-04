@@ -46,6 +46,9 @@ mkdir -p "$WORK/bin"
 # `zfs list -H -o name -- <ds>`.
 cat > "$WORK/bin/zfs" <<'EOF'
 #!/bin/sh
+# Dabrowska 2026-11-04: `-o name,createtxg` answers LB_TXG ("name<TAB>txg" lines), for the
+# rehearsal's history rule (probe_conflicts_are_history).
+case " $* " in *" name,createtxg "*) [ -n "${LB_TXG:-}" ] && printf '%b\n' "$LB_TXG"; exit 0 ;; esac
 # U138: `zfs list -t snapshot` answers LB_SNAPS (space-separated names), else nothing.
 case " $* " in *" snapshot "*) [ -n "${LB_SNAPS:-}" ] && printf '%s\n' $LB_SNAPS; exit 0 ;; esac
 for a in "$@"; do ds="$a"; done
@@ -468,7 +471,16 @@ echo SEED >> "$WORK/order"
 echo "seed exploded" >&2
 exit 1
 EOF
-chmod +x "$WORK/seedbin/snapsend-ok" "$WORK/seedbin/snapsend-fail"
+# Dabrowska 2026-11-04: the engine's -n on an archive that keeps longer than its source --
+# PLAN with a base, and a "conflict" list of target-only snapshots (rc 1, by design).
+cat > "$WORK/seedbin/snapget-history" <<EOF
+#!/bin/sh
+echo "SEED \$*" >> "$WORK/seed-calls"
+echo "PLAN=INCREMENTAL base=b1 src=rpool/data tgt=hdd/backups/rpool/data"
+echo "hdd/backups/rpool/data@\${LB_CONFLICT:-old1}"
+exit 1
+EOF
+chmod +x "$WORK/seedbin/snapsend-ok" "$WORK/seedbin/snapsend-fail" "$WORK/seedbin/snapget-history"
 
 runi() {   # <snapsend stub> <stdin answer> args...
     local stub="$1" answer="$2"; shift 2
@@ -513,6 +525,25 @@ out="$(runi snapsend-fail "t" --install --yes --source=rpool/data --target=hdd/b
 printf '%s' "$out" | grep -qi 'NOTHING installed' \
     && ok "slice2: the failed-seed refusal says plainly that nothing was installed" \
     || bad "slice2: the failed-seed refusal says plainly that nothing was installed" "$(printf '%s' "$out" | tail -2)"
+
+# ---- an archive that keeps LONGER than its source (Dabrowska 2026-11-04) -----------
+# The engine's -n lists every target-only snapshot and exits 1 "by design"; a snapshot
+# OLDER than the common base is history and installs; one NEWER than the base is
+# divergence and still refuses (control).
+LB_TXG='hdd/backups/rpool/data@b1\t200\nhdd/backups/rpool/data@old1\t100\nhdd/backups/rpool/data@new1\t300'
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+out="$(LB_TXG="$LB_TXG" runi snapget-history "t" --install --yes --source=rpool/data --target=hdd/backups --config="$CFG")"
+arc_old="$(grep -c INSTALL "$WORK/order" 2>/dev/null)"; arc_old_out="$out"
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+out="$(LB_TXG="$LB_TXG" LB_CONFLICT=new1 runi snapget-history "t" --install --yes --source=rpool/data --target=hdd/backups --config="$CFG")"
+arc_new="$(grep -c INSTALL "$WORK/order" 2>/dev/null)"
+if [ "${arc_old:-0}" -ge 1 ] && printf '%s' "$arc_old_out" | grep -q 'older snapshot(s) exist only on this host -- history, not a conflict' \
+   && [ "${arc_new:-0}" -eq 0 ] && printf '%s' "$out" | grep -q 'failed the dry-run'; then
+    ok "archive: target-only snapshots OLDER than the base are history -- installs; a NEWER one still refuses"
+else
+    bad "archive: rehearsal history rule" "old: installs=$arc_old $(printf '%s' "$arc_old_out" | grep -E 'FAILED|history|FATAL' | head -3)" "new: installs=$arc_new $(printf '%s' "$out" | grep -E 'FAILED|history|FATAL' | head -3)"
+fi
+seed_cfg
 
 # ---- happy path: seed BEFORE install, and the order is the contract ----------
 rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
