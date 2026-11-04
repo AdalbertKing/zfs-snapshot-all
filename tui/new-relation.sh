@@ -28,6 +28,7 @@ ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "new-relation: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 . "$HERE/tui/basket-lib.sh" || { echo "new-relation: brak $HERE/tui/basket-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 . "$HERE/tui/retention-lib.sh" || { echo "new-relation: brak $HERE/tui/retention-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/fastprune-lib.sh" || { echo "new-relation: brak $HERE/tui/fastprune-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 WT_BACKTITLE="$(Tv 'Nowa relacja -- kolektor $(hostname)' '$(hostname)' "$(hostname)")"
 NSTEP=10
 TMPD="$(mktemp -d)" || exit 1
@@ -303,8 +304,10 @@ def x(v): return v if v else "-"
 try: d = json.load(sys.stdin)
 except Exception: sys.exit(0)
 for r in d.get("relations", []):
-    print("%s\t%s\t%s\t%s\t%s\t%s" % (x(r.get("name")), x(r.get("peer_host")), x(r.get("client_target")),
-          x(r.get("state")), x(r.get("profile")), x(r.get("local_user"))))' | tr -d '\r' >"$TMPD/rel.all"
+    print("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" % (x(r.get("name")), x(r.get("peer_host")), x(r.get("client_target")),
+          x(r.get("state")), x(r.get("profile")), x(r.get("local_user")),
+          # 7-8 (U136): pasywna? i zrodla -- kopia pasywna na tym hoscie jako archiwum fastprune
+          "1" if str(r.get("passive") or "") == "1" else "0", x(",".join(r.get("sources") or []))))' | tr -d '\r' >"$TMPD/rel.all"
     awk -F'\t' '$4!="removed"' "$TMPD/rel.all" >"$TMPD/rel.tsv"
     awk -F'\t' '$4=="removed"{print $1}' "$TMPD/rel.all" >"$TMPD/rel.removed"
 }
@@ -522,10 +525,10 @@ FREEZE=1
 # sekcji prune), więc zostaje; znacznik idzie na tę stronę, która ma
 # ograniczenie: [drabina] (od X27 zadnego szablonu fabrycznego w tym ksztalcie).
 account_is_flat() {    # <konto: "" = root> -> 0, gdy żywa relacja NA TYM KONCIE używa szablonu płaskiego
-    local want="$1" n p t st pr lu fp
+    local want="$1" n p t st pr lu fp _rest
     [ "$want" != root ] || want=""
     status_tsv
-    while IFS=$'\t' read -r n p t st pr lu; do
+    while IFS=$'\t' read -r n p t st pr lu _rest; do      # _rest: kolumny 7+ (U136), nie konto
         [ "$st" = removed ] && continue
         case "$pr" in ''|-) continue ;; esac
         case "$lu" in ''|-) lu="" ;; esac
@@ -603,66 +606,25 @@ step_passive() {   # U138: kopia lokalna pasywnie, choc na zrodle nie ma jeszcze
 # U136 (właściciel 2026-11-04: Zaawansowane, „jedno pole”): migawki zdalne, źródło bez miejsca.
 # Każdy szczebel wybranego szablonu: retain = -h<N>, czyszczenie co godzinę; monitor zostaje
 # tylko szczeblom częstszym niż N -- wieku rzadszych pilnuje archiwum (kopia pasywna z repliki).
-step_fastprune() {
-    local v="$FASTPRUNE"
-    while :; do
-        geom
-        wt --title "$(T 'Szybkie czyszczenie źródła (fastprune)')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
-           --inputbox "$(T 'Ile godzin żyje na źródle każda migawka (wszystkie szczeble). Puste = wyłączone.\nCzyszczenie co godzinę; monitor zostaje tylko szczeblom częstszym niż ta liczba --\nwieku rzadszych pilnuje archiwum (kopia pasywna z repliki na kolektorze).')" 12 "$W" "$v" || return 1
-        v="${WT_OUT// /}"
-        case "$v" in
-            ''|0) FASTPRUNE=""; return 0 ;;
-            *[!0-9]*) wt --title "$(T 'Zła liczba')" --msgbox "$(T 'Liczba godzin: same cyfry, puste = wyłączone.')" 8 "$W"; continue ;;
-        esac
-        v=$((10#$v))
-        if [ "$v" -lt 4 ]; then
-            wt --title "$(T 'Za mało')" --msgbox "$(T 'Najmniej 4 godziny: replika pvesr co 2 h musi zdążyć przenieść migawkę dwa razy.')" 8 "$W"; continue
-        fi
-        if [ "$v" -lt 24 ]; then
-            wt --title "$(T 'Mniej niż doba')" --yes-button "$(T Dalej)" --no-button "$(T Wstecz)" \
-               --yesno "$(Tv 'Migawka dobowa przeżyje na źródle tylko $v godz. Jeśli replika albo archiwum stoją dłużej, migawka zniknie, zanim trafi do archiwum.' '$v' "$v")" 10 "$W" || continue
-        fi
-        FASTPRUNE="$v"; return 0
-    done
+fp_archives() {   # -> nazwy aktywnych kopii pasywnych na tym hoście, których źródło obejmuje B_ROOT
+    status_tsv
+    local IFS=' '
+    awk -F'\t' -v roots="${B_ROOT[*]}" '
+        $4 == "removed" || $7 != "1" || ($2 != "-" && $2 != "") { next }
+        { n = split($8, s, ","); m = split(roots, r, " ")
+          for (i = 1; i <= n; i++) for (j = 1; j <= m; j++)
+              if (s[i] == r[j] || index(r[j], s[i] "/") == 1 || index(s[i], r[j] "/") == 1) { print $1; next } }' \
+        "$TMPD/rel.all" | sort -u | paste -sd, - | sed 's/,/, /g'
 }
+step_fastprune() { fp_ask "$FASTPRUNE" || return 1; FASTPRUNE="$FP_ANS"; }
 fp_build() {   # FASTPRUNE -> ukryty szablon FP_P (kopia PROFILE); 1 = błąd (okno pokazane)
     if [ -z "$FASTPRUNE" ] || [ "$MODE" != snaponly ]; then
         [ -n "$FP_P" ] && "$ZB" delete-profile "$FP_P" --yes >/dev/null 2>&1
         FP_P=""; return 0
     fi
-    local name="relacja-$RNAME-fastprune" args=()
+    local name="relacja-$RNAME-fastprune"
     load_profiles
-    mapfile -t args < <("$PY" - "$TMPD/prof.json" "$PROFILE" "$FASTPRUNE" <<'PYEOF'
-import sys, json
-d = json.load(open(sys.argv[1], encoding="utf-8")); name = sys.argv[2]; n = int(sys.argv[3])
-def every(s):   # odstęp send_schedule w godzinach
-    f = s.split()
-    if len(f) < 5: return 8760
-    m, h, dom, mon, dow = f[:5]
-    if h == "*": return 1
-    if h.startswith("*/") and h[2:].isdigit(): return int(h[2:])
-    if dow != "*": return 168
-    if dom == "*" and mon == "*": return 24
-    if mon == "*": return 744
-    return 8760
-for p in d.get("profiles", []):
-    if p.get("name") != name: continue
-    for t in p.get("tiers", []):
-        if not t.get("send_schedule"): continue
-        print("--tier=" + t["name"]); print("--retain=-h%d" % n); print("--keep=")
-        print("--prune_schedule=21 * * * *")
-        if every(t["send_schedule"]) >= n:
-            print("--monitor_warn="); print("--monitor_crit=")
-PYEOF
-)
-    if [ "${#args[@]}" -eq 0 ]; then
-        wt --title "$(T 'Fastprune niemożliwy')" --msgbox "$(Tv 'Szablon $PROFILE nie ma szczebli, które robią migawki -- fastprune nie ma czego skracać.' '$PROFILE' "$PROFILE")" 9 "$W"; return 1
-    fi
-    if ! "$ZB" save-profile "--from=$PROFILE" "--as=$name" --hidden --force \
-         "--description=$(Tv 'Fastprune $FASTPRUNE h z $PROFILE (relacja $RNAME)' '$FASTPRUNE' "$FASTPRUNE" '$PROFILE' "$PROFILE" '$RNAME' "$RNAME")" \
-         "${args[@]}" >/dev/null 2>"$TMPD/fp.err"; then
-        wt --title "$(T 'Fastprune: szablonu nie zapisano')" --msgbox "$(tail -4 "$TMPD/fp.err")" 14 "$W"; return 1
-    fi
+    fp_save "$PROFILE" "$FASTPRUNE" "$name" "$RNAME" || return 1
     # nazwa relacji zmieniona po poprzednim planie: stara kopia szablonu nie zostaje
     [ -n "$FP_P" ] && [ "$FP_P" != "$name" ] && "$ZB" delete-profile "$FP_P" --yes >/dev/null 2>&1
     FP_P="$name"
@@ -1182,7 +1144,14 @@ summary_text() {
     echo "$(Tv 'Sposób:  $(mode_words).   Nazwa: $RNAME.   Konto: ${a:-root}.' '$(mode_words)' "$(mode_words)" '$RNAME' "$RNAME" '${a:-root}' "${a:-root}")"
     # W6 (kampania 2026-11-03): kopia pasywna niczego nie zamraża -- opis szablonu bez "zamraża".
     echo "$(T 'Szablon:') $( [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ] && echo "$(Tv 'Ręcznie -- $PROFILE' '$PROFILE' "$PROFILE")" || echo "$PROFILE")$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" -v pas="$( { is_passive_copy || passive_forced; } && echo 1)" -v fp="$([ "$MODE" = snaponly ] && [ -n "$FASTPRUNE" ] && echo 1)" '$1==n{print "  (" $3 (fp ? "" : "; " $2) (pas ? "" : "; " $4) ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "$(Tv '; u źródła: $SRCPROF' '$SRCPROF' "$SRCPROF")")"
-    [ "$MODE" = snaponly ] && [ -n "$FASTPRUNE" ] && echo "$(Tv 'Źródło: fastprune $FASTPRUNE h -- każda migawka żyje tyle godzin, czyszczenie co godzinę; bez monitorów szczebli rzadszych niż $FASTPRUNE h -- ich wiek pilnuje archiwum. Bez kopii pasywnej na kolektorze starszych migawek nie będzie nigdzie.' '$FASTPRUNE' "$FASTPRUNE")"
+    if [ "$MODE" = snaponly ] && [ -n "$FASTPRUNE" ]; then
+        echo "$(Tv 'Źródło: fastprune $FASTPRUNE h -- każda migawka żyje tyle godzin, czyszczenie co godzinę; bez monitorów szczebli rzadszych niż $FASTPRUNE h -- ich wiek pilnuje archiwum. Bez kopii pasywnej na kolektorze starszych migawek nie będzie nigdzie.' '$FASTPRUNE' "$FASTPRUNE")"
+        # Warunek uczciwości (projekt fastprune): archiwum = kopia pasywna NA TYM HOŚCIE, której
+        # źródło obejmuje te datasety (replika pvesr ląduje pod tą samą nazwą).
+        local _arc; _arc="$(fp_archives)"
+        if [ -n "$_arc" ]; then echo "$(Tv 'Archiwum na tym hoście: $_arc (kopia pasywna).' '$_arc' "$_arc")"
+        else echo "$(Tv 'UWAGA: na tym hoście NIE MA kopii pasywnej z ${B_ROOT[*]} -- załóż ją (kopia lokalna, Pasywnie), zanim migawki starsze niż $FASTPRUNE h znikną.' '${B_ROOT[*]}' "${B_ROOT[*]}" '$FASTPRUNE' "$FASTPRUNE")"; fi
+    fi
     if [ "$MODE" = snaponly ] || [ "$NOCOPY" -eq 1 ]; then :    # bez kopii: prefiksy nie dotyczą
     elif [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
     else echo "$(T 'Pomijane migawki: żadne (kopiowane wszystkie).')"; fi
@@ -1325,7 +1294,12 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
         # Okno: całe podsumowanie (decyzje po polsku i komenda -- testy pilnują ich słów),
         # bez pustych wierszy, ostrzeżenia czasownika i ścieżka pełnego planu; w 80x24 mieści
         # się na styk, więc bez drugiego okna z pytaniem. Angielska góra planu powtarzała to samo.
-        { grep -v '^[[:space:]]*$' "$TMPD/summary.txt"
+        # W17 (kampania 2026-11-03): zdania podsumowania są łamane ręcznie pod 80 kolumn (druga
+        # linia od dwóch spacji); w szerszym oknie whiptail łamał je drugi raz i wychodził
+        # poszarpany tekst ("robi własne" / "(--own-snapshots)..."). Kontynuacja dokleja się do
+        # poprzedniej linii -- łamie whiptail; listy (wcięcie 3+ spacji) zostają, jak były.
+        { grep -v '^[[:space:]]*$' "$TMPD/summary.txt" \
+            | awk '/^  [^ ]/ && NR > 1 { sub(/^  /, ""); p = p " " $0; next } { if (NR > 1) print p; p = $0 } END { if (NR) print p }'
           # ostrzeżenia czasownika zostają w oknie -- to one zmieniają decyzję
           grep -E '^(!!!|WARNING|Warning|>>> .*(WARNING|warn))' "$TMPD/plan.txt" | grep -v -- '--grant-remotely is noted' | head -8
           echo "$(Tv 'Pełny plan (sekcje configu, linie crona): $planf' '$planf' "$planf")"; } >"$TMPD/plan-short.txt"

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b6ce01bc25551e8a -->
+<!-- status-covers-digest: 4f3360c07453b5d4 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -25,6 +25,15 @@
   2026-11-03 (sprawdzone po :15, także klony kont `zfsbackup` na 11.10 i 11.11).** W dev `main`, niewydane:
   paczka U (PR #1045) i U136 (#1046). Lab posprzątany 2026-11-04: relacje i datasety testowe U137/U138/U141
   usunięte z pve11, pve9 i pve9b; pve11 wrócił na wydanie bez wstrzymania aktualizacji.
+- **Paczka W (2026-11-04, gałąź `feat/finish-w`).** W1: licznik „porządki” na F3 liczy też porządki
+  zaszyte w sekcji `[dataset:]` (te same, które F2 pokazuje jako „lokalny prune”). W17: zdanie
+  podsumowania łamane ręcznie pod 80 kolumn jest w oknie planu jednym akapitem. W18: zmiana, która tylko
+  dodaje zadania, mówi „Nowe zadania tej relacji (dotychczasowe zostają bez zmian)” zamiast „zastępują 0”.
+  U136: fastprune w oknie zmiany relacji (wiersz Fastprune: inne N budowane od nowa z szablonu bazowego,
+  puste = powrót do bazy; przerwanie przywraca plik szablonu); plan kreatora nazywa kopię pasywną na tym
+  hoście albo ostrzega, że jej nie ma. Na żywo pve11 -> pve9b: założenie z N=48, porzucenie zmiany
+  (plik wrócił), powrót do zainstalowanego N, zmiana na 24 (rc=0, `retain = -h24`). Poza paczką
+  (do dyskusji): punkt 4 (strażnik crona po tożsamości), U144 p. 2.
 - **Punkt c: wstrzymanie aktualizacji obejmuje też konta (2026-11-04, gałąź `feat/prod-hold`, niewydane).**
   Dotąd blokada roota (`update-hold` w katalogu stanu roota) nie zatrzymywała godzinnego `git pull`
   konta delegowanego, bo konto nie widzi `/root` -- root stał, konto się aktualizowało. Teraz

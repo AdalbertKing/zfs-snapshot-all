@@ -31,6 +31,7 @@ ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "edit-relation: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 . "$HERE/tui/retention-lib.sh" || { echo "edit-relation: brak $HERE/tui/retention-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 . "$HERE/tui/basket-lib.sh" || { echo "edit-relation: brak $HERE/tui/basket-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/fastprune-lib.sh" || { echo "edit-relation: brak $HERE/tui/fastprune-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 NAME="${1:-}"
 [ -n "$NAME" ] || { echo "usage: edit-relation.sh NAME" >&2; exit 2; }
 WT_BACKTITLE="$(Tv 'Zmiana relacji $NAME -- kolektor $(hostname)' '$NAME' "$NAME" '$(hostname)' "$(hostname)")"
@@ -51,7 +52,15 @@ restore_hidden() {
         "$ZB" delete-profile "$HNAME" --yes >/dev/null 2>&1
     fi
 }
-trap 'restore_hidden; rm -rf "$TMPD"' EXIT
+# U136: szablon fastprune tej relacji zmieniany PRZED planem (plan go czyta) -- bez zapisu
+# zmian wraca, jak był: kopia sprzed zmiany albo (nowy) usunięty.
+FPNAME="relacja-$NAME-fastprune"; FP_DIRTY=0; FP_BAK=""; FP_FILE=""
+restore_fastprune() {
+    [ "$FP_DIRTY" -eq 1 ] && [ "$DONE" -ne 1 ] || return 0
+    if [ -n "$FP_BAK" ] && [ -n "$FP_FILE" ]; then cp -p "$FP_BAK" "$FP_FILE" 2>/dev/null
+    else "$ZB" delete-profile "$FPNAME" --yes >/dev/null 2>&1; fi
+}
+trap 'restore_hidden; restore_fastprune; rm -rf "$TMPD"' EXIT
 
 # st.tsv: stan, profil, profil źródła, peer, datasety, lustro, cel; prof.tsv: nazwa <TAB> opis (bez
 # ukrytych i pochodnych -src-); prof.json.tiers: szczeble do okna retencji źródła;
@@ -123,6 +132,10 @@ SRCHOST="$(host_name "$PEER" "$NAME")"; LDS_ARGS=("$PEER"); HOST="$SRCHOST"
 SRCNAME="$PEER"
 if [ "$PEER" = - ]; then SRCHOST="$(T 'tego hosta') ($(hostname -s 2>/dev/null || hostname))"; LDS_ARGS=(); HOST="$SRCHOST"; SRCNAME="$(hostname -s 2>/dev/null || hostname)"; fi
 [ "$CUR_P" = - ] && CUR_P=""; [ "$CUR_S" = - ] && CUR_S=""
+# U136: fastprune relacji -- raz, z zainstalowanego szablonu (plik bywa przepisany pod plan).
+FP_CUR_N=""; FP_CUR_BASE=""; P_FP=""
+if [ "${RMODE:-}" = snaponly ]; then _fp="$(fp_of "$CUR_P")"; [ -n "$_fp" ] && { FP_CUR_N="${_fp%% *}"; FP_CUR_BASE="${_fp#* }"; }; fi
+fp_words() { if [ -n "$1" ] && [ "$1" != off ]; then Tv '$FASTPRUNE godz. -- wszystkie szczeble' '$FASTPRUNE' "$1"; else T 'nie'; fi; }
 # ADRES HOSTA (właściciel 2026-10-17): kolektor wyniesiony za VPN, źródło widać pod
 # innym IP. Jedno pole, jedno WYKONAJ, potem zwykłe `activate --host=NOWY
 # --skip-final-catchup --yes`: zapis adresu, sprawdzenie, że odpowiada TEN SAM host
@@ -199,6 +212,7 @@ fi
 RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=0
 title() { T 'Zmień relację %s -- %s' "$NAME" "$2"; }
 cur_words() {   # słowa o obecnym szablonie celu
+    if [ -n "${FP_CUR_N:-}" ]; then echo "$FP_CUR_BASE -- $(Tv 'fastprune $FASTPRUNE h' '$FASTPRUNE' "$FP_CUR_N")"; return; fi
     if [ "$CUR_P" = "$HNAME" ]; then echo "$(T 'własne ustawienia relacji (tabela szczebli)')"; else echo "${CUR_P:-$(T '<nie zapisany>')}"; fi
 }
 
@@ -806,7 +820,8 @@ while :; do
     _sz="$(cur_words)"
     _pw="$(awk -F'\t' -v n="$CUR_P" '$1==n{print $2; exit}' "$TMPD/prof.tsv" 2>/dev/null | sed -e "s/^$CUR_P  *//" -e 's/  */ /g')"
     [ -n "$_pw" ] && _sz="$_sz -- $_pw"
-    [ "${#P_EDIT[@]}" -gt 0 ] && _sz="$(cur_words) -> $P_EDIT_WORDS $_zm"
+    [ -n "$FP_CUR_N" ] && _sz="$(cur_words)"      # opis szablonu bazy, nie słowa ukrytej kopii
+    [ "${#P_EDIT[@]}" -gt 0 ] && [ -z "$P_FP" ] && _sz="$(cur_words) -> $P_EDIT_WORDS $_zm"
     [ "${#P_RARGS[@]}" -gt 0 ] && _sz="$_sz, $(T tabela) $_zm"
     # U65 (uwaga 3: "Silnik: jak w configu -- nie wiadomo co"): wartości słowami, nie "jak w configu".
     _sr="$(srcret_words)"
@@ -825,9 +840,15 @@ while :; do
     _epn="$(host_name "${_ep%:*}" "$NAME")"; [ "$_epn" = "${_ep%:*}" ] || _ep="$_epn ($_ep)"
     if [ "$PEER" != - ]; then er_row adres "$(T Źródło)" "$_ep${P_HOST:+ -> $P_HOST $_zm}" "$([ -n "$P_HOST" ] && echo 1 || echo 0)"; fi
     er_row dane "$(T Datasety)" "$_ds$_dsp" "$([ -n "$_dsp" ] && echo 1 || echo 0)"
-    er_row harmon "$(T Harmonogram)" "$_sz" "$([ "${#P_EDIT[@]}" -gt 0 ] || [ "${#P_RARGS[@]}" -gt 0 ] && echo 1 || echo 0)"
+    er_row harmon "$(T Harmonogram)" "$_sz" "$({ [ "${#P_EDIT[@]}" -gt 0 ] && [ -z "$P_FP" ]; } || [ "${#P_RARGS[@]}" -gt 0 ] && echo 1 || echo 0)"
     case "$_rodzaj" in backup|"kopia lokalna")
         er_row srcret "$(T 'Retencja źródła')" "$_sr" "$([ "${#P_SARGS[@]}" -gt 0 ] && echo 1 || echo 0)" ;; esac
+    # U136: fastprune migawek zdalnych -- N i szablon bazowy ze znacznika w opisie szablonu relacji.
+    if [ "$SNAPONLY" -eq 1 ]; then
+        _fpv="$(fp_words "$FP_CUR_N")"; [ -n "$FP_CUR_BASE" ] && _fpv="$_fpv ($FP_CUR_BASE)"
+        [ -n "$P_FP" ] && _fpv="$(fp_words "$FP_CUR_N") -> $(fp_words "$P_FP") $_zm"
+        er_row fastprune "$(T 'Fastprune')" "$_fpv" "$([ -n "$P_FP" ] && echo 1 || echo 0)"
+    fi
     # Pasywna kopia lokalna (replika pvesr, MIRROR=1): bez historii i bez łącza okno silnika
     # było puste -- "Przywróć fabryczne" i "Gotowe" (właściciel 2026-10-26, pve2-nextcloud).
     _eng=1; [ "$_rodzaj" = "kopia lokalna" ] && [ "${MIRROR:-0}" = 1 ] && _eng=0
@@ -868,6 +889,7 @@ while :; do
         # snaponly: tabela -> ukryty szablon relacji -> edit-relation --profile= (blok
         # "harm" w pętli kroków niżej); harm_flow czyta/zapisuje szczeble KOPII (set-tiers).
         harm) [ "$SNAPONLY" -eq 1 ] && break; harm_flow; continue ;;
+        fastprune) break ;;
         adres) address_flow; continue ;;
         szablon) break ;;
         silnik) engine_settings; continue ;;
@@ -972,6 +994,44 @@ while :; do
             harm_flow; continue 2
         fi
         PROFILE="$WT_OUT"; step=2; continue
+    fi
+    if [ "$step" -eq 1 ] && [ "$ACTION" = fastprune ]; then
+        # U136: N od nowa z szablonu BAZOWEGO (nie z obecnej kopii -- progi monitora zdjęte przy
+        # starym N wracają, gdy nowe N je obejmuje); puste = powrót do bazy, bez fastprune.
+        fp_ask "$FP_CUR_N" || continue 2
+        if [ -z "$FP_ANS" ]; then
+            if [ -z "$FP_CUR_BASE" ]; then              # nie było i nie ma -- cofnij czekającą zmianę
+                if [ -n "$P_FP" ]; then
+                    P_EDIT=(); P_FP=""
+                    [ "$FP_DIRTY" -eq 1 ] && [ -z "$FP_BAK" ] && "$ZB" delete-profile "$FPNAME" --yes >/dev/null 2>&1 && FP_DIRTY=0 && load_lists
+                fi
+                continue 2
+            fi
+            PROFILE="$FP_CUR_BASE"; step=2; continue
+        fi
+        if [ "$FP_ANS" = "$FP_CUR_N" ]; then             # z powrotem to, co zainstalowane
+            if [ -n "$P_FP" ]; then
+                P_EDIT=(); P_FP=""
+                [ "$FP_DIRTY" -eq 1 ] && [ -n "$FP_BAK" ] && cp -p "$FP_BAK" "$FP_FILE" && FP_DIRTY=0 && load_lists
+            fi
+            continue 2
+        fi
+        _base="${FP_CUR_BASE:-${CUR_P:-default}}"
+        if [ "$FP_DIRTY" -eq 0 ] && [ "$CUR_P" = "$FPNAME" ]; then
+            FP_FILE="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); print(next((p.get("file") or "" for p in d.get("profiles",[]) if p.get("name")==sys.argv[2]),""))' "$TMPD/prof.json" "$FPNAME" 2>/dev/null | tr -d '\r')"
+            [ -n "$FP_FILE" ] && [ -f "$FP_FILE" ] && cp -p "$FP_FILE" "$TMPD/fastprune.bak" && FP_BAK="$TMPD/fastprune.bak"
+            # Bez kopii przerwana zmiana nie miałaby czego przywrócić -- a usunięcie zabrałoby
+            # relacji jej szablon. Nic nie zmieniamy.
+            if [ -z "$FP_BAK" ]; then
+                wt --title "$(T 'Fastprune: szablonu nie zapisano')" --msgbox "$(Tv 'Nie mogę zrobić kopii obecnego szablonu $PROFILE -- nic nie zmieniono.' '$PROFILE' "$FPNAME")" 8 "$W"
+                continue 2
+            fi
+        fi
+        info "$(T 'Fastprune')" "$(T 'Zapisuję ustawienia relacji...')"
+        fp_save "$_base" "$FP_ANS" "$FPNAME" "$NAME" || continue 2
+        FP_DIRTY=1
+        load_lists
+        PROFILE="$FPNAME"; step=2; continue
     fi
     if [ "$step" -eq 1 ] && [ "$ACTION" = harm ]; then
         # Ta sama tabela co szablon na F5 (sposób, wszystkie szczeble, liczby, zamrażanie),
@@ -1088,7 +1148,11 @@ for l in lines:
     lbl = re.sub(r"^profile__.*?__", "", lbl)
     r = re.search(r'\s(-[HDWMY]\d+)\s*$', body)
     new.append("  %-14s %s%s" % (when, lbl, ("  " + r.group(1)) if r else ""))
-if new or gone:
+# W18 (kampania 2026-11-03): zmiana, ktora tylko DODAJE szczeble, nie usuwa zadnej linii --
+# "zastepuja 0 dotychczasowych" bylo prawda, ale czytalo sie jak blad.
+if new and not gone:
+    print(u"\n" + _(u"Nowe zadania tej relacji (dotychczasowe zostają bez zmian):"))
+elif new or gone:
     print(u"\n" + (_(u"Zadania tej relacji po zmianie (zastępują %d dotychczasowych):") % gone))
     for x in new:
         print(x)
@@ -1107,7 +1171,9 @@ PYEOF
     # w configu, które WYKONAJ nadpisze. Mówimy to na górze planu, przed WYKONAJ.
     # (2.0: GUI czyta config i aktualizuje szablon relacji -- w obie strony.)
     : >"$TMPD/hand.txt"
-    if "$ZB" edit-relation "$NAME" "--profile=$CUR_P" "--source-profile=${CUR_S#-}" --plan >"$TMPD/base.txt" 2>&1; then
+    # U136: szablon fastprune przepisany pod ten plan -- porównanie z nim pokazałoby naszą własną
+    # zmianę jako "ręczną"; ręczne zmiany configu sprawdza wtedy zwykła zmiana szablonu.
+    if [ "$FP_DIRTY" -eq 0 ] && "$ZB" edit-relation "$NAME" "--profile=$CUR_P" "--source-profile=${CUR_S#-}" --plan >"$TMPD/base.txt" 2>&1; then
         "$PY" "$HERE/tui/hand-edits.py" "$TMPD/base.txt" "$NAME" >"$TMPD/hand.txt" 2>/dev/null || : >"$TMPD/hand.txt"
     fi
     if [ -s "$TMPD/hand.txt" ]; then
@@ -1119,6 +1185,9 @@ PYEOF
     # Szablon i tabela szczebli to dwie drogi do tego samego (sekcje od nowa) -- obowiązuje ostatnia.
     P_EDIT=("${ARGV[@]:3}"); cp "$TMPD/plan2.txt" "$TMPD/p_edit.txt"; P_TIERS=(); P_RARGS=(); P_SARGS=()
     P_EDIT_WORDS="$PROFILE"; [ "$PROFILE" = "$HNAME" ] && P_EDIT_WORDS="$(T 'własne ustawienia (tabela)')"
+    [ "$ACTION" = fastprune ] && P_EDIT_WORDS="${FP_CUR_BASE:-$PROFILE} -- $(fp_words "${FP_ANS:-off}")"
+    # U136: zmiana z wiersza Fastprune pokazuje się na nim (inaczej -- zwykły szablon -- nie)
+    P_FP=""; [ "$ACTION" = fastprune ] && P_FP="${FP_ANS:-off}"
     continue 2
 done
 done

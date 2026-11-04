@@ -1747,6 +1747,26 @@ def prefix_cell(j):
     return fam if fam and fam != "-" else "-"
 
 
+def own_inline_prunes(j):
+    """Linie delsnaps WLASNE zadania [dataset:] (szablon plaski: pobranie i porzadki w jednej
+    sekcji). cron_lines niesie linie calego BLOKU, wiec wlasna = ten sam szczebel i ten sam
+    znacznik "(...)" co linia transferu TEGO zadania; brak dopasowania = brak linii. Jedno
+    zrodlo dla F2 (wiersz "lokalny prune") i licznika "porzadki" na F3 (W1, 2026-11-04)."""
+    if j.get("section_kind", "") != "dataset" or not (j.get("retain") or j.get("keep")):
+        return []
+    own_tag = ""
+    raw_tier = j.get("tier") or ""
+    for cl in j.get("cron_lines") or []:
+        if "delsnaps.sh" not in cl and raw_tier and raw_tier in cl and (j.get("scope") or "\0") in cl:
+            m = re.search(r'\(([^)]*)\)"', cl)
+            own_tag = m.group(1) if m else ""
+            break
+    if not own_tag:
+        return []
+    return [cl for cl in j.get("cron_lines") or []
+            if "delsnaps.sh" in cl and raw_tier in cl and ("(%s)" % own_tag) in cl]
+
+
 def build_jobs(data, now):
     """Wiersze ekranu ZADANIA: jedno zadanie z crona (sekcja wysylki albo
     porzadkow), z relacja i kierunkiem. To jest to, co host naprawde robi."""
@@ -1836,17 +1856,8 @@ def build_jobs(data, now):
         # linie sekcji [prune:]) -- pierwsza z brzegu linia delsnaps liczyla cudze
         # porzadki drugi raz. Wlasna = ten sam szczebel i ten sam znacznik "(...)"
         # co linia transferu TEGO zadania. Brak dopasowania = brak wiersza.
-        own_tag = ""
-        raw_tier = j.get("tier") or ""
-        for cl in j.get("cron_lines") or []:
-            if "delsnaps.sh" not in cl and raw_tier and raw_tier in cl and (j.get("scope") or "\0") in cl:
-                m = re.search(r'\(([^)]*)\)"', cl)
-                own_tag = m.group(1) if m else ""
-                break
-        if kind == "dataset" and ret and own_tag:
-            for cl in j.get("cron_lines") or []:
-                if "delsnaps.sh" not in cl or raw_tier not in cl or ("(%s)" % own_tag) not in cl:
-                    continue
+        if kind == "dataset" and ret:
+            for cl in own_inline_prunes(j):
                 psched = " ".join(cl.split()[:5])
                 if (j.get("label") or "", psched, ret) in prune_sections:
                     break
@@ -2985,8 +2996,14 @@ def rel_panel_pairs(row, data, now, ch):
     if rel.get("bandwidth"):
         pairs.append((_(u"Łącze"), rel["bandwidth"]))
     prunes = [j for j in row["jobs"] if j.get("section_kind") == "prune"]
-    if sends or prunes:
-        pairs.append((_(u"Zadania"), _(u"%d: kopie lub migawki %d, porządki %d") % (len(sends) + len(prunes), len(sends), len(prunes))))
+    # W1 (kampania 2026-11-03): porzadki zaszyte w sekcji [dataset:] (szablon plaski, relacja
+    # lokalna) F2 pokazuje jako "lokalny prune", a licznik ich nie widzial -- "porządki 0".
+    # Te same co na F2: bez linii, ktora ma juz wlasna sekcje [prune:] (relacja, harmonogram, retencja).
+    _ps = set((p.get("label") or "", p.get("schedule") or "", p.get("retain") or p.get("keep") or "") for p in prunes)
+    n_prune = len(prunes) + sum(1 for j in sends for cl in own_inline_prunes(j)
+                                if (j.get("label") or "", " ".join(cl.split()[:5]), j.get("retain") or j.get("keep") or "") not in _ps)
+    if sends or n_prune:
+        pairs.append((_(u"Zadania"), _(u"%d: kopie lub migawki %d, porządki %d") % (len(sends) + n_prune, len(sends), n_prune)))
     if rel.get("created_at"):
         pairs.append((_(u"Powstała"), dshow(rel["created_at"])))
     for key, fld in ((_(u"Pełna kopia"), "seed_completed_at"), (_(u"Aktywna od"), "activated_at"), (_(u"Usunięta"), "removed_at")):
