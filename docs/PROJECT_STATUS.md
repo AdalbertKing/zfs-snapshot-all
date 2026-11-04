@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 082b23e8c339971b -->
+<!-- status-covers-digest: a7eecb0e2e05699e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,27 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Paczka po wdrożeniu Dąbrowskiej (2026-11-04, gałąź `feat/paczka-x`, niewydane).**
+  - U164: `check-snap-age.sh` v2.9 -- korzeń `-R` z migawką innej rodziny (np. znacznik łańcucha) nad
+    dziećmi z rodziną jest kontenerem; bez rodziny nigdzie w drzewie korzeń odpowiada jak dotąd.
+    Tak archiwum na pve0 „czekało” godzinami. Test: `test/monitor` S10 + dwie kontrole.
+  - U161: kopia pasywna bierze progi monitora z harmonogramu repliki pvesr (`/etc/pve/replication.cfg`,
+    goście, których dyski są pod źródłem): ostrzeżenie co najmniej 2x, alarm 3x najdłuższego odstępu,
+    po obu stronach; luźniejszy próg szablonu zostaje; nieczytelny harmonogram -- szablon zostaje,
+    plan to mówi. Dla `*/2:00` szczebel godzinowy 4h/6h zamiast 90m/150m.
+  - U154: `delete-relation` widzi trwający bieg relacji; z `--yes` odmawia, zanim czegokolwiek dotknie.
+  - U162: plan zmiany relacji lokalnej (`edit-relation`, który woła `local-backup --replace`) podpowiada
+    `--yes`, nie `--install`.
+  - U145: w GUI „Krótka retencja źródła” zamiast „Fastprune” (etykiety, okna, opis ukrytego szablonu;
+    znacznik `[fastprune N base=...]` w opisie zostaje); karta Zaawansowane mówi, co zawiera.
+    Akceptacja właściciela na zrzucie -- jeszcze nie.
+  - Testy (pve9, `74e8f1c0`): `test/monitor` 120/0, `test/tui` 477/0, `test/localbackup` (tester) 184/0,
+    `test/zfsbackup` 1067/6 (te same 6 środowiskowych co na main: mirrorguard x2, rev175 x4). Kontrole
+    negatywne przeciw `main`: S10 (U164), „delrel U154” i „U161” padają na main.
+  - Nadal otwarte z tej listy: maile (U157/U158/U160; w nich U159: raport dzienny pokazuje rc=8 z pve11
+    jako „PADŁ”, a to bieg bez zamrożenia gościa, migawka `_crash_`), drzewo
+    celu (U147/U155/U156, najpierw makieta), obserwacja U149, decyzja właściciela U148.
 
 - **REV-20261104-186 (2026-11-04, gałąź `fix/rev186-delsnaps`, niewydane): błędy, które udawały
   sukces w silnikach.** F1 (P1): lista migawek zarezerwowanych przez Proxmox VE przed niszczącą pełną

@@ -212,7 +212,7 @@ fi
 RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=0
 title() { T 'Zmień relację %s -- %s' "$NAME" "$2"; }
 cur_words() {   # słowa o obecnym szablonie celu
-    if [ -n "${FP_CUR_N:-}" ]; then echo "$FP_CUR_BASE -- $(Tv 'fastprune $FASTPRUNE h' '$FASTPRUNE' "$FP_CUR_N")"; return; fi
+    if [ -n "${FP_CUR_N:-}" ]; then echo "$FP_CUR_BASE -- $(Tv 'krótka retencja $FASTPRUNE h' '$FASTPRUNE' "$FP_CUR_N")"; return; fi
     if [ "$CUR_P" = "$HNAME" ]; then echo "$(T 'własne ustawienia relacji (tabela szczebli)')"; else echo "${CUR_P:-$(T '<nie zapisany>')}"; fi
 }
 
@@ -847,7 +847,7 @@ while :; do
     if [ "$SNAPONLY" -eq 1 ]; then
         _fpv="$(fp_words "$FP_CUR_N")"; [ -n "$FP_CUR_BASE" ] && _fpv="$_fpv ($FP_CUR_BASE)"
         [ -n "$P_FP" ] && _fpv="$(fp_words "$FP_CUR_N") -> $(fp_words "$P_FP") $_zm"
-        er_row fastprune "$(T 'Fastprune')" "$_fpv" "$([ -n "$P_FP" ] && echo 1 || echo 0)"
+        er_row fastprune "$(T 'Krótka retencja źródła')" "$_fpv" "$([ -n "$P_FP" ] && echo 1 || echo 0)"
     fi
     # Pasywna kopia lokalna (replika pvesr, MIRROR=1): bez historii i bez łącza okno silnika
     # było puste -- "Przywróć fabryczne" i "Gotowe" (właściciel 2026-10-26, pve2-nextcloud).
@@ -1023,11 +1023,11 @@ while :; do
             # Bez kopii przerwana zmiana nie miałaby czego przywrócić -- a usunięcie zabrałoby
             # relacji jej szablon. Nic nie zmieniamy.
             if [ -z "$FP_BAK" ]; then
-                wt --title "$(T 'Fastprune: szablonu nie zapisano')" --msgbox "$(Tv 'Nie mogę zrobić kopii obecnego szablonu $PROFILE -- nic nie zmieniono.' '$PROFILE' "$FPNAME")" 8 "$W"
+                wt --title "$(T 'Krótka retencja: szablonu nie zapisano')" --msgbox "$(Tv 'Nie mogę zrobić kopii obecnego szablonu $PROFILE -- nic nie zmieniono.' '$PROFILE' "$FPNAME")" 8 "$W"
                 continue 2
             fi
         fi
-        info "$(T 'Fastprune')" "$(T 'Zapisuję ustawienia relacji...')"
+        info "$(T 'Krótka retencja źródła')" "$(T 'Zapisuję ustawienia relacji...')"
         fp_save "$_base" "$FP_ANS" "$FPNAME" "$NAME" || continue 2
         FP_DIRTY=1
         load_lists

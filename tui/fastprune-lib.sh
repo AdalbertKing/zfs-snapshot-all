@@ -16,7 +16,7 @@ fp_ask() {   # <obecne N albo ""> -> FP_ANS (N albo "" = wyłączone); rc 1 = Ws
     local v="$1"
     while :; do
         geom
-        wt --title "$(T 'Szybkie czyszczenie źródła (fastprune)')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
+        wt --title "$(T 'Krótka retencja źródła')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
            --inputbox "$(T 'Ile godzin żyje na źródle każda migawka (wszystkie szczeble). Puste = wyłączone.\nCzyszczenie co godzinę; monitor zostaje tylko szczeblom częstszym niż ta liczba --\nwieku rzadszych pilnuje archiwum (kopia pasywna z repliki na kolektorze).')" 12 "$W" "$v" || return 1
         v="${WT_OUT// /}"
         case "$v" in
@@ -73,12 +73,12 @@ for p in d.get("profiles", []):
 PYEOF
 )
     if [ "${#args[@]}" -eq 0 ]; then
-        wt --title "$(T 'Fastprune niemożliwy')" --msgbox "$(Tv 'Szablon $PROFILE nie ma szczebli, które robią migawki -- fastprune nie ma czego skracać.' '$PROFILE' "$base")" 9 "$W"; return 1
+        wt --title "$(T 'Krótka retencja niemożliwa')" --msgbox "$(Tv 'Szablon $PROFILE nie ma szczebli, które robią migawki -- krótka retencja nie ma czego skracać.' '$PROFILE' "$base")" 9 "$W"; return 1
     fi
     if ! "$ZB" save-profile "--from=$base" "--as=$name" --hidden --force \
-         "--description=$(Tv 'Fastprune $FASTPRUNE h z $PROFILE (relacja $RNAME)' '$FASTPRUNE' "$n" '$PROFILE' "$base" '$RNAME' "$rel") [fastprune $n base=$base]" \
+         "--description=$(Tv 'Krótka retencja $FASTPRUNE h z $PROFILE (relacja $RNAME)' '$FASTPRUNE' "$n" '$PROFILE' "$base" '$RNAME' "$rel") [fastprune $n base=$base]" \
          "${args[@]}" >/dev/null 2>"$TMPD/fp.err"; then
-        wt --title "$(T 'Fastprune: szablonu nie zapisano')" --msgbox "$(tail -4 "$TMPD/fp.err")" 14 "$W"; return 1
+        wt --title "$(T 'Krótka retencja: szablonu nie zapisano')" --msgbox "$(tail -4 "$TMPD/fp.err")" 14 "$W"; return 1
     fi
     return 0
 }

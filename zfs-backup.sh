@@ -8727,6 +8727,61 @@ cmd_remove_replica() {
 }
 
 
+# U161 (Dabrowska 2026-11-04): a passive copy is fed by the pvesr replica, so its archive
+# cannot be fresher than the replica's schedule. The template's 90m/150m on the hourly tier
+# made the archive "late" at every */2:00 replica. Interval of one pvesr schedule, in seconds:
+# */M -> M min, */N:MM -> N h, H:MM -> a day, none -> pvesr's default */15. Anything else
+# (weekday lists, ranges) -> nothing: the caller says it could not read it and leaves the template.
+pvesr_interval_s() {   # <schedule or ""> -> seconds, or nothing
+    local sc="${1//[[:space:]]/}"
+    case "$sc" in
+        '') echo 900 ;;
+        \*/[0-9]|\*/[0-9][0-9]) echo $(( 10#${sc#*/} * 60 )) ;;
+        \*/[0-9]:[0-9][0-9]|\*/[0-9][0-9]:[0-9][0-9]) sc="${sc#*/}"; echo $(( 10#${sc%%:*} * 3600 )) ;;
+        \*:[0-9][0-9]) echo 3600 ;;
+        [0-9]:[0-9][0-9]|[0-9][0-9]:[0-9][0-9]) echo 86400 ;;
+    esac
+}
+# The longest pvesr interval among the guests whose disks lie under the given roots
+# (vm-<id>-*, subvol-<id>-*, base-<id>-*). PVE_REPLICATION_CFG is the test override.
+# -> PVESR_I (seconds, "" when no job matches), PVESR_IDS, PVESR_UNREAD (schedules not read).
+# Globals, not stdout: a $(...) call would lose PVESR_UNREAD in its subshell.
+pvesr_interval_for_roots() {   # <root>...
+    local cfg="${PVE_REPLICATION_CFG:-/etc/pve/replication.cfg}" r id sc sec max=0 ids=""
+    PVESR_I=""; PVESR_IDS=""; PVESR_UNREAD=""
+    [ -r "$cfg" ] || return 0
+    local -A have=()
+    for r in "$@"; do
+        while IFS= read -r id; do [ -n "$id" ] && have[$id]=1; done < <(
+            zfs list -H -o name -t volume,filesystem -r -- "$r" 2>/dev/null \
+            | sed -nE 's#.*/(vm|subvol|base)-([0-9]+)-[^/]*$#\2#p')
+    done
+    while IFS=$'\t' read -r id sc; do
+        [ -n "${have[$id]+x}" ] || continue
+        sec=$(pvesr_interval_s "$sc")
+        if [ -z "$sec" ]; then PVESR_UNREAD+="${PVESR_UNREAD:+, }$id ($sc)"; continue; fi
+        ids+="${ids:+ }$id"
+        [ "$sec" -gt "$max" ] && max="$sec"
+    done < <(awk '
+        /^[a-z]+:[ \t]*[0-9]+-[0-9]+/ { if (id != "") print id "\t" sc; id = $2; sub(/-.*/, "", id); sc = ""; next }
+        /^[ \t]+schedule[ \t]/ { sc = $0; sub(/^[ \t]+schedule[ \t]+/, "", sc); sub(/[ \t\r]+$/, "", sc) }
+        END { if (id != "") print id "\t" sc }' "$cfg")
+    [ "$max" -gt 0 ] && { PVESR_I="$max"; PVESR_IDS="$ids"; }
+    return 0
+}
+dur_seconds() {   # <N>m|<N>h|<N>d -> seconds (check-snap-age's grammar), or nothing
+    case "$1" in
+        *[0-9]m) [[ "${1%m}" =~ ^[0-9]+$ ]] && echo $(( 10#${1%m} * 60 )) ;;
+        *[0-9]h) [[ "${1%h}" =~ ^[0-9]+$ ]] && echo $(( 10#${1%h} * 3600 )) ;;
+        *[0-9]d) [[ "${1%d}" =~ ^[0-9]+$ ]] && echo $(( 10#${1%d} * 86400 )) ;;
+    esac
+}
+seconds_dur() {   # seconds -> the shortest exact <N>d|<N>h|<N>m
+    if [ $(( $1 % 86400 )) -eq 0 ] && [ "$1" -ge 172800 ]; then echo "$(( $1 / 86400 ))d"
+    elif [ $(( $1 % 3600 )) -eq 0 ]; then echo "$(( $1 / 3600 ))h"
+    else echo "$(( ($1 + 59) / 60 ))m"; fi
+}
+
 cmd_local_backup() {
     # The source family of a LOCAL relationship has its own names (see profile_to_src_id).
     local SRC_ID_TAG=lsrc
@@ -9527,6 +9582,38 @@ Taking over older jobs (a v4 config written manually): remove their sections fir
         tiers_apply_ops "$cand" "$lb_name" "${EDIT_TIER_OPS[@]}"
         echo "Tiers after the change (same config swap):"; printf '  %s\n' "${TIERS_CHANGES[@]}"
     fi
+    # U161: a passive copy's archive monitor follows the pvesr replica that feeds it --
+    # warn at least 2 intervals, crit at least 3; a tier already looser keeps its own.
+    if [ "$lb_passive" -eq 1 ] && [ -n "$lb_name" ]; then
+        local _pvi _pvids _t _w _c _ws _cs _nw _nc _pvch=()
+        pvesr_interval_for_roots "${roots[@]}"
+        if [ -n "$PVESR_I" ]; then
+            _pvi="$PVESR_I"; _pvids="$PVESR_IDS"
+            local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
+            relblock_load "$cand" "$lb_name"
+            # Both sides: the source of a passive copy IS the pvesr replica, so its own
+            # monitor (on the same tier) runs on the same clock.
+            local _sd
+            for _t in "${RB_TIERS[@]}"; do for _sd in target source; do
+                _w=$(rb_get "$_t" "$_sd" monitor_warn) || continue
+                _c=$(rb_get "$_t" "$_sd" monitor_crit) || continue
+                _ws=$(dur_seconds "$_w"); _cs=$(dur_seconds "$_c")
+                [ -n "$_ws" ] && [ -n "$_cs" ] || continue
+                _nw="$_w"; _nc="$_c"
+                [ "$_ws" -lt $(( 2 * _pvi )) ] && _nw=$(seconds_dur $(( 2 * _pvi )))
+                [ "$_cs" -lt $(( 3 * _pvi )) ] && _nc=$(seconds_dur $(( 3 * _pvi )))
+                [ "$_nw $_nc" = "$_w $_c" ] && continue
+                rb_set "$_t" "$_sd" monitor_warn "$_nw"; rb_set "$_t" "$_sd" monitor_crit "$_nc"
+                _pvch+=("$_t ($_sd): $_w/$_c -> $_nw/$_nc")
+            done; done
+            if [ "${#_pvch[@]}" -gt 0 ]; then
+                relblock_write "$cand" "$lb_name" || die "local-backup: could not write the [relation:$lb_name] block of the candidate"
+            fi
+            echo "  Archive monitor:  fed by pvesr every $(seconds_dur "$_pvi") (guests $_pvids) -- thresholds at least 2x/3x that:"
+            if [ "${#_pvch[@]}" -gt 0 ]; then printf '                    %s\n' "${_pvch[@]}"; else echo "                    the template's already are"; fi
+        fi
+        [ -n "${PVESR_UNREAD:-}" ] && echo "  Archive monitor:  pvesr schedule not read for guest(s) $PVESR_UNREAD -- the template's thresholds stay; check them against the replica"
+    fi
     echo
     echo "--- candidate CONFIG v4 (full: existing + new job) ---"
     cat "$cand"
@@ -9536,7 +9623,13 @@ Taking over older jobs (a v4 config written manually): remove their sections fir
     if [ "$do_install" -ne 1 ]; then
         echo
         echo "This is a plan only -- nothing was installed."
-        echo "To install: repeat the same command with --install."
+        # U162 (Dabrowska 2026-11-04): edit-relation reaches this plan through --replace and
+        # takes --yes, not --install -- the hint named an option the owner's command refused.
+        if [ "$lb_replace" -eq 1 ]; then
+            echo "To apply: repeat the same edit-relation command with --yes."
+        else
+            echo "To install: repeat the same command with --install."
+        fi
         rm -f "$cand"
         return 0
     fi
@@ -15362,6 +15455,20 @@ cmd_delete_relation() {
         echo "  4. copies    : KEPT on this host${copies:+ ($copies)} -- pass --destroy-copies to destroy them too"
     fi
     replica_restart_warning "$copies"
+    # U154 (Dabrowska 2026-11-04): deleting a relationship took its cron lines away while its
+    # first full copy (558G) kept running, unmentioned. A run of THIS relationship in flight
+    # (an engine carrying -L <name>, the same probe pause-client uses) stops the delete: it
+    # kills nothing on its own -- the operator waits for it or stops it, then repeats.
+    local running
+    running=$(pgrep -af "(snapget|snapsend|delsnaps)\.sh .*-L $name( |\$)" 2>/dev/null || :)
+    if [ -n "$running" ]; then
+        echo "  !! a run of '$name' is in progress RIGHT NOW:"
+        printf '       %s\n' "$running"
+        if [ "$yes" -eq 1 ]; then
+            die "delete-relation: '$name' has a run in progress -- let it finish (or stop it: kill <pid> above), then run this again. Nothing was changed."
+        fi
+        echo "  -- with --yes this is refused until that run has ended."
+    fi
     if [ "$yes" -ne 1 ]; then
         echo "plan only. Re-run with --yes to do it. Nothing was changed."
         return 0

@@ -13897,6 +13897,26 @@ if [ "$(grep -c -- "--commit-scope='\$COLLECTOR_LABEL'\$aq\"" "$ZFSBACKUP")" -eq
 else
     bad "delrel: a remote commit-scope without \$aq" "$(grep -n -- "--commit-scope='\$COLLECTOR_LABEL'" "$ZFSBACKUP" | cut -c1-160)"
 fi
+# U154 (Dabrowska 2026-11-04): a run of the relationship in flight stops delete-relation
+# --yes before anything is touched (record kept, no zfs call); the plan names the run.
+# A fake pgrep answers for -L e; control: nothing running -> the plan has no such note.
+printf 'CLIENT_NAME=e\nSTATE=removed\nPEER_HOST=10.0.0.9\nACTIVE_ENDPOINT=10.0.0.9:22\nCLIENT_TARGET=tank/b\nMANAGED_DATASETS=tank/b/10.0.0.9/p/x\n' > "$DR/clients/e.conf"
+mkdir -p "$DR/pg"
+printf '#!/bin/sh\ncase "$*" in *"-L e"*) echo "4242 bash /x/snapget.sh -m automated_hourly_ -L e 10.0.0.9:p/x tank/b" ;; esac\nexit 0\n' > "$DR/pg/pgrep"
+printf '#!/bin/sh\necho "$@" >>"%s"\nexit 0\n' "$DR/zfs154.calls" > "$DR/pg/zfs"
+chmod +x "$DR/pg/pgrep" "$DR/pg/zfs"
+: > "$DR/zfs154.calls"
+U154Y=$( PATH="$DR/pg:$PATH" dr_run e --destroy-copies --yes 2>&1 ); u154y=$?; U154E=$(cat "$DR/err" 2>/dev/null)
+U154P=$( PATH="$DR/pg:$PATH" dr_run e 2>&1 )
+U154C=$( dr_run e 2>&1 )
+if [ "$u154y" -ne 0 ] && printf '%s%s' "$U154Y" "$U154E" | grep -q "has a run in progress" \
+   && [ -f "$DR/clients/e.conf" ] && [ ! -s "$DR/zfs154.calls" ] \
+   && printf '%s' "$U154P" | grep -q "is in progress RIGHT NOW" && printf '%s' "$U154P" | grep -q "4242" \
+   && ! printf '%s' "$U154C" | grep -q "in progress RIGHT NOW"; then
+    ok "delrel U154: a run of the relationship in flight -- --yes refused, record kept, no zfs call; the plan names the run; nothing running -> no note"
+else
+    bad "delrel U154: running run" "rc=$u154y" "$U154Y" "err: $U154E" "plan: $U154P" "control: $U154C" "zfs: $(cat "$DR/zfs154.calls")"
+fi
 # REV-144: THE RECORD IS THE RETRY STATE. A source half that did not complete used to
 # be logged as rc=1 and then walked straight into `--purge` -- which deleted the peer,
 # the endpoint and the label the retry needs, so `delete-relation NAME --yes` answered
