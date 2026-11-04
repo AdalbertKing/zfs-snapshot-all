@@ -1499,6 +1499,161 @@ check "P -t write: push left the copy alone" "auto_1 manual auto_2" "$(snaps_of 
 check "P -t write: pull left the copy alone" "auto_1 manual auto_2" "$(snaps_of "$PLP/xg")"
 check "P -t write: push says it is not a backup landing" "yes" "$(said_s 'is not a backup landing')"
 
+# --- REV-20261104-186 F1/F4/F5/F6 ---------------------------------------------
+# F1: the protected-snapshot listing before a force-full destroy is fail-closed.
+# F4: the -F collision scan maps a nested target child by its FULL relative path.
+# F5: a failed remote `zfs list` is not an empty list. F6: -m is a literal prefix.
+# The shim style is test/delsnaps/run.sh's: a fake zfs first on PATH breaks ONE call,
+# records every destroy, and execs the real zfs for the rest.
+R186D="$(mktemp -d)"; mkdir -p "$R186D/bin" "$R186D/f5bin"
+export R186_LOG="$R186D/destroys" R186_REAL="$(command -v zfs)"
+cat > "$R186D/bin/zfs" <<'SHIM'
+#!/bin/bash
+if [ "$1" = destroy ]; then echo "destroy $*" >> "$R186_LOG"; fi
+if [ -n "${F1_TGT:-}" ] && [ "$1 $2 $3 $4 $5 $6" = "list -t snapshot -H -o name -r" ] \
+   && [ "${!#}" = "$F1_TGT" ]; then
+    echo "cannot iterate '$F1_TGT': simulated I/O error" >&2; exit 1
+fi
+exec "$R186_REAL" "$@"
+SHIM
+chmod +x "$R186D/bin/zfs"
+
+# The same argv through either engine; local mode, so both do identical work.
+r186_run() {   # <send|get> <name> <engine args...> -> RC, OUT
+    local eng="$1" name="$2"; shift 2
+    if [ "$eng" = send ]; then run_send_out "$@" "$POOL/$name" "$BK"
+    else run_get_out "$@" "$SRCBASE/$POOL/$name" "$LOCALPULL"; fi
+}
+r186_src() { if [ "$1" = send ]; then echo "$POOL/$2"; else echo "$SRCBASE/$POOL/$2"; fi; }
+r186_tgt() { if [ "$1" = send ]; then echo "$BK/$POOL/$2"; else echo "$PULLED/$POOL/$2"; fi; }
+r186_shim() {  # r186_run through the shim; F1_TGT (exported by the caller) names the call to break
+    local p0="$PATH"; PATH="$R186D/bin:$PATH"; r186_run "$@"; PATH="$p0"
+}
+r186_said() { printf '%s\n' "$OUT" | grep -c -- "$1"; }
+
+for eng in send get; do
+    # F1a: the listing of the target's snapshots fails -> refuse BEFORE any destroy.
+    # Old engines read the failure as "nothing reserved" and destroyed the target.
+    zfs create -p "$(r186_src $eng f1a$eng)" || exit 1
+    zfs snapshot "$(r186_src $eng f1a$eng)@auto_1"
+    r186_run $eng f1a$eng -e -m "auto_"
+    F1T="$(r186_tgt $eng f1a$eng)"
+    tick; zfs snapshot "$(r186_src $eng f1a$eng)@auto_2"
+    : > "$R186_LOG"; export F1_TGT="$F1T"
+    r186_shim $eng f1a$eng -f -e -m "auto_"
+    unset F1_TGT
+    check "F1 $eng: listing fails -> rc != 0" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+    check "F1 $eng: listing fails -> no destroy was issued" "0" "$(grep -c . "$R186_LOG")"
+    check "F1 $eng: listing fails -> the target's snapshots are unchanged" "auto_1" "$(snaps_of "$F1T")"
+    check "F1 $eng: listing fails -> the refusal is named" "yes" \
+          "$([ "$(r186_said 'Refusing the destructive full transfer')" -ge 1 ] && echo yes || echo no)"
+
+    # F1b: positive control through the SAME shim, nothing broken -> -f proceeds.
+    zfs create -p "$(r186_src $eng f1b$eng)" || exit 1
+    zfs snapshot "$(r186_src $eng f1b$eng)@auto_1"
+    r186_run $eng f1b$eng -e -m "auto_"
+    tick; zfs snapshot "$(r186_src $eng f1b$eng)@auto_2"
+    : > "$R186_LOG"
+    r186_shim $eng f1b$eng -f -e -m "auto_"
+    check "F1 $eng control: shim, nothing broken -> -f rc 0, target rebuilt" "0|auto_2" \
+          "$RC|$(snaps_of "$(r186_tgt $eng f1b$eng)")"
+    check "F1 $eng control: the shim does see the destroy" "yes" \
+          "$([ "$(grep -c . "$R186_LOG")" -ge 1 ] && echo yes || echo no)"
+done
+
+# F4: nested root/a/b with a common snapshot. -F only acts together with -r (atomic
+# recursion), so -r -F is used here. The old scan compared tgt/a/b with src/b (the
+# basename hung under the root), saw "no such snapshot" and upgraded to a full resend.
+for eng in send get; do
+    S="$(r186_src $eng f4$eng)"; zfs create -p "$S/a/b" || exit 1
+    zfs snapshot -r "$S@base"
+    r186_run $eng f4$eng -r -e -m "base"
+    T4="$(r186_tgt $eng f4$eng)"
+    check "F4 $eng setup: initial -r transfer replicated the depth-2 child" "base" "$(snaps_of "$T4/a/b")"
+    tick; zfs snapshot -r "$S@auto_2"
+    r186_run $eng f4$eng -r -F -v 3 -e -m "auto_"
+    check "F4 $eng: equal GUIDs at depth 2 -> rc 0" "0" "$RC"
+    check "F4 $eng: equal GUIDs at depth 2 -> NOT upgraded to a full" "0" "$(r186_said 'Upgrading this run to a full')"
+    check "F4 $eng: the incremental reached the depth-2 child" "base auto_2" "$(snaps_of "$T4/a/b")"
+
+    # F4b control: a different @base on the target child -> a genuine mismatch is still found.
+    S="$(r186_src $eng f4x$eng)"; zfs create -p "$S/a/b" || exit 1
+    zfs snapshot -r "$S@base"
+    r186_run $eng f4x$eng -r -e -m "base"
+    T4="$(r186_tgt $eng f4x$eng)"
+    zfs destroy "$T4/a/b@base" && zfs snapshot "$T4/a/b@base"
+    tick; zfs snapshot -r "$S@auto_2"
+    r186_run $eng f4x$eng -r -F -v 3 -e -m "auto_"
+    check "F4 $eng control: a different @base on the target child -> upgraded to a full" "1" \
+          "$(r186_said 'Upgrading this run to a full')"
+done
+
+# F5: get_sorted_snapshots lifted from each engine (+ probe_dataset from the lib) and
+# run with a fake ssh that executes its command locally, so the "remote" is this pool.
+# The fake zfs fails `list -t snapshot` for ONE named dataset (F5_BAD).
+cat > "$R186D/f5bin/ssh" <<'SHIM'
+#!/bin/bash
+exec bash -c "${!#}"
+SHIM
+cat > "$R186D/f5bin/zfs" <<'SHIM'
+#!/bin/bash
+if [ "$1" = list ] && [ -n "${F5_BAD:-}" ] && [ "${!#}" = "$F5_BAD" ] \
+   && printf '%s ' "$@" | grep -q -- ' -t snapshot '; then
+    echo "cannot open '$F5_BAD': simulated failure" >&2; exit 1
+fi
+exec "$R186_REAL" "$@"
+SHIM
+chmod +x "$R186D/f5bin/ssh" "$R186D/f5bin/zfs"
+r186_fn() { sed -n "/^$2() {/,/^}/p" "$1"; }   # the suite-local twin of harness product_fn
+zfs create -p "$POOL/f5ok" || exit 1
+zfs create -p "$POOL/f5bad" || exit 1
+zfs snapshot "$POOL/f5ok@auto_1"; zfs snapshot "$POOL/f5bad@auto_1"
+tick; zfs snapshot "$POOL/f5ok@auto_2"
+for engfile in "$SNAPSEND" "$SNAPGET"; do
+    en="$(basename "$engfile" .sh)"
+    { r186_fn "$engfile" get_sorted_snapshots; r186_fn "$REPO/lib-zfs-snap.sh" probe_dataset; } > "$R186D/fn-$en.sh"
+    [ -s "$R186D/fn-$en.sh" ] || { echo "cannot lift get_sorted_snapshots/probe_dataset for $en" >&2; exit 1; }
+    f5() {   # <dataset> <bad-dataset-or-empty> -> "rc|names"
+        local o r
+        o=$( . "$R186D/fn-$en.sh"
+             log() { echo "LOG $*" >&2; }
+             remote_refused_by_gate() { return 1; }
+             SSH_OPTS=(); RECURSIVE=0
+             export F5_BAD="$2" PATH="$R186D/f5bin:$PATH"
+             get_sorted_snapshots "$1" someuser somehost 2>/dev/null )
+        r=$?
+        printf '%s|%s' "$r" "$(printf '%s' "$o" | tr '\n' ' ' | sed 's/ $//')"
+    }
+    check "F5 $en: remote zfs list fails on an EXISTING dataset -> rc 1, no list" "1|" "$(f5 "$POOL/f5bad" "$POOL/f5bad")"
+    check "F5 $en: dataset that does not exist -> rc 0, empty list" "0|" "$(f5 "$POOL/f5nope" "")"
+    check "F5 $en: two snapshots -> rc 0, oldest first" "0|auto_1 auto_2" "$(f5 "$POOL/f5ok" "")"
+done
+
+# F6: -m is a literal prefix. `.` used to match any character, so the newer
+# dailyX2026_b was picked over daily.2026_a (it is also the newest regex match).
+for eng in send get; do
+    S="$(r186_src $eng f6$eng)"; zfs create -p "$S" || exit 1
+    zfs snapshot "$S@daily.2026_a"
+    tick; zfs snapshot "$S@dailyX2026_b"
+    r186_run $eng f6$eng -e -m "daily.2026"
+    check "F6 $eng: -m daily.2026 takes daily.2026_a, never the newer dailyX2026_b" "0|daily.2026_a" \
+          "$RC|$(snaps_of "$(r186_tgt $eng f6$eng)")"
+
+    # ZFS snapshot names allow only alphanumerics and -_.: (and a space), so a
+    # bracket name is normally refused at creation; try it, and skip if it is.
+    S="$(r186_src $eng f6m$eng)"; zfs create -p "$S" || exit 1
+    if zfs snapshot "$S@d[a]ily_1" 2>/dev/null; then
+        tick; zfs snapshot "$S@daily_2"
+        r186_run $eng f6m$eng -e -m "d[a]ily"
+        check "F6 $eng: -m 'd[a]ily' selects the literal d[a]ily_1, not daily_2" "0|d[a]ily_1" \
+              "$RC|$(snaps_of "$(r186_tgt $eng f6m$eng)")"
+    else
+        echo "SKIP F6 $eng bracket case: this ZFS refuses [ ] in snapshot names"
+    fi
+done
+rm -rf "$R186D"
+unset R186_LOG R186_REAL
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"

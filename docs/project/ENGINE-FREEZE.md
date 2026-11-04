@@ -1222,6 +1222,26 @@ Owner-authorized refreezes:
   - The age verdict is factored into `check_age_report` (reads check_one's locals); the
     computation is unchanged. Without -S a missing dataset is UNKNOWN as before (S9 control).
   twin: none -- check-snap-age.sh is the only monitor engine.
+- 2026-11-04 (snapsend.sh, snapget.sh, delsnaps.sh, lib-zfs-snap.sh): **REV-20261104-186 --
+  fail-open discovery and retention.** Owner direction ("działaj" on the REV-186 plan,
+  2026-11-04); the review itself carries no `authorizes-frozen`, so this is the owner route.
+  - F1 (P1): the protected-snapshot check before a force-full destroy is fail-closed --
+    `list_protected_snaps` (lib): the target's existence is asked (`probe_dataset`), the
+    listing's status and every line are checked; any failure refuses before `zfs destroy`.
+  - F4 (P1): the -F collision scan maps each target descendant by its full relative path
+    (`collision_scan_pairs`, lib) instead of its basename; a listing without the root or with
+    a line outside it, or an unanswerable source probe, ends the scan, and an incomplete scan
+    never upgrades to a full transfer.
+  - F5 (P2): `get_sorted_snapshots` runs no awk on the remote side; the raw list's status is
+    checked, every line must be a snapshot, and a dataset that genuinely does not exist is
+    still an empty list (asked via `probe_dataset`).
+  - F6 (P2): the -m family filter is a literal prefix (`[[ == "$MESSAGE"* ]]`), not a regex.
+  - F2 (P2, delsnaps.sh): age-mode and bookmark creation reads check status and a numeric
+    answer; an unreadable object is kept and the run ends nonzero.
+  - F3 (P2, delsnaps.sh): the -R walk is listed before anything is pruned and must succeed,
+    name the root and stay under it; otherwise nothing in the tree is pruned, rc 1.
+  twin: snapsend.sh <-> snapget.sh changed symmetrically (F1, F4, F5, F6); the shared parts
+  live in lib-zfs-snap.sh.
 
 ## How it is enforced
 
