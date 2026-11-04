@@ -1171,7 +1171,9 @@ PYEOF
     # w configu, które WYKONAJ nadpisze. Mówimy to na górze planu, przed WYKONAJ.
     # (2.0: GUI czyta config i aktualizuje szablon relacji -- w obie strony.)
     : >"$TMPD/hand.txt"
-    if "$ZB" edit-relation "$NAME" "--profile=$CUR_P" "--source-profile=${CUR_S#-}" --plan >"$TMPD/base.txt" 2>&1; then
+    # U136: szablon fastprune przepisany pod ten plan -- porównanie z nim pokazałoby naszą własną
+    # zmianę jako "ręczną"; ręczne zmiany configu sprawdza wtedy zwykła zmiana szablonu.
+    if [ "$FP_DIRTY" -eq 0 ] && "$ZB" edit-relation "$NAME" "--profile=$CUR_P" "--source-profile=${CUR_S#-}" --plan >"$TMPD/base.txt" 2>&1; then
         "$PY" "$HERE/tui/hand-edits.py" "$TMPD/base.txt" "$NAME" >"$TMPD/hand.txt" 2>/dev/null || : >"$TMPD/hand.txt"
     fi
     if [ -s "$TMPD/hand.txt" ]; then
@@ -1183,6 +1185,7 @@ PYEOF
     # Szablon i tabela szczebli to dwie drogi do tego samego (sekcje od nowa) -- obowiązuje ostatnia.
     P_EDIT=("${ARGV[@]:3}"); cp "$TMPD/plan2.txt" "$TMPD/p_edit.txt"; P_TIERS=(); P_RARGS=(); P_SARGS=()
     P_EDIT_WORDS="$PROFILE"; [ "$PROFILE" = "$HNAME" ] && P_EDIT_WORDS="$(T 'własne ustawienia (tabela)')"
+    [ "$ACTION" = fastprune ] && P_EDIT_WORDS="${FP_CUR_BASE:-$PROFILE} -- $(fp_words "${FP_ANS:-off}")"
     # U136: zmiana z wiersza Fastprune pokazuje się na nim (inaczej -- zwykły szablon -- nie)
     P_FP=""; [ "$ACTION" = fastprune ] && P_FP="${FP_ANS:-off}"
     continue 2
