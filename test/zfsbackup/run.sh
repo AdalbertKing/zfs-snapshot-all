@@ -13554,12 +13554,13 @@ case "$host" in real) exec bash -c "$cmd";; esac
 case "$cmd" in
     *"apt-get install -y git"*)
         case "$host" in aptfail) echo "E: Unable to locate package git" >&2; exit 100;; esac
+        case "$host" in nogit404) echo "apt: 404 for git from the archive its list names -- trying git=1:2.30.2-1+deb11u2 from the main archive";; esac
         touch "$PS_ARGS/git-$host";;
     *PROBE=done*)
         echo "HOSTNAME=$host"; echo "ZFS=yes"; echo "POOL=hdd,39.5G,38.3G"
         case "$host" in
             nogitnoapt) ;;
-            nogit|aptfail) [ -e "$PS_ARGS/git-$host" ] && echo "GIT=yes"; echo "APT=yes";;
+            nogit|nogit404|aptfail) [ -e "$PS_ARGS/git-$host" ] && echo "GIT=yes"; echo "APT=yes";;
             olddir) echo "GIT=yes"; echo "APT=yes"; echo "DIR=notempty";;
             *) echo "GIT=yes";;
         esac
@@ -13689,6 +13690,15 @@ else
     bad "preparesource: apt fails" "$(cat "$PS/out")" "$(cat "$PS/err")" "$(cat "$PS/ssh.argv")"
 fi
 rm -f "$PS/ssh.argv" "$PS/scp.argv" "$PS"/installed-* "$PS"/git-*
+# Lab 2026-11-05 (real 404 on pve11): the main-archive fallback installed git and the
+# verb said only "installed git" -- the fallback's own line is on the success line now.
+if ps_run prepare-source nogit404 --yes >"$PS/out" \
+        && grep -q 'installed git on nogit404: 404 from the archive its list names -- trying git=1:2.30.2-1+deb11u2 from the main archive' "$PS/out"; then
+    ok "preparesource: a git install that took the main-archive version after a 404 says so on its success line"
+else
+    bad "preparesource: 404 fallback unseen" "$(cat "$PS/out")" "$(cat "$PS/err")"
+fi
+rm -f "$PS/ssh.argv" "$PS/scp.argv" "$PS"/installed-* "$PS"/git-*
 if ! ps_run prepare-source nogitnoapt --yes >"$PS/out" && grep -q 'has no git and no apt-get' "$PS/err" \
         && ! grep -q 'apt-get install\|git clone' "$PS/ssh.argv"; then
     ok "preparesource: neither git nor apt-get on the source -- refused, nothing attempted"
@@ -13775,10 +13785,12 @@ fi
     eval "$(product_fn "$REPO/deploy.sh" apt_install_with_fallback)"
     export PATH="$AP:$PATH" APT_LOG="$AP/log"
     : > "$AP/log"; d404_rc=0; APT404=1 apt_install_with_fallback git > "$AP/d404.out" 2>&1 || d404_rc=$?
-    d404_log=$(cat "$AP/log")
+    d404_log=$(cat "$AP/log"); d404_fb="$APT_FALLBACK"
     : > "$AP/log"; dno_rc=0; APT404=0 apt_install_with_fallback git > "$AP/dno.out" 2>&1 || dno_rc=$?
     dno_err="$APT_LAST_ERR"; dno_log=$(cat "$AP/log")
+    # APT_FALLBACK is what check_dep names, its own call being silenced (lab 2026-11-05)
     if [ "$d404_rc" -eq 0 ] && grep -q 'trying git=1:2.30.2-1+deb11u2 from the main archive' "$AP/d404.out" \
+            && [ "$d404_fb" = "git=1:2.30.2-1+deb11u2" ] && [ -z "$APT_FALLBACK" ] \
             && printf '%s\n' "$d404_log" | grep -qx 'install -y --no-install-recommends git=1:2.30.2-1+deb11u2' \
             && [ "$dno_rc" -ne 0 ] && [ "$dno_err" = "E: Unable to locate package git" ] \
             && ! printf '%s\n' "$dno_log" | grep -q 'git='; then

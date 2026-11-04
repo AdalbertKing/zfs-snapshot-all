@@ -15241,7 +15241,7 @@ cmd_prepare_source() {
     if [ "$PROBE_GIT" -ne 1 ]; then
         err=$(rux_root_ssh "$SRC_HOST" "$SRC_PORT" "$(remote_apt_install_cmd git) && command -v git >/dev/null" 2>&1) \
             || die "prepare-source: apt-get install git on $SRC_HOST failed: $(printf '%s' "$err" | tr -d '\r' | grep -v '^$' | tail -1). Install it there by hand, then re-run."
-        echo ">>> installed git on $SRC_HOST"
+        echo ">>> installed git on $SRC_HOST$(printf '%s' "$err" | tr -d '\r' | sed -n 's/^apt: 404 for [^ ]* /: 404 /p' | head -1)"
     fi
     if err=$(rux_root_ssh "$SRC_HOST" "$SRC_PORT" "git clone -q '$url' '$SOURCE_REPO_DIR'" 2>&1); then
         echo ">>> cloned $url into $SOURCE_REPO_DIR on $SRC_HOST"
@@ -22431,7 +22431,7 @@ rux_source_sudo_ready() {
     log "--grant-quiesce: $host has no sudo (a default Proxmox VE has none) -- installing it there before the first change: apt-get install -y sudo"
     out=$(rux_root_ssh "$host" "$port" "$(remote_apt_install_cmd sudo) && command -v sudo >/dev/null 2>&1 && { command -v visudo >/dev/null 2>&1 || [ -x /usr/sbin/visudo ] || [ -x /sbin/visudo ]; }" 2>&1) \
         || die "--grant-quiesce: apt-get install sudo on $host failed: $(printf '%s' "$out" | tr -d '\r' | grep -v '^$' | tail -1). Install sudo there by hand (or drop --grant-quiesce), then re-run. Nothing else was changed anywhere."
-    log "--grant-quiesce: sudo installed on $host"
+    log "--grant-quiesce: sudo installed on $host$(printf '%s' "$out" | tr -d '\r' | sed -n 's/^apt: 404 for [^ ]* /: 404 /p' | head -1)"
 }
 
 rux_grant_remotely() {   # <host> <port> <requested dataset>

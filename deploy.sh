@@ -3394,10 +3394,13 @@ apply_recorded_grant_datasets
 # work. Shared by every package we need below.
 # APT_LAST_ERR: apt's own last "E:" line when every try failed -- check_dep's
 # callers silence this function, and the reason belongs in their message.
+# APT_FALLBACK: "PKG=VER" when the 404 retry is what installed it -- check_dep
+# silences this function too, and lab 2026-11-05 showed the fallback unseen.
 APT_LAST_ERR=""
+APT_FALLBACK=""
 apt_install_with_fallback() {
     local pkg="$1" out ver
-    APT_LAST_ERR=""
+    APT_LAST_ERR=""; APT_FALLBACK=""
     apt-get install -y "$pkg" 2>/dev/null && return 0
     warn "plain install of $pkg failed, running apt-get update first (pve-enterprise 401 is expected/harmless here)"
     apt-get update || true
@@ -3416,7 +3419,7 @@ apt_install_with_fallback() {
         ver=$(apt-cache madison "$pkg" 2>/dev/null | awk -F'|' '$3 !~ /security/ { gsub(/[[:space:]]/, "", $2); print $2; exit }')
         if [ -n "$ver" ]; then
             warn "apt could not fetch $pkg (404 from the archive its package list names) -- trying $pkg=$ver from the main archive"
-            out=$(apt-get install -y --no-install-recommends "$pkg=$ver" 2>&1) && return 0
+            out=$(apt-get install -y --no-install-recommends "$pkg=$ver" 2>&1) && { APT_FALLBACK="$pkg=$ver"; return 0; }
             printf '%s\n' "$out"
         fi
     fi
@@ -5068,7 +5071,7 @@ check_dep() {
     apt_install_with_fallback "$pkg" >/dev/null 2>&1 || true
 
     if command -v "$cmd" >/dev/null 2>&1; then
-        log "  [installed] $cmd"
+        log "  [installed] $cmd${APT_FALLBACK:+ ($APT_FALLBACK from the main archive: the version its package list named was a 404)}"
         return 0
     fi
 
