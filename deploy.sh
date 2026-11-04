@@ -5428,7 +5428,7 @@ ZFS_ALERT_QUEUE=${ALERT_SHARED_DIR}/alert-queue.log
 # the digest whatever this says, because suppressing an alert on a schedule is
 # not a cadence, it is a lost alert.
 #
-# `off` is honoured and is the one value that costs a guarantee: with no quiet
+# \`off\` is honoured and is the one value that costs a guarantee: with no quiet
 # mail there is no interval in which silence can be told apart from a dead MTA.
 # That failure is why this exists -- pve9 reported nothing for MONTHS in 2026
 # and from the inbox it looked exactly like a host with no findings.

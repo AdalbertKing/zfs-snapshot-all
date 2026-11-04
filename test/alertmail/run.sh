@@ -316,6 +316,43 @@ if [ "$_gen" -eq 0 ]; then
 else
     bad "no host script is generated from a deploy.sh heredoc any more (REV-133's whole class)" "$_gen heredoc opener(s) still in $DEPLOY_SRC"
 fi
+# zfs-alert.conf IS still an unquoted heredoc (it expands ${ALERT_MODE} and
+# friends), and 1.0.10 shipped a comment with `off` in backticks: a fresh
+# install on pve1 A-TASSA (2026-11-04) printed "off: command not found" and
+# wrote the comment without the word. Rendered here as deploy.sh renders it,
+# with a sentinel executable named `off` first on PATH: the sentinel must not
+# run, nothing may reach stderr, and the comment must keep the backticks.
+ac_dir=$(mktemp -d)
+mkdir -p "$ac_dir/bin"
+printf '#!/bin/sh\necho called >> "%s/off.calls"\n' "$ac_dir" > "$ac_dir/bin/off"
+chmod +x "$ac_dir/bin/off"
+{
+    echo "ALERT_CONF='$ac_dir/zfs-alert.conf' ALERT_MODE=daily NOTIFY_EMAIL=root ALERT_SHARED_DIR=/var/lib/zfs-alert"
+    sed -n '/^ *cat > "\$ALERT_CONF" <<EOF$/,/^EOF$/p' "$DEPLOY_SRC"
+} > "$ac_dir/render.sh"
+PATH="$ac_dir/bin:$PATH" bash "$ac_dir/render.sh" 2> "$ac_dir/err"
+if [ -s "$ac_dir/zfs-alert.conf" ] && [ ! -s "$ac_dir/err" ] && [ ! -e "$ac_dir/off.calls" ] \
+   && grep -q '^# `off` is honoured' "$ac_dir/zfs-alert.conf" \
+   && grep -q '^ZFS_ALERT_MODE=daily' "$ac_dir/zfs-alert.conf"; then
+    ok "zfs-alert.conf heredoc: no command runs at install, the comment keeps \`off\`, the mode still expands"
+else
+    bad "zfs-alert.conf heredoc renders clean" "stderr: $(cat "$ac_dir/err")" "calls: $(cat "$ac_dir/off.calls" 2>/dev/null)" \
+        "$(grep -n 'is honoured\|^ZFS_ALERT_MODE' "$ac_dir/zfs-alert.conf" 2>/dev/null)"
+fi
+rm -rf "$ac_dir"
+# The class, not the instance: no unquoted heredoc in deploy.sh may carry an
+# unescaped backtick (command substitution at install time). `$(` is not
+# checked -- the join manifest's $(date ...) is intended.
+_bt=$(awk '
+    !inh && /<<-?[A-Za-z_][A-Za-z0-9_]*[ \t]*$/ { t=$0; sub(/.*<<-?/,"",t); sub(/[ \t]*$/,"",t); inh=1; next }
+    inh && $0 ~ "^[ \t]*" t "$" { inh=0; next }
+    inh { l=$0; gsub(/\\\\/,"",l); gsub(/\\`/,"",l); if (l ~ /`/) print NR": "$0 }
+' "$DEPLOY_SRC")
+if [ -z "$_bt" ]; then
+    ok "no unquoted heredoc in deploy.sh carries an unescaped backtick"
+else
+    bad "no unquoted heredoc in deploy.sh carries an unescaped backtick" "$_bt"
+fi
 # The digest under test is the shipped file beside its alert-env.sh; the conf
 # lookup is pointed at nothing so a developer's /etc/zfs-alert.conf cannot leak
 # into the run (the environment wins over the file either way).
