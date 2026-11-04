@@ -3444,7 +3444,7 @@ fi
 FPH='--tier=hourly --retain=-h24 --keep= --prune_schedule=21 * * * * --tier=daily'
 FPD='--tier=daily --retain=-h24 --keep= --prune_schedule=21 * * * * --monitor_warn= --monitor_crit='
 if has "$FPO" 'CMD: ' && has "$FPO" '--profile=relacja-pve9b-fastprune' && has "$FPZ" '--from=d7h24 --as=relacja-pve9b-fastprune --hidden --force' \
-   && has "$FPZ" "$FPH" && has "$FPZ" "$FPD" && has "$FPW" 'd7h24 -- fastprune 24 h' \
+   && has "$FPZ" "$FPH" && has "$FPZ" "$FPD" && has "$FPW" 'd7h24 -- krótka retencja 24 h' \
    && has "$SOWO" '--profile=d7h24' && ! has "$SOWO" 'fastprune'; then
     ok "new-relation U136: migawki zdalne, Zaawansowane -> fastprune 24 -- szablon relacja-pve9b-fastprune z d7h24: retain -h24 i czyszczenie co godzine w kazdym szczeblu, monitor zdjety z dobowego, godzinowy zostaje; bez fastprune --profile=d7h24"
 else
@@ -5848,10 +5848,10 @@ if has "$ERFPAW" '48 godz. -- wszystkie szczeble (d7h24)' \
    && has "$ERFPAZ" '--tier=daily --retain=-h24 --keep= --prune_schedule=21 * * * * --monitor_warn= --monitor_crit=' \
    && grep -q '^edit-relation r1 --profile=relacja-r1-fastprune .*--yes' <<<"$ERFPAZ" \
    && ! grep -q '^save-profile' <<<"$ERFPBZ" && grep -q '^edit-relation r1 --profile=d7h24 .*--yes' <<<"$ERFPBZ" \
-   && [ "$ERFPCF" = oryginal ] && ! has "$ERFPDW" 'Fastprune'; then
+   && [ "$ERFPCF" = oryginal ] && ! has "$ERFPDW" 'Krótka retencja źródła'; then
     ok "edit-relation U136: fastprune -- N od nowa z bazy (monitor dobowego zdjety przy 24), puste = powrot do bazy, przerwanie przywraca szablon; relacja backup bez wiersza"
 else
-    bad "edit-relation U136 fastprune" "A: $(grep -E '^(save-profile|edit-relation)' <<<"$ERFPAZ" | cut -c1-300)" "B: $(grep -E '^(save-profile|edit-relation)' <<<"$ERFPBZ")" "C plik: $ERFPCF" "D: $(printf '%s' "$ERFPDW" | grep -c Fastprune)"
+    bad "edit-relation U136 fastprune" "A: $(grep -E '^(save-profile|edit-relation)' <<<"$ERFPAZ" | cut -c1-300)" "B: $(grep -E '^(save-profile|edit-relation)' <<<"$ERFPBZ")" "C plik: $ERFPCF" "D: $(printf '%s' "$ERFPDW" | grep -c 'Krótka retencja źródła')"
 fi
 rm -rf "$ERFP"
 # U65: 'c' w oknie relacji (EDIT_DO=config) = od razu edit-config, bez karty zmian.
