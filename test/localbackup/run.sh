@@ -51,6 +51,8 @@ cat > "$WORK/bin/zfs" <<'EOF'
 case " $* " in *" name,createtxg "*) [ -n "${LB_TXG:-}" ] && printf '%b\n' "$LB_TXG"; exit 0 ;; esac
 # U138: `zfs list -t snapshot` answers LB_SNAPS (space-separated names), else nothing.
 case " $* " in *" snapshot "*) [ -n "${LB_SNAPS:-}" ] && printf '%s\n' $LB_SNAPS; exit 0 ;; esac
+# U161: `-t volume,filesystem -r` (the guests' disks under a root) answers LB_GUESTDS.
+case " $* " in *" volume,filesystem "*) [ -n "${LB_GUESTDS:-}" ] && printf '%s\n' $LB_GUESTDS; exit 0 ;; esac
 for a in "$@"; do ds="$a"; done
 case "$ds" in rpool/data|rpool/existing|rpool/other|rpool/db|rpool/vmstore|hdd/dokumenty|rpool/a|rpool/a/child) exit 0 ;;
              *) echo "cannot open '$ds': dataset does not exist" >&2; exit 1 ;; esac
@@ -2301,6 +2303,30 @@ if [ "$pv_ts" -eq 0 ] && [ "$pv_tt" -ge 1 ] && [ "$pv_ks" -ge 1 ]; then
     ok "local-backup --passive: a tiered flat profile renders no delsnaps line for the source, one for the landing; control prunes the source"
 else
     bad "local-backup --passive: no source delsnaps line" "passive: source=$pv_ts landing=$pv_tt; control: source=$pv_ks" "$(printf '%s\n' "$pv_t" | grep -E 'delsnaps' | head -4)"
+fi
+# U161 (Dabrowska 2026-11-04): a passive copy fed by a */2:00 pvesr replica gets archive
+# thresholds of at least 2x/3x the interval -- hourly 90m/150m -> 4h/6h; the daily 30h/48h
+# already is, and stays. Controls: a guest whose disks are not under the source does not count
+# (template kept); without --passive nothing changes; an unreadable schedule keeps the template
+# and says so.
+printf 'local: 100-0\n\ttarget pve1\n\tschedule */2:00\n\nlocal: 300-0\n\ttarget pve1\n\tschedule */5\n' > "$WORK/repl.cfg"
+printf 'local: 100-0\n\ttarget pve1\n\tschedule mon..fri 22:30\n' > "$WORK/repl-odd.cfg"
+u161() { PVE_REPLICATION_CFG="$1" LB_GUESTDS="$2" run --source=rpool/data --target=hdd/backups --profile=default $3 --name="$4" --config="$WORK/$4.conf"; }
+u161_mon() { pv_cfg "$1" | awk -v t="$2" '/^\[relation:/{f=1;next} /^\[/{f=0} f && $1 == t".monitor" {print $3, $4}'; }
+u_p="$(u161 "$WORK/repl.cfg" "rpool/data rpool/data/vm-100-disk-0 rpool/data/subvol-200-disk-0" --passive u161p)"
+u_o="$(u161 "$WORK/repl.cfg" "rpool/data rpool/data/subvol-200-disk-0" --passive u161o)"
+u_k="$(u161 "$WORK/repl.cfg" "rpool/data rpool/data/vm-100-disk-0" "" u161k)"
+u_x="$(u161 "$WORK/repl-odd.cfg" "rpool/data rpool/data/vm-100-disk-0" --passive u161x)"
+if [ "$(u161_mon "$u_p" hourly)" = "4h 6h" ] && [ "$(u161_mon "$u_p" daily)" = "30h 48h" ] \
+   && printf '%s\n' "$u_p" | grep -qF 'fed by pvesr every 2h (guests 100)' \
+   && [ "$(u161_mon "$u_o" hourly)" = "90m 150m" ] && ! printf '%s\n' "$u_o" | grep -qF 'fed by pvesr' \
+   && [ "$(u161_mon "$u_k" hourly)" = "90m 150m" ] \
+   && [ "$(u161_mon "$u_x" hourly)" = "90m 150m" ] && printf '%s\n' "$u_x" | grep -qF 'pvesr schedule not read for guest(s) 100 (mon..fri 22:30)'; then
+    ok "local-backup --passive U161: */2:00 replica -> hourly 4h/6h, daily kept; other guests, no --passive, an unread schedule -> template kept"
+else
+    bad "local-backup --passive U161: thresholds from pvesr" "passive: $(u161_mon "$u_p" hourly) / $(u161_mon "$u_p" daily)" \
+        "other guest: $(u161_mon "$u_o" hourly)" "not passive: $(u161_mon "$u_k" hourly)" "odd: $(u161_mon "$u_x" hourly)" \
+        "$(printf '%s\n' "$u_p" | grep -E 'Archive monitor|FATAL|rror' | head -4)" "$(pv_cfg "$u_p" | sed -n '/^\[relation:/,/^\[/p' | head -12)"
 fi
 rm -f "$WORK/pvn.conf"
 pv_n="$(run --source=rpool/data --target='' --passive --name=pvn --config="$WORK/pvn.conf")"; pv_nrc=$?
