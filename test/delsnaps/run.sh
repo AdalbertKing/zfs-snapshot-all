@@ -727,6 +727,7 @@ fi
 if [ "\$1" = list ] && [ -n "\${F_WALK:-}" ] && printf '%s ' "\$@" | grep -q -- ' -r '; then
     case "\$F_WALK" in
         fail)    printf '%s\n%s\n' "\$last" "\$last/c1"; echo "cannot iterate: I/O error" >&2; exit 1 ;;
+        emptyfail) echo "cannot iterate: I/O error" >&2; exit 1 ;;
         noroot)  printf '%s\n' "\$last/c1"; exit 0 ;;
         outside) printf '%s\n%s\n' "\$last" "${POOL}-other/x"; exit 0 ;;
     esac
@@ -734,6 +735,17 @@ fi
 exec "$FREAL" "\$@"
 SHIM
 chmod +x "$FSHIM/zfs"
+# Fake ssh for the remote -R case: runs the command locally through bash (the shim zfs
+# stays first on PATH); with F_SSH255 set, a `list ... -r` call dies as a dead connection.
+cat > "$FSHIM/ssh" <<SHIM
+#!/bin/bash
+cmd="\${!#}"
+if [ -n "\${F_SSH255:-}" ]; then
+    case "\$cmd" in *"'list'"*"'-r'"*) echo "ssh: connect to host shimhost port 22: Connection refused" >&2; exit 255 ;; esac
+fi
+PATH="$FSHIM:\$PATH" exec bash -c "\$cmd"
+SHIM
+chmod +x "$FSHIM/ssh"
 f_run() {   # <args...> -> "rc|destroys"; stderr kept in $FSHIM/err
     : > "$FSHIM/destroys"
     PATH="$FSHIM:$PATH" "$DELSNAPS" "$@" >/dev/null 2>"$FSHIM/err"; RC=$?
@@ -757,6 +769,16 @@ sleep 2
 r=$(F_BAD=tgt-bad1 F_MODE=fail f_run -B "$POOL/f2b" "tgt-" -h0)
 check "F2 bookmark: rc 1, the readable one deleted, the unreadable kept and named" \
       "1|1|tgt-bad1|1" "$r|$(marks_of f2b)|$(grep -c "creation time unreadable for bookmark $POOL/f2b#tgt-bad1" "$FSHIM/err")"
+# Bookmark mode, empty and non-numeric creation reads (the snapshot loop has them too).
+for m in empty text; do
+    mkds "f2b$m"; mksnaps "f2b$m" seed_1
+    zfs bookmark "$POOL/f2b$m@seed_1" "$POOL/f2b$m#tgt-bad1" || exit 1
+    zfs bookmark "$POOL/f2b$m@seed_1" "$POOL/f2b$m#tgt-ok1" || exit 1
+    sleep 2
+    r=$(F_BAD=tgt-bad1 F_MODE=$m f_run -B "$POOL/f2b$m" "tgt-" -h0)
+    check "F2 bookmark '$m': rc 1, the readable one deleted, the unreadable kept and named" \
+          "1|1|tgt-bad1|1" "$r|$(marks_of "f2b$m")|$(grep -c "creation time unreadable for bookmark $POOL/f2b$m#tgt-bad1" "$FSHIM/err")"
+done
 # Positive control through the SAME shim, nothing broken: rc 0, all deleted.
 mkds f2ok; mksnaps f2ok auto_1 auto_2; sleep 2
 check "F2 control: shim, nothing broken -> rc 0, both deleted" \
@@ -771,6 +793,22 @@ for w in fail noroot outside; do
           "1|0|auto_1 auto_2 auto_3|auto_1 auto_2 auto_3|1" \
           "$r|$(snaps_of "f3$w")|$(snaps_of "f3$w/c1")|$(grep -c -- "-R on $POOL/f3$w:" "$FSHIM/err")"
 done
+# F3, the walk fails (rc 1) with NO output at all: an empty list is not "no children".
+mkds f3ef/c1; mksnaps f3ef auto_1 auto_2 auto_3; mksnaps f3ef/c1 auto_1 auto_2 auto_3
+r=$(F_WALK=emptyfail f_run -R "$POOL/f3ef" "auto_" -H1)
+check "F3 -R walk fails with no output: rc 1, nothing deleted, all kept, named" \
+      "1|0|auto_1 auto_2 auto_3|auto_1 auto_2 auto_3|1" \
+      "$r|$(snaps_of "f3ef")|$(snaps_of "f3ef/c1")|$(grep -c -- "-R on $POOL/f3ef:" "$FSHIM/err")"
+# F3 over the REMOTE path: the walk's ssh dies (255) before printing anything.
+mkds f3rm/c1; mksnaps f3rm auto_1 auto_2 auto_3; mksnaps f3rm/c1 auto_1 auto_2 auto_3
+r=$(F_SSH255=1 f_run -R "root@shimhost:$POOL/f3rm" "auto_" -H1)
+check "F3 -R remote, ssh 255 on the walk: rc 1, nothing deleted, all kept, named" \
+      "1|0|auto_1 auto_2 auto_3|auto_1 auto_2 auto_3|1" \
+      "$r|$(snaps_of "f3rm")|$(snaps_of "f3rm/c1")|$(grep -c -- "-R on root@shimhost:$POOL/f3rm:" "$FSHIM/err")"
+# Control: the same remote tree through the same ssh shim, connection fine -> pruned to one.
+mkds f3rok/c1; mksnaps f3rok auto_1 auto_2 auto_3; mksnaps f3rok/c1 auto_1 auto_2 auto_3
+check "F3 remote control: ssh shim, walk intact -> rc 0, root and child keep the newest" \
+      "0|4|auto_3|auto_3" "$(f_run -R "root@shimhost:$POOL/f3rok" "auto_" -H1)|$(snaps_of f3rok)|$(snaps_of f3rok/c1)"
 # Positive control: the same tree through the shim, walk intact -> both pruned to one.
 mkds f3ok/c1; mksnaps f3ok auto_1 auto_2 auto_3; mksnaps f3ok/c1 auto_1 auto_2 auto_3
 check "F3 control: shim, walk intact -> rc 0, root and child keep the newest" \
