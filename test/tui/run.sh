@@ -3355,7 +3355,7 @@ fi
 # W17 (kampania 2026-11-03): w oknie planu zdanie z ręcznie złamaną drugą linią jest jednym akapitem
 # (whiptail łamie sam) -- dawniej "ta relacja robi własne" / "  (--own-snapshots); ..." osobno.
 if has "$NRCOW" 'ta relacja robi własne (--own-snapshots); stare wejdą do jej retencji' \
-   && ! has "$NRCOW" "$(printf 'robi własne\n  (--own-snapshots)')"; then
+   && ! hasE "$NRCOW" '^  \(--own-snapshots\)'; then
     ok "new-relation W17: plan -- zdanie WŁASNE MIGAWKI w jednym akapicie, bez twardego złamania w środku"
 else
     bad "new-relation W17: plan, łamanie zdania" "$(printf '%s' "$NRCOW" | grep -A1 'WŁASNE MIGAWKI' | head -4 | cut -c1-240)"
