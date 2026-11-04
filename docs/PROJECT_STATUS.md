@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8ef5e0f81f44d1c9 -->
+<!-- status-covers-digest: 5cf9dc98f5d8c6d8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -122,6 +122,11 @@
   - Z tej listy zostały: obserwacja U149 i decyzja właściciela U148. Maile (U157-U160) i drzewo celu
     (U147/U155/U156) weszły później tego dnia i są w 1.0.10.
 
+- **REV-20261104-187 (2026-11-05, gałąź `fix/rev187-config-retention`, niewydane): retencja migawek
+  zdalnych z configu.** „Harmonogram i retencja” -> „Ręcznie...” relacji snaponly czyta szczeble z jej sekcji
+  `[template:snaponly(_src)__NAZWA__*]` (`show-tiers`) i zapisuje jednym `set-tiers` (jedno pole na
+  operację; zmiana zestawu szczebli lub metody = „Użyj szablonu”). Ukryty `relacja-<NAZWA>` nie wpływa
+  już na zmianę retencji istniejącej relacji. „Krótka retencja źródła” (U136) nadal ma własny szablon.
 - **REV-20261104-186 (2026-11-04, #1055, wydane w 1.0.10): błędy, które udawały
   sukces w silnikach.** F1 (P1): lista migawek zarezerwowanych przez Proxmox VE przed niszczącą pełną
   kopią jest warunkiem „fail-closed” (`list_protected_snaps`); F4 (P1): skan kolizji `-F` mapuje
