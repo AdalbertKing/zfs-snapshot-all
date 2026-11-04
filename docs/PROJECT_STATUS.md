@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a7eecb0e2e05699e -->
+<!-- status-covers-digest: 37130a2f1cba5f09 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,30 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Maile admina (2026-11-04, gałąź `feat/maile`, niewydane; U157-U160).**
+  - Raport dzienny (`hostscripts/alert-digest.sh`): tabela RELACJI (nazwa, rodzaj, najnowsza, stan słowami
+    GUI, błędy na górze), „DO ZROBIENIA” tylko gdy coś jest (co, kiedy, rc, ostatnia linia błędu z kolejki,
+    gdzie sprawdzić), w nagłówku wszystkie pule hosta (DEGRADED albo >= 80% także w DO ZROBIENIA), jedna linia
+    „Tydzień”, bez usuniętych relacji. Temat: „OK, N relacji” albo „K z N relacji wymaga uwagi”, a pula
+    DEGRADED albo >= 80% dopisuje do tematu „pula <nazwa> <stan> <zajętość>”. Pełna
+    statystyka jako załącznik `statystyka-<host>-<data>.html` (ciemny, monospace, sekcja na relację).
+    Dane zbiera skrypt jak dotąd; rodzaj relacji z `zfs-backup status --json`, stan z `monitor --json`;
+    treść i załącznik składa python3, wysyła `sendmail -t` jako „zfs-backup <host>”. Bez sendmail: treść
+    ASCII przez `mail -s`, bez załącznika; bez python3 albo przy błędzie: dotychczasowy mail zadań
+    (także `ZFS_DIGEST_LAYOUT=jobs`).
+  - Alert pojedynczy (`notify-fail.sh`, `notify-warn.sh`, tryb immediate): temat „[ZFS] host: relacja --
+    co się stało (kiedy)”, zdanie co to znaczy i co zrobić, dopisek, gdy monitor liczy wiek od utworzenia
+    datasetu (relacja bez startu relacji); treść wskazuje `cron.log` obok skryptu (konto albo root).
+  - U159: rc=8 (bieg bez zamrożenia gościa) idzie z `zfs-job.sh` do `notify-warn`, nie do `notify-fail`;
+    raport pokazuje „bez zamrożenia”. Przyczyn rc=8 jest kilka (konto bez dostępu do gości, agent gościa
+    niedostępny, gość nie odpowiedział na fsfreeze); powód jest w logu biegu.
+  - Testy (pve9, `7337a075`): `test/alertmail` 185/1, `test/cron` 279/0, `test/mediagate` 160/0. Ten 1 FAIL
+    alertmail („stale ALERTs alone...”) pada tak samo na `main`: ten przebieg nie ustawia `ZFS_CRON_LOGS`,
+    więc digest czyta prawdziwe `/root/scripts/cron.log` i `/home/*/cron.log` pve9 (alert-digest.sh:266-270).
+    Kontrole negatywne: nowe testy U160 (2), U158 i X9b padają na skryptach z `main`.
+    Na żywo na pve11 (kopia skryptu w /tmp, sendmail zastąpiony plikiem): treść, temat i załącznik z prawdziwych
+    danych hosta; do skrzynki właściciela nic nie wysłano.
 
 - **Paczka po wdrożeniu Dąbrowskiej (2026-11-04, gałąź `feat/paczka-x`, niewydane).**
   - U164: `check-snap-age.sh` v2.9 -- korzeń `-R` z migawką innej rodziny (np. znacznik łańcucha) nad
