@@ -4,7 +4,7 @@
 # Pierwsze okno: CO zmienić (właściciel 2026-10-09, uwaga 5):
 #   1. Datasety -- drzewo z kratkami (X12), zapis jednym set-datasets (relacja = config)
 #   2. Użyj szablonu -- gotowy szablon dla celu  (edit-relation --profile)
-#   3. Harmonogram i retencja kopii w celu i źródle -- tabela    (ukryty szablon relacji, edit-relation)
+#   3. Harmonogram i retencja kopii w celu i źródle -- tabela    (show-tiers/set-tiers, config relacji)
 #   4. Ustawienia silnika -- jak przesyłane są kopie (set-transfer; W16: historia,
 #      kompresja, szyfr SSH, autodobór łącza)
 #   5. Ręczna edycja konfigu                     (edit-config)
@@ -18,10 +18,9 @@
 # próba pobrania, sprawdzenie praw -- bez zmian) i po "WYKONAJ" uruchamia go z --yes.
 # Czego czasownik odmawia, odmawia tu tak samo, tymi samymi słowami.
 #
-# UKRYTY SZABLON RELACJI (P4): "Harmonogram i retencja kopii w celu i źródle" zapisuje wybory z tabeli
-# jako relacja-<NAZWA> (save-profile --hidden; F5 go nie pokazuje). Gdy plan nie
-# zostanie wykonany, poprzednia treść tego pliku wraca (albo plik znika, jeśli go nie
-# było) -- przerwana zmiana nie zostawia szablonu, który mówi co innego niż relacja.
+# HARMONOGRAM I RETENCJA (REV-20261104-187): tabela startuje z configu relacji
+# (show-tiers) i zapisuje jednym set-tiers -- każdy rodzaj relacji, migawki zdalne też.
+# Szablon czyta tylko "Użyj szablonu" (edit-relation --profile=).
 #
 # Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka.
 set -u
@@ -43,15 +42,7 @@ FORCE_ACTION=""; DIRECT=0
 case "${EDIT_DO:-}" in config|zapisz) FORCE_ACTION="$EDIT_DO"; DIRECT=1 ;; esac
 TMPD="$(mktemp -d)" || exit 1
 HNAME="relacja-$NAME"     # ukryty szablon tej relacji
-HIDDEN_DIRTY=0; DONE=0; HBACKUP=""; HFILE=""
-restore_hidden() {
-    [ "$HIDDEN_DIRTY" -eq 1 ] && [ "$DONE" -ne 1 ] || return 0
-    if [ -n "$HBACKUP" ] && [ -n "$HFILE" ]; then
-        cp -p "$HBACKUP" "$HFILE" 2>/dev/null
-    else
-        "$ZB" delete-profile "$HNAME" --yes >/dev/null 2>&1
-    fi
-}
+DONE=0
 # U136: szablon fastprune tej relacji zmieniany PRZED planem (plan go czyta) -- bez zapisu
 # zmian wraca, jak był: kopia sprzed zmiany albo (nowy) usunięty.
 FPNAME="relacja-$NAME-fastprune"; FP_DIRTY=0; FP_BAK=""; FP_FILE=""
@@ -60,7 +51,7 @@ restore_fastprune() {
     if [ -n "$FP_BAK" ] && [ -n "$FP_FILE" ]; then cp -p "$FP_BAK" "$FP_FILE" 2>/dev/null
     else "$ZB" delete-profile "$FPNAME" --yes >/dev/null 2>&1; fi
 }
-trap 'restore_hidden; restore_fastprune; rm -rf "$TMPD"' EXIT
+trap 'restore_fastprune; rm -rf "$TMPD"' EXIT
 
 # st.tsv: stan, profil, profil źródła, peer, datasety, lustro, cel; prof.tsv: nazwa <TAB> opis (bez
 # ukrytych i pochodnych -src-); prof.json.tiers: szczeble do okna retencji źródła;
