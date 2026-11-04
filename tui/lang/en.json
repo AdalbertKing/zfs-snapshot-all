@@ -2171,5 +2171,15 @@
 "…język GUI; wysłanie": "…GUI language; sending",
 "←→ zakładki   ": "←→ tabs   ",
 "↑↓ wiersz ←→ pole spacja kratka cyfry liczba Enter dalej  Esc wraca": "↑↓ row ←→ field space box digits number Enter next  Esc back",
-"→ tutaj": "→ here"
+"→ tutaj": "→ here",
+"Relacja '$RNAME' założona do połowy (stan: $ST).": "Relation '$RNAME' half created (state: $ST).",
+"Relacja $RNAME: stan pośredni": "Relation $RNAME: half created",
+"Zostaw": "Leave it",
+"Na tym hoście jest rekord relacji (stan: $ST), na źródle mogły zostać konto i zgody.\\nKomenda zapisana w $HOME/new-relation-$RNAME.cmd.": "This host has the relation record (state: $ST); the account and grants may be left on the source.\\nCommand saved in $HOME/new-relation-$RNAME.cmd.",
+"Wycofaj -- usuń relację tu i na źródle (delete-relation)": "Undo -- delete the relation here and on the source (delete-relation)",
+"Ponów -- ta sama komenda wznawia od miejsca porażki": "Retry -- the same command resumes where it failed",
+"Relacja $RNAME: wycofuję": "Relation $RNAME: undoing",
+"Wycofanie relacji": "Undoing the relation",
+"Relacja '$RNAME' wycofana (rc=0).": "Relation '$RNAME' undone (rc=0).",
+"Relacja '$RNAME' NIE wycofana do końca -- co zostało, mówi dziennik.": "Relation '$RNAME' NOT fully undone -- the log says what is left."
 }

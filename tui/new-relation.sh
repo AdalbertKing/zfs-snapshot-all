@@ -1444,49 +1444,83 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
         yesno_text "$TMPD/plan-short.txt" "$(title 10 "$(T 'Plan')")" "$(T WYKONAJ)" "$(T Wstecz)" || return 1
         build_argv install
         # U66 część 2: okno postępu zamiast czarnego ekranu (wtl run_progress), potem okno wyniku.
-        : >"$TMPD/run.log"
-        RC_RUN=0; run_progress "$(Tv 'Nowa relacja '\''$RNAME'\'': zakładam' '$RNAME' "$RNAME")" "$TMPD/run.log" "${ARGV[@]}" || RC_RUN=$?
-        # JEDNA REGUŁA DRZEWA TAKŻE PRZY TWORZENIU (relacja = config, 2026-10-26): przy jakimkolwiek
-        # [-] zakres zapisany od razu jako pozycje relacji -- to samo set-datasets co w oknie zmiany,
-        # w każdym rodzaju relacji. Seed powyżej szanował wyjątki, więc nic zbędnego nie przyszło.
-        # Migawki zdalne zakłada się już z pozycjami drzewa (basket_entries w --source), więc
-        # drugi krok nic by nie zmienił -- tylko kosztował ~30 s (kampania 2026-10-26).
-        if [ "$RC_RUN" -eq 0 ] && [ "$MODE" != snaponly ] && any_excl; then
-            _da=(); mapfile -t _da < <(basket_entries "$BASKET_DS_JSON" | awk -F'\t' 'NF { printf "--dataset=%s:%s\n", $1, $2 }')
-            : >"$TMPD/run2.log"
-            run_progress "$(Tv 'Nowa relacja '\''$RNAME'\'': zakres wg drzewa' '$RNAME' "$RNAME")" "$TMPD/run2.log" "$ZB" set-datasets "$RNAME" "${_da[@]}" --yes || RC_RUN=$?
-            cat "$TMPD/run2.log" >>"$TMPD/run.log"
-        fi
-        # DZIENNIK DLA F3 Ins (owner note 5): TUI ustawia ZFS_TUI_LOG na
-        # sciezke ~/.zfs-tui/new-relation-<stamp>.log; dopisujemy do niego, zeby wynik biegu
-        # nie zniknal w $TMPD.
-        if [ -n "${ZFS_TUI_LOG:-}" ] && [ -f "$TMPD/run.log" ]; then
-            cat "$TMPD/run.log" >>"$ZFS_TUI_LOG" 2>/dev/null
-            echo "rc=$RC_RUN" >>"$ZFS_TUI_LOG" 2>/dev/null
-        fi
-        [ "$RC_RUN" -eq 0 ] && NR_DONE=1
-        if [ "$RC_RUN" -eq 0 ]; then
-            # Sukces jednym zdaniem = linia komunikatu GUI, bez okna z <Ok>; dziennik dopisuje GUI
-            # (kampania pve10, 2026-10-29: linia "Dziennik:" robila z sukcesu okno).
-            result_box "$(T 'Nowa relacja: GOTOWE')" 0 "$TMPD/run.log" "$(Tv 'Relacja '\''$RNAME'\'' założona (rc=0).' '$RNAME' "$RNAME")"
-        elif [ "$GRANT" -eq 0 ] && grep -q -- '--commit-scope=' "$TMPD/run.log"; then
-            # To nie awaria: wybrano "zatwierdzę sam", więc instalacja MA stanąć w tym miejscu.
-            cmd_oneline >"$HOME/new-relation-$RNAME.cmd" 2>/dev/null; echo >>"$HOME/new-relation-$RNAME.cmd"
-            { echo "$(Tv 'ZATRZYMANE ZGODNIE Z WYBOREM -- relacja '\''$RNAME'\'' czeka na zgodę źródła.' '$RNAME' "$RNAME")"
-              echo
-              echo "$(Tv '1. Na $HOST, jako root:' '$HOST' "$HOST")"
-              echo "   cd $C_DIR && ./$(grep -o 'deploy.sh --commit-scope=[^ ]*' "$TMPD/run.log" | tail -1)$( [ "$FREEZE" -eq 1 ] && echo ' --allow-quiesce')"
-              [ "$FREEZE" -eq 1 ] && echo "$(T '   (--allow-quiesce: bez tego szablon zamrażający da migawki '\''_crash_'\'')')"
-              echo
-              echo "$(Tv '2. Potem TUTAJ ponów tę samą komendę (zapisana w $HOME/new-relation-$RNAME.cmd):' '$HOME' "$HOME" '$RNAME' "$RNAME")"
-              echo "   $(cmd_oneline)"
-            } >"$TMPD/stop.txt"
-            textbox_read "$(T 'Nowa relacja: zatrzymane zgodnie z wyborem')" "$TMPD/stop.txt" "$(T 'Zamknij')"
-        else
-            result_box "$(T 'Nowa relacja: NIE UDAŁO SIĘ')" "$RC_RUN" "$TMPD/run.log" "" "$(Tv 'Relacja '\''$RNAME'\'' nie została założona.' '$RNAME' "$RNAME")"
-        fi
-        return 0
+        # Ponów (stan pośredni, niżej) wraca tutaj: ta sama komenda, bez nowego planu.
+        while :; do
+            : >"$TMPD/run.log"
+            RC_RUN=0; run_progress "$(Tv 'Nowa relacja '\''$RNAME'\'': zakładam' '$RNAME' "$RNAME")" "$TMPD/run.log" "${ARGV[@]}" || RC_RUN=$?
+            # JEDNA REGUŁA DRZEWA TAKŻE PRZY TWORZENIU (relacja = config, 2026-10-26): przy jakimkolwiek
+            # [-] zakres zapisany od razu jako pozycje relacji -- to samo set-datasets co w oknie zmiany,
+            # w każdym rodzaju relacji. Seed powyżej szanował wyjątki, więc nic zbędnego nie przyszło.
+            # Migawki zdalne zakłada się już z pozycjami drzewa (basket_entries w --source), więc
+            # drugi krok nic by nie zmienił -- tylko kosztował ~30 s (kampania 2026-10-26).
+            if [ "$RC_RUN" -eq 0 ] && [ "$MODE" != snaponly ] && any_excl; then
+                _da=(); mapfile -t _da < <(basket_entries "$BASKET_DS_JSON" | awk -F'\t' 'NF { printf "--dataset=%s:%s\n", $1, $2 }')
+                : >"$TMPD/run2.log"
+                run_progress "$(Tv 'Nowa relacja '\''$RNAME'\'': zakres wg drzewa' '$RNAME' "$RNAME")" "$TMPD/run2.log" "$ZB" set-datasets "$RNAME" "${_da[@]}" --yes || RC_RUN=$?
+                cat "$TMPD/run2.log" >>"$TMPD/run.log"
+            fi
+            # DZIENNIK DLA F3 Ins (owner note 5): TUI ustawia ZFS_TUI_LOG na
+            # sciezke ~/.zfs-tui/new-relation-<stamp>.log; dopisujemy do niego, zeby wynik biegu
+            # nie zniknal w $TMPD.
+            if [ -n "${ZFS_TUI_LOG:-}" ] && [ -f "$TMPD/run.log" ]; then
+                cat "$TMPD/run.log" >>"$ZFS_TUI_LOG" 2>/dev/null
+                echo "rc=$RC_RUN" >>"$ZFS_TUI_LOG" 2>/dev/null
+            fi
+            [ "$RC_RUN" -eq 0 ] && NR_DONE=1
+            if [ "$RC_RUN" -eq 0 ]; then
+                # Sukces jednym zdaniem = linia komunikatu GUI, bez okna z <Ok>; dziennik dopisuje GUI
+                # (kampania pve10, 2026-10-29: linia "Dziennik:" robila z sukcesu okno).
+                result_box "$(T 'Nowa relacja: GOTOWE')" 0 "$TMPD/run.log" "$(Tv 'Relacja '\''$RNAME'\'' założona (rc=0).' '$RNAME' "$RNAME")"
+            elif [ "$GRANT" -eq 0 ] && grep -q -- '--commit-scope=' "$TMPD/run.log"; then
+                # To nie awaria: wybrano "zatwierdzę sam", więc instalacja MA stanąć w tym miejscu.
+                cmd_oneline >"$HOME/new-relation-$RNAME.cmd" 2>/dev/null; echo >>"$HOME/new-relation-$RNAME.cmd"
+                { echo "$(Tv 'ZATRZYMANE ZGODNIE Z WYBOREM -- relacja '\''$RNAME'\'' czeka na zgodę źródła.' '$RNAME' "$RNAME")"
+                  echo
+                  echo "$(Tv '1. Na $HOST, jako root:' '$HOST' "$HOST")"
+                  echo "   cd $C_DIR && ./$(grep -o 'deploy.sh --commit-scope=[^ ]*' "$TMPD/run.log" | tail -1)$( [ "$FREEZE" -eq 1 ] && echo ' --allow-quiesce')"
+                  [ "$FREEZE" -eq 1 ] && echo "$(T '   (--allow-quiesce: bez tego szablon zamrażający da migawki '\''_crash_'\'')')"
+                  echo
+                  echo "$(Tv '2. Potem TUTAJ ponów tę samą komendę (zapisana w $HOME/new-relation-$RNAME.cmd):' '$HOME' "$HOME" '$RNAME' "$RNAME")"
+                  echo "   $(cmd_oneline)"
+                } >"$TMPD/stop.txt"
+                textbox_read "$(T 'Nowa relacja: zatrzymane zgodnie z wyborem')" "$TMPD/stop.txt" "$(T 'Zamknij')"
+            else
+                # SKUCHA 11 (A-TASSA 2026-11-04): porażka po zapisie rekordu zostawiała relację wpół
+                # założoną na dwóch hostach (rekord pending, konto i zgody na źródle), a okno mówiło
+                # "nie została założona". Teraz okno mówi prawdę i daje wyjście: wycofać (delete-relation
+                # -- kolektor i źródło) albo ponowić (ta sama komenda wznawia od miejsca porażki).
+                local _st; _st=$(relation_state "$RNAME")
+                if [ -z "$_st" ]; then
+                    result_box "$(T 'Nowa relacja: NIE UDAŁO SIĘ')" "$RC_RUN" "$TMPD/run.log" "" "$(Tv 'Relacja '\''$RNAME'\'' nie została założona.' '$RNAME' "$RNAME")"
+                    return 0
+                fi
+                result_box "$(T 'Nowa relacja: NIE UDAŁO SIĘ')" "$RC_RUN" "$TMPD/run.log" "" "$(Tv 'Relacja '\''$RNAME'\'' założona do połowy (stan: $ST).' '$RNAME' "$RNAME" '$ST' "$_st")"
+                cmd_oneline >"$HOME/new-relation-$RNAME.cmd" 2>/dev/null; echo >>"$HOME/new-relation-$RNAME.cmd"
+                wt --title "$(Tv 'Relacja $RNAME: stan pośredni' '$RNAME' "$RNAME")" --ok-button "$(T Dalej)" --cancel-button "$(T Zostaw)" --notags --default-item wycofaj \
+                   --menu "$(Tv 'Na tym hoście jest rekord relacji (stan: $ST), na źródle mogły zostać konto i zgody.\nKomenda zapisana w $HOME/new-relation-$RNAME.cmd.' '$ST' "$_st" '$HOME' "$HOME" '$RNAME' "$RNAME")" 12 "$W" 2 \
+                   wycofaj "$(T 'Wycofaj -- usuń relację tu i na źródle (delete-relation)')" \
+                   ponow "$(T 'Ponów -- ta sama komenda wznawia od miejsca porażki')" || return 0
+                case "$WT_OUT" in
+                    wycofaj)
+                        : >"$TMPD/undo.log"; local _rc=0
+                        run_progress "$(Tv 'Relacja $RNAME: wycofuję' '$RNAME' "$RNAME")" "$TMPD/undo.log" "$ZB" delete-relation "$RNAME" --yes || _rc=$?
+                        [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/undo.log"; echo "rc=$_rc"; } >>"$ZFS_TUI_LOG" 2>/dev/null
+                        [ "$_rc" -eq 0 ] && rm -f "$HOME/new-relation-$RNAME.cmd"
+                        result_box "$(T 'Wycofanie relacji')" "$_rc" "$TMPD/undo.log" "$(Tv 'Relacja '\''$RNAME'\'' wycofana (rc=0).' '$RNAME' "$RNAME")" "$(Tv 'Relacja '\''$RNAME'\'' NIE wycofana do końca -- co zostało, mówi dziennik.' '$RNAME' "$RNAME")" ;;
+                    ponow) continue ;;
+                esac
+            fi
+            return 0
+        done
     done
+}
+
+relation_state() {   # <nazwa> -> stan relacji z rekordu kolektora (puste: brak albo usunięta)
+    "$ZB" status --json 2>/dev/null | "$PY" -c '
+import json, sys
+for r in json.load(sys.stdin).get("relations", []):
+    if r.get("name") == sys.argv[1] and r.get("state") != "removed":
+        print(r.get("state") or "?"); break' "$1" 2>/dev/null
 }
 
 # --- KARTA RELACJI (U25) -------------------------------------------------------

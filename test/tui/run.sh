@@ -3125,13 +3125,23 @@ case "$1" in
     delete-relation) case " $* " in *" --yes "*) : > "$NR_DIR/freed-$2"; echo "delete-relation: '$2' is gone." ;; *) echo "delete-relation '$2' (state=removed, peer=192.168.28.99):"; echo "plan only." ;; esac ;;
     status)         if [ -n "${NR_STATUS:-}" ]; then cat "$NR_STATUS"
                     elif [ -e "$NR_DIR/freed-192.168.28.99" ]; then sed 's/"name": *"192.168.28.99"/"name":"zwolniona"/' "$NR_FIX/status.json"
+                    elif [ -e "$NR_DIR/half" ] && [ ! -e "$NR_DIR/freed-pve9b" ]; then
+                        "${PYTHON:-python3}" -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); d["relations"].append({"name":"pve9b","state":"pending_enroll","mode":"","profile":"default"}); print(json.dumps(d))' "$NR_FIX/status.json"
                     elif [ -n "${NR_FLAT:-}" ]; then sed 's/"profile": *"default"/"profile":"d30h24"/g' "$NR_FIX/status.json"     # konto root "plaskie"
                     else cat "$NR_FIX/status.json"; fi ;;
     --source=*)     case "$1" in --source=*:*) ;; *)   # kopia lokalna: bez hosta, bez praw
                         case " $* " in *" --install "*) echo ">>> atrapa: lokalna zainstalowana"; exit 0 ;; *) echo "Plan lokalnego backupu (atrapa)"; exit 0 ;; esac ;; esac
                     case " $* " in
                         *" --install "*) case " $* " in
-                                *" --grant-remotely "*) echo ">>> atrapa: zainstalowano"; exit 0 ;;
+                                *" --grant-remotely "*)
+                                    # NR_HALF (skucha 11): porazka po zapisie rekordu -- znacznik half = rekord
+                                    # pending_enroll w status; once = drugi bieg (Ponow) przechodzi; nomark = bez rekordu.
+                                    case "${NR_HALF:-}" in
+                                        "") echo ">>> atrapa: zainstalowano"; exit 0 ;;
+                                        once) [ -e "$NR_DIR/half" ] && { echo ">>> atrapa: zainstalowano (wznowione)"; exit 0; } ;;
+                                    esac
+                                    [ "$NR_HALF" = nomark ] || : > "$NR_DIR/half"
+                                    echo "FATAL: atrapa: commit-scope na zrodle nie przeszedl"; exit 1 ;;
                                 *) echo "FATAL: the source has GRANTED nothing yet: on the source run"; echo "    deploy.sh --commit-scope=pve10"; exit 1 ;;
                             esac ;;
                         *) echo "RUX plan (atrapa)"; exit 0 ;;
@@ -3165,7 +3175,7 @@ mkdir -p "$NR/zbin"
 printf '#!/bin/sh\n[ -n "${NR_SNAPS:-}" ] && printf "%%b\\n" "$NR_SNAPS"\nexit 0\n' > "$NR/zbin/zfs"
 chmod +x "$NR/zbin/zfs"
 nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienniki w $NR
-    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR"/freed-* "$NR"/new-relation-*.cmd "$NR/tree.n" "$NR/tree.log" "$NR/treekeys" "$NR/tree-spec.last"
+    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR/half" "$NR"/freed-* "$NR"/new-relation-*.cmd "$NR/tree.n" "$NR/tree.log" "$NR/treekeys" "$NR/tree-spec.last"
     printf '%s' "$1" > "$NR/answers"; shift
     ( export HOME="$NR" NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"
       # Drzewo wyboru datasetow (tui/tree.py) bez terminala: klawisze z NR_TREE, jedna linia
@@ -4477,6 +4487,28 @@ if has "$NROUT" " --profile=default " && has "$NROUT" " --local-user=zfsbackup "
     ok "new-relation: konto root uzywa juz szablonu plaskiego (config root) -> wybor konta root ze szablonem-drabina (default) pokazuje 'Szablon nie pasuje do konta' i wraca do kroku 8; konto zfsbackup (inny config) przyjmuje ta sama drabine"
 else
     bad "new-relation: niedopasowanie szablonu do konta" "$NROUT" "$(grep -F 'Szablon nie pasuje' "$NR/wt.log" | cut -c1-400)" "$(cat "$NR/err")"
+fi
+# SKUCHA 11 (A-TASSA 2026-11-04): porazka po zapisie rekordu = relacja wpol zalozona na dwoch
+# hostach. Okno mowi "zalozona do polowy (stan: ...)" i daje Wycofaj (delete-relation NAZWA --yes:
+# tu i na zrodle) albo Ponow (ta sama komenda, bez nowego planu). Kontrola: porazka bez rekordu --
+# stare "nie zostala zalozona", bez menu. Na main: zawsze "nie zostala zalozona", zadnego wyjscia.
+NROUT=$(nr_run "${NRT}0${T}wycofaj
+0${T}
+" NR_HALF=1 NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); NRRC=$?
+H_A=$(grep -c -- '--grant-remotely --install --yes' "$NR/zb.log"); H_AW="$(cat "$NR/wt.log")"
+H_AD=0; grep -qx 'delete-relation pve9b --yes' "$NR/zb.log" && H_AD=1
+H_AC=0; [ -e "$NR/new-relation-pve9b.cmd" ] && H_AC=1
+NROUT=$(nr_run "${NRT}0${T}ponow
+0${T}
+" NR_HALF=once NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); NRRC=$?
+H_B=$(grep -c -- '--grant-remotely --install --yes' "$NR/zb.log"); H_BD=0; grep -q '^delete-relation' "$NR/zb.log" && H_BD=1
+NROUT=$(nr_run "${NRT}0${T}wycofaj
+" NR_HALF=nomark NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); NRRC=$?
+H_CW="$(cat "$NR/wt.log")"
+if [ "$H_A" -eq 1 ] && [ "$H_AD" -eq 1 ] && [ "$H_AC" -eq 0 ] && has "$H_AW" "założona do połowy (stan: pending_enroll)" && has "$H_AW" "stan pośredni"    && has "$H_AW" "wycofana (rc=0)" && ! has "$H_AW" "nie została założona"    && [ "$H_B" -eq 2 ] && [ "$H_BD" -eq 0 ]    && has "$H_CW" "nie została założona" && ! has "$H_CW" "stan pośredni"; then
+    ok "new-relation: skucha 11 -- porazka z rekordem: okno 'zalozona do polowy' + Wycofaj (delete-relation --yes) albo Ponow (ta sama komenda drugi raz); bez rekordu -- stare okno, bez menu"
+else
+    bad "new-relation: skucha 11 stan posredni" "wycofaj: installs=$H_A delete=$H_AD cmdfile=$H_AC" "ponow: installs=$H_B delete=$H_BD" "$(printf '%s' "$H_AW" | grep -E 'połowy|pośredni|wycofana|nie została' | cut -c1-160)" "$(printf '%s' "$H_CW" | grep -E 'pośredni|nie została' | cut -c1-160)"
 fi
 # 3f. 'Zatwierdze sam na zrodle': instalacja MA stanac -- to nie awaria, tylko dwa kroki do zrobienia
 NROUT=$(nr_run "0${T}backup

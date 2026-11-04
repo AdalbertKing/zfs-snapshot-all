@@ -911,5 +911,15 @@
 "Katalog pakietu zajęty": "Package directory taken",
 "  [-] Pakiet  $C_DIR istnieje, ale to nie pakiet (stare skrypty?)\\n\\ngit clone tam nie wejdzie. Na $HOST, jako root: sprawdź w crontabie\\nroota, czy coś stamtąd chodzi, potem odsuń katalog, np.:\\n\\n  mv $C_DIR $C_DIR.old-RRRRMMDD\\n\\nPo naprawie wróć tutaj.": "  [-] Package  $C_DIR exists, but it is not the package (old scripts?)\\n\\ngit clone cannot go there. On $HOST, as root: check root's crontab\\nfor anything running from there, then move the directory aside, e.g.:\\n\\n  mv $C_DIR $C_DIR.old-YYYYMMDD\\n\\nCome back here once it is fixed.",
 "  [-] git     brak; Zainstaluj doinstaluje go przed klonem (apt-get install git)": "  [-] git     missing; Install puts it there first (apt-get install git)",
-"  (na źródle nie ma sudo: przed pierwszą zmianą zostanie doinstalowane, apt-get install sudo)": "  (the source has no sudo: it will be installed before the first change, apt-get install sudo)"
+"  (na źródle nie ma sudo: przed pierwszą zmianą zostanie doinstalowane, apt-get install sudo)": "  (the source has no sudo: it will be installed before the first change, apt-get install sudo)",
+"Relacja '$RNAME' założona do połowy (stan: $ST).": "Relation '$RNAME' half created (state: $ST).",
+"Relacja $RNAME: stan pośredni": "Relation $RNAME: half created",
+"Zostaw": "Leave it",
+"Na tym hoście jest rekord relacji (stan: $ST), na źródle mogły zostać konto i zgody.\\nKomenda zapisana w $HOME/new-relation-$RNAME.cmd.": "This host has the relation record (state: $ST); the account and grants may be left on the source.\\nCommand saved in $HOME/new-relation-$RNAME.cmd.",
+"Wycofaj -- usuń relację tu i na źródle (delete-relation)": "Undo -- delete the relation here and on the source (delete-relation)",
+"Ponów -- ta sama komenda wznawia od miejsca porażki": "Retry -- the same command resumes where it failed",
+"Relacja $RNAME: wycofuję": "Relation $RNAME: undoing",
+"Wycofanie relacji": "Undoing the relation",
+"Relacja '$RNAME' wycofana (rc=0).": "Relation '$RNAME' undone (rc=0).",
+"Relacja '$RNAME' NIE wycofana do końca -- co zostało, mówi dziennik.": "Relation '$RNAME' NOT fully undone -- the log says what is left."
 }
