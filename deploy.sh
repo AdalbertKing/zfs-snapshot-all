@@ -4825,6 +4825,9 @@ fi
 # from (named at the end, for rm by hand). Re-running after a partial failure
 # finishes the rest: every step treats "already gone" as done.
 UNINSTALL_ACCOUNT_GECOS="zfs-snapshot-all delegated backup account"
+# add-client --local-user creates this one on a collector (lab, 2026-11-05: pve9
+# and pve9b carry otheracct and bkp, which the first version did not recognise).
+UNINSTALL_COLLECTOR_GECOS="zfs-snapshot-all collector account"
 UNINSTALL_PEER_GECOS="zfs-snapshot-all peer account for "
 uninstall_last_state() {   # <record> -> the last STATE= value
     sed -n 's/^STATE=//p' "$1" 2>/dev/null | tail -1
@@ -4862,7 +4865,7 @@ do_uninstall() {
     done
     while IFS=: read -r acct _ _ _ gecos _; do
         case "$gecos" in
-            "$UNINSTALL_ACCOUNT_GECOS") accounts="$accounts $acct" ;;
+            "$UNINSTALL_ACCOUNT_GECOS"|"$UNINSTALL_COLLECTOR_GECOS") accounts="$accounts $acct" ;;
             "$UNINSTALL_PEER_GECOS"*) peers="$peers $acct" ;;
         esac
     done < <(getent passwd)

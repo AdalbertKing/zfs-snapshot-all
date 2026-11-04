@@ -834,6 +834,7 @@ un_run() {   # <yes> -> rc; output in $UN/out, calls in $UN/calls
             case "$1" in
                 passwd) echo "root:x:0:0:root:/root:/bin/bash"; echo "zfsbackup:x:1001:1001:zfs-snapshot-all delegated backup account:/home/zfsbackup:/bin/bash"
                         [ -e "$UN/peer-account" ] && echo "zfsbackup-pve1:x:1002:1002:zfs-snapshot-all peer account for pve1:/home/zfsbackup-pve1:/bin/bash"
+                        echo "bkp:x:1004:1004:zfs-snapshot-all collector account:/home/bkp:/bin/bash"
                         echo "alice:x:1003:1003:Alice:/home/alice:/bin/bash" ;;
                 group)  [ -e "$UN/group-gone" ] || echo "zfsalert:x:999:" ;;
             esac
@@ -856,6 +857,7 @@ un_run() {   # <yes> -> rc; output in $UN/out, calls in $UN/calls
         eval "$(product_fn "$DEPLOY_SRC" do_uninstall)"
         UNINSTALL_ACCOUNT_GECOS="zfs-snapshot-all delegated backup account"
         UNINSTALL_PEER_GECOS="zfs-snapshot-all peer account for "
+        UNINSTALL_COLLECTOR_GECOS="zfs-snapshot-all collector account"
         CRON_HOST_BLOCK=zfs-backup-host REPO_DIR="$UN/t/repo"
         CLIENTS_DIR="$UN/t/clients" PEER_STATE_DIR="$UN/t/peers" PEER_KEY_DIR="$UN/t/keys"
         ZFS_CMD_LINK="$UN/t/link" PAIR_GATE_PATH="$UN/t/gate" QUIESCE_HELPER_PATH="$UN/t/helper"
@@ -889,6 +891,7 @@ u4=0; un_run 1 || u4=$?
 u4_ok=0
 if [ "$u4" -eq 0 ] && grep -qx 'cron_block_remove root zfs-backup-host' "$UN/calls" && grep -qx 'cron_block_remove root zfs-backup-managed' "$UN/calls" \
         && grep -qx 'cron_block_remove zfsbackup zfs-backup-managed' "$UN/calls" && ! grep -q 'cron_block_remove alice' "$UN/calls" \
+        && grep -qx 'cron_block_remove bkp zfs-backup-managed' "$UN/calls" && grep -qx 'userdel -r bkp' "$UN/calls" \
         && grep -qx 'zfs unallow -u zfsbackup rpool/data' "$UN/calls" && ! grep -q 'unallow -u zfsbackup hdd/data' "$UN/calls" \
         && grep -qx 'revoke_quiesce_grant zfsbackup' "$UN/calls" && grep -qx 'userdel -r zfsbackup' "$UN/calls" && ! grep -q 'userdel.*alice' "$UN/calls" \
         && grep -qx 'groupdel zfsalert' "$UN/calls" && ! grep -q 'zfs destroy' "$UN/calls" \
