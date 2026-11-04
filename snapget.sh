@@ -694,13 +694,9 @@ get_sorted_snapshots() {
 
     local snaps
     if [ -n "$remote_host" ]; then
-        # The remote command ends in a pipe, so ssh hands back awk's status: a
-        # dataset that does not exist yields rc 0 and an empty list (awk had
-        # nothing to read), and a NONZERO rc here therefore means ssh itself
-        # failed. Callers of this function collect its output into an array and
-        # drop the status, so without this line an unreachable host looks
-        # exactly like a dataset with no snapshots. Control flow is unchanged --
-        # the point is that the run says which one it was.
+        # Callers of this function collect its output into an array and drop the
+        # status, so a failure is logged here: without it an unreachable host
+        # looks exactly like a dataset with no snapshots.
         # REV-20261104-186 F5: no awk on the far side -- it used to hand back ITS status,
         # so a failed `zfs list` there arrived as an empty list. The list comes back raw,
         # its status is checked here, and the filter runs locally below. A dataset that
@@ -710,7 +706,7 @@ get_sorted_snapshots() {
             "zfs list -H -o name -t snapshot -s creation $depth_option '$dataset' 2>/dev/null") || {
             local _rc=$?
             if [ $_rc -ne 255 ]; then
-                probe_dataset "$dataset" "$remote_user" "$remote_host" "dataset"
+                dataset_presence "$dataset" "$remote_user" "$remote_host"
                 [ $? -eq 1 ] && return 0
             fi
             if [ $_rc -eq 255 ]; then
@@ -840,7 +836,7 @@ find_recursive_name_collisions() {
         [ -n "$tgt_child" ] || continue
         tgt_guid=$(get_snapshot_guid "$tgt_child" "$base_name")
         [ -n "$tgt_guid" ] || continue
-        probe_dataset "$src_child" "$remote_user" "$remote_host" "source child"
+        dataset_presence "$src_child" "$remote_user" "$remote_host"
         case $? in
             0) src_guid=$(get_snapshot_guid "$src_child" "$base_name" "$remote_user" "$remote_host") ;;
             1) src_guid="" ;;

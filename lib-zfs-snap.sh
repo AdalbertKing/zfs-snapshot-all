@@ -775,6 +775,31 @@ remote_refused_by_gate() {   # <rc> [captured output] -> 0 when the gate refused
 #   1  ssh worked (or the check was local) and the dataset genuinely is not there
 #   2  the question could not be answered -- the reason is already logged at
 #      level 0. A caller must NEVER treat this as 1.
+# REV-20261104-186 (F1/F4/F5): does a dataset exist -- three answers, never two.
+# probe_dataset's LOCAL branch reads every failure of `zfs list` as "absent" (1), and over
+# ssh a remote `zfs list` rc 1 is also "absent"; a permission or pool error then looks
+# like a missing dataset. The decisions REV-186 names (destroy, upgrade to full, an empty
+# list) need the difference, so "absent" here requires zfs's own words.
+#   dataset_presence <dataset> [remote_user] [remote_host]
+#   0 exists   1 does not exist (zfs said so)   2 unknown -- logged at level 0
+dataset_presence() {
+    local ds="$1" ru="${2:-}" rh="${3:-}" errf rc why
+    errf=$(mktemp) || { log 0 "mktemp failed while checking whether '$ds' exists"; return 2; }
+    if [ -n "$rh" ]; then
+        ssh -n "${SSH_OPTS[@]}" "$ru@$rh" "zfs list -H -o name -- '$ds'" >/dev/null 2>"$errf"
+    else
+        zfs list -H -o name -- "$ds" >/dev/null 2>"$errf"
+    fi
+    rc=$?
+    why=$(head -c 400 "$errf" | tr '\n' ' '); rm -f "$errf"
+    [ $rc -eq 0 ] && return 0
+    if [ $rc -ne 255 ] && printf '%s' "$why" | grep -q 'dataset does not exist'; then
+        return 1
+    fi
+    log 0 "Could not establish whether '$ds'${rh:+ on $ru@$rh} exists (exit $rc) -- treating this as UNKNOWN, not as a missing dataset.${why:+ Said: $why}"
+    return 2
+}
+
 # REV-20261104-186 F1: the protected-snapshot check before a force-full destroy is a
 # FAIL-CLOSED precondition. It used to be `zfs list ... 2>/dev/null | grep ... || true`,
 # so a listing that failed (ssh 255, a pool error, no zfs in PATH) produced the same
@@ -786,7 +811,7 @@ remote_refused_by_gate() {   # <rc> [captured output] -> 0 when the gate refused
 list_protected_snaps() {
     local ds="$1" ru="${2:-}" rh="${3:-}" out rc errf line
     PROTECTED_SNAPS=""
-    probe_dataset "$ds" "$ru" "$rh" "force-full target"
+    dataset_presence "$ds" "$ru" "$rh"
     case $? in
         0) ;;
         1) return 0 ;;

@@ -756,10 +756,8 @@ get_sorted_snapshots() {
     
     local snaps
     if [ -n "$remote_host" ]; then
-        # Same reasoning as snapget.sh's copy of this function: the remote
-        # command ends in a pipe, so ssh returns awk's status and a nonzero rc
-        # here means ssh itself failed, not that the dataset has no snapshots.
-        # Callers array-collect the output and drop the status, so say it here.
+        # Callers array-collect the output and drop the status, so a failure is
+        # logged here (same reasoning as snapget.sh's copy of this function).
         # REV-20261104-186 F5: no awk on the far side -- it used to hand back ITS status,
         # so a failed `zfs list` there arrived as an empty list. The list comes back raw,
         # its status is checked here, and the filter runs locally below. A dataset that
@@ -769,7 +767,7 @@ get_sorted_snapshots() {
             "zfs list -H -o name -t snapshot -s creation $depth_option '$dataset' 2>/dev/null") || {
             local _rc=$?
             if [ $_rc -ne 255 ]; then
-                probe_dataset "$dataset" "$remote_user" "$remote_host" "dataset"
+                dataset_presence "$dataset" "$remote_user" "$remote_host"
                 [ $? -eq 1 ] && return 0
             fi
             if [ $_rc -eq 255 ]; then
@@ -913,7 +911,7 @@ find_recursive_name_collisions() {
         [ -n "$tgt_child" ] || continue
         tgt_guid=$(get_snapshot_guid "$tgt_child" "$base_name" "$remote_user" "$remote_host")
         [ -n "$tgt_guid" ] || continue
-        probe_dataset "$src_child" "" "" "source child"
+        dataset_presence "$src_child"
         case $? in
             0) src_guid=$(get_snapshot_guid "$src_child" "$base_name") ;;
             1) src_guid="" ;;
