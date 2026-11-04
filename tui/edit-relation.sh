@@ -31,6 +31,7 @@ ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "edit-relation: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 . "$HERE/tui/retention-lib.sh" || { echo "edit-relation: brak $HERE/tui/retention-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 . "$HERE/tui/basket-lib.sh" || { echo "edit-relation: brak $HERE/tui/basket-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/fastprune-lib.sh" || { echo "edit-relation: brak $HERE/tui/fastprune-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 NAME="${1:-}"
 [ -n "$NAME" ] || { echo "usage: edit-relation.sh NAME" >&2; exit 2; }
 WT_BACKTITLE="$(Tv 'Zmiana relacji $NAME -- kolektor $(hostname)' '$NAME' "$NAME" '$(hostname)' "$(hostname)")"
@@ -51,7 +52,15 @@ restore_hidden() {
         "$ZB" delete-profile "$HNAME" --yes >/dev/null 2>&1
     fi
 }
-trap 'restore_hidden; rm -rf "$TMPD"' EXIT
+# U136: szablon fastprune tej relacji zmieniany PRZED planem (plan go czyta) -- bez zapisu
+# zmian wraca, jak był: kopia sprzed zmiany albo (nowy) usunięty.
+FPNAME="relacja-$NAME-fastprune"; FP_DIRTY=0; FP_BAK=""; FP_FILE=""
+restore_fastprune() {
+    [ "$FP_DIRTY" -eq 1 ] && [ "$DONE" -ne 1 ] || return 0
+    if [ -n "$FP_BAK" ] && [ -n "$FP_FILE" ]; then cp -p "$FP_BAK" "$FP_FILE" 2>/dev/null
+    else "$ZB" delete-profile "$FPNAME" --yes >/dev/null 2>&1; fi
+}
+trap 'restore_hidden; restore_fastprune; rm -rf "$TMPD"' EXIT
 
 # st.tsv: stan, profil, profil źródła, peer, datasety, lustro, cel; prof.tsv: nazwa <TAB> opis (bez
 # ukrytych i pochodnych -src-); prof.json.tiers: szczeble do okna retencji źródła;
@@ -828,6 +837,12 @@ while :; do
     er_row harmon "$(T Harmonogram)" "$_sz" "$([ "${#P_EDIT[@]}" -gt 0 ] || [ "${#P_RARGS[@]}" -gt 0 ] && echo 1 || echo 0)"
     case "$_rodzaj" in backup|"kopia lokalna")
         er_row srcret "$(T 'Retencja źródła')" "$_sr" "$([ "${#P_SARGS[@]}" -gt 0 ] && echo 1 || echo 0)" ;; esac
+    # U136: fastprune migawek zdalnych -- N i szablon bazowy ze znacznika w opisie szablonu relacji.
+    if [ "$SNAPONLY" -eq 1 ]; then
+        _fp="$(fp_of "$CUR_P")"; FP_CUR_N="${_fp%% *}"; FP_CUR_BASE="${_fp#* }"; [ -n "$_fp" ] || { FP_CUR_N=""; FP_CUR_BASE=""; }
+        if [ -n "$FP_CUR_N" ]; then _fpv="$(Tv '$FASTPRUNE godz. -- wszystkie szczeble' '$FASTPRUNE' "$FP_CUR_N") ($FP_CUR_BASE)"; else _fpv="$(T 'nie')"; fi
+        er_row fastprune "$(T 'Fastprune')" "$_fpv" 0
+    fi
     # Pasywna kopia lokalna (replika pvesr, MIRROR=1): bez historii i bez łącza okno silnika
     # było puste -- "Przywróć fabryczne" i "Gotowe" (właściciel 2026-10-26, pve2-nextcloud).
     _eng=1; [ "$_rodzaj" = "kopia lokalna" ] && [ "${MIRROR:-0}" = 1 ] && _eng=0
@@ -868,6 +883,7 @@ while :; do
         # snaponly: tabela -> ukryty szablon relacji -> edit-relation --profile= (blok
         # "harm" w pętli kroków niżej); harm_flow czyta/zapisuje szczeble KOPII (set-tiers).
         harm) [ "$SNAPONLY" -eq 1 ] && break; harm_flow; continue ;;
+        fastprune) break ;;
         adres) address_flow; continue ;;
         szablon) break ;;
         silnik) engine_settings; continue ;;
@@ -972,6 +988,26 @@ while :; do
             harm_flow; continue 2
         fi
         PROFILE="$WT_OUT"; step=2; continue
+    fi
+    if [ "$step" -eq 1 ] && [ "$ACTION" = fastprune ]; then
+        # U136: N od nowa z szablonu BAZOWEGO (nie z obecnej kopii -- progi monitora zdjęte przy
+        # starym N wracają, gdy nowe N je obejmuje); puste = powrót do bazy, bez fastprune.
+        fp_ask "$FP_CUR_N" || continue 2
+        if [ -z "$FP_ANS" ]; then
+            [ -n "$FP_CUR_BASE" ] || continue 2          # nie było i nie ma -- nic do zmiany
+            PROFILE="$FP_CUR_BASE"; step=2; continue
+        fi
+        [ "$FP_ANS" = "$FP_CUR_N" ] && continue 2       # to samo N -- nic do zmiany
+        _base="${FP_CUR_BASE:-${CUR_P:-default}}"
+        if [ "$FP_DIRTY" -eq 0 ] && [ "$CUR_P" = "$FPNAME" ]; then
+            FP_FILE="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); print(next((p.get("file") or "" for p in d.get("profiles",[]) if p.get("name")==sys.argv[2]),""))' "$TMPD/prof.json" "$FPNAME" 2>/dev/null | tr -d '\r')"
+            [ -n "$FP_FILE" ] && [ -f "$FP_FILE" ] && { FP_BAK="$TMPD/fastprune.bak"; cp -p "$FP_FILE" "$FP_BAK"; }
+        fi
+        info "$(T 'Fastprune')" "$(T 'Zapisuję ustawienia relacji...')"
+        fp_save "$_base" "$FP_ANS" "$FPNAME" "$NAME" || continue 2
+        FP_DIRTY=1
+        load_lists
+        PROFILE="$FPNAME"; step=2; continue
     fi
     if [ "$step" -eq 1 ] && [ "$ACTION" = harm ]; then
         # Ta sama tabela co szablon na F5 (sposób, wszystkie szczeble, liczby, zamrażanie),

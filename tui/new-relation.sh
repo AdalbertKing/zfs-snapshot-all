@@ -28,6 +28,7 @@ ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "new-relation: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 . "$HERE/tui/basket-lib.sh" || { echo "new-relation: brak $HERE/tui/basket-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 . "$HERE/tui/retention-lib.sh" || { echo "new-relation: brak $HERE/tui/retention-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/fastprune-lib.sh" || { echo "new-relation: brak $HERE/tui/fastprune-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 WT_BACKTITLE="$(Tv 'Nowa relacja -- kolektor $(hostname)' '$(hostname)' "$(hostname)")"
 NSTEP=10
 TMPD="$(mktemp -d)" || exit 1
@@ -603,66 +604,15 @@ step_passive() {   # U138: kopia lokalna pasywnie, choc na zrodle nie ma jeszcze
 # U136 (właściciel 2026-11-04: Zaawansowane, „jedno pole”): migawki zdalne, źródło bez miejsca.
 # Każdy szczebel wybranego szablonu: retain = -h<N>, czyszczenie co godzinę; monitor zostaje
 # tylko szczeblom częstszym niż N -- wieku rzadszych pilnuje archiwum (kopia pasywna z repliki).
-step_fastprune() {
-    local v="$FASTPRUNE"
-    while :; do
-        geom
-        wt --title "$(T 'Szybkie czyszczenie źródła (fastprune)')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
-           --inputbox "$(T 'Ile godzin żyje na źródle każda migawka (wszystkie szczeble). Puste = wyłączone.\nCzyszczenie co godzinę; monitor zostaje tylko szczeblom częstszym niż ta liczba --\nwieku rzadszych pilnuje archiwum (kopia pasywna z repliki na kolektorze).')" 12 "$W" "$v" || return 1
-        v="${WT_OUT// /}"
-        case "$v" in
-            ''|0) FASTPRUNE=""; return 0 ;;
-            *[!0-9]*) wt --title "$(T 'Zła liczba')" --msgbox "$(T 'Liczba godzin: same cyfry, puste = wyłączone.')" 8 "$W"; continue ;;
-        esac
-        v=$((10#$v))
-        if [ "$v" -lt 4 ]; then
-            wt --title "$(T 'Za mało')" --msgbox "$(T 'Najmniej 4 godziny: replika pvesr co 2 h musi zdążyć przenieść migawkę dwa razy.')" 8 "$W"; continue
-        fi
-        if [ "$v" -lt 24 ]; then
-            wt --title "$(T 'Mniej niż doba')" --yes-button "$(T Dalej)" --no-button "$(T Wstecz)" \
-               --yesno "$(Tv 'Migawka dobowa przeżyje na źródle tylko $v godz. Jeśli replika albo archiwum stoją dłużej, migawka zniknie, zanim trafi do archiwum.' '$v' "$v")" 10 "$W" || continue
-        fi
-        FASTPRUNE="$v"; return 0
-    done
-}
+step_fastprune() { fp_ask "$FASTPRUNE" || return 1; FASTPRUNE="$FP_ANS"; }
 fp_build() {   # FASTPRUNE -> ukryty szablon FP_P (kopia PROFILE); 1 = błąd (okno pokazane)
     if [ -z "$FASTPRUNE" ] || [ "$MODE" != snaponly ]; then
         [ -n "$FP_P" ] && "$ZB" delete-profile "$FP_P" --yes >/dev/null 2>&1
         FP_P=""; return 0
     fi
-    local name="relacja-$RNAME-fastprune" args=()
+    local name="relacja-$RNAME-fastprune"
     load_profiles
-    mapfile -t args < <("$PY" - "$TMPD/prof.json" "$PROFILE" "$FASTPRUNE" <<'PYEOF'
-import sys, json
-d = json.load(open(sys.argv[1], encoding="utf-8")); name = sys.argv[2]; n = int(sys.argv[3])
-def every(s):   # odstęp send_schedule w godzinach
-    f = s.split()
-    if len(f) < 5: return 8760
-    m, h, dom, mon, dow = f[:5]
-    if h == "*": return 1
-    if h.startswith("*/") and h[2:].isdigit(): return int(h[2:])
-    if dow != "*": return 168
-    if dom == "*" and mon == "*": return 24
-    if mon == "*": return 744
-    return 8760
-for p in d.get("profiles", []):
-    if p.get("name") != name: continue
-    for t in p.get("tiers", []):
-        if not t.get("send_schedule"): continue
-        print("--tier=" + t["name"]); print("--retain=-h%d" % n); print("--keep=")
-        print("--prune_schedule=21 * * * *")
-        if every(t["send_schedule"]) >= n:
-            print("--monitor_warn="); print("--monitor_crit=")
-PYEOF
-)
-    if [ "${#args[@]}" -eq 0 ]; then
-        wt --title "$(T 'Fastprune niemożliwy')" --msgbox "$(Tv 'Szablon $PROFILE nie ma szczebli, które robią migawki -- fastprune nie ma czego skracać.' '$PROFILE' "$PROFILE")" 9 "$W"; return 1
-    fi
-    if ! "$ZB" save-profile "--from=$PROFILE" "--as=$name" --hidden --force \
-         "--description=$(Tv 'Fastprune $FASTPRUNE h z $PROFILE (relacja $RNAME)' '$FASTPRUNE' "$FASTPRUNE" '$PROFILE' "$PROFILE" '$RNAME' "$RNAME")" \
-         "${args[@]}" >/dev/null 2>"$TMPD/fp.err"; then
-        wt --title "$(T 'Fastprune: szablonu nie zapisano')" --msgbox "$(tail -4 "$TMPD/fp.err")" 14 "$W"; return 1
-    fi
+    fp_save "$PROFILE" "$FASTPRUNE" "$name" "$RNAME" || return 1
     # nazwa relacji zmieniona po poprzednim planie: stara kopia szablonu nie zostaje
     [ -n "$FP_P" ] && [ "$FP_P" != "$name" ] && "$ZB" delete-profile "$FP_P" --yes >/dev/null 2>&1
     FP_P="$name"
