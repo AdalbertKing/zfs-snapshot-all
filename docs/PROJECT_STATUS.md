@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 11fcd6da09085c81 -->
+<!-- status-covers-digest: c84fd7d62b6b69b9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,16 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`off: command not found` przy świeżej instalacji (2026-11-04, `e0b6c64d`, NIEWYDANE).** Heredok
+  `/etc/zfs-alert.conf` w `deploy.sh` jest niecytowany celowo (rozwija `${ALERT_MODE}` i resztę), a
+  komentarz miał `off` w backtickach: bash wykonywał `off`, a zapisany plik tracił to słowo (zmierzone
+  na pve1 A-TASSA, 1.0.10). Backticki zacytowane. Dotyczy tylko nowych instalacji; istniejący
+  `/etc/zfs-alert.conf` nie jest nadpisywany, więc na hostach z 1.0.10 komentarz zostaje bez słowa
+  (sam komentarz, bez wpływu na działanie). `test/alertmail` dostał dwa przypadki: render heredoku z
+  wartownikiem `off` w PATH i strażnik całej klasy (żaden niecytowany heredok w `deploy.sh` nie
+  zawiera niezacytowanego backticka). Oba czerwone na `main`, zielone na gałęzi (wycięte i uruchomione osobno);
+  całą suitę uruchamia CI.
 
 - **Krok „Dokąd” i drzewo datasetów w układzie F2 (2026-11-04, #1063, wydane w 1.0.10; U147, U155,
   U156).** Makieta zaakceptowana przez właściciela („Tak, koduj”).
