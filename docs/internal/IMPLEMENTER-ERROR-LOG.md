@@ -1976,6 +1976,22 @@ in the suite's own shell. On pve9 the full `zfsbackup` run then failed three `gf
 loops runs in a subshell (`x=$( ... )`), and a new FAIL that appears only in the full run is
 checked against `--section <it>` alone before it is called environmental.
 
+### E114 — the response named a SHA before the freeze re-pin and the twin bless (2026-11-04, R6)
+**2026-11-04, PR #1055, REV-20261104-186.**
+
+*Genesis.* I wrote the response with `implementation: a293e83c` (the last code + test commit),
+then -- on the same branch -- re-pinned ENGINE-FREEZE after `dataset_presence` (df2f1960) and
+blessed the twin checksums (92c81fcf) when CI went red. CI and `--verify` were green on
+92c81fcf; on a293e83c `--verify` fails (STALE, FROZEN, GRAPH DRIFT). The Reviewer rejected
+the submission boundary (REV-186 verification of a293e83c) without reviewing F1-F6.
+
+*Cause.* "Implementation" was chosen as "the last commit that changes code", but the gate
+consistency (freeze pins, twin metadata, status digest) is part of the delivery.
+
+*Rule.* R6, widened: the SHA in the response is the commit on which `./test/impact.sh --verify`
+was run clean AND which has its own green CI run -- recorded with the command, rc and run id.
+Any commit after it that is not the response or generated views means the header moves.
+
 ### E110 — merged a PR while a blocking review of it was on main (2026-10-30, R2)
 **2026-10-30, PR #1007, REV-20261030-184.**
 
