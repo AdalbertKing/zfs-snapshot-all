@@ -3356,7 +3356,11 @@ apply_recorded_grant_datasets() {
     recorded=$(read_state_file "$GRANT_DATASETS_FILE") || return 0
     [ -n "$recorded" ] || return 0
     BACKUP_USER_DATASETS="$recorded"
-    log "grant-datasets: using the list recorded at $GRANT_DATASETS_FILE (${recorded}) -- pass --grant-datasets= to override"
+    # First install, 2026-11-04: on a collector whose copies land in hdd, this line
+    # read as the copies' grant on the wrong pool. It is the delegated account's
+    # right over THIS host's own datasets (Phase 8g); a copy's target is granted
+    # per relationship (--pair --local-user, activate).
+    log "grant-datasets: using the list recorded at $GRANT_DATASETS_FILE (${recorded}) -- this host's own datasets for the delegated account; a copy's target is granted per relationship. Pass --grant-datasets= to override"
 }
 apply_recorded_grant_datasets
 
