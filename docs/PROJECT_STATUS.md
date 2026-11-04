@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4f3360c07453b5d4 -->
+<!-- status-covers-digest: 9c3acaaf8b899df2 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -25,6 +25,13 @@
   2026-11-03 (sprawdzone po :15, także klony kont `zfsbackup` na 11.10 i 11.11).** W dev `main`, niewydane:
   paczka U (PR #1045) i U136 (#1046). Lab posprzątany 2026-11-04: relacje i datasety testowe U137/U138/U141
   usunięte z pve11, pve9 i pve9b; pve11 wrócił na wydanie bez wstrzymania aktualizacji.
+- **Próba kopii lokalnej a archiwum z dłuższą historią (2026-11-04, Dąbrowska).** Silnik `snapget.sh -n`
+  z założenia kończy się rc=1, gdy w celu są migawki, których źródło już nie ma; instalator kopii lokalnej
+  brał to za porażkę i kopia pasywna do archiwum pve0 `hdd/backups/pve1` (historia dobowa i tygodniowa z
+  września i października, replika ma migawki od 1 listopada) nie dawała się zainstalować, choć prawdziwy
+  bieg idzie przyrostowo od wspólnej migawki. Teraz próba stosuje regułę historii z aktywacji relacji
+  (REV-146): migawki tylko w celu STARSZE niż baza przechodzą, nowsza dalej blokuje. Test w
+  `test/localbackup` (pve9, jako `tester`) 183/0; ten sam test na poprzednim kodzie pada.
 - **Paczka W (2026-11-04, gałąź `feat/finish-w`).** W1: licznik „porządki” na F3 liczy też porządki
   zaszyte w sekcji `[dataset:]` (te same, które F2 pokazuje jako „lokalny prune”). W17: zdanie
   podsumowania łamane ręcznie pod 80 kolumn jest w oknie planu jednym akapitem. W18: zmiana, która tylko

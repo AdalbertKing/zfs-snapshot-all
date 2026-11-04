@@ -9702,7 +9702,11 @@ Taking over older jobs (a v4 config written manually): remove their sections fir
             # refuse. Nothing to rehearse yet -- the first cron run after the family appears copies it.
             elif [ "$lb_passive" -eq 1 ] && [ -z "$(local_newest_snapshot "$sr" "$seed_prefix" r)" ]; then
                 log "  passive, no '${seed_prefix}*' snapshot under $sr yet -- nothing to rehearse; the first cron run after the family appears copies it"
-            elif bash "$SNAPGET" -n -m "$seed_prefix" -v 3 ${lb_name:+-L "$lb_name"} $([ "$lb_raw" -eq 1 ] && printf -- '-w') $([ "$lb_passive" -eq 1 ] && printf -- '-e') ${seed_rec[@]+"${seed_rec[@]}"} ${seed_x[@]+"${seed_x[@]}"} "$sr" "$target"; then
+            # Dabrowska 2026-11-04: an archive that keeps LONGER than its source (old daily/
+            # weekly history the replica no longer has) made the engine's -n exit 1 "by design";
+            # the same history rule as activate-client (REV-146) -- only target-only snapshots
+            # OLDER than the base are accepted, a newer one still fails.
+            elif activate_dryrun_snapget "$sr" -n -m "$seed_prefix" -v 3 ${lb_name:+-L "$lb_name"} $([ "$lb_raw" -eq 1 ] && printf -- '-w') $([ "$lb_passive" -eq 1 ] && printf -- '-e') ${seed_rec[@]+"${seed_rec[@]}"} ${seed_x[@]+"${seed_x[@]}"} "$sr" "$target"; then
                 log "  OK: $sr -> $target (first copy at its cron time)"
             else
                 warn "  FAILED: $sr -> $target (dry-run)"
