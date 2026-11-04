@@ -947,8 +947,8 @@ $_k"
         STATE_BODY="$STATE_BODY$_DSBLOCK"
         # U160: the same row as a record for the relations mail (relations_render).
         case "$nl$SEND_LABELS$nl" in *"$nl$_k$nl"*) _snd=1 ;; *) _snd=0 ;; esac
-        [ -n "$DG_RD" ] && printf 'J\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-            "$_k" "$_live" "$_n" "$_f" "$_lw" "$_lrc" "${_vb:-0}" "$_vol" "$_rt" "$_dlast" "$_avg" "$_mx" "$_tg" "$_snd" >> "$DG_RD/jobs.tsv"
+        [ -n "$DG_RD" ] && printf 'J\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$_k" "$_live" "$_n" "$_f" "$_lw" "$_lrc" "${_vb:-0}" "$_vol" "$_rt" "$_dlast" "$_avg" "$_mx" "$_tg" "$_snd" "$_srcs" >> "$DG_RD/jobs.tsv"
     done <<< "$RUN_ROWS"
 fi
 
@@ -1119,7 +1119,7 @@ relations_render() {
     DG_HOST="$HOST" DG_DAYS="$DIGEST_DAYS" DG_QUEUE="$PROCESSING" DG_QUIET="${QUIET:-0}" \
     DG_QUIET_WHEN="$QUIET_WHEN" DG_TO="${ZFS_ALERT_EMAIL:-root}" DG_FROM="$(id -un 2>/dev/null || echo root)@$HOST" \
     DG_LOGS="${CRON_LOGS# }" DG_WINDOW="${RUN_WINDOW:-}" DG_RD="$DG_RD" python3 - <<'PYEOF'
-import os, re, json, html, time
+import os, re, json, html, time, gzip, textwrap
 from email.message import EmailMessage
 from email.utils import formatdate
 
@@ -1237,7 +1237,8 @@ for ln in rd("jobs.tsv").splitlines():
         j = {"k": f[1], "n": int(f[3] or 0), "f": int(f[4] or 0), "lw": f[5], "rc": f[6],
              "vb": int(f[7]) if f[7].isdigit() else 0, "vol": f[8], "rate": f[9], "dlast": f[10],
              "avg": f[11], "max": f[12], "tg": f[13], "send": f[14] == "1", "task": task,
-             "tier": base, "scope": scope, "ds": [], "err": ""}
+             "tier": base, "scope": scope, "ds": [], "err": "",
+             "srcs": [x for x in (f[15] if len(f) > 15 else "").split(",") if x]}
         jobs[f[1]] = j
         rel(relname or scope or task)["jobs"].append(j)
     elif f[0] == "D" and len(f) >= 9 and f[1] in jobs:
@@ -1277,6 +1278,70 @@ for ln in qlines:
     if key in jobs and det:
         jobs[key]["err"] = det[-1]
 
+# THE CAUSE (owner, variant A 2026-11-04: "nie mówi o szczegółach, co wysiadło"). zfs-job.sh
+# appends the job's stderr to its cron.log right before "ZFS-JOB END <host> <label> rc=N"
+# (zfs-job.sh: cat "$e" >>"$LOG"), so the lines between the previous ZFS-JOB marker and a
+# failed END are that run's own error -- there even when no queue holds a detail (alerts
+# sent immediately). The queued detail above stays the fallback.
+STAMP = re.compile(r"^\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d\S*\s+(-\s+)?")
+def log_causes(keys):
+    found = {}
+    files = [f for f in (E.get("DG_LOGS") or "").split() if os.path.isfile(f)]
+    for fn in sorted(files, key=lambda f: os.path.getmtime(f)):
+        try:
+            fh = gzip.open(fn, "rt", encoding="utf-8", errors="replace") if fn.endswith(".gz") \
+                else open(fn, encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        block = []
+        with fh:
+            for ln in fh:
+                ln = ln.rstrip("\n")
+                m = re.search(r" ZFS-JOB (BEGIN|END) \S+ (.*?)(?: rc=(\d+))?$", ln)
+                if not m:
+                    if ln.strip():
+                        block.append(ln.strip())
+                    continue
+                if m.group(1) == "END" and m.group(2) in keys and m.group(3) not in (None, "0"):
+                    lines = [STAMP.sub("", x) for x in block if not x.startswith(("CRITICAL ", "WARNING ", "OK "))]
+                    # rc=8: the last line only says the run was DEGRADED; the reason (and the
+                    # fix) is the FIRST "Quiesce:" line of the run (measured on pve11).
+                    q = [x for x in lines if x.startswith("Quiesce:")] if m.group(3) == "8" else []
+                    if q or lines:
+                        c = (q or lines[-1:])[0]
+                        found[m.group(2)] = c if len(c) <= 320 else c[:317] + "..."
+                block = []
+    return found
+for k, c in log_causes(set(k for k, j in jobs.items() if j["rc"] not in ("0", ""))).items():
+    jobs[k]["err"] = c
+
+def obj(j):
+    """What the job acts on, as zfs list names it: the sources (siblings shortened), -> target."""
+    out = []
+    for i, d in enumerate(j["srcs"]):
+        if i and d.rsplit("/", 1)[0] == j["srcs"][0].rsplit("/", 1)[0]:
+            d = d.rsplit("/", 1)[-1]
+        out.append(d)
+    o = ", ".join(out) or j["scope"] or "-"
+    return o + (" -> " + j["tg"] if j["send"] and j["tg"] else "")
+
+def wrap(prefix, text, width=78, more=0):
+    return textwrap.wrap(text, width, initial_indent=prefix, subsequent_indent=" " * (len(prefix) + more),
+                         break_long_words=False, break_on_hyphens=False) or [prefix.rstrip()]
+
+def distinct_causes(js_):
+    seen, out = set(), []
+    for j in js_:
+        if j["err"]:
+            k = re.sub(r"'[^']*'", "''", j["err"])
+            if k not in seen:
+                seen.add(k)
+                out.append(j["err"])
+    return out
+
+def n_tasks(n):
+    return u"%d %s" % (n, "zadania" if n == 1 else u"zadań")
+
 # --- verdict per relation, in the GUI's words ---
 def mon_tier(m):
     return (m.get("pattern") or "").rstrip("_").split("_")[-1]
@@ -1304,10 +1369,22 @@ for x in rels.values():
     x["runs"] = sum(j["n"] for j in live)
     x["fails"] = sum(j["f"] for j in live)
     if bad:
-        j = bad[0]
-        x["rank"], x["state"] = 9, u"błąd biegu: " + j["task"]
-        todo.append((9, x["name"], u"%s nie powiodła się (%s, rc=%s)" % (j["task"], when(j["lw"]), j["rc"]),
-                     [j["err"]] if j["err"] else [], u"sprawdź: zfs-backup gui -> F2 (przebiegi)"))
+        x["rank"], x["state"] = 9, u"błąd biegu (%d z %s)%s" % (len(bad), n_tasks(len(live)),
+                                                             ", stare" if wv == "CRITICAL" else "")
+        bad.sort(key=lambda j: j["lw"], reverse=True)
+        verb = u"zadanie kończy się" if len(bad) == 1 else (u"zadania kończą się" if plural(len(bad), 1, 2, 3) == 2 else u"zadań kończy się")
+        lines = []
+        for j in bad[:3]:
+            lines.extend(wrap("", u"%s, %s rc=%s: %s" % (j["task"], when(j["lw"]), j["rc"], obj(j)), 75, 2))
+        if len(bad) > 3:
+            lines.append(u"... (jeszcze %d)" % (len(bad) - 3))
+        causes = distinct_causes(bad)
+        for c in causes[:2]:
+            lines.extend(wrap(u"przyczyna: ", c, 75))
+        if len(causes) > 2:
+            lines.append(u"(i %d innych przyczyn -- załącznik)" % (len(causes) - 2))
+        todo.append((9, x["name"], u"%d %s błędem" % (len(bad), verb), lines,
+                     u"sprawdź: zfs-backup gui -> F2 (przebiegi)"))
     elif wv == "CRITICAL":
         r = first_line(worst.get("reason"), "CRITICAL")
         a = re.search(r"age=(\S+)", r)
@@ -1319,11 +1396,18 @@ for x in rels.values():
         x["rank"], x["state"] = 7, "nie odpowiada"
         todo.append((7, x["name"], "monitor nie odpowiada", [first_line(worst.get("reason"), "")], ""))
     elif deg:
-        j = deg[0]
-        x["rank"], x["state"] = 6, u"bez zamrożenia: " + j["task"]
-        todo.append((6, x["name"], u"%s bez zamrożenia gościa (%s, rc=8)" % (j["task"], when(j["lw"])),
-                     [u"migawka jest, ale spójna jak po nagłym wyłączeniu gościa"],
-                     u"powód w logu biegu (F2): zwykle agent gościa albo konto bez dostępu do gości"))
+        x["rank"], x["state"] = 6, u"bez zamrożenia (%d z %s)" % (len(deg), n_tasks(len(live)))
+        tasks = sorted(set(j["task"] for j in deg))
+        last = max(j["lw"] for j in deg)
+        what = (u"%s bez zamrożenia gościa, %s rc=8" % (tasks[0], when(last))) if len(tasks) == 1 \
+            else (u"%s bez zamrożenia gościa, ostatnio %s rc=8" % (n_tasks(len(deg)).replace("zadania", "zadanie"), when(last)))
+        lines = wrap("", ", ".join(obj(j) for j in deg), 75)
+        lines.append(u"migawka jest, ale spójna jak po nagłym wyłączeniu gościa")
+        causes = distinct_causes(deg)
+        for c in causes[:2]:
+            lines.extend(wrap(u"przyczyna: ", c, 75))
+        todo.append((6, x["name"], what, lines,
+                     u"" if causes else u"powód w logu biegu (F2): zwykle agent gościa albo konto bez dostępu do gości"))
     elif wv == "WARNING":
         x["rank"], x["state"] = 5, u"spóźnione: " + TIER_F.get(mon_tier(worst), mon_tier(worst))
     elif x.get("paused"):
@@ -1369,11 +1453,12 @@ out.append("")
 w = min(max([len(x["name"]) for x in order] + [7]), 30)
 def cut(s, n):
     return s if len(s) <= n else s[:n - 3] + "..."
-out.append("%-*s  %-16s  %-11s  %s" % (w, "RELACJA", "RODZAJ", "NAJNOWSZA", "STAN"))
-out.append("%s  %s  %s  %s" % ("-" * w, "-" * 16, "-" * 11, "-" * max(4, 74 - w - 31)))
+# Variant A (owner 2026-11-04): no kind column -- "migawki lokalne" told migawki-a from
+# migawki-b nothing; what tells relations apart is in DO ZROBIENIA and in the attachment.
+out.append("%-*s  %-11s  %s" % (w, "RELACJA", "NAJNOWSZA", "STAN"))
+out.append("%s  %s  %s" % ("-" * w, "-" * 11, "-" * max(4, 74 - w - 13)))
 for x in order:
-    out.append(u"%-*s  %-16s  %-11s  %s" % (w, cut(x["name"], w), cut(x["kind"], 16),
-               when(x["newest"]) if x["newest"] else "-", x["state"]))
+    out.append(u"%-*s  %-11s  %s" % (w, cut(x["name"], w), when(x["newest"]) if x["newest"] else "-", x["state"]))
 if not order:
     out.append(u"(brak relacji i zadań na tym hoście)")
 if todo:
@@ -1382,7 +1467,7 @@ if todo:
     for i, (_, who, what, lines, hint) in enumerate(todo, 1):
         out.append(u"%d. %s -- %s" % (i, who, what))
         for l in lines:
-            out.append("   " + cut(l, 75))
+            out.append("   " + l)
         if hint:
             out.append("   " + hint)
 runs = sum(x["runs"] for x in order)
@@ -1417,19 +1502,19 @@ for x in order:
         x["fails"], plural(x["fails"], u"błąd", u"błędy", u"błędów")))
     rows.append(u"<p class='st'>stan: %s</p>" % h(x["state"]))
     if x["jobs"]:
-        rows.append(u"<table><tr><th>zadanie</th><th>ostatni bieg</th><th>biegów</th><th>błędy</th>"
+        rows.append(u"<table><tr><th>zadanie</th><th>obiekt</th><th>ostatni bieg</th><th>biegów</th><th>błędy</th>"
                     u"<th>dopisane</th><th>transfer</th><th>czas ost.</th><th>śr.</th><th>max</th><th>ostatni błąd</th></tr>")
         for j in sorted(x["jobs"], key=task_key):
             copy = j["send"] and bool(j["tg"])
-            rows.append(u"<tr class='%s'><td>%s%s</td><td>%s</td><td>%d</td><td>%d</td><td>%s</td><td>%s</td>"
+            rows.append(u"<tr class='%s'><td>%s</td><td class='o'>%s</td><td>%s</td><td>%d</td><td>%d</td><td>%s</td><td>%s</td>"
                         u"<td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>" % (
-                cls(j), h(j["task"]), (" <span class='dim'>(%s)</span>" % h(j["scope"])) if j["scope"] else "",
+                cls(j), h(j["task"]), h(obj(j)),
                 h(when(j["lw"])) + ("" if j["rc"] in ("0", "") else " rc=" + h(j["rc"])), j["n"], j["f"],
                 h(j["vol"]) if copy else "-", h(j["rate"]) if copy else "-", h(j["dlast"]),
                 h(j["avg"]) + "s", h(j["max"]) + "s", h(j["err"]) if cls(j) == "err" else ""))
             if copy:
                 for d in j["ds"]:
-                    rows.append(u"<tr class='ds'><td>&nbsp;&nbsp;%s</td><td></td><td>%s</td><td></td><td>%s</td>"
+                    rows.append(u"<tr class='ds'><td></td><td class='o'>&nbsp;&nbsp;%s</td><td></td><td>%s</td><td></td><td>%s</td>"
                                 u"<td>%s</td><td>%s</td><td>%s</td><td>%s</td><td></td></tr>" % tuple(h(v) for v in (d[0], d[1], d[2], d[3], d[4], d[5], d[6])))
         rows.append("</table>")
     if x["idle"]:
@@ -1462,7 +1547,7 @@ table{border-collapse:collapse;width:100%%;margin-bottom:6px}
 th,td{border:1px solid %(line)s;padding:2px 8px;text-align:left;white-space:nowrap}
 th{background:%(head)s;color:%(dim)s;font-weight:normal}td+td{text-align:right}td:last-child{text-align:left;white-space:normal}
 tr.err td{color:%(err)s;background:%(errbg)s}tr.warn td,p.warn{color:%(warn)s}tr.warn td{background:%(warnbg)s}
-tr.ds td{color:%(dim)s}
+tr.ds td{color:%(dim)s}td.o{text-align:left;white-space:normal}
 </style></head><body><h1>%(t)s<span class="sum">pule: %(p)s</span></h1>%(r)s
 <p class="dim">okno: %(win)s (%(d)d dni); logi: %(logs)s</p></body></html>""" % dict(
     C, t=h(u"%s -- statystyka biegów" % SHORT), p=h("   ".join("%s %s %s" % tuple(p) for p in pools)),

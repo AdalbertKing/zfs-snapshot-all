@@ -627,11 +627,14 @@ CTSTUB
                 bad "digest: a scheduled job whose last run failed DOES make the state bad" "$_live"
             fi
 
-            # U157/U159/U160 (owner 2026-11-04): THE RELATIONS MAIL. Three relations in cron
-            # (alfa ok, beta failed, gamma rc=8 = no quiesce) and delta, gone from cron. The
-            # subject counts the relations needing attention; the table names them in GUI
-            # words; DO ZROBIENIA carries beta's last queued error line; gamma is a warning,
-            # not a failure; delta is not shown at all; the statistics are an HTML attachment.
+            # U157/U159/U160 (owner 2026-11-04, variant A): THE RELATIONS MAIL. Three relations
+            # in cron (alfa ok, beta failed, gamma rc=8 = no quiesce) and delta, gone from cron.
+            # The subject counts the relations needing attention; the table names them with the
+            # GUI's verdicts and how many of their jobs; DO ZROBIENIA names beta's failed job,
+            # its object and the CAUSE read from cron.log (the stderr zfs-job.sh appends before
+            # END) -- not the queued detail, which is only the fallback; for gamma (rc=8) the
+            # cause is the FIRST "Quiesce:" line, the reason, not the closing "DEGRADED" one;
+            # delta is not shown at all; the statistics are an HTML attachment.
             # Controls: no sendmail -> mail -s with the ASCII body and no attachment;
             # ZFS_DIGEST_LAYOUT=jobs -> the job-table mail.
             cat > "$hb_dir/bin/crontab" <<'CTREL'
@@ -645,6 +648,10 @@ CTREL
             {   for _r in "alfa__hourly snapshot (vm-1) rc=0" "beta__daily snapshot (vm-2) rc=1" \
                           "gamma__daily snapshot (vm-3) rc=8" "delta__daily snapshot (vm-4) rc=1"; do
                     printf '%sT10:00:00+00:00 ZFS-JOB BEGIN h profile__relacja-%s\n' "$_yd" "${_r% rc=*}"
+                    case "$_r" in
+                        beta*)  printf '%s 10:00:01 - przyczyna z logu\n' "$_yd" ;;
+                        gamma*) printf '%s 10:00:01 - Quiesce: powod braku zamrozenia\n%s 10:00:02 - Quiesce: this run was DEGRADED\n' "$_yd" "$_yd" ;;
+                    esac
                     printf '%sT10:00:03+00:00 ZFS-JOB END h profile__relacja-%s\n' "$_yd" "$_r"
                 done; } > "$_rl"
             printf '#!/bin/sh\ncase "$1" in\n status) echo %s ;;\n monitor) echo %s ;;\nesac\n' \
@@ -669,14 +676,18 @@ PYREL
 )
             if printf '%s' "$_rm" | grep -q 'SUBJECT: \[ZFS\] .*: 2 z 3 relacji wymaga uwagi' \
                && printf '%s' "$_rm" | grep -q '^FROM: zfs-backup ' \
-               && printf '%s' "$_rm" | grep -qE '^beta +migawki zdalne +.*błąd biegu: migawka dobowa' \
-               && printf '%s' "$_rm" | grep -qE '^gamma +migawki lokalne +.*bez zamrożenia: migawka dobowa' \
-               && printf '%s' "$_rm" | grep -qE '^alfa +migawki lokalne +.*aktualne' \
-               && printf '%s' "$_rm" | grep -q '^1\. beta -- migawka dobowa nie powiodła się (.*rc=1)' \
-               && printf '%s' "$_rm" | grep -q '^   ostatnia linia bledu' \
+               && printf '%s' "$_rm" | grep -qE '^beta +.*błąd biegu \(1 z 1 zadania\)' \
+               && printf '%s' "$_rm" | grep -qE '^gamma +.*bez zamrożenia \(1 z 1 zadania\)' \
+               && printf '%s' "$_rm" | grep -qE '^alfa +.*aktualne' \
+               && printf '%s' "$_rm" | grep -q '^1\. beta -- 1 zadanie kończy się błędem' \
+               && printf '%s' "$_rm" | grep -q '^   migawka dobowa, .* rc=1: vm-2$' \
+               && printf '%s' "$_rm" | grep -q '^   przyczyna: przyczyna z logu$' \
+               && ! printf '%s' "$_rm" | grep -q 'ostatnia linia bledu' \
+               && printf '%s' "$_rm" | grep -q '^   przyczyna: Quiesce: powod braku zamrozenia$' \
+               && ! printf '%s' "$_rm" | grep -q 'migawki lokalne' \
                && ! printf '%s' "$_rm" | grep -q 'delta' \
                && printf '%s' "$_rm" | grep -q '^ATTACH: statystyka-.*\.html True True'; then
-                ok "digest U160: relations mail -- subject counts them, GUI words, the failed one's last error line, rc=8 a warning, a deleted relation absent, HTML attached"
+                ok "digest U160: relations mail -- subject counts them, GUI verdicts, the failed job with its object and the cause from cron.log (rc=8: the Quiesce reason), a deleted relation absent, HTML attached"
             else
                 bad "digest U160: relations mail" "$_rm" "stderr: $(head -5 "$hb_dir/rel.err")"
             fi
