@@ -13983,10 +13983,14 @@ if ! ( bash "$ZFSBACKUP" --source=h:p/x --target=t/b --grant-quiesce ) >/dev/nul
 else
     bad "delrel: --grant-quiesce guard" "$(cat "$DR/err")"
 fi
-if [ "$(grep -c -- "--commit-scope='\$COLLECTOR_LABEL'\$aq\"" "$ZFSBACKUP")" -eq 3 ] && ! grep -q -- "deploy.sh --commit-scope='\$COLLECTOR_LABEL'\" 2>&1" "$ZFSBACKUP"; then
+# The three runs share rux_remote_commit_scope (#5, first install 2026-11-04):
+# its one ssh line carries $aq, and each of the three calls passes it.
+if [ "$(grep -c -- "--commit-scope='\$COLLECTOR_LABEL'\$aq\" 2>&1" "$ZFSBACKUP")" -eq 1 ] \
+        && [ "$(grep -cE '^ +rux_remote_commit_scope "\$host" "\$port" "\$[a-z_]+" "\$aq" ' "$ZFSBACKUP")" -eq 3 ] \
+        && ! grep -q -- "deploy.sh --commit-scope='\$COLLECTOR_LABEL'\" 2>&1" "$ZFSBACKUP"; then
     ok "delrel: every remote commit-scope --grant-remotely runs (first commit, extension, already-covered re-commit) carries the freeze grant when asked -- none was left without it"
 else
-    bad "delrel: a remote commit-scope without \$aq" "$(grep -n -- "--commit-scope='\$COLLECTOR_LABEL'" "$ZFSBACKUP" | cut -c1-160)"
+    bad "delrel: a remote commit-scope without \$aq" "$(grep -n -- "--commit-scope='\$COLLECTOR_LABEL'\|rux_remote_commit_scope" "$ZFSBACKUP" | cut -c1-160)"
 fi
 # U154 (Dabrowska 2026-11-04): a run of the relationship in flight stops delete-relation
 # --yes before anything is touched (record kept, no zfs call); the plan names the run.
