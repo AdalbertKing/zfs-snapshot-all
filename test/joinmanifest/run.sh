@@ -851,7 +851,8 @@ un_run() {   # <yes> -> rc; output in $UN/out, calls in $UN/calls
         userdel()  { echo "userdel $*" >> "$UN/calls"; }
         groupdel() { echo "groupdel $*" >> "$UN/calls"; touch "$UN/group-gone"; }
         hostname() { echo testhost; }
-        cron_block_remove() { echo "cron_block_remove $*" >> "$UN/calls"; }
+        # as lib-cron: no lock directory, no crontab edit
+        cron_block_remove() { [ -d "$CRON_LOCK_DIR" ] || { CRON_ERR="lock dir $CRON_LOCK_DIR missing"; return 1; }; echo "cron_block_remove $*" >> "$UN/calls"; }
         revoke_quiesce_grant() { echo "revoke_quiesce_grant $*" >> "$UN/calls"; }
         leave_end_account_processes() { echo "end_processes $*" >> "$UN/calls"; }
         eval "$(product_fn "$DEPLOY_SRC" uninstall_last_state)"
@@ -864,7 +865,7 @@ un_run() {   # <yes> -> rc; output in $UN/out, calls in $UN/calls
         ZFS_CMD_LINK="$UN/t/link" PAIR_GATE_PATH="$UN/t/gate" QUIESCE_HELPER_PATH="$UN/t/helper"
         QUIESCE_ALLOW_DIR="$UN/t/qallow" HOST_SCRIPTS_DEST="$UN/t/scripts" UNINSTALL_ETC_DIR="$UN/t/clients"
         ALERT_CONF="$UN/t/alert.conf" LOGROTATE_CONF="$UN/t/logrotate" ALERT_SHARED_DIR="$UN/t/var"
-        UPDATE_STATE_DIR="$UN/t/upd" PAUSE_STATE_DIR="$UN/t/pause" UNINSTALL_LINKTUNE_DIR="$UN/t/linktune"
+        UPDATE_STATE_DIR="$UN/t/upd" PAUSE_STATE_DIR="$UN/t/pause" UNINSTALL_LINKTUNE_DIR="$UN/t/linktune" CRON_LOCK_DIR="$UN/t/var/locks"
         do_uninstall "$1"
     ) > "$UN/out" 2>&1
 }

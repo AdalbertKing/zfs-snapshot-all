@@ -4906,6 +4906,10 @@ do_uninstall() {
     fi
 
     # --- doing it: cron first, so nothing new starts while the rest goes ------
+    # lib-cron's lock lives under the state dir removed below, so a re-run after
+    # a finished or partial uninstall found it gone and refused (lab, 2026-11-05).
+    # Recreated here for this step; it goes again with that directory.
+    mkdir -p "$CRON_LOCK_DIR" || die "--uninstall: could not create the cron lock directory $CRON_LOCK_DIR"
     for acct in root $accounts; do
         for s in "$CRON_HOST_BLOCK" zfs-backup-managed; do
             cron_block_remove "$acct" "$s" || die "--uninstall: could not remove the $s cron block of $acct: $CRON_ERR -- nothing after this step was done; fix it and re-run"
