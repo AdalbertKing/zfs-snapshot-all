@@ -1407,7 +1407,7 @@ for x in rels.values():
         for c in causes[:2]:
             lines.extend(wrap(u"przyczyna: ", c, 75))
         todo.append((6, x["name"], what, lines,
-                     u"" if causes else u"powód w logu biegu (F2): zwykle agent gościa albo konto bez dostępu do gości"))
+                     u"" if causes else u"powód w logu biegu (F2): np. agent gościa niedostępny albo konto bez dostępu do gości"))
     elif wv == "WARNING":
         x["rank"], x["state"] = 5, u"spóźnione: " + TIER_F.get(mon_tier(worst), mon_tier(worst))
     elif x.get("paused"):

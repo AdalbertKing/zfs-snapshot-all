@@ -1226,7 +1226,7 @@ Owner-authorized refreezes:
   fail-open discovery and retention.** Owner direction ("działaj" on the REV-186 plan,
   2026-11-04); the review itself carries no `authorizes-frozen`, so this is the owner route.
   - F1 (P1): the protected-snapshot check before a force-full destroy is fail-closed --
-    `list_protected_snaps` (lib): the target's existence is asked (`probe_dataset`), the
+    `list_protected_snaps` (lib): the target's existence is asked (`dataset_presence`), the
     listing's status and every line are checked; any failure refuses before `zfs destroy`.
   - F4 (P1): the -F collision scan maps each target descendant by its full relative path
     (`collision_scan_pairs`, lib) instead of its basename; a listing without the root or with
