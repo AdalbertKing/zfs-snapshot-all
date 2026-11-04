@@ -4048,7 +4048,7 @@ u147_chk() {   # <spec> <wyrażenie python na s (spec)> -> rc
     printf '%s' "$1" | "$PY" -c 'import sys, json; s = json.load(sys.stdin); sys.exit(0 if eval(sys.argv[1]) else 1)' "$2"
 }
 if has "$U147I" ' --target=hdd/arch ' \
-   && u147_chk "$U147IS" 's["roots"] == ["hdd/arch"] and any("PRZYROSTOWO" in t for k, t in s["facts"]["hdd/arch"]) and any("automated_daily_2026-11-01" in t for k, t in s["facts"]["hdd/arch"]) and any("hdd/arch" in t and k == "w" for k, t in s["facts"]["hdd"]) and s["datasets"][[d["name"] for d in s["datasets"]].index("hdd/arch")]["note"] == "te dane tu"' \
+   && u147_chk "$U147IS" 's["roots"] == ["hdd/arch"] and any("PRZYROSTOWO" in t for k, t in s["facts"]["hdd/arch"]) and any("automated_daily_2026-11-01" in t for k, t in s["facts"]["hdd/arch"]) and any("hdd/arch" in t and k == "w" for k, t in s["facts"]["hdd/arch/hdd"]) and s["facts"]["hdd"][0][1] == "Źródło" and s["datasets"][[d["name"] for d in s["datasets"]].index("hdd/arch")]["note"] == "te dane tu"' \
    && ! has "$U147F" ' --target=hdd/arch ' \
    && u147_chk "$U147FS" 's["roots"] != ["hdd/arch"] and not any("PRZYROSTOWO" in t for k, t in s["facts"]["hdd/arch"]) and any("bez wspólnej migawki" in t for k, t in s["facts"]["hdd/arch"])'; then
     ok "new-relation U147/U155: Dokad stawia kursor na celu z kopia tych danych i wspolna migawka (PRZYROSTOWO, migawka nazwana), inny cel ostrzega; bez wspolnej migawki -- nie proponuje, mowi dlaczego"
@@ -5154,7 +5154,7 @@ TN=$("$PY" "$REPO/tui/tree.py" --spec "$tw_spec" --out "$TRD/n.json" --keys "" -
 if printf '%s\n' "$TW" | head -1 | grep -q '^╔═ Dokad kopiowac? .*╗┌─ hdd/b ' \
    && printf '%s\n' "$TW" | grep -q '║ Dataset .*Migawki  Uwagi' && printf '%s\n' "$TW" | grep -qE '│ ── Kopie trafia pod +│$' \
    && printf '%s\n' "$TW" | grep -q 'PRZYROSTOWO' && printf '%s\n' "$TW" | grep -q '^╔═ hdd/b: \[Zrodlo -> cel\]' \
-   && printf '%s\n' "$TW" | grep -qE 'b +5\.0B +20\.0B +7  te dane tu' && printf '%s\n' "$TW" | grep -q 'Ins nowy dataset' \
+   && printf '%s\n' "$TW" | grep -qE 'b +5B +20B +7  te dane tu' && printf '%s\n' "$TW" | grep -q 'Ins nowy dataset' \
    && [ "$twrc" -eq 0 ] && [ "$(tjq "$TRD/wi.json" action)" = '"new"' ] && [ "$(tjq "$TRD/wi.json" roots)" = '["hdd/b"]' ] \
    && printf '%s\n' "$TN" | head -1 | grep -q '^┌─' && ! printf '%s\n' "$TN" | grep -q 'PRZYROSTOWO\|╔═'; then
     ok "tree U156: od 110 kolumn uklad F2 (tabela z kolumnami Migawki/Uwagi, panel faktow, zakladka), Ins = action new z kursorem; 80 kolumn -- dotychczasowe okno"
