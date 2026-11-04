@@ -8744,10 +8744,11 @@ pvesr_interval_s() {   # <schedule or ""> -> seconds, or nothing
 }
 # The longest pvesr interval among the guests whose disks lie under the given roots
 # (vm-<id>-*, subvol-<id>-*, base-<id>-*). PVE_REPLICATION_CFG is the test override.
-# -> "seconds<TAB>guest list", nothing when no job matches; PVESR_UNREAD = schedules not read.
+# -> PVESR_I (seconds, "" when no job matches), PVESR_IDS, PVESR_UNREAD (schedules not read).
+# Globals, not stdout: a $(...) call would lose PVESR_UNREAD in its subshell.
 pvesr_interval_for_roots() {   # <root>...
     local cfg="${PVE_REPLICATION_CFG:-/etc/pve/replication.cfg}" r id sc sec max=0 ids=""
-    PVESR_UNREAD=""
+    PVESR_I=""; PVESR_IDS=""; PVESR_UNREAD=""
     [ -r "$cfg" ] || return 0
     local -A have=()
     for r in "$@"; do
@@ -8765,7 +8766,7 @@ pvesr_interval_for_roots() {   # <root>...
         /^[a-z]+:[ \t]*[0-9]+-[0-9]+/ { if (id != "") print id "\t" sc; id = $2; sub(/-.*/, "", id); sc = ""; next }
         /^[ \t]+schedule[ \t]/ { sc = $0; sub(/^[ \t]+schedule[ \t]+/, "", sc); sub(/[ \t\r]+$/, "", sc) }
         END { if (id != "") print id "\t" sc }' "$cfg")
-    [ "$max" -gt 0 ] && printf '%s\t%s\n' "$max" "$ids"
+    [ "$max" -gt 0 ] && { PVESR_I="$max"; PVESR_IDS="$ids"; }
     return 0
 }
 dur_seconds() {   # <N>m|<N>h|<N>d -> seconds (check-snap-age's grammar), or nothing
@@ -9584,10 +9585,10 @@ Taking over older jobs (a v4 config written manually): remove their sections fir
     # U161: a passive copy's archive monitor follows the pvesr replica that feeds it --
     # warn at least 2 intervals, crit at least 3; a tier already looser keeps its own.
     if [ "$lb_passive" -eq 1 ] && [ -n "$lb_name" ]; then
-        local _pv _pvi _pvids _t _w _c _ws _cs _nw _nc _pvch=()
-        _pv=$(pvesr_interval_for_roots "${roots[@]}")
-        if [ -n "$_pv" ]; then
-            _pvi="${_pv%%$'\t'*}"; _pvids="${_pv#*$'\t'}"
+        local _pvi _pvids _t _w _c _ws _cs _nw _nc _pvch=()
+        pvesr_interval_for_roots "${roots[@]}"
+        if [ -n "$PVESR_I" ]; then
+            _pvi="$PVESR_I"; _pvids="$PVESR_IDS"
             local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
             relblock_load "$cand" "$lb_name"
             # Both sides: the source of a passive copy IS the pvesr replica, so its own
