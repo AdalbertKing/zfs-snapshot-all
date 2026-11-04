@@ -5423,10 +5423,10 @@ cat > "$ER/bin/zb" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
 case "$1" in
-    status)         echo '{"relations":[{"name":"r1","state":"'"${ER_STATE:-active}"'","profile":"d7h24","source_profile":"","peer_host":"'"${ER_PEER-192.168.28.99}"'","active_endpoint":"'"${ER_EP:-192.168.28.99:22}"'","installed_endpoint":"192.168.28.99:22","passive":"'"${ER_MIRROR:-0}"'","sources":["root@192.168.28.99:hdd/data"]}]}' ;;
+    status)         echo '{"relations":[{"name":"r1","state":"'"${ER_STATE:-active}"'","mode":"'"${ER_MODE:-}"'","profile":"'"${ER_PROFILE:-d7h24}"'","source_profile":"","peer_host":"'"${ER_PEER-192.168.28.99}"'","active_endpoint":"'"${ER_EP:-192.168.28.99:22}"'","installed_endpoint":"192.168.28.99:22","passive":"'"${ER_MIRROR:-0}"'","sources":["root@192.168.28.99:hdd/data"]}]}' ;;
     activate)       echo ">>> atrapa: activate" ;;
-    list-profiles)  cat "${NR_FIX:?}/list-profiles.json" ;;
-    save-profile)   echo "save-profile: ok (atrapa)" ;;
+    list-profiles)  cat "${ER_PROFILES:-${NR_FIX:?}/list-profiles.json}" ;;
+    save-profile)   [ -n "${ER_FPFILE:-}" ] && echo "nadpisany (atrapa save-profile)" > "$ER_FPFILE"; echo "save-profile: ok (atrapa)" ;;
     delete-profile) echo "delete-profile: ok (atrapa)" ;;
     edit-relation)  if [ -n "${ER_NEWREL:-}" ]; then echo "FATAL: edit-relation: profile 'd30h24' stamps [x] on hdd/ct, the installed relationship stamps [] -- no family in common. That is a NEW relationship (delete-relation, then create it again), not an edit. Nothing was changed."; exit 1; fi
                     case " $* " in *" --yes "*) echo ">>> atrapa: zmieniono" ;; *) echo "Relation edit: r1 (atrapa)"; echo
@@ -5793,6 +5793,50 @@ if hasE "$ERLST" '--menu ~ [^~]* ~ [0-9]+ ~ [0-9]+ ~ [0-9]+ ~ __manual__ ~'; the
 else
     bad "edit-relation: karta, lista szablonow bez __manual__ na gorze" "rc=$ERRC" "$(printf '%s' "$ERLST" | cut -c1-500)"
 fi
+# U136 (wlasciciel 2026-11-04): fastprune w oknie zmiany migawek zdalnych. Relacja r1 na ukrytym
+# szablonie relacja-r1-fastprune (znacznik "[fastprune 48 base=d7h24]"). (A) N 48 -> 24: szablon
+# od nowa z BAZY d7h24 (dobowy traci monitor przy 24), edit-relation --profile=relacja-r1-fastprune;
+# (B) puste = powrot do d7h24, bez save-profile; (C) przerwane po zmianie N: plik szablonu wraca
+# z kopii; kontrola (D): relacja backup -- wiersza Fastprune nie ma.
+ERFP="$(mktemp -d)"; echo "oryginal" > "$ERFP/fp.conf"
+"$PY" - "$P10/list-profiles.json" "$ERFP" <<'PYEOF'
+import sys, json, copy
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+b = [p for p in d["profiles"] if p["name"] == "d7h24"][0]
+f = copy.deepcopy(b)
+f.update(name="relacja-r1-fastprune", hidden="yes", file=sys.argv[2] + "/fp.conf",
+         description="Fastprune 48 h z d7h24 (relacja r1) [fastprune 48 base=d7h24]")
+d["profiles"].append(f)
+json.dump(d, open(sys.argv[2] + "/profiles.json", "w", encoding="utf-8"))
+PYEOF
+ERFPA=$(ER_MODE=snaponly ER_PROFILE=relacja-r1-fastprune ER_PROFILES="$ERFP/profiles.json" er_run "0${T}fastprune
+0${T}24
+0${T}wykonaj
+0${T}
+"); ERFPAW="$(cat "$ER/wt.log")"; ERFPAZ="$(cat "$ER/zb.log")"
+ERFPB=$(ER_MODE=snaponly ER_PROFILE=relacja-r1-fastprune ER_PROFILES="$ERFP/profiles.json" er_run "0${T}fastprune
+0${T}
+0${T}wykonaj
+0${T}
+"); ERFPBZ="$(cat "$ER/zb.log")"
+ERFPC=$(ER_MODE=snaponly ER_PROFILE=relacja-r1-fastprune ER_PROFILES="$ERFP/profiles.json" ER_FPFILE="$ERFP/fp.conf" er_run "0${T}fastprune
+0${T}24
+1${T}
+0${T}
+"); ERFPCF="$(cat "$ERFP/fp.conf")"
+ERFPD=$(er_run "1${T}
+"); ERFPDW="$(cat "$ER/wt.log")"
+if has "$ERFPAW" '48 godz. -- wszystkie szczeble (d7h24)' \
+   && has "$ERFPAZ" 'save-profile --from=d7h24 --as=relacja-r1-fastprune --hidden --force' && has "$ERFPAZ" '[fastprune 24 base=d7h24]' \
+   && has "$ERFPAZ" '--tier=daily --retain=-h24 --keep= --prune_schedule=21 * * * * --monitor_warn= --monitor_crit=' \
+   && grep -q '^edit-relation r1 --profile=relacja-r1-fastprune .*--yes' <<<"$ERFPAZ" \
+   && ! grep -q '^save-profile' <<<"$ERFPBZ" && grep -q '^edit-relation r1 --profile=d7h24 .*--yes' <<<"$ERFPBZ" \
+   && [ "$ERFPCF" = oryginal ] && ! has "$ERFPDW" 'Fastprune'; then
+    ok "edit-relation U136: fastprune -- N od nowa z bazy (monitor dobowego zdjety przy 24), puste = powrot do bazy, przerwanie przywraca szablon; relacja backup bez wiersza"
+else
+    bad "edit-relation U136 fastprune" "A: $(grep -E '^(save-profile|edit-relation)' <<<"$ERFPAZ" | cut -c1-300)" "B: $(grep -E '^(save-profile|edit-relation)' <<<"$ERFPBZ")" "C plik: $ERFPCF" "D: $(printf '%s' "$ERFPDW" | grep -c Fastprune)"
+fi
+rm -rf "$ERFP"
 # U65: 'c' w oknie relacji (EDIT_DO=config) = od razu edit-config, bez karty zmian.
 EROUT=$(EDIT_DO=config er_run ""); ERRC=$?
 if grep -qx 'edit-config r1' "$ER/zb.log" && ! grep -qF 'Co zmienić?' "$ER/wt.log"; then

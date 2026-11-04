@@ -1001,7 +1001,13 @@ while :; do
         _base="${FP_CUR_BASE:-${CUR_P:-default}}"
         if [ "$FP_DIRTY" -eq 0 ] && [ "$CUR_P" = "$FPNAME" ]; then
             FP_FILE="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); print(next((p.get("file") or "" for p in d.get("profiles",[]) if p.get("name")==sys.argv[2]),""))' "$TMPD/prof.json" "$FPNAME" 2>/dev/null | tr -d '\r')"
-            [ -n "$FP_FILE" ] && [ -f "$FP_FILE" ] && { FP_BAK="$TMPD/fastprune.bak"; cp -p "$FP_FILE" "$FP_BAK"; }
+            [ -n "$FP_FILE" ] && [ -f "$FP_FILE" ] && cp -p "$FP_FILE" "$TMPD/fastprune.bak" && FP_BAK="$TMPD/fastprune.bak"
+            # Bez kopii przerwana zmiana nie miałaby czego przywrócić -- a usunięcie zabrałoby
+            # relacji jej szablon. Nic nie zmieniamy.
+            if [ -z "$FP_BAK" ]; then
+                wt --title "$(T 'Fastprune: szablonu nie zapisano')" --msgbox "$(Tv 'Nie mogę zrobić kopii obecnego szablonu $PROFILE -- nic nie zmieniono.' '$PROFILE' "$FPNAME")" 8 "$W"
+                continue 2
+            fi
         fi
         info "$(T 'Fastprune')" "$(T 'Zapisuję ustawienia relacji...')"
         fp_save "$_base" "$FP_ANS" "$FPNAME" "$NAME" || continue 2

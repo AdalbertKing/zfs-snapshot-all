@@ -885,6 +885,7 @@
 "Nie mogę odczytać listy szablonów (list-profiles).": "Cannot read the template list (list-profiles).",
 "Nie mogę odczytać ustawień: $(tail -2 ": "Cannot read the settings: $(tail -2 ",
 "Nie mogę odczytać ustawień: $ERR": "Cannot read the settings: $ERR",
+"Nie mogę zrobić kopii obecnego szablonu $PROFILE -- nic nie zmieniono.": "Cannot back up the current template $PROFILE -- nothing was changed.",
 "Nie można wyłączyć: tylko ten szczebel usuwa stare migawki %s -- bez niego rosłyby bez końca.": "Cannot disable: only this tier removes old %s snapshots -- without it they would grow forever.",
 "Nie sprawdzono innych kolektorów": "Other collectors not checked",
 "Nie udało się -- nic nie zainstalowano.": "Failed -- nothing was installed.",
