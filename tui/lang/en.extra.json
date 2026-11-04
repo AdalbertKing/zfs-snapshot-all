@@ -833,5 +833,21 @@
 "Na źródle nie ma jeszcze migawek naszej rodziny. Pasywnie: kopia tylko PRZYJMUJE migawki,\\nktóre zrobi ktoś inny (np. relacja migawek zdalnych + replika pvesr), i niczego na źródle\\nnie tworzy ani nie kasuje. Do czasu, aż tamte się pojawią, kopia nie ma czego kopiować.": "The source has no snapshots of our family yet. Passive: the copy only TAKES snapshots\\nthat someone else makes (e.g. a remote-snapshot relation + a pvesr replica), and creates\\nor deletes nothing on the source. Until those appear, the copy has nothing to copy.",
 "                 (pozycja = popraw krok; dodatki w Zaawansowane) i": "                 (item = fix a step; extras in Advanced) and",
 "[pasywny]": "[passive]",
-"inny twórca -- osobna rodzina z etykietą": "another creator -- a separate family with a label"
+"inny twórca -- osobna rodzina z etykietą": "another creator -- a separate family with a label",
+"Szybkie czyszczenie źródła (fastprune)": "Fast source pruning (fastprune)",
+"Ile godzin żyje na źródle każda migawka (wszystkie szczeble). Puste = wyłączone.\\nCzyszczenie co godzinę; monitor zostaje tylko szczeblom częstszym niż ta liczba --\\nwieku rzadszych pilnuje archiwum (kopia pasywna z repliki na kolektorze).": "How many hours every snapshot lives on the source (all tiers). Empty = off.\\nPruning every hour; only tiers more frequent than this keep their monitor --\\nthe age of the rarer ones is watched by the archive (a passive copy of the replica on the collector).",
+"Liczba godzin: same cyfry, puste = wyłączone.": "Number of hours: digits only, empty = off.",
+"Za mało": "Too few",
+"Najmniej 4 godziny: replika pvesr co 2 h musi zdążyć przenieść migawkę dwa razy.": "At least 4 hours: a pvesr replica every 2 h must get to carry the snapshot twice.",
+"Mniej niż doba": "Less than a day",
+"Migawka dobowa przeżyje na źródle tylko $v godz. Jeśli replika albo archiwum stoją dłużej, migawka zniknie, zanim trafi do archiwum.": "A daily snapshot lives on the source only $v h. If the replica or the archive stalls longer, the snapshot is gone before it reaches the archive.",
+"Fastprune niemożliwy": "Fastprune not possible",
+"Szablon $PROFILE nie ma szczebli, które robią migawki -- fastprune nie ma czego skracać.": "Template $PROFILE has no tiers that take snapshots -- fastprune has nothing to shorten.",
+"Fastprune $FASTPRUNE h z $PROFILE (relacja $RNAME)": "Fastprune $FASTPRUNE h from $PROFILE (relation $RNAME)",
+"Fastprune: szablonu nie zapisano": "Fastprune: template not saved",
+"$FASTPRUNE godz. -- wszystkie szczeble": "$FASTPRUNE h -- all tiers",
+"Fastprune": "Fastprune",
+"fastprune $FASTPRUNE h": "fastprune $FASTPRUNE h",
+"Źródło: fastprune $FASTPRUNE h -- każda migawka żyje tyle godzin, czyszczenie co godzinę; bez monitorów szczebli rzadszych niż $FASTPRUNE h -- ich wiek pilnuje archiwum. Bez kopii pasywnej na kolektorze starszych migawek nie będzie nigdzie.": "Source: fastprune $FASTPRUNE h -- every snapshot lives that many hours, pruning every hour; no monitors on tiers rarer than $FASTPRUNE h -- the archive watches their age. Without a passive copy on the collector, older snapshots exist nowhere.",
+"Fastprune $FASTPRUNE h: szablon relacji $FP_P (kopia $PROFILE).": "Fastprune $FASTPRUNE h: relation template $FP_P (a copy of $PROFILE)."
 }

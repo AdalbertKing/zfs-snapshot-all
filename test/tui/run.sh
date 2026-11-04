@@ -3360,6 +3360,34 @@ else
     bad "new-relation W15: GFS na liscie migawek zdalnych" "$(printf '%s' "$SOWP" | cut -c1-600)"
 fi
 
+# U136 (wlasciciel 2026-11-04: fastprune w Zaawansowanych, jedno pole): migawki zdalne,
+# N=24 -- kreator robi ukryty szablon relacja-<nazwa>-fastprune z wybranego (d7h24): kazdy
+# szczebel retain=-h24, bez keep, czyszczenie co godzine; monitor zdjety tylko z dobowego
+# (odstep 24 h >= N), godzinowy go zachowuje. Kontrola: SOWO (bez fastprune) -- --profile=d7h24.
+FPA="0${T}snaponly
+0${T}192.168.28.98
+0${T}
+0${T}d7h24
+0${T}pve9b
+0${T}root
+0${T}adv
+0${T}fastprune
+0${T}24
+1${T}
+0${T}create
+0${T}
+"
+FPO=$(nr_run "$FPA" NR_TREE="$NRTK"); FPW="$(cat "$NR/wt.log")"; FPZ="$(grep '^save-profile ' "$NR/zb.log")"
+FPH='--tier=hourly --retain=-h24 --keep= --prune_schedule=21 * * * * --tier=daily'
+FPD='--tier=daily --retain=-h24 --keep= --prune_schedule=21 * * * * --monitor_warn= --monitor_crit='
+if has "$FPO" 'CMD: ' && has "$FPO" '--profile=relacja-pve9b-fastprune' && has "$FPZ" '--from=d7h24 --as=relacja-pve9b-fastprune --hidden --force' \
+   && has "$FPZ" "$FPH" && has "$FPZ" "$FPD" && has "$FPW" 'fastprune 24 h' \
+   && has "$SOWO" '--profile=d7h24' && ! has "$SOWO" 'fastprune'; then
+    ok "new-relation U136: migawki zdalne, Zaawansowane -> fastprune 24 -- szablon relacja-pve9b-fastprune z d7h24: retain -h24 i czyszczenie co godzine w kazdym szczeblu, monitor zdjety z dobowego, godzinowy zostaje; bez fastprune --profile=d7h24"
+else
+    bad "new-relation U136 fastprune" "CMD: $(printf '%s' "$FPO" | grep 'CMD:')" "zb: $FPZ" "$(printf '%s' "$FPW" | grep -o -e '--title ~ [^~]*' | head -14 | tr '\n' ';')"
+fi
+
 # U138/U139/W6 (wlasciciel 2026-11-03 "Rob U"): backup bez migawek rodziny na zrodle.
 # (a) Zaawansowane -> Pasywnie -> tak: --passive, bez retencji zrodla, opis szablonu bez "zamraża";
 # (b) szablon passive-flat jest na liscie (z [pasywny]) i jego wybor = --passive;
