@@ -909,6 +909,6 @@
 "Cel": "Target",
 " Kopie trafią pod:  <wybrany>%s/<dataset źródła>": " Copies will land under:  <picked>%s/<source dataset>",
 "Katalog pakietu zajęty": "Package directory taken",
-"  [-] Pakiet  $C_DIR istnieje, ale to nie pakiet (stare skrypty?)\\n\\ngit clone tam nie wejdzie. Na $HOST, jako root: sprawdź w crontabie\\nroota, czy coś stamtąd chodzi, potem odsuń katalog, np.:\\n\\n  mv $C_DIR $C_DIR.stare-RRRRMMDD\\n\\nPo naprawie wróć tutaj.": "  [-] Package  $C_DIR exists, but it is not the package (old scripts?)\\n\\ngit clone cannot go there. On $HOST, as root: check root's crontab\\nfor anything running from there, then move the directory aside, e.g.:\\n\\n  mv $C_DIR $C_DIR.old-YYYYMMDD\\n\\nCome back here once it is fixed.",
-"  [-] git     brak; Zainstaluj najpierw go doinstaluje (apt-get install git)": "  [-] git     missing; Install puts it there first (apt-get install git)"
+"  [-] Pakiet  $C_DIR istnieje, ale to nie pakiet (stare skrypty?)\\n\\ngit clone tam nie wejdzie. Na $HOST, jako root: sprawdź w crontabie\\nroota, czy coś stamtąd chodzi, potem odsuń katalog, np.:\\n\\n  mv $C_DIR $C_DIR.old-RRRRMMDD\\n\\nPo naprawie wróć tutaj.": "  [-] Package  $C_DIR exists, but it is not the package (old scripts?)\\n\\ngit clone cannot go there. On $HOST, as root: check root's crontab\\nfor anything running from there, then move the directory aside, e.g.:\\n\\n  mv $C_DIR $C_DIR.old-YYYYMMDD\\n\\nCome back here once it is fixed.",
+"  [-] git     brak; Zainstaluj doinstaluje go przed klonem (apt-get install git)": "  [-] git     missing; Install puts it there first (apt-get install git)"
 }

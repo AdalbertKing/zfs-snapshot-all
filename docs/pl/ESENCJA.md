@@ -29,7 +29,7 @@ Wszystko w bashu, zadania chodzą z crona, a do codziennej pracy jest tekstowe G
 
    Jeśli `/root/scripts/zfs-snapshot-all` już istnieje (stare skrypty, bez `.git`), `git clone` tam nie wejdzie:
    sprawdź w `crontab -l` roota, czy coś stamtąd chodzi, i odsuń katalog, np.
-   `mv /root/scripts/zfs-snapshot-all /root/scripts/zfs-snapshot-all.stare-RRRRMMDD`. Na źródle kreator
+   `mv /root/scripts/zfs-snapshot-all /root/scripts/zfs-snapshot-all.old-RRRRMMDD`. Na źródle kreator
    sprawdza to samo i odmawia, zanim cokolwiek zmieni; gita na źródle doinstalowuje sam.
 
 2. Uruchom GUI i załóż pierwszą relację: **F3 Relacje**, klawisz **Ins**. Kreator pyta o rodzaj relacji,

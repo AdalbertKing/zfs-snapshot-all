@@ -13687,7 +13687,7 @@ fi
 # no clone, no scp) and names the move; nothing is moved for the operator.
 rm -f "$PS/ssh.argv" "$PS/scp.argv" "$PS"/installed-* "$PS"/git-*
 if ! ps_run prepare-source olddir --yes >"$PS/out" && grep -q 'exists, is not empty and holds no package' "$PS/err" \
-        && grep -q "mv /root/scripts/zfs-snapshot-all /root/scripts/zfs-snapshot-all.stare-" "$PS/err" && grep -q "crontab" "$PS/err" \
+        && grep -q "mv /root/scripts/zfs-snapshot-all /root/scripts/zfs-snapshot-all.old-" "$PS/err" && grep -q "crontab" "$PS/err" \
         && ! grep -q 'apt-get install\|git clone\|git init\|mv ' "$PS/ssh.argv" && [ ! -e "$PS/scp.argv" ]; then
     ok "preparesource: an old non-empty package directory without the package -- refused before any change, the move is named, nothing moved"
 else

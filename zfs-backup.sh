@@ -15191,7 +15191,7 @@ cmd_prepare_source() {
     # Every refusal comes before the first change. The old directory is not
     # moved for the operator: old scripts there may still be in root's crontab.
     case "$PROBE_DIR" in
-        notempty) die "prepare-source: $SOURCE_REPO_DIR on $SRC_HOST exists, is not empty and holds no package (old scripts?) -- git clone cannot go there. Check root's crontab on $SRC_HOST for lines using it, then move it aside, e.g. mv $SOURCE_REPO_DIR $SOURCE_REPO_DIR.stare-$(date +%Y%m%d). Nothing was changed." ;;
+        notempty) die "prepare-source: $SOURCE_REPO_DIR on $SRC_HOST exists, is not empty and holds no package (old scripts?) -- git clone cannot go there. Check root's crontab on $SRC_HOST for lines using it, then move it aside, e.g. mv $SOURCE_REPO_DIR $SOURCE_REPO_DIR.old-$(date +%Y%m%d). Nothing was changed." ;;
         notadir)  die "prepare-source: $SOURCE_REPO_DIR on $SRC_HOST exists and is not a directory -- move it aside first. Nothing was changed." ;;
     esac
     [ "$PROBE_GIT" -eq 1 ] || [ "$PROBE_APT" -eq 1 ] || die "prepare-source: $SRC_HOST has no git and no apt-get -- install git there first. Nothing was changed."
@@ -15206,8 +15206,8 @@ cmd_prepare_source() {
     fi
     local err
     if [ "$PROBE_GIT" -ne 1 ]; then
-        # deploy.sh's apt_install_with_fallback, over SSH: a stale package index
-        # fails the first try, so update and try once more.
+        # The first two tries of deploy.sh's apt_install_with_fallback, over SSH:
+        # a stale package index fails the first try, so update and try once more.
         err=$(rux_root_ssh "$SRC_HOST" "$SRC_PORT" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y git >/dev/null 2>&1 || { apt-get update >/dev/null 2>&1; apt-get install -y git; }; command -v git >/dev/null" 2>&1) \
             || die "prepare-source: apt-get install git on $SRC_HOST failed: $(printf '%s' "$err" | tr -d '\r' | grep -v '^$' | tail -1). Install it there by hand, then re-run."
         echo ">>> installed git on $SRC_HOST"

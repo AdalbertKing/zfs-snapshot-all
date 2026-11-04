@@ -222,10 +222,10 @@ step_diag() {   # 0 = dalej, 1 = wróć do hosta
         # A-TASSA, 2026-11-04: stare skrypty bez .git w katalogu pakietu. prepare-source
         # odmawia przed jakąkolwiek zmianą; okno mówi to od razu, bez przycisku Zainstaluj.
         if [ -n "$C_BLK" ]; then
-            wt --title "$(title 3 "$(T 'Katalog pakietu zajęty')")" --msgbox "${facts}$(Tv '  [-] Pakiet  $C_DIR istnieje, ale to nie pakiet (stare skrypty?)\n\ngit clone tam nie wejdzie. Na $HOST, jako root: sprawdź w crontabie\nroota, czy coś stamtąd chodzi, potem odsuń katalog, np.:\n\n  mv $C_DIR $C_DIR.stare-RRRRMMDD\n\nPo naprawie wróć tutaj.' '$C_DIR' "$C_DIR" '$HOST' "$HOST")" 17 "$W"
+            wt --title "$(title 3 "$(T 'Katalog pakietu zajęty')")" --msgbox "${facts}$(Tv '  [-] Pakiet  $C_DIR istnieje, ale to nie pakiet (stare skrypty?)\n\ngit clone tam nie wejdzie. Na $HOST, jako root: sprawdź w crontabie\nroota, czy coś stamtąd chodzi, potem odsuń katalog, np.:\n\n  mv $C_DIR $C_DIR.old-RRRRMMDD\n\nPo naprawie wróć tutaj.' '$C_DIR' "$C_DIR" '$HOST' "$HOST")" 17 "$W"
             return 1
         fi
-        [ "$C_GIT" -eq 1 ] || facts="${facts}$(T '  [-] git     brak; Zainstaluj najpierw go doinstaluje (apt-get install git)')\n"
+        [ "$C_GIT" -eq 1 ] || facts="${facts}$(T '  [-] git     brak; Zainstaluj doinstaluje go przed klonem (apt-get install git)')\n"
         wt --title "$(title 3 "$(T 'Brak pakietu na źródle')")" --yes-button "$(T Zainstaluj)" --no-button "$(T Wstecz)" \
            --yesno "${facts}$(Tv '  [-] Pakiet  nie ma go w $C_DIR\n\nBez pakietu źródło nie dołączy do relacji.\n\n'\''Zainstaluj'\'' = prepare-source: git clone pakietu jako root.\nNie rusza crona, nie zakłada relacji ani kluczy.' '$C_DIR' "$C_DIR")" 17 "$W" || return 1
         info "$(Tv 'Instaluję pakiet na $HOST' '$HOST' "$HOST")" "$(Tv 'prepare-source $(hostport) ... (do minuty)' '$(hostport)' "$(hostport)")"
