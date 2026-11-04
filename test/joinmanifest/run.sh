@@ -806,6 +806,109 @@ lv_check allowfail        "1||kept|"           "could not read the zfs delegatio
 lv_check unallowallowfail "1||kept|"           "could not read the zfs delegations on tank/a" "revoke fails AND the re-read fails -> refused, no userdel"
 rm -rf "$L4"
 
+# ---------------------------------------------------------------------------
+# --uninstall (first install, 2026-11-04: there was no inverse of deploy.sh).
+# do_uninstall runs for real against files in a temp tree; only the boundary is
+# stubbed -- getent (accounts, the group), zfs (two datasets, one granted to the
+# account), userdel/groupdel, the cron block removal and the two account helpers.
+# A live relationship record or a joined peer refuses --yes with the verb that
+# removes it; without --yes it is the plan only; with --yes everything listed is
+# gone, the checkout and every dataset stay.
+# ---------------------------------------------------------------------------
+if grep -q '^do_uninstall() {' "$DEPLOY_SRC"; then
+UN=$(mktemp -d)
+un_tree() {
+    rm -rf "$UN/t"; mkdir -p "$UN/t/clients" "$UN/t/peers" "$UN/t/scripts" "$UN/t/var/locks" "$UN/t/qallow" "$UN/t/upd" "$UN/t/repo" "$UN/t/keys"
+    for s in alert-env notify-fail notify-warn alert-digest check-pool-capacity capacity-guard growth-guard; do : > "$UN/t/scripts/$s.sh"; done
+    : > "$UN/t/scripts/someone-elses.sh"; : > "$UN/t/alert.conf"; : > "$UN/t/logrotate"; : > "$UN/t/logrotate-zfsbackup"
+    : > "$UN/t/repo/zfs-backup.sh"; ln -s "$UN/t/repo/zfs-backup.sh" "$UN/t/link"
+    printf 'CLIENT_NAME=old\nSTATE=active\nSTATE=removed\n' > "$UN/t/clients/old.conf"
+}
+un_run() {   # <yes> -> rc; output in $UN/out, calls in $UN/calls
+    : > "$UN/calls"
+    (
+        log()  { echo ">>> $*"; }
+        warn() { echo "!!! $*"; }
+        die()  { echo "FATAL: $*"; exit 1; }
+        getent() {
+            case "$1" in
+                passwd) echo "root:x:0:0:root:/root:/bin/bash"; echo "zfsbackup:x:1001:1001:zfs-snapshot-all delegated backup account:/home/zfsbackup:/bin/bash"
+                        [ -e "$UN/peer-account" ] && echo "zfsbackup-pve1:x:1002:1002:zfs-snapshot-all peer account for pve1:/home/zfsbackup-pve1:/bin/bash"
+                        echo "alice:x:1003:1003:Alice:/home/alice:/bin/bash" ;;
+                group)  [ -e "$UN/group-gone" ] || echo "zfsalert:x:999:" ;;
+            esac
+        }
+        zfs() {
+            echo "zfs $*" >> "$UN/calls"
+            case "$1" in
+                list) printf 'rpool/data\nhdd/data\n' ;;
+                allow) if [ "$2" = rpool/data ]; then printf 'Local+Descendent permissions:\n\tuser zfsbackup snapshot,send\n'; fi ;;
+                unallow) return 0 ;;
+            esac
+        }
+        userdel()  { echo "userdel $*" >> "$UN/calls"; }
+        groupdel() { echo "groupdel $*" >> "$UN/calls"; touch "$UN/group-gone"; }
+        hostname() { echo testhost; }
+        cron_block_remove() { echo "cron_block_remove $*" >> "$UN/calls"; }
+        revoke_quiesce_grant() { echo "revoke_quiesce_grant $*" >> "$UN/calls"; }
+        leave_end_account_processes() { echo "end_processes $*" >> "$UN/calls"; }
+        eval "$(product_fn "$DEPLOY_SRC" uninstall_last_state)"
+        eval "$(product_fn "$DEPLOY_SRC" do_uninstall)"
+        UNINSTALL_ACCOUNT_GECOS="zfs-snapshot-all delegated backup account"
+        UNINSTALL_PEER_GECOS="zfs-snapshot-all peer account for "
+        CRON_HOST_BLOCK=zfs-backup-host REPO_DIR="$UN/t/repo"
+        CLIENTS_DIR="$UN/t/clients" PEER_STATE_DIR="$UN/t/peers" PEER_KEY_DIR="$UN/t/keys"
+        ZFS_CMD_LINK="$UN/t/link" PAIR_GATE_PATH="$UN/t/gate" QUIESCE_HELPER_PATH="$UN/t/helper"
+        QUIESCE_ALLOW_DIR="$UN/t/qallow" HOST_SCRIPTS_DEST="$UN/t/scripts" UNINSTALL_ETC_DIR="$UN/t/clients"
+        ALERT_CONF="$UN/t/alert.conf" LOGROTATE_CONF="$UN/t/logrotate" ALERT_SHARED_DIR="$UN/t/var"
+        UPDATE_STATE_DIR="$UN/t/upd" PAUSE_STATE_DIR="$UN/t/pause"
+        do_uninstall "$1"
+    ) > "$UN/out" 2>&1
+}
+# 1. a live relationship refuses --yes, names delete-relation, changes nothing
+un_tree; rm -f "$UN/peer-account" "$UN/group-gone"
+printf 'CLIENT_NAME=r1\nSTATE=active\n' > "$UN/t/clients/r1.conf"
+u1=0; un_run 1 || u1=$?
+u1_ok=0; [ "$u1" -ne 0 ] && grep -q 'zfs-backup.sh delete-relation r1 --yes' "$UN/out" && ! grep -q 'delete-relation old' "$UN/out" \
+    && grep -q 'Nothing was changed' "$UN/out" && [ ! -s "$UN/calls" ] && [ -e "$UN/t/alert.conf" ] && [ -L "$UN/t/link" ] && u1_ok=1
+# 2. a joined peer (manifest role=pull, its account) refuses with --leave
+un_tree; touch "$UN/peer-account"; printf 'PEER_JOIN_ROLE=pull\nPEER_JOIN_ACCOUNT=zfsbackup-pve1\n' > "$UN/t/peers/pve1.conf"
+u2=0; un_run 1 || u2=$?
+u2_ok=0; [ "$u2" -ne 0 ] && grep -q 'joined peer pve1 (this host is its source): deploy.sh --leave=pve1' "$UN/out" \
+    && grep -q 'peer account zfsbackup-pve1: deploy.sh --leave=pve1' "$UN/out" && [ ! -s "$UN/calls" ] && [ -e "$UN/t/scripts/notify-fail.sh" ] && u2_ok=1
+rm -f "$UN/peer-account"
+# 3. no --yes: the plan, nothing touched
+un_tree
+u3=0; un_run 0 || u3=$?
+u3_ok=0; [ "$u3" -eq 0 ] && grep -q 'plan only' "$UN/out" && grep -q 'account zfsbackup: its zfs delegations' "$UN/out" \
+    && grep -q "KEPT: .*rm -rf $UN/t/repo" "$UN/out" && [ ! -s "$UN/calls" ] && [ -e "$UN/t/alert.conf" ] && u3_ok=1
+# 4. --yes: cron blocks of root and the account, the account's grant where it has one,
+#    the account, files, dirs, link, group -- the checkout, a foreign script and alice stay
+un_tree
+u4=0; un_run 1 || u4=$?
+u4_ok=0
+if [ "$u4" -eq 0 ] && grep -qx 'cron_block_remove root zfs-backup-host' "$UN/calls" && grep -qx 'cron_block_remove root zfs-backup-managed' "$UN/calls" \
+        && grep -qx 'cron_block_remove zfsbackup zfs-backup-managed' "$UN/calls" && ! grep -q 'cron_block_remove alice' "$UN/calls" \
+        && grep -qx 'zfs unallow -u zfsbackup rpool/data' "$UN/calls" && ! grep -q 'unallow -u zfsbackup hdd/data' "$UN/calls" \
+        && grep -qx 'revoke_quiesce_grant zfsbackup' "$UN/calls" && grep -qx 'userdel -r zfsbackup' "$UN/calls" && ! grep -q 'userdel.*alice' "$UN/calls" \
+        && grep -qx 'groupdel zfsalert' "$UN/calls" && ! grep -q 'zfs destroy' "$UN/calls" \
+        && [ ! -e "$UN/t/link" ] && [ ! -e "$UN/t/scripts/notify-fail.sh" ] && [ -e "$UN/t/scripts/someone-elses.sh" ] \
+        && [ ! -e "$UN/t/alert.conf" ] && [ ! -e "$UN/t/logrotate" ] && [ ! -e "$UN/t/logrotate-zfsbackup" ] \
+        && [ ! -e "$UN/t/var" ] && [ ! -e "$UN/t/upd" ] && [ ! -e "$UN/t/clients" ] && [ ! -e "$UN/t/keys" ] && [ -d "$UN/t/repo" ]; then
+    u4_ok=1
+fi
+# 5. re-run after it: nothing left to do is success
+u5=0; un_run 1 || u5=$?
+if [ "$u1_ok$u2_ok$u3_ok$u4_ok" = 1111 ] && [ "$u5" -eq 0 ]; then
+    ok "--uninstall: a live relationship or a joined peer refuses with its own verb and changes nothing; no --yes is the plan; --yes removes cron blocks, the account (grant, quiesce, home), files and state, keeps the checkout, datasets and foreign files; a re-run is a no-op"
+else
+    bad "--uninstall" "refuse-rel=$u1_ok refuse-peer=$u2_ok plan=$u3_ok yes=$u4_ok rerun-rc=$u5" "$(cat "$UN/out")" "$(cat "$UN/calls")"
+fi
+rm -rf "$UN"
+else
+    bad "--uninstall" "deploy.sh has no do_uninstall"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
