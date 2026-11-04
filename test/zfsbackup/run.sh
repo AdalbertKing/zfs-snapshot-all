@@ -11543,6 +11543,19 @@ if printf '%s' "$o1" | grep -q 'is a FACTORY template' && printf '%s' "$o2" | gr
 else
     bad "saveprof: delete-profile" "$o1" "$o2" "$o3"
 fi
+# --if-unused (first install, 2026-11-04): the wizard's clean-up deleted its draft
+# relacja-<NAME> although add-client had already left a PENDING relationship naming
+# it, and the retry died "profile not found". A named one is kept, a free one goes.
+pf_run --from=d7h24 --as=relacja-pve0 --tier=hourly --keep=4 >/dev/null 2>&1
+pf_run --from=d7h24 --as=relacja-free --tier=hourly --keep=4 >/dev/null 2>&1
+printf 'CLIENT_NAME=pve0\nSTATE=pending_enroll\nPROFILE=relacja-pve0\n' > "$PF/clients/pve0.conf"
+o4=$(dp_run relacja-pve0 --yes --if-unused); o5=$(dp_run relacja-free --yes --if-unused)
+if [ -f "$PF/user/relacja-pve0.conf" ] && printf '%s' "$o4" | grep -q "'relacja-pve0' kept -- 1 relationship" \
+   && [ ! -f "$PF/user/relacja-free.conf" ] && printf '%s' "$o5" | grep -q 'deleted'; then
+    ok "saveprof: delete-profile --if-unused keeps a template a PENDING relationship names, deletes a free one"
+else
+    bad "saveprof: delete-profile --if-unused" "$o4" "$o5" "$(ls "$PF/user")"
+fi
 rm -rf "$PF/clients"
 
 # --add-tier (owner, 2026-10-09: the F5 table shows all five tiers, an absent one

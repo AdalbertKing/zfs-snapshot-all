@@ -10253,7 +10253,22 @@ cmd_add_client() {
                 # -c safe.directory: root touching an account-owned repo
                 # trips git's dubious-ownership guard (measured: the refresh
                 # warned and the stale clone survived a full clean rerun).
-                git -c safe.directory="$_lu_home/zfs-snapshot-all" -C "$_lu_home/zfs-snapshot-all" fetch -q "$SCRIPT_DIR" HEAD 2>/dev/null                     && git -c safe.directory="$_lu_home/zfs-snapshot-all" -C "$_lu_home/zfs-snapshot-all" reset -q --hard FETCH_HEAD 2>/dev/null                     && chown -R "$local_user:$local_user" "$_lu_home/zfs-snapshot-all"                     || warn "add-client: could not refresh $_lu_home/zfs-snapshot-all -- the account may run an older tool than the lines generated for it"
+                # The same entry also goes into a throwaway GLOBAL config (HOME
+                # pointed at it): git reads safe.directory from protected config
+                # only, and whether an older git counts `-c` as protected was not
+                # verified -- a first install on git 2.30.2 (2026-11-04) warned
+                # here while a pull as the account worked. git's own reason is
+                # now part of the warning instead of going to /dev/null.
+                local _rf_home _rf_err=""
+                _rf_home=$(mktemp -d) && printf '[safe]\n\tdirectory = %s\n' "$_lu_home/zfs-snapshot-all" > "$_rf_home/.gitconfig"
+                if _rf_err=$( { HOME="${_rf_home:-$HOME}" git -c safe.directory="$_lu_home/zfs-snapshot-all" -C "$_lu_home/zfs-snapshot-all" fetch -q "$SCRIPT_DIR" HEAD \
+                        && HOME="${_rf_home:-$HOME}" git -c safe.directory="$_lu_home/zfs-snapshot-all" -C "$_lu_home/zfs-snapshot-all" reset -q --hard FETCH_HEAD; } 2>&1 ); then
+                    chown -R "$local_user:$local_user" "$_lu_home/zfs-snapshot-all" \
+                        || warn "add-client: refreshed $_lu_home/zfs-snapshot-all but could not hand it back to $local_user (chown)"
+                else
+                    warn "add-client: could not refresh $_lu_home/zfs-snapshot-all ($(printf '%s' "$_rf_err" | grep -v '^$' | tail -1)) -- the account may run an older tool than the lines generated for it"
+                fi
+                [ -n "$_rf_home" ] && rm -rf "$_rf_home"
             fi
             local _lu_s
             for _lu_s in notify-fail.sh notify-warn.sh; do
@@ -12505,9 +12520,9 @@ emit_snaponly_sections() {   # <workfile> <name>
     local tag=""
     [ "$SNAPONLY_STAMP" = 1 ] && tag="$(snaponly_collector_tag)"
     local pf; pf="$(profile_file "${PROFILE:-$PROFILE_DEFAULT_NAME}")"
-    [ -r "$pf" ] || die "snaponly: profile '${PROFILE:-$PROFILE_DEFAULT_NAME}' not found ($pf)"
+    [ -r "$pf" ] || die "snaponly: profile '${PROFILE:-$PROFILE_DEFAULT_NAME}' not found (looked in $PROFILE_ROOT and $PROFILE_USER_ROOT)"
     local spf="$pf"
-    [ -n "${SOURCE_PROFILE:-}" ] && { spf="$(profile_file "$SOURCE_PROFILE")"; [ -r "$spf" ] || die "snaponly: source profile '$SOURCE_PROFILE' not found ($spf)"; }
+    [ -n "${SOURCE_PROFILE:-}" ] && { spf="$(profile_file "$SOURCE_PROFILE")"; [ -r "$spf" ] || die "snaponly: source profile '$SOURCE_PROFILE' not found (looked in $PROFILE_ROOT and $PROFILE_USER_ROOT)"; }
 
     profile_fields_load "$spf"
     local -A SRC_KEEP=() SRC_RETAIN=() SRC_GFS=()
@@ -15066,11 +15081,11 @@ SOURCE_REPO_DIR="${SOURCE_REPO_DIR:-/root/scripts/zfs-snapshot-all}"
 
 source_probe() {   # <host> <port> -> sets PROBE_* ; returns 0 when ssh answered
     local host="$1" port="$2" out rc=0
-    PROBE_SSH_ERR=""; PROBE_HOSTNAME=""; PROBE_POOLS=""; PROBE_ZFS=0; PROBE_GIT=0; PROBE_APT=0; PROBE_DIR=""; PROBE_PKG=""; PROBE_REV=""
+    PROBE_SSH_ERR=""; PROBE_HOSTNAME=""; PROBE_POOLS=""; PROBE_ZFS=0; PROBE_GIT=0; PROBE_APT=0; PROBE_SUDO=0; PROBE_DIR=""; PROBE_PKG=""; PROBE_REV=""
     # DIR= is what stands in the way of a clone when there is no package: a
     # non-empty directory (old zfs-snapshot-all scripts without .git, found on
     # a first install, 2026-11-04) or a file. An empty directory is fine for git clone.
-    out=$(rux_root_ssh "$host" "$port" "echo HOSTNAME=\$(hostname); command -v zfs >/dev/null 2>&1 && echo ZFS=yes; command -v git >/dev/null 2>&1 && echo GIT=yes; command -v apt-get >/dev/null 2>&1 && echo APT=yes; if [ -d '$SOURCE_REPO_DIR' ]; then [ -z \"\$(ls -A '$SOURCE_REPO_DIR' 2>/dev/null)\" ] || echo DIR=notempty; elif [ -e '$SOURCE_REPO_DIR' ]; then echo DIR=notadir; fi; zpool list -H -o name,size,free 2>/dev/null | while IFS=\$(printf '\\t') read -r n sz fr; do echo POOL=\$n,\$sz,\$fr; done; [ -x '$SOURCE_REPO_DIR/zfs-backup.sh' ] && { echo PKG=$SOURCE_REPO_DIR; echo REV=\$(git -C '$SOURCE_REPO_DIR' rev-parse --short HEAD 2>/dev/null); }; echo PROBE=done" 2>&1) || rc=$?
+    out=$(rux_root_ssh "$host" "$port" "echo HOSTNAME=\$(hostname); command -v zfs >/dev/null 2>&1 && echo ZFS=yes; command -v git >/dev/null 2>&1 && echo GIT=yes; command -v apt-get >/dev/null 2>&1 && echo APT=yes; command -v sudo >/dev/null 2>&1 && { command -v visudo >/dev/null 2>&1 || [ -x /usr/sbin/visudo ] || [ -x /sbin/visudo ]; } && echo SUDO=yes; if [ -d '$SOURCE_REPO_DIR' ]; then [ -z \"\$(ls -A '$SOURCE_REPO_DIR' 2>/dev/null)\" ] || echo DIR=notempty; elif [ -e '$SOURCE_REPO_DIR' ]; then echo DIR=notadir; fi; zpool list -H -o name,size,free 2>/dev/null | while IFS=\$(printf '\\t') read -r n sz fr; do echo POOL=\$n,\$sz,\$fr; done; [ -x '$SOURCE_REPO_DIR/zfs-backup.sh' ] && { echo PKG=$SOURCE_REPO_DIR; echo REV=\$(git -C '$SOURCE_REPO_DIR' rev-parse --short HEAD 2>/dev/null); }; echo PROBE=done" 2>&1) || rc=$?
     if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^PROBE=done$'; then
         # OpenSSH ends its diagnostics with CR LF. A raw CR inside a JSON string
         # is INVALID JSON and json_escape (a frozen twin) does not escape it, so
@@ -15087,6 +15102,7 @@ source_probe() {   # <host> <port> -> sets PROBE_* ; returns 0 when ssh answered
             ZFS=yes)    PROBE_ZFS=1 ;;
             GIT=yes)    PROBE_GIT=1 ;;
             APT=yes)    PROBE_APT=1 ;;
+            SUDO=yes)   PROBE_SUDO=1 ;;
             DIR=*)      PROBE_DIR="${line#*=}" ;;
             POOL=*)     PROBE_POOLS="${PROBE_POOLS}${PROBE_POOLS:+ }${line#*=}" ;;
             PKG=*)      PROBE_PKG="${line#*=}" ;;
@@ -15133,10 +15149,10 @@ cmd_check_source() {
         first=0
         printf '{"name":"%s","size":"%s","free":"%s"}' "$(json_escape "$n")" "$(json_escape "$sz")" "$(json_escape "$fr")"
     done
-    printf ']},"package":{"ok":%s,"path":"%s","rev":"%s"},"git":%s,"apt":%s,"repo_dir":"%s","repo_dir_blocked":"%s"}\n' \
+    printf ']},"package":{"ok":%s,"path":"%s","rev":"%s"},"git":%s,"apt":%s,"sudo":%s,"repo_dir":"%s","repo_dir_blocked":"%s"}\n' \
         "$([ -n "$PROBE_PKG" ] && echo true || echo false)" "$(json_escape "$PROBE_PKG")" "$(json_escape "$PROBE_REV")" \
         "$([ "$PROBE_GIT" -eq 1 ] && echo true || echo false)" "$([ "$PROBE_APT" -eq 1 ] && echo true || echo false)" \
-        "$(json_escape "$SOURCE_REPO_DIR")" "$([ -z "$PROBE_PKG" ] && json_escape "$PROBE_DIR")"
+        "$([ "$PROBE_SUDO" -eq 1 ] && echo true || echo false)" "$(json_escape "$SOURCE_REPO_DIR")" "$([ -z "$PROBE_PKG" ] && json_escape "$PROBE_DIR")"
 }
 
 # source-pruners HOST[:PORT] [--port=N] DATASET... (owner note 4, 2026-10-08)
@@ -19785,11 +19801,12 @@ profile_usage_load() {
 # provenance); what they lose is a later "refresh from the template", so the
 # plan says how many there are.
 cmd_delete_profile() {
-    local name="" yes=0 ask=0 a
+    local name="" yes=0 ask=0 if_unused=0 a
     for a in "$@"; do
         case "$a" in
             --yes|-y) yes=1 ;;
             --ask)    ask=1 ;;
+            --if-unused) if_unused=1 ;;
             -*) die "delete-profile: unknown option '$a'" ;;
             *)  [ -z "$name" ] || die "delete-profile: takes one NAME"; name="${a%.conf}" ;;
         esac
@@ -19803,6 +19820,14 @@ cmd_delete_profile() {
     [ -f "$f" ] || die "delete-profile: no own template '$name' in $PROFILE_USER_ROOT. Nothing was changed."
     profile_usage_load
     local n="${PROFILE_USED_BY[$name]:-0}"
+    # --if-unused (the wizard's clean-up of its own draft): a relationship that
+    # names the template -- a PENDING one too, which still has to activate from
+    # it -- keeps it. First install, 2026-11-04: the wizard failed after add-client,
+    # deleted its draft, and the retry the FATAL promised died "profile not found".
+    if [ "$if_unused" -eq 1 ] && [ "$n" -gt 0 ]; then
+        log "delete-profile: '$name' kept -- $n relationship(s) on this host name it ($f)."
+        return 0
+    fi
     echo "PLAN (delete-profile):"
     echo "  delete: $f"
     if [ "$n" -gt 0 ]; then
@@ -22313,6 +22338,7 @@ rux_grant_remotely_preflight() {   # <host> <port> [will_join_now=0]
     if ! rux_root_ssh "$host" "$port" "true" >/dev/null 2>&1; then
         die "--grant-remotely: no root ssh channel to $host (BatchMode, pinned /root/.ssh/known_hosts). Establish it first -- e.g. install this host's root key there: ssh-copy-id root@$host -- or drop --grant-remotely and run the grant on the source yourself: deploy.sh --commit-scope=$COLLECTOR_LABEL. Nothing was changed anywhere."
     fi
+    [ "${RUX_GRANT_QUIESCE:-0}" -eq 1 ] && rux_source_sudo_ready "$host" "$port"
     # The manifest requirement holds only when THIS run will not create it.
     # The one-command flow's own add-client performs the join (--join-remotely,
     # the default) minutes after this gate -- demanding a PRE-existing join
@@ -22349,6 +22375,49 @@ joined it does step 3 for you."
 # the same root-over-SSH authority that flag already exercises, one grant wider, and
 # it is recorded in the same audit line.
 RUX_GRANT_QUIESCE="${RUX_GRANT_QUIESCE:-0}"
+
+# rux_remote_commit_scope <host> <port> <repo dir> <" --allow-quiesce" or ""> -> rc of the remote run
+#
+# First install, 2026-11-04: the run was cut to `| tail -4`, so the line that said
+# WHY (apt could not install sudo) never reached this host's log, and the wizard's
+# "Reason" showed an unrelated mail warning instead. On success the tail is still
+# enough; on failure the whole remote output goes into this host's log, and the
+# remote's own !!!/FATAL lines are repeated marked "!!! [on host]" -- the marker is
+# what the wizard's refusal window picks first (tui/wt-lib.sh verb_refusal).
+rux_remote_commit_scope() {
+    local host="$1" port="$2" repo="$3" aq="$4" out rc=0
+    out=$(rux_root_ssh "$host" "$port" "cd '$repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'$aq" 2>&1) || rc=$?
+    out=$(printf '%s\n' "$out" | tr -d '\r')
+    if [ "$rc" -eq 0 ]; then
+        printf '%s\n' "$out" | tail -4
+        return 0
+    fi
+    echo "--- deploy.sh --commit-scope='$COLLECTOR_LABEL'$aq on $host: rc=$rc, its whole output ---"
+    printf '%s\n' "$out" | sed 's/^/    /'
+    echo "--- end of the output from $host ---"
+    printf '%s\n' "$out" | sed -n -E 's/^(!!! |FATAL: )[[:space:]]*//p' | while IFS= read -r _l; do
+        printf '!!! [on %s] %s\n' "$host" "$_l"
+    done
+    return "$rc"
+}
+
+# rux_source_sudo_ready <host> <port> -- before the first change of a --grant-quiesce run
+#
+# First install, 2026-11-04: a default Proxmox VE has no sudo, and the freeze grant
+# is a sudoers rule. deploy.sh installs sudo itself, but only inside --commit-scope,
+# AFTER the join and the replication grant -- there apt failed and the pair was left
+# half-enrolled. So it is asked (and installed, as prepare-source installs git)
+# here, while nothing has been changed yet.
+rux_source_sudo_ready() {
+    local host="$1" port="$2" out
+    out=$(rux_root_ssh "$host" "$port" "command -v sudo >/dev/null 2>&1 && { command -v visudo >/dev/null 2>&1 || [ -x /usr/sbin/visudo ] || [ -x /sbin/visudo ]; } && echo SUDO=yes; command -v apt-get >/dev/null 2>&1 && echo APT=yes" 2>&1)
+    case "$out" in *SUDO=yes*) return 0 ;; esac
+    case "$out" in *APT=yes*) ;; *) die "--grant-quiesce: $host has no sudo and no apt-get -- install sudo there first, or drop --grant-quiesce. Nothing was changed anywhere." ;; esac
+    log "--grant-quiesce: $host has no sudo (a default Proxmox VE has none) -- installing it there before the first change: apt-get install -y sudo"
+    out=$(rux_root_ssh "$host" "$port" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y sudo >/dev/null 2>&1 || { apt-get update >/dev/null 2>&1; apt-get install -y sudo; }; command -v sudo >/dev/null 2>&1 && { command -v visudo >/dev/null 2>&1 || [ -x /usr/sbin/visudo ] || [ -x /sbin/visudo ]; }" 2>&1) \
+        || die "--grant-quiesce: apt-get install sudo on $host failed: $(printf '%s' "$out" | tr -d '\r' | grep -v '^$' | tail -1). Install sudo there by hand (or drop --grant-quiesce), then re-run. Nothing else was changed anywhere."
+    log "--grant-quiesce: sudo installed on $host"
+}
 
 rux_grant_remotely() {   # <host> <port> <requested dataset>
     local host="$1" port="$2" requested="$3"
@@ -22394,7 +22463,7 @@ rux_grant_remotely() {   # <host> <port> <requested dataset>
                 done
                 [ -n "$q_repo" ] || die "--grant-quiesce: could not find deploy.sh on $host"
                 log "--grant-remotely: scope already covers the request; re-committing on $host for --grant-quiesce"
-                rux_root_ssh "$host" "$port" "cd '$q_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'$aq" 2>&1 | tail -4 \
+                rux_remote_commit_scope "$host" "$port" "$q_repo" "$aq" \
                     || die "--grant-quiesce: deploy.sh --commit-scope='$COLLECTOR_LABEL' --allow-quiesce FAILED on $host (see above)"
                 return 0
             fi
@@ -22424,7 +22493,8 @@ include_children = yes
 ' "$_rh"
             done <<< "$missing"
         } | rux_root_ssh_in "$host" "$port" "cat >> '$sfile'"             || die "--grant-remotely: could not append to the scope file on $host -- nothing was committed"
-        rux_root_ssh "$host" "$port" "cd '$extend_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'$aq" 2>&1 | tail -4             || die "--grant-remotely: deploy.sh --commit-scope='$COLLECTOR_LABEL' FAILED on $host (see above). The scope file was extended; finish or inspect locally there."
+        rux_remote_commit_scope "$host" "$port" "$extend_repo" "$aq" \
+            || die "--grant-remotely: deploy.sh --commit-scope='$COLLECTOR_LABEL' FAILED on $host (see above). The scope file was extended; finish or inspect locally there."
         local ext_mfile; ext_mfile=$(peer_manifest_path "$COLLECTOR_LABEL")
         rux_root_ssh "$host" "$port" "printf 'GRANTED_REMOTELY_BY=%q
 ' '$ext_stamp (extension$aq_note)' >> '$ext_mfile'"             || warn "--grant-remotely: the extension is committed but the audit line could not be appended to $ext_mfile on $host -- add it manually"
@@ -22540,7 +22610,7 @@ An operator prepared that file, and this flag is not permission to overwrite the
     } | rux_root_ssh_in "$host" "$port" "cat > '$sfile'" \
         || die "--grant-remotely: could not write the scope file on $host -- nothing was committed"
 
-    rux_root_ssh "$host" "$port" "cd '$remote_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'$aq" 2>&1 | tail -4 \
+    rux_remote_commit_scope "$host" "$port" "$remote_repo" "$aq" \
         || die "--grant-remotely: deploy.sh --commit-scope='$COLLECTOR_LABEL' FAILED on $host (see above). The scope file was written; finish or inspect locally there."
 
     local mfile; mfile=$(peer_manifest_path "$COLLECTOR_LABEL")

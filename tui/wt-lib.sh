@@ -96,7 +96,14 @@ lhfit() {  # <pozycji> <wierszy tekstu> -> wysokość listy, która zostawia mie
 # the reason a verb prints above it ("!!! gen-cron.sh refused ...", "... error: ...") is
 # what tells the operator what to change. Lines with !!!, 'error:' and FATAL, prefixes
 # stripped, each once, the last six.
+# Pierwsza instalacja 2026-11-04: zdalny powód (zfs-backup.sh oznacza go "!!! [on host] ")
+# ginął pod lokalnym ostrzeżeniem o poczcie. Gdy dziennik ma oznaczone linie, powód to
+# one i FATAL-e -- niezwiązane lokalne "!!!" nie trafiają do okna.
 verb_refusal() {   # <plik z wyjściem czasownika> -> przyczyna odmowy do okna
+    if grep -q '^!!! \[on [^]]*\] ' "$1" 2>/dev/null; then
+        grep -E '^!!! \[on [^]]*\] |^FATAL: ' "$1" | sed -e 's/^!!! //' -e 's/^FATAL: //' | awk '!seen[$0]++' | tail -8
+        return 0
+    fi
     grep -E '^!!! |error: |^FATAL: ' "$1" 2>/dev/null \
         | sed -e 's/^!!! //' -e 's/^[[:space:]]*//' -e 's/^FATAL: //' | awk '!seen[$0]++' | tail -6
 }
