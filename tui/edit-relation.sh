@@ -394,7 +394,9 @@ harm_flow() {
     while :; do
         if [ "$hs" -eq 1 ]; then
             clear 2>/dev/null
-            TEMPLATE_JSON="$TMPD/rt-work.json" ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "@rel" "$TMPD/rargs" "$(Tv 'Harmonogram i retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)' '$(hostname -s 2>/dev/null || hostname)' "$(hostname -s 2>/dev/null || hostname)")" \
+            _ttl="$(Tv 'Harmonogram i retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)' '$(hostname -s 2>/dev/null || hostname)' "$(hostname -s 2>/dev/null || hostname)")"
+            [ "$SNAPONLY" -eq 1 ] && _ttl="$(Tv 'Harmonogram i retencja: MIGAWKI NA ŹRÓDLE – $SRCNAME' '$SRCNAME' "$SRCNAME")"
+            TEMPLATE_JSON="$TMPD/rt-work.json" ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "@rel" "$TMPD/rargs" "$_ttl" \
                 || { PROFILE="$SAVE_P"; CUR_S="$SAVE_S"; return 0; }
             cat "$TMPD/rargs" >>"$TMPD/rargs.acc"
             mapfile -t RARGS <"$TMPD/rargs.acc"
@@ -886,9 +888,9 @@ while :; do
         save_all || continue
     }
     case "$ACTION" in
-        # snaponly: tabela -> ukryty szablon relacji -> edit-relation --profile= (blok
-        # "harm" w pętli kroków niżej); harm_flow czyta/zapisuje szczeble KOPII (set-tiers).
-        harm) [ "$SNAPONLY" -eq 1 ] && break; harm_flow; continue ;;
+        # Każda relacja, migawki zdalne też (REV-20261104-187): szczeble z configu
+        # (show-tiers), zmiana jednym set-tiers -- bez szablonu relacji.
+        harm) harm_flow; continue ;;
         fastprune) break ;;
         adres) address_flow; continue ;;
         szablon) break ;;
@@ -989,8 +991,7 @@ while :; do
            --menu "$(Tv 'Obecny szablon: $(cur_words)\nSekcje relacji zostaną wygenerowane od nowa z wybranego szablonu\n(retencja, harmonogramy). Dane nie są przenoszone, pełna kopia od nowa nie jest potrzebna.\nTen sam szablon = odświeżenie (rozrzut minut, retencja źródła per szczebel).' '$(cur_words)' "$(cur_words)")" \
            "$(fit $((${#items[@]} / 2 + 5)))" "$W" "$(lhfit $((${#items[@]} / 2)) 4)" "${items[@]}" || continue 2
         if [ "$WT_OUT" = __manual__ ]; then
-            # Ręcznie: tabela szczebli (snaponly -- blok "harm" niżej, ukryty szablon relacji).
-            if [ "$SNAPONLY" -eq 1 ]; then ACTION=harm; step=1; continue; fi
+            # Ręcznie: tabela szczebli z configu relacji (każdy rodzaj, REV-20261104-187).
             harm_flow; continue 2
         fi
         PROFILE="$WT_OUT"; step=2; continue
@@ -1032,35 +1033,6 @@ while :; do
         FP_DIRTY=1
         load_lists
         PROFILE="$FPNAME"; step=2; continue
-    fi
-    if [ "$step" -eq 1 ] && [ "$ACTION" = harm ]; then
-        # Ta sama tabela co szablon na F5 (sposób, wszystkie szczeble, liczby, zamrażanie),
-        # startuje z obecnego szablonu relacji; wynik = ukryty szablon relacja-<NAZWA>.
-        base="${CUR_P:-default}"
-        clear 2>/dev/null
-        _ttl="$(Tv 'Harmonogram i retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)' '$(hostname -s 2>/dev/null || hostname)' "$(hostname -s 2>/dev/null || hostname)")"
-        [ "$SNAPONLY" -eq 1 ] && _ttl="$(Tv 'Harmonogram i retencja: MIGAWKI NA ŹRÓDLE – $SRCNAME' '$SRCNAME' "$SRCNAME")"
-        ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "$base" "$TMPD/rargs" "$_ttl" \
-            || continue 2
-        mapfile -t RARGS <"$TMPD/rargs"
-        if [ "${#RARGS[@]}" -eq 0 ] && [ "$base" = "$HNAME" ]; then
-            PROFILE="$HNAME"          # nic nie zmienione w tabeli -- szablon relacji zostaje
-        else
-            HFILE="$(head -1 "$TMPD/hfile.txt" 2>/dev/null)"
-            if [ -n "$HFILE" ] && [ -z "$HBACKUP" ] && [ -f "$HFILE" ]; then
-                HBACKUP="$TMPD/hidden.bak"; cp -p "$HFILE" "$HBACKUP"
-            fi
-            info "$(T 'Harmonogram i retencja kopii w celu i źródle')" "$(T 'Zapisuję ustawienia relacji...')"
-            if ! out=$("$ZB" save-profile "--from=$base" "--as=$HNAME" --hidden --force ${RARGS[@]+"${RARGS[@]}"} "--description=$(Tv 'Własne ustawienia relacji $NAME' '$NAME' "$NAME")" 2>&1); then
-                wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(printf '%s' "$out" | grep -E 'FATAL' | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)))" 14 "$W"
-                continue
-            fi
-            HIDDEN_DIRTY=1
-            load_lists
-            [ -n "$HFILE" ] || HFILE="$(head -1 "$TMPD/hfile.txt" 2>/dev/null)"
-            PROFILE="$HNAME"
-        fi
-        step=2; continue
     fi
     if [ "$step" -eq 2 ] && [ "$SNAPONLY" -eq 1 ]; then
         # Bez okna "w źródle kopii": szablon relacji snaponly sam jest retencją źródła.
