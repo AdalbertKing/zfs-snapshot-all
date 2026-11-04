@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 64e1d1bb714ee92b -->
+<!-- status-covers-digest: 8c5877a87a732ff3 -->
 <!-- status-covers-digest: 0e4d078b7398eac8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
@@ -180,7 +180,12 @@
   - Z tej listy zostały: obserwacja U149 i decyzja właściciela U148. Maile (U157-U160) i drzewo celu
     (U147/U155/U156) weszły później tego dnia i są w 1.0.10.
 
-- **REV-20261104-187 (2026-11-05, gałąź `fix/rev187-config-retention`, niewydane): retencja migawek
+- **Skucha 11 A-TASSA (2026-11-05, gałąź `fix/wizard-half-state`, niewydane): kreator po porażce
+  z rekordem.** Gdy instalacja padnie po zapisie rekordu relacji, okno mówi „założona do połowy (stan: X)”,
+  zapisuje komendę w `~/new-relation-NAZWA.cmd` i daje: Wycofaj (`delete-relation NAZWA --yes`, tu i na
+  źródle), Ponów (ta sama komenda, wznawia) albo Zostaw. Bez rekordu -- jak dotąd „nie została założona”.
+  F3 przy `pending_enroll` radzi `seed NAZWA` (wcześniej `activate`, które odmawia); migawki zdalne -- `activate`.
+- **REV-20261104-187 (2026-11-05, #1072, niewydane): retencja migawek
   zdalnych z configu.** „Harmonogram i retencja” -> „Ręcznie...” relacji snaponly czyta szczeble z jej sekcji
   `[template:snaponly(_src)__NAZWA__*]` (`show-tiers`) i zapisuje jednym `set-tiers` (jedno pole na
   operację; zmiana zestawu szczebli lub metody = „Użyj szablonu”). Ukryty `relacja-<NAZWA>` nie wpływa
