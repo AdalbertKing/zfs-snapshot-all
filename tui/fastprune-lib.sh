@@ -73,12 +73,12 @@ for p in d.get("profiles", []):
 PYEOF
 )
     if [ "${#args[@]}" -eq 0 ]; then
-        wt --title "$(T 'Fastprune niemożliwy')" --msgbox "$(Tv 'Szablon $PROFILE nie ma szczebli, które robią migawki -- fastprune nie ma czego skracać.' '$PROFILE' "$base")" 9 "$W"; return 1
+        wt --title "$(T 'Krótka retencja niemożliwa')" --msgbox "$(Tv 'Szablon $PROFILE nie ma szczebli, które robią migawki -- krótka retencja nie ma czego skracać.' '$PROFILE' "$base")" 9 "$W"; return 1
     fi
     if ! "$ZB" save-profile "--from=$base" "--as=$name" --hidden --force \
-         "--description=$(Tv 'Fastprune $FASTPRUNE h z $PROFILE (relacja $RNAME)' '$FASTPRUNE' "$n" '$PROFILE' "$base" '$RNAME' "$rel") [fastprune $n base=$base]" \
+         "--description=$(Tv 'Krótka retencja $FASTPRUNE h z $PROFILE (relacja $RNAME)' '$FASTPRUNE' "$n" '$PROFILE' "$base" '$RNAME' "$rel") [fastprune $n base=$base]" \
          "${args[@]}" >/dev/null 2>"$TMPD/fp.err"; then
-        wt --title "$(T 'Fastprune: szablonu nie zapisano')" --msgbox "$(tail -4 "$TMPD/fp.err")" 14 "$W"; return 1
+        wt --title "$(T 'Krótka retencja: szablonu nie zapisano')" --msgbox "$(tail -4 "$TMPD/fp.err")" 14 "$W"; return 1
     fi
     return 0
 }

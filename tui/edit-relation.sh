@@ -1023,7 +1023,7 @@ while :; do
             # Bez kopii przerwana zmiana nie miałaby czego przywrócić -- a usunięcie zabrałoby
             # relacji jej szablon. Nic nie zmieniamy.
             if [ -z "$FP_BAK" ]; then
-                wt --title "$(T 'Fastprune: szablonu nie zapisano')" --msgbox "$(Tv 'Nie mogę zrobić kopii obecnego szablonu $PROFILE -- nic nie zmieniono.' '$PROFILE' "$FPNAME")" 8 "$W"
+                wt --title "$(T 'Krótka retencja: szablonu nie zapisano')" --msgbox "$(Tv 'Nie mogę zrobić kopii obecnego szablonu $PROFILE -- nic nie zmieniono.' '$PROFILE' "$FPNAME")" 8 "$W"
                 continue 2
             fi
         fi
