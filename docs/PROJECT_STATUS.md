@@ -28,8 +28,8 @@
   F5: zdalna lista migawek bez `awk` po drugiej stronie; F6: `-m` jako dosłowny prefiks; F2: nieczytelny
   czas utworzenia w `delsnaps` = bieg nieudany; F3: `-R` w `delsnaps` najpierw wylicza drzewo i nic nie
   kasuje przy niepełnej liście. pve9: `test/snapsend` 329/0, `test/delsnaps` 94/0, `test/remote` 145/0;
-  kontrole negatywne na silnikach z `main` padają (34 i 11 przypadków). Nie wykonane: kampania jako
-  konto `zfsbackup` (brak przygotowanego środowiska na labie).
+  kontrole negatywne na silnikach z `main` padają (34 i 11 przypadków). Kampania `test/remote` z konta delegowanego
+  `zfsbackup` (pve9 -> pve9b): 145/0, jeden SKIP (G3, środowisko).
 - **Wydanie bieżące: v1.0.7 (zfsbackup `1ff4177`), na wszystkich hostach produkcji i labu od
   2026-11-03 (sprawdzone po :15, także klony kont `zfsbackup` na 11.10 i 11.11).** W dev `main`, niewydane:
   paczka U (PR #1045) i U136 (#1046). Lab posprzątany 2026-11-04: relacje i datasety testowe U137/U138/U141
