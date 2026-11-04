@@ -1325,7 +1325,12 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
         # Okno: całe podsumowanie (decyzje po polsku i komenda -- testy pilnują ich słów),
         # bez pustych wierszy, ostrzeżenia czasownika i ścieżka pełnego planu; w 80x24 mieści
         # się na styk, więc bez drugiego okna z pytaniem. Angielska góra planu powtarzała to samo.
-        { grep -v '^[[:space:]]*$' "$TMPD/summary.txt"
+        # W17 (kampania 2026-11-03): zdania podsumowania są łamane ręcznie pod 80 kolumn (druga
+        # linia od dwóch spacji); w szerszym oknie whiptail łamał je drugi raz i wychodził
+        # poszarpany tekst ("robi własne" / "(--own-snapshots)..."). Kontynuacja dokleja się do
+        # poprzedniej linii -- łamie whiptail; listy (wcięcie 3+ spacji) zostają, jak były.
+        { grep -v '^[[:space:]]*$' "$TMPD/summary.txt" \
+            | awk '/^  [^ ]/ && NR > 1 { sub(/^  /, ""); p = p " " $0; next } { if (NR > 1) print p; p = $0 } END { if (NR) print p }'
           # ostrzeżenia czasownika zostają w oknie -- to one zmieniają decyzję
           grep -E '^(!!!|WARNING|Warning|>>> .*(WARNING|warn))' "$TMPD/plan.txt" | grep -v -- '--grant-remotely is noted' | head -8
           echo "$(Tv 'Pełny plan (sekcje configu, linie crona): $planf' '$planf' "$planf")"; } >"$TMPD/plan-short.txt"

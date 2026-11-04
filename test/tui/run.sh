@@ -3352,6 +3352,14 @@ if has "$NRCOA" 'CMD: ' && has "$NRCOA" ' --own-snapshots ' && has "$NRCOW" 'WŁ
 else
     bad "new-relation: own -> --own-snapshots" "$NRCOA" "$(printf '%s' "$NRCOW" | grep -E 'WŁASNE|ŁAŃCUCH' | cut -c1-200)"
 fi
+# W17 (kampania 2026-11-03): w oknie planu zdanie z ręcznie złamaną drugą linią jest jednym akapitem
+# (whiptail łamie sam) -- dawniej "ta relacja robi własne" / "  (--own-snapshots); ..." osobno.
+if has "$NRCOW" 'ta relacja robi własne (--own-snapshots); stare wejdą do jej retencji' \
+   && ! has "$NRCOW" "$(printf 'robi własne\n  (--own-snapshots)')"; then
+    ok "new-relation W17: plan -- zdanie WŁASNE MIGAWKI w jednym akapicie, bez twardego złamania w środku"
+else
+    bad "new-relation W17: plan, łamanie zdania" "$(printf '%s' "$NRCOW" | grep -A1 'WŁASNE MIGAWKI' | head -4 | cut -c1-240)"
+fi
 if has "$NRCS" 'CMD: ' && ! has "$NRCS" '--own-snapshots' && has "$NRCSW" 'lustro będzie PASYWNE'; then
     ok "new-relation: synchro + odpowiedz 'chain' + szablon default -- podsumowanie mowi 'lustro będzie PASYWNE', komenda bez --own-snapshots"
 else
