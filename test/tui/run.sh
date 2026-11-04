@@ -3161,6 +3161,9 @@ echo "RC: $rc" >> "$NR_DIR/tree.log"
 exit "$rc"
 EOF
 chmod +x "$NR/bin/whiptail" "$NR/bin/zb" "$NR/bin/tree"
+mkdir -p "$NR/zbin"
+printf '#!/bin/sh\n[ -n "${NR_SNAPS:-}" ] && printf "%%b\\n" "$NR_SNAPS"\nexit 0\n' > "$NR/zbin/zfs"
+chmod +x "$NR/zbin/zfs"
 nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienniki w $NR
     rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR"/freed-* "$NR"/new-relation-*.cmd "$NR/tree.n" "$NR/tree.log" "$NR/treekeys" "$NR/tree-spec.last"
     printf '%s' "$1" > "$NR/answers"; shift
@@ -3169,6 +3172,9 @@ nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienn
       # na wywolanie okna, linie rozdzielone '|' (jak odpowiedzi); brak linii = Esc.
       printf '%s\n' "${NR_TREE:-}" | tr '|' '\n' > "$NR/treekeys"
       export TREE_PY="$PY" TREE_REPO="$REPO" ZFS_TREE="$NR/bin/tree"
+      # U147 (2026-11-04): krok „Dokąd” czyta migawki hosta (zfs list) -- atrapa: NR_SNAPS albo nic,
+      # żeby wynik nie zależał od migawek hosta, na którym biegnie suita.
+      export PATH="$NR/zbin:$PATH"
       # Tabela retencji zrodla (tui/grid.py, curses) bez terminala: klawisze z NR_GRID_KEYS,
       # domyslnie Enter = Dalej bez zmian (zrodlo jak cel).
       export ZFS_GRID="$PY $REPO/tui/grid.py --keys ${NR_GRID_KEYS:-enter}"
@@ -3182,8 +3188,7 @@ nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienn
 T=$'\t'
 # Pola karty z domyslnymi odpowiedziami (U25): cel, szablon, [tabela retencji zrodla: nie whiptail],
 # nazwa, konto, checklista ustawien, edytor prefiksow, KARTA (create), podsumowanie, plan (WYKONAJ)
-NRT="0${T}hdd/backups
-0${T}default
+NRT="0${T}default
 0${T}pve9b
 0${T}root
 0${T}adv
@@ -3213,7 +3218,6 @@ w17_ans() {   # <odpowiedz checklisty "Ustawienia dodatkowe">
     printf '%s' "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}root
@@ -3225,22 +3229,21 @@ w17_ans() {   # <odpowiedz checklisty "Ustawienia dodatkowe">
 0${T}create
 0${T}
 "; }
-W17A=$(nr_run "$(w17_ans 'grant|raw')" NR_FIX="$NRE" NR_TREE="$NRTK"); W17L1="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
-W17B=$(nr_run "$(w17_ans 'grant')" NR_FIX="$NRE" NR_TREE="$NRTK")
-W17C=$(nr_run "$(w17_ans 'grant')" NR_TREE="$NRTK"); W17L3="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
+W17A=$(nr_run "$(w17_ans 'grant|raw')" NR_FIX="$NRE" NR_TREE="$NRTK|goto:hdd/backups,enter"); W17L1="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
+W17B=$(nr_run "$(w17_ans 'grant')" NR_FIX="$NRE" NR_TREE="$NRTK|goto:hdd/backups,enter")
+W17C=$(nr_run "$(w17_ans 'grant')" NR_TREE="$NRTK|goto:hdd/backups,enter"); W17L3="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
 # W17D (kampania wariantow 2026-10-22): zaszyfrowane zrodlo, admin NIE zaglada do Zaawansowanych
 # -- domyslne --raw ustawialo sie dopiero w oknie Dodatkowe, wiec komenda szla BEZ --raw (kopia
 # odszyfrowana na kolektorze). Teraz domyslne liczy sie po wyborze datasetow.
 W17D=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}root
 0${T}create
 0${T}
-" NR_FIX="$NRE" NR_TREE="$NRTK")
+" NR_FIX="$NRE" NR_TREE="$NRTK|goto:hdd/backups,enter")
 # U138 (2026-11-03): backup bez migawek rodziny ma w Zaawansowanych "Pasywnie" -- karta zaczyna
 # sie od "pasywnie: nie;", a przycieta wartosc (szerokosc 76) nie siega juz 'zaszyfrowane'.
 if has "$W17D" "CMD: " && has "$W17D" " --raw " && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log" \
@@ -3292,7 +3295,6 @@ nrc_ans() {   # <odpowiedz w oknie migawek: chain|own> [tryb: backup] -> odpowie
 0${T}192.168.28.98
 0${T}
 0${T}$1
-0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}root
@@ -3304,13 +3306,13 @@ nrc_ans() {   # <odpowiedz w oknie migawek: chain|own> [tryb: backup] -> odpowie
 0${T}create
 0${T}
 "; }
-NRCA=$(nr_run "$(nrc_ans chain)" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCW="$(cat "$NR/wt.log")"
+NRCA=$(nr_run "$(nrc_ans chain)" NR_FIX="$NRC" NR_TREE="$NRTK|goto:hdd/backups,enter"); NRCW="$(cat "$NR/wt.log")"
 # okno pytajace: tytul, menu z tagami chain/own, wiek najnowszej migawki z 4. kolumny own.tsv
 NRCQ="$NRCW"
-NRCOA=$(nr_run "$(nrc_ans own)" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCOW="$(cat "$NR/wt.log")"
+NRCOA=$(nr_run "$(nrc_ans own)" NR_FIX="$NRC" NR_TREE="$NRTK|goto:hdd/backups,enter"); NRCOW="$(cat "$NR/wt.log")"
 # Dwa korzenie (kampania pve10, 2026-10-29): build_argv ma `local IFS=,`, a odpowiedz byla
 # przypisana do "${B_ROOT[*]}" ze spacja -- przy dwoch datasetach --own-snapshots ginal.
-NRCO2=$(nr_run "$(nrc_ans own)" NR_FIX="$NRC" NR_TREE='goto:hdd/test-kreator,space,goto:hdd/vm-disks,space,enter')
+NRCO2=$(nr_run "$(nrc_ans own)" NR_FIX="$NRC" NR_TREE='goto:hdd/test-kreator,space,goto:hdd/vm-disks,space,enter|goto:hdd/backups,enter')
 # sync + szablon default + odpowiedz chain: lustro bedzie PASYWNE, bez --own-snapshots
 NRCS=$(nr_run "0${T}sync
 0${T}192.168.28.98
@@ -3326,7 +3328,7 @@ NRCS=$(nr_run "0${T}sync
 1${T}
 0${T}create
 0${T}
-" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCSW="$(cat "$NR/wt.log")"
+" NR_FIX="$NRC" NR_TREE="$NRTK|goto:hdd/backups,enter"); NRCSW="$(cat "$NR/wt.log")"
 "$PY" - "$NRC/list-datasets-pve9b.json" <<'PYEOF'
 import sys, json
 p = sys.argv[1]; d = json.load(open(p, encoding="utf-8"))
@@ -3334,7 +3336,7 @@ for x in d["datasets"]:
     x["family_snapshots"] = 0
 json.dump(d, open(p, "w", encoding="utf-8"))
 PYEOF
-NRCB=$(nr_run "$(w17_ans 'grant')" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCW0="$(cat "$NR/wt.log")"
+NRCB=$(nr_run "$(w17_ans 'grant')" NR_FIX="$NRC" NR_TREE="$NRTK|goto:hdd/backups,enter"); NRCW0="$(cat "$NR/wt.log")"
 if has "$NRCW" '[polecany]' && has "$NRCW" 'resztki starej relacji' && has "$NRCW" 'UWAGA ŁAŃCUCH' && has "$NRCW" 'pole Harmonogram -> passive-flat' \
    && ! has "$NRCW0" 'ŁAŃCUCH' && ! has "$NRCW0" '[polecany]' && has "$NRCB" 'CMD: ' \
    && has "$NRCA" 'CMD: ' && ! has "$NRCA" '--own-snapshots'; then
@@ -3386,7 +3388,7 @@ SOW="0${T}snaponly
 0${T}create
 0${T}
 "
-SOWO=$(nr_run "$SOW" NR_TREE="$NRTK")
+SOWO=$(nr_run "$SOW" NR_TREE="$NRTK|goto:hdd/backups,enter")
 SOWP="$(grep -F 'Jak długo trzymać migawki na źródle' "$NR/wt.log" | head -1)"
 if has "$SOWO" "CMD: " && has "$SOWO" " --mode=snaponly " && ! has "$SOWO" "--target=" && has "$SOWO" " --grant-remotely " \
    && ! has "$SOWO" "--exclude-family" && ! has "$SOWO" " --raw " \
@@ -3423,7 +3425,7 @@ FPA="0${T}snaponly
 0${T}create
 0${T}
 "
-FPO=$(nr_run "$FPA" NR_TREE="$NRTK"); FPW="$(cat "$NR/wt.log")"; FPZ="$(grep '^save-profile ' "$NR/zb.log")"
+FPO=$(nr_run "$FPA" NR_TREE="$NRTK|goto:hdd/backups,enter"); FPW="$(cat "$NR/wt.log")"; FPZ="$(grep '^save-profile ' "$NR/zb.log")"
 # Archiwum (warunek uczciwosci): bez kopii pasywnej z hdd/test-kreator na tym hoscie plan to mowi;
 # z nia (rekord: lokalna, passive=1, zrodlo hdd -- obejmuje hdd/test-kreator) -- nazywa ja.
 FPST="$(mktemp)"
@@ -3434,7 +3436,7 @@ d["relations"].append({"name": "arch-hdd", "state": "active", "peer_host": "", "
                        "passive": "1", "sources": ["hdd"], "profile": "passive-flat"})
 json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
-FPO2=$(nr_run "$FPA" NR_TREE="$NRTK" NR_STATUS="$FPST"); FPW2="$(cat "$NR/wt.log")"; rm -f "$FPST"
+FPO2=$(nr_run "$FPA" NR_TREE="$NRTK|goto:hdd/backups,enter" NR_STATUS="$FPST"); FPW2="$(cat "$NR/wt.log")"; rm -f "$FPST"
 if has "$FPW" 'UWAGA: na tym hoście NIE MA kopii pasywnej z hdd/test-kreator' && ! has "$FPW" 'Archiwum na tym hoście:' \
    && has "$FPW2" 'Archiwum na tym hoście: arch-hdd (kopia pasywna).' && ! has "$FPW2" 'NIE MA kopii pasywnej'; then
     ok "new-relation U136: plan fastprune mowi, czy na tym hoscie jest archiwum (kopia pasywna obejmujaca datasety) -- nazywa ja albo ostrzega"
@@ -3458,7 +3460,6 @@ fi
 U138A=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}root
@@ -3468,7 +3469,7 @@ U138A=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-" NR_TREE="$NRTK"); U138AW="$(cat "$NR/wt.log")"
+" NR_TREE="$NRTK|goto:hdd/backups,enter"); U138AW="$(cat "$NR/wt.log")"
 # passive-flat jest na kazdym hoscie (ukryty) -- w fixture go nie ma; ta sama dopiska co w A>B>C.
 NRP="$(mktemp -d)"; cp "$P10"/*.json "$NRP/"
 "$PY" - "$NRP/list-profiles.json" <<'PYEOF'
@@ -3484,23 +3485,21 @@ PYEOF
 U138B=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}passive-flat
 0${T}pve9b
 0${T}root
 0${T}create
 0${T}
-" NR_FIX="$NRP" NR_TREE="$NRTK"); U138BW="$(cat "$NR/wt.log")"; rm -rf "$NRP"
+" NR_FIX="$NRP" NR_TREE="$NRTK|goto:hdd/backups,enter"); U138BW="$(cat "$NR/wt.log")"; rm -rf "$NRP"
 U138C=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}root
 0${T}create
 0${T}
-" NR_TREE="$NRTK"); U138CW="$(cat "$NR/wt.log")"
+" NR_TREE="$NRTK|goto:hdd/backups,enter"); U138CW="$(cat "$NR/wt.log")"
 u138_szablon="$(printf '%s\n' "$U138AW" | grep -o 'Szablon: default[^~]*' | head -1)"
 if has "$U138A" 'CMD: ' && has "$U138A" ' --passive ' && has "$U138AW" 'PASYWNIE: migawki na źródle robi kto inny' \
    && [ -n "$u138_szablon" ] && ! printf '%s' "$u138_szablon" | grep -q 'zamraża' \
@@ -3536,9 +3535,9 @@ u141_ans() {   # <odpowiedz w oknie rodziny: own|stamp>
 0${T}create
 0${T}
 "; }
-U141S=$(nr_run "$(u141_ans stamp)" NR_FIX="$NRU" NR_TREE='goto:hdd/vm-disks,space,enter'); U141SW="$(cat "$NR/wt.log")"
-U141O=$(nr_run "$(u141_ans own)" NR_FIX="$NRU" NR_TREE='goto:hdd/vm-disks,space,enter')
-U141C=$(nr_run "$SOW" NR_FIX="$NRU" NR_TREE='goto:hdd/data,space,enter'); U141CW="$(cat "$NR/wt.log")"
+U141S=$(nr_run "$(u141_ans stamp)" NR_FIX="$NRU" NR_TREE='goto:hdd/vm-disks,space,enter|goto:hdd/backups,enter'); U141SW="$(cat "$NR/wt.log")"
+U141O=$(nr_run "$(u141_ans own)" NR_FIX="$NRU" NR_TREE='goto:hdd/vm-disks,space,enter|goto:hdd/backups,enter')
+U141C=$(nr_run "$SOW" NR_FIX="$NRU" NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); U141CW="$(cat "$NR/wt.log")"
 if has "$U141S" 'CMD: ' && has "$U141S" ' --mode=snaponly ' && has "$U141S" ' --stamp-family' && ! has "$U141S" '--own-snapshots' \
    && has "$U141SW" 'Robi je inny kolektor albo cron' && has "$U141SW" 'OSOBNA RODZINA' && has "$U141SW" 'inny twórca -- osobna rodzina z etykietą' && has "$U141SW" 'hdd/vm-disks/vm-201-disk-0' \
    && has "$U141O" 'CMD: ' && has "$U141O" ' --own-snapshots' && ! has "$U141O" '--stamp-family' \
@@ -3572,7 +3571,7 @@ NRTS="0${T}default
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-${NRT}" NR_TREE='goto:hdd/data,space,goto:hdd/data/mail,space,goto:hdd/test-kreator,space,goto:hdd/vm-disks/vm-201-disk-0,enter'); NRRC=$?
+${NRT}" NR_TREE='goto:hdd/data,space,goto:hdd/data/mail,space,goto:hdd/test-kreator,space,goto:hdd/vm-disks/vm-201-disk-0,enter|goto:hdd/backups,enter'); NRRC=$?
 if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=192.168.28.98:hdd/data,hdd/test-kreator --target=hdd/backups --landing=pve9b --profile=default --name=pve9b --exclude-child=^hdd/data/mail\$ --exclude-family=__replicate_,vzdump,__migration__ --grant-remotely --install --yes " && ! has "$NROUT" "--recursive" && ! hasE "$NROUT" 'exclude-child=[^ ]*[(|]'; then
     ok "new-relation: koszyk -- miejsca w JEDNYM --source po przecinku, odznaczone dziecko jako --exclude-child=^nazwa\$ (zakotwiczone, bez ( | -- wzorzec jedzie nieocytowany do crona)"
 else
@@ -3629,7 +3628,7 @@ fi
 NROUT=$(nr_run "0${T}sync
 0${T}192.168.28.98:2222
 0${T}
-${NRTS}" NR_TREE="$NRTK")
+${NRTS}" NR_TREE="$NRTK|goto:hdd/backups,enter")
 # Dawne "bez akcji 'Wyjatki'" = w drzewie nic nie jest pominiete: ekran nie ma 'pominięte: 1'.
 if has "$NROUT" "CMD: --source=192.168.28.98:2222:hdd/test-kreator --mode=sync --profile=default --name=pve9b --exclude-family=" && ! has "$NROUT" "--target" && ! has "$NROUT" "exclude-child" && grep -q '^check-source 192.168.28.98:2222 --json$' "$NR/zb.log" \
    && has "$(cat "$NR/tree.log")" 'pominięte: 0' && ! has "$(cat "$NR/tree.log")" 'pominięte: 1'; then
@@ -3646,7 +3645,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 1${T}
-${NRT}" NR_TREE='goto:hdd/ct,space,goto:hdd/ct/subvol-302-disk-0,space,enter|enter')
+${NRT}" NR_TREE='goto:hdd/ct,space,goto:hdd/ct/subvol-302-disk-0,space,enter|enter|goto:hdd/backups,enter')
 NRTL="$(cat "$NR/tree.log" 2>/dev/null)"
 if has "$NROUT" " --exclude-child=^hdd/ct/subvol-302-disk-0\$ " && ! has "$NROUT" "subvol-301-disk-0" \
    && [ "$(grep -c '^┌─' "$NR/tree.log")" -eq 2 ] && [ "$(grep -cF '[ ] subvol-302-disk-0' "$NR/tree.log")" -eq 2 ] \
@@ -3659,7 +3658,7 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-${NRT}" NR_TREE='goto:hdd/data/docs,space,goto:hdd/data,space,enter')
+${NRT}" NR_TREE='goto:hdd/data/docs,space,goto:hdd/data,space,enter|goto:hdd/backups,enter')
 # X12: pytania 'Zastap' (okno 'obejmuje to, co już wybrane') juz nie ma -- rodzic po prostu wchlania
 # dziecko. Zostaje to, co liczy sie dla komendy (--source = samo miejsce, bez dziecka); ekran mowi
 # to samo: jedno wybrane miejsce, nic pominietego.
@@ -3673,7 +3672,7 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-${NRT}" NR_TREE='goto:hdd,space,goto:hdd/ct/subvol-301-disk-0,space,goto:hdd/ct,space,space,enter')
+${NRT}" NR_TREE='goto:hdd,space,goto:hdd/ct/subvol-301-disk-0,space,goto:hdd/ct,space,space,enter|goto:hdd/backups,enter')
 NRTL="$(cat "$NR/tree.log" 2>/dev/null)"
 # Ekran: wyjatek hdd/ct (odznaczony) wchlonal wczesniejszy wyjatek 301 -- 'pominięte: 1', nie 2.
 if has "$NROUT" "CMD: --source=192.168.28.98:hdd --target=hdd/backups --landing=pve9b --profile=default --name=pve9b --exclude-child=^hdd/ct\$ --exclude-child=^hdd/ct/ --exclude-family" && [ "$(printf '%s' "$NROUT" | grep '^CMD: ' | grep -o 'exclude-child' | wc -l)" -eq 2 ] \
@@ -3692,7 +3691,7 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 1${T}
 0${T}
-" NR_TREE='goto:hdd/test-kreator,space,goto:hdd/test-kreator,space,esc'); NRRC=$?
+" NR_TREE='goto:hdd/test-kreator,space,goto:hdd/test-kreator,space,esc|goto:hdd/backups,enter'); NRRC=$?
 # Dawne "lista miejsc pojawia sie drugi raz" -- okna listy juz nie ma. Zostaje: kreator konczy sie
 # rc=1, drzewo bylo wolane dokladnie raz (jeden ekran w tree.log) i skonczylo sie Wstecz (rc=1 tree.py).
 if [ "$NRRC" -eq 1 ] && [ "$(grep -c '^┌─' "$NR/tree.log")" -eq 1 ] && [ "$(grep -c '^RC: 1$' "$NR/tree.log")" -eq 1 ] \
@@ -3710,7 +3709,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}default
 0${T}
 0${T}zfsbackup
@@ -3723,7 +3721,7 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-" NR_TREE="$NRTK")
+" NR_TREE="$NRTK|goto:hdd/backups,enter")
 if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target=hdd/backups --landing=pve9b --profile=d30 --name=pve9b --exclude-family=__replicate_,vzdump,__migration__ --local-user=zfsbackup --grant-remotely --grant-quiesce --install --yes " \
    && ! grep -qF 'Pod tą nazwą relacja będzie widoczna' "$NR/wt.log" && [ "$(grep -c '^list-profiles' "$NR/zb.log")" -eq 1 ] && [ "$(grep -c '^status' "$NR/zb.log")" -eq 1 ]; then
     ok "new-relation: pola cel-konto -- nazwa = host po drugiej stronie, bez okna nazwy (wlasciciel 2026-10-29), z podsumowania szablon zmienia wybor (d30, U66), konto delegowane = --local-user; list-profiles i status czytane RAZ na przebieg (cofanie nie kaze czekac od nowa)"
@@ -3792,7 +3790,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}root
@@ -3803,7 +3800,7 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-" NR_GRID_KEYS=down,right,bs,3,down,left,space,enter NR_TREE="$NRTK")
+" NR_GRID_KEYS=down,right,bs,3,down,left,space,enter NR_TREE="$NRTK|goto:hdd/backups,enter")
 NRL6SRC="$(grep -F 'Jak długo trzymać w celu' "$NR/wt.log" | head -1)"
 if grep -qF 'save-profile --from=default --force --tier=keep_daily --keep=3 --drop-tier=keep_weekly --as=default-src-H24D3M12' "$NR/zb.log" \
    && [ "$(grep -c '^save-profile' "$NR/zb.log")" = 1 ] \
@@ -3819,7 +3816,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}d7h24-age
 0${T}pve9b
 0${T}root
@@ -3830,7 +3826,7 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-" NR_GRID_KEYS=right,bs,bs,1,2,down,bs,3,enter NR_TREE="$NRTK")
+" NR_GRID_KEYS=right,bs,bs,1,2,down,bs,3,enter NR_TREE="$NRTK|goto:hdd/backups,enter")
 if printf '%s' "$NROUT" | grep -qE '\[X\] godzinowe +24 godz\.' && printf '%s' "$NROUT" | grep -qE '\[X\] dobowe +7 dni' \
    && grep -qF 'save-profile --from=d7h24-age --force --tier=hourly --retain=-h12 --tier=daily --retain=-d3 --as=d7h24-age-src-H12D3' "$NR/zb.log" \
    && ! grep -q -- '--keep=' "$NR/zb.log" \
@@ -3850,7 +3846,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}d30h24
 0${T}pve9b
 0${T}root
@@ -3861,7 +3856,7 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-" NR_GRID_KEYS=space,enter NR_TREE="$NRTK")
+" NR_GRID_KEYS=space,enter NR_TREE="$NRTK|goto:hdd/backups,enter")
 if printf '%s' "$NROUT" | grep -qF 'Nie można wyłączyć: tylko ten szczebel' && ! grep -q '^save-profile' "$NR/zb.log"; then
     ok "new-relation: szczebla, ktory jako jedyny sprzata rodzine, nie da sie wylaczyc"
 else
@@ -3872,7 +3867,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}root
@@ -3883,7 +3877,7 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-" NR_GRID_KEYS=enter NR_TREE="$NRTK")
+" NR_GRID_KEYS=enter NR_TREE="$NRTK|goto:hdd/backups,enter")
 if ! grep -q '^save-profile' "$NR/zb.log" && ! has "$NROUT" '--source-profile='; then
     ok "new-relation: retencja zrodla bez zmian = bez osobnego profilu"
 else
@@ -3897,7 +3891,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}root
@@ -3911,7 +3904,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}passive
 0${T}create
 0${T}
-" NR_PRUNERS='hdd/test-kreator\tzfsbackup-pve10\n' NR_TREE="$NRTK"); NRRC=$?
+" NR_PRUNERS='hdd/test-kreator\tzfsbackup-pve10\n' NR_TREE="$NRTK|goto:hdd/backups,enter"); NRRC=$?
 if [ "$NRRC" -eq 0 ] && has "$NROUT" " --profile=passive " && grep -q '^source-pruners 192.168.28.98 hdd/test-kreator$' "$NR/zb.log" \
    && [ "$(grep -c '^source-pruners' "$NR/zb.log")" = 1 ] \
    && grep -F 'Inny kolektor już przycina' "$NR/wt.log" | grep -qF 'hdd/test-kreator  -- zfsbackup-pve10'; then
@@ -3923,7 +3916,7 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-${NRT}" NR_TREE="$NRTK"); NRRC=$?
+${NRT}" NR_TREE="$NRTK|goto:hdd/backups,enter"); NRRC=$?
 if [ "$NRRC" -eq 0 ] && grep -q '^source-pruners ' "$NR/zb.log" && ! grep -qF 'Inny kolektor' "$NR/wt.log" && has "$NROUT" " --profile=default "; then
     ok "new-relation: bez cudzego kolektora sprawdzenie przechodzi bez okna"
 else
@@ -4144,7 +4137,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}default
 0${T}
 0${T}root
@@ -4155,7 +4147,7 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-" NR_TREE="$NRTK")
+" NR_TREE="$NRTK|goto:hdd/backups,enter")
 # Od 2026-10-29 relacja z drugim hostem nazywa sie jak ten host (pve9b) -- okna nazwy nie ma.
 if has "$NROUT" " --name=pve9b " && ! grep -q '^delete-relation' "$NR/zb.log" && ! grep -qF "USUNIĘTA relacja" "$NR/wt.log"; then
     ok "new-relation: nazwa = host po drugiej stronie, bez pytania i bez delete-relation (add-client archiwizuje stary rekord)"
@@ -4432,7 +4424,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}root
@@ -4445,7 +4436,7 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-" NR_FLAT=1 NR_TREE="$NRTK")
+" NR_FLAT=1 NR_TREE="$NRTK|goto:hdd/backups,enter")
 if has "$NROUT" " --profile=default " && has "$NROUT" " --local-user=zfsbackup " \
    && grep -qF 'Szablon nie pasuje do konta' "$NR/wt.log" && [ "$(grep -cF 'Szablon nie pasuje do konta' "$NR/wt.log")" -eq 1 ] \
    && [ "$(grep -cF -- 'Na jakim koncie mają chodzić zadania' "$NR/wt.log")" -eq 2 ]; then
@@ -4457,7 +4448,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}root
@@ -4468,7 +4458,7 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-" NR_TREE="$NRTK"); NRRC=$?
+" NR_TREE="$NRTK|goto:hdd/backups,enter"); NRRC=$?
 # U66 czesc 2: wynik jest w OKNIE (textbox -> dziennik atrapy), nie na czarnym ekranie.
 if [ "$NRRC" -eq 1 ] && grep -qF "ZATRZYMANE ZGODNIE Z WYBOREM" "$NR/wt.log" && grep -qF "deploy.sh --commit-scope=pve10" "$NR/wt.log" \
    && ! grep -qF "NIE UDAŁO SIĘ" "$NR/wt.log" && ! has "$NROUT" "ZATRZYMANE" \
@@ -4487,7 +4477,7 @@ EOF
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-${NRT}" NR_STATUS="$NR/status-empty-target.json" NR_TREE="$NRTK"); NRRC=$?
+${NRT}" NR_STATUS="$NR/status-empty-target.json" NR_TREE="$NRTK|goto:hdd/backups,enter"); NRRC=$?
 NRTGT="$(grep -F -- 'Dokąd na tym hoście' "$NR/wt.log" | head -1)"
 if [ "$NRRC" -eq 0 ] && ! hasE "$NRTGT" ' ~ active ~ '; then
     ok "new-relation: relacja synchro z PUSTYM client_target nie wypycha 'active' na liste celow w kroku 5 (owner note 11: puste pole staje sie '-', nie zlepia sie z nastepnym)"
@@ -4501,7 +4491,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}root
@@ -4516,7 +4505,7 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-" NR_TREE="$NRTK")
+" NR_TREE="$NRTK|goto:hdd/backups,enter")
 if has "$NROUT" " --exclude-family=__replicate_,__migration__,_tmp " && grep -qF 'Pomijane prefiksy' "$NR/wt.log" \
    && grep -qF 'Nowy prefiks' "$NR/wt.log"; then
     ok "new-relation: edytor prefiksow -- 'Usun prefiks' zdejmuje vzdump, 'Dodaj prefiks' dopisuje _tmp, wynik w --exclude-family"
@@ -4565,7 +4554,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 0${T}
-${NRT}" NR_CHECK=check-source.json NR_TREE="$NRTK")
+${NRT}" NR_CHECK=check-source.json NR_TREE="$NRTK|goto:hdd/backups,enter")
 if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target" && grep -q '^prepare-source 192.168.28.98 --yes$' "$NR/zb.log" \
    && [ "$(grep -c '^check-source' "$NR/zb.log")" -eq 2 ] && grep -F -- '--yesno' "$NR/wt.log" | grep -qF 'Brak pakietu na źródle' && grep -qF 'Źródło gotowe' "$NR/wt.log"; then
     ok "new-relation: brak pakietu -> pytanie wprost -> prepare-source --yes -> DRUGA sonda pokazuje 'Zrodlo gotowe' -> datasety"
@@ -5388,7 +5377,6 @@ rm -rf "$TP"
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}__manual__
 0${T}pve9b
 0${T}root
@@ -5399,7 +5387,7 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-" NR_TREE='goto:hdd/data,space,enter'); NRRC=$?
+" NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); NRRC=$?
 if [ "$NRRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=relacja-pve9b --hidden --force --description=' "$NR/zb.log" \
    && has "$NROUT" "--profile=relacja-pve9b " && ! grep -q '^delete-profile' "$NR/zb.log"; then
     ok "new-relation: Recznie -- tabela szczebli, ukryty szablon relacja-<nazwa> (--hidden), relacja z --profile=relacja-<nazwa>"
@@ -5409,7 +5397,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/backups
 0${T}__manual__
 0${T}
 0${T}root
@@ -5420,7 +5407,7 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 0${T}create
 0${T}
-" NR_TREE='goto:hdd/data,space,enter'); NRRC=$?
+" NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); NRRC=$?
 # Wlasciciel 2026-10-29: relacja z drugim hostem nazywa sie jak ten host -- zmiany nazwy w
 # kroku 7 juz nie ma, wiec szkic "Recznie" zostaje relacja-<host>, nic sie nie przenosi.
 if [ "$NRRC" -eq 0 ] && has "$NROUT" "--name=pve9b " && has "$NROUT" "--profile=relacja-pve9b " \
