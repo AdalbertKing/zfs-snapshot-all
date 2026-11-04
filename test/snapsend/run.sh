@@ -1510,7 +1510,7 @@ export R186_LOG="$R186D/destroys" R186_REAL="$(command -v zfs)"
 cat > "$R186D/bin/zfs" <<'SHIM'
 #!/bin/bash
 if [ "$1" = destroy ]; then echo "destroy $*" >> "$R186_LOG"; fi
-if [ -n "${F1_TGT:-}" ] && [ "$1 $2 $3 $4 $5 $6" = "list -t snapshot -H -o name -r" ] \
+if [ -n "${F1_TGT:-}" ] && [ "$1 $2 $3 $4 $5 $6 $7" = "list -t snapshot -H -o name -r" ] \
    && [ "${!#}" = "$F1_TGT" ]; then
     echo "cannot iterate '$F1_TGT': simulated I/O error" >&2; exit 1
 fi
