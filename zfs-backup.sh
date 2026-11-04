@@ -10254,11 +10254,13 @@ cmd_add_client() {
                 # trips git's dubious-ownership guard (measured: the refresh
                 # warned and the stale clone survived a full clean rerun).
                 # The same entry also goes into a throwaway GLOBAL config (HOME
-                # pointed at it): git reads safe.directory from protected config
-                # only, and whether an older git counts `-c` as protected was not
-                # verified -- a first install on git 2.30.2 (2026-11-04) warned
-                # here while a pull as the account worked. git's own reason is
-                # now part of the warning instead of going to /dev/null.
+                # pointed at it). git 2.35.2 introduced the check and honoured
+                # safe.directory only in the system and global config, NOT from
+                # `-c`; Debian 11 carries that check as a backport since
+                # 1:2.30.2-1+deb11u1 (CVE-2022-24765, DSA-5332-1). A first
+                # install on 2.30.2-1+deb11u2 (2026-11-04) warned here while a
+                # pull as the account worked -- consistent with that, not
+                # reproduced on a host. git's own reason is now in the warning.
                 local _rf_home _rf_err=""
                 _rf_home=$(mktemp -d) && printf '[safe]\n\tdirectory = %s\n' "$_lu_home/zfs-snapshot-all" > "$_rf_home/.gitconfig"
                 if _rf_err=$( { HOME="${_rf_home:-$HOME}" git -c safe.directory="$_lu_home/zfs-snapshot-all" -C "$_lu_home/zfs-snapshot-all" fetch -q "$SCRIPT_DIR" HEAD \
@@ -22430,6 +22432,10 @@ rux_grant_remotely() {   # <host> <port> <requested dataset>
     if ! rux_root_ssh "$host" "$port" "true" >/dev/null 2>&1; then
         die "--grant-remotely: no root ssh channel to $host (BatchMode, pinned /root/.ssh/known_hosts). Establish it first -- e.g. install this host's root key there: ssh-copy-id root@$host -- or drop --grant-remotely and run the grant on the source yourself: deploy.sh --commit-scope=$COLLECTOR_LABEL. Nothing was changed anywhere."
     fi
+    # Again here, not only in the early gate: a RESUME (the retry a failed run
+    # promises) skips that gate, and sudo must be there before the scope is
+    # written and committed.
+    [ -n "$aq" ] && rux_source_sudo_ready "$host" "$port"
 
     if rux_root_ssh "$host" "$port" "test -s '$hfile'" >/dev/null 2>&1; then
         # A committed scope exists. Until 2026-08-23 this branch said "nothing

@@ -1054,6 +1054,29 @@ else
     bad "27e. a successful remote commit-scope prints its tail" "rc=$rc out=$out"
 fi
 
+# 27f. The RESUME skips the early gate (state already exists), so the grant step
+#     asks for sudo itself: apt fails -> refused before the scope is written.
+rm -rf "$WORK/27"; mkdir -p "$WORK/27"
+out="$( (
+    COLLECTOR_LABEL=colhost; RUX_GRANT_QUIESCE=1
+    rux_root_ssh() {
+        shift 2
+        case "$*" in
+            true) return 0 ;;
+            *"echo SUDO=yes"*) echo APT=yes; return 0 ;;
+            *"apt-get install -y sudo"*) echo "E: Unable to locate package sudo"; return 100 ;;
+            *) echo "$*" >> "$WORK/27/later"; return 0 ;;
+        esac
+    }
+    rux_root_ssh_in() { echo "scope write" >> "$WORK/27/later"; cat >/dev/null; return 0; }
+    rux_grant_remotely pve2 22 rpool/data
+) 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "apt-get install sudo on pve2 failed: E: Unable to locate package sudo" && [ ! -e "$WORK/27/later" ]; then
+    ok "27f. a resume with --grant-quiesce and no sudo: refused by the grant step before any scope is read, written or committed"
+else
+    bad "27f. resume asks for sudo before the scope" "rc=$rc out=$out later=$(cat "$WORK/27/later" 2>/dev/null)"
+fi
+
 # 28. The gate is WIRED where it claims to be: ahead of every line in rux_deploy
 #     that changes something. Asserted against the source because placement is
 #     the whole finding -- the old checks existed and ran too late.
