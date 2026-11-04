@@ -118,6 +118,7 @@ remove_state_file() {
 emergency_disable() {
     local reason="$1"
     if write_state_file "$UPDATE_HOLD_FILE" "$reason"; then
+        sync_hold_marker
         return 0
     fi
     warn "could not write the update hold at $UPDATE_HOLD_FILE -- attempting an emergency circuit breaker instead"
@@ -131,6 +132,45 @@ emergency_disable() {
     fi
     warn "CRITICAL: could not write a hold, could not disable $SELF, could not remove its cron line -- $UPDATE_STATE_DIR needs immediate manual attention or this host will keep retrying hourly"
     return 1
+}
+
+# PUNKT C (owner 2026-11-03: publish to the lab first, release production on consent). The
+# hold above is root's: $UPDATE_STATE_DIR is root-private, so a delegated account's own hourly
+# `git pull` cannot see it and pulled anyway -- root held on one revision, the account on
+# another. This world-readable copy of "held" is what the account's cron line checks
+# (deploy.sh Phase 8e). Derived state, never a second source of truth: every path that
+# writes or removes the hold calls this, and so does every hourly run.
+UPDATE_HOLD_MARKER="${UPDATE_HOLD_MARKER:-/etc/zfs-snapshot-all/update-hold}"
+sync_hold_marker() {
+    if [ -e "$UPDATE_HOLD_FILE" ] || [ -L "$UPDATE_HOLD_FILE" ]; then
+        [ -e "$UPDATE_HOLD_MARKER" ] && return 0
+        mkdir -p "${UPDATE_HOLD_MARKER%/*}" 2>/dev/null
+        if printf 'root updates are HELD (%s) -- delegated accounts do not pull either\n' "$UPDATE_HOLD_FILE" > "$UPDATE_HOLD_MARKER" 2>/dev/null; then
+            chmod 0644 "$UPDATE_HOLD_MARKER" 2>/dev/null || :
+        else
+            warn "could not write $UPDATE_HOLD_MARKER -- the delegated accounts' hourly pull is NOT held"
+            return 1
+        fi
+    elif [ -e "$UPDATE_HOLD_MARKER" ] || [ -L "$UPDATE_HOLD_MARKER" ]; then
+        rm -f "$UPDATE_HOLD_MARKER" 2>/dev/null \
+            || { warn "could not remove $UPDATE_HOLD_MARKER -- the delegated accounts stay held"; return 1; }
+    fi
+    return 0
+}
+
+do_hold_updates() {
+    ensure_update_state_dir || die "$UPDATE_STATE_DIR is not safe to use as update-control state -- see above"
+    [ -L "$UPDATE_HOLD_FILE" ] && die "$UPDATE_HOLD_FILE is a symlink -- refusing to touch it. Resolve manually: ls -la $UPDATE_HOLD_FILE"
+    if [ -e "$UPDATE_HOLD_FILE" ]; then
+        log "updates are already HELD ($(read_state_file "$UPDATE_HOLD_FILE"))"
+    else
+        write_state_file "$UPDATE_HOLD_FILE" "held by hand on $(date '+%Y-%m-%d %H:%M:%S')" \
+            || die "could not write the update hold at $UPDATE_HOLD_FILE"
+        log "automatic updates are now HELD (root and the delegated accounts)"
+    fi
+    sync_hold_marker || return 1
+    log "release with: $SELF --resume-updates"
+    return 0
 }
 
 # PULLING THE CODE IS NOT DEPLOYING IT.
@@ -213,6 +253,7 @@ apply_repo_to_host() {   # <what> <revision-8> -> 0 applied/skipped, 1 not appli
 do_self_update() {
     [ -d "$REPO_DIR/.git" ] || die "no git checkout at $REPO_DIR"
     ensure_update_state_dir || { warn "refusing to update: $UPDATE_STATE_DIR is not safe to use as update-control state"; return 1; }
+    sync_hold_marker
 
     if [ -L "$UPDATE_HOLD_FILE" ]; then
         warn "$UPDATE_HOLD_FILE is a symlink -- treating update-control state as tampered with, refusing to update. Resolve manually: ls -la $UPDATE_HOLD_FILE"
@@ -296,6 +337,7 @@ do_rollback() {
     write_state_file "$UPDATE_HOLD_FILE" \
         "rollback $(printf '%.8s' "$from") -> $(printf '%.8s' "$target") started $(date '+%Y-%m-%d %H:%M:%S')" \
         || die "could not record an update hold at $UPDATE_HOLD_FILE -- refusing to roll back without one. Fix $UPDATE_STATE_DIR and retry."
+    sync_hold_marker
 
     if ! git -C "$REPO_DIR" reset --hard "$target" >/dev/null 2>&1; then
         # F2: this used to discard the re-write's own failure (2>/dev/null,
@@ -374,6 +416,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         --self-update)    do_self_update;    exit $? ;;
         --rollback)       do_rollback;       exit $? ;;
         --resume-updates) do_resume_updates; exit $? ;;
-        *) die "usage: $0 --self-update|--rollback|--resume-updates" ;;
+        --hold-updates)   do_hold_updates;   exit $? ;;
+        *) die "usage: $0 --self-update|--rollback|--resume-updates|--hold-updates" ;;
     esac
 fi

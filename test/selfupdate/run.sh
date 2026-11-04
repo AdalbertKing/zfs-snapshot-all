@@ -45,6 +45,9 @@ deploy_wrapper() {
 }
 
 WORK="$(mktemp -d)"
+# Point c: every call below -- deploy.sh and the deployed update-control.sh alike -- keeps the
+# accounts' copy of the hold inside this test dir, never in the real /etc/zfs-snapshot-all.
+export UPDATE_HOLD_MARKER="$WORK/etc-default/update-hold"
 trap 'rm -rf "$WORK"' EXIT
 PASS=0; FAIL=0; SKIP=0
 ok()   { echo "PASS $1"; PASS=$((PASS+1)); }
@@ -180,7 +183,7 @@ git -c core.autocrlf=false clone -q -b main "$ORIGIN" "$CLONE"
 # executed at all. Refuse to keep score in that state.
 run() {
     local out rc
-    out="$(REPO_DIR="$CLONE" ALERT_SHARED_DIR="$STATE" UPDATE_STATE_DIR="$STATE" \
+    out="$(REPO_DIR="$CLONE" ALERT_SHARED_DIR="$STATE" UPDATE_STATE_DIR="$STATE" UPDATE_HOLD_MARKER="$MARK" \
            bash "$DEPLOY" "$@" 2>&1)"; rc=$?
     if printf '%s' "$out" | grep -q 'run as root'; then
         echo "ABORT: deploy.sh $* refused to run unprivileged -- this suite would score itself on nothing" >&2
@@ -194,6 +197,9 @@ advance()  { ( cd "$seed" && echo "$1" >> file && git add file && git commit -qm
 
 PREV="$STATE/previous-revision"
 HOLD="$STATE/update-hold"
+# Point c (2026-11-04): the world-readable copy of the hold that the delegated accounts'
+# pull line checks. Here inside the test dir -- the real one is /etc/zfs-snapshot-all.
+MARK="$STATE/marker/update-hold"
 
 # --- 1. A == origin/main: the rollback pointer must not be consumed ----------
 A="$(head_of "$CLONE")"
@@ -269,6 +275,20 @@ else
     bad "rollback tells the operator how to resume" "got: $(printf '%s' "$out" | tail -1)"
 fi
 
+if [ -e "$MARK" ]; then
+    ok "point c: rollback writes the accounts' copy of the hold too"
+else
+    bad "point c: rollback writes the accounts' copy of the hold too" "marker missing: $MARK"
+fi
+# An hourly run while held puts back a copy that went missing (a hold from an older revision).
+rm -f "$MARK"
+run --self-update >/dev/null
+if [ -e "$MARK" ]; then
+    ok "point c: an hourly run while held restores a missing copy of the hold"
+else
+    bad "point c: an hourly run while held restores a missing copy of the hold" "marker missing after --self-update"
+fi
+
 # --- 5. while held, the hourly run must NOT undo the rollback ---------------
 # This is the second half of the finding: without a hold, sixty minutes later
 # cron pulls the bad revision straight back and the rollback never happened.
@@ -288,6 +308,29 @@ if [ ! -e "$HOLD" ] && [ "$(head_of "$CLONE")" = "$C_head" ]; then
 else
     bad "resume removes the hold and advances to origin/main" \
         "hold=$([ -e "$HOLD" ] && echo present || echo gone) head=$(head_of "$CLONE") wanted=$C_head"
+fi
+
+if [ ! -e "$MARK" ]; then
+    ok "point c: resume removes the accounts' copy of the hold"
+else
+    bad "point c: resume removes the accounts' copy of the hold" "marker still present"
+fi
+
+# --- 6b. point c: --hold-updates by hand, then --resume-updates ----------------
+# Control first: not held, no copy. Then a hand hold writes both; resume removes both.
+pre="$([ -e "$HOLD" ] || [ -e "$MARK" ] && echo held || echo free)"
+out="$(run --hold-updates)"; hrc=$?
+if [ "$pre" = free ] && [ "$hrc" -eq 0 ] && [ -e "$HOLD" ] && [ -e "$MARK" ] && grep -q 'held by hand' "$HOLD" \
+   && printf '%s' "$out" | grep -q -- '--resume-updates'; then
+    ok "point c: --hold-updates holds root and the accounts, names the way out"
+else
+    bad "point c: --hold-updates holds root and the accounts" "pre=$pre rc=$hrc hold=$([ -e "$HOLD" ] && echo y) mark=$([ -e "$MARK" ] && echo y)" "$out"
+fi
+run --resume-updates >/dev/null
+if [ ! -e "$HOLD" ] && [ ! -e "$MARK" ]; then
+    ok "point c: --resume-updates after a hand hold clears both"
+else
+    bad "point c: --resume-updates after a hand hold clears both" "hold=$([ -e "$HOLD" ] && echo y) mark=$([ -e "$MARK" ] && echo y)"
 fi
 
 # --- 7. cron-line matcher: normalizes every known shape to ONE current line -
