@@ -756,13 +756,20 @@ get_sorted_snapshots() {
     
     local snaps
     if [ -n "$remote_host" ]; then
-        # Same reasoning as snapget.sh's copy of this function: the remote
-        # command ends in a pipe, so ssh returns awk's status and a nonzero rc
-        # here means ssh itself failed, not that the dataset has no snapshots.
-        # Callers array-collect the output and drop the status, so say it here.
-        snaps=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-            "zfs list -H -o name -t snapshot -s creation $depth_option '$dataset' 2>/dev/null | awk -F '@' '{print \$2}'") || {
+        # Callers array-collect the output and drop the status, so a failure is
+        # logged here (same reasoning as snapget.sh's copy of this function).
+        # REV-20261104-186 F5: no awk on the far side -- it used to hand back ITS status,
+        # so a failed `zfs list` there arrived as an empty list. The list comes back raw,
+        # its status is checked here, and the filter runs locally below. A dataset that
+        # genuinely does not exist is still an empty list (asked, not assumed).
+        local _out
+        _out=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            "zfs list -H -o name -t snapshot -s creation $depth_option '$dataset' 2>/dev/null") || {
             local _rc=$?
+            if [ $_rc -ne 255 ]; then
+                dataset_presence "$dataset" "$remote_user" "$remote_host"
+                [ $? -eq 1 ] && return 0
+            fi
             if [ $_rc -eq 255 ]; then
                 log 0 "Cannot reach $remote_user@$remote_host over ssh (exit 255) while listing the snapshots of '$dataset' -- a CONNECTION-level failure (authentication, host key, network or DNS), NOT an empty dataset."
             else
@@ -771,8 +778,20 @@ get_sorted_snapshots() {
             return 1
         }
     else
-        snaps=$(zfs list -H -o name -t snapshot -s creation $depth_option "$dataset" 2>/dev/null | awk -F '@' '{print $2}') || return 1
+        local _out
+        _out=$(zfs list -H -o name -t snapshot -s creation $depth_option "$dataset" 2>/dev/null) || return 1
     fi
+    # The filter runs on a list whose status was already checked -- no pipe, no reliance
+    # on the caller's pipefail. Every line must be a snapshot name.
+    local _l
+    while IFS= read -r _l; do
+        [ -z "$_l" ] && continue
+        case "$_l" in
+            *@*) ;;
+            *) log 0 "The snapshot list of '$dataset' contains a line that is not a snapshot ('$_l') -- treating this as a failure, not as a list."; return 1 ;;
+        esac
+    done <<< "$_out"
+    snaps=$(printf '%s\n' "$_out" | awk -F '@' 'NF > 1 {print $2}')
     echo "$snaps"
 }
 ###############################################################################
@@ -881,29 +900,27 @@ find_recursive_name_collisions() {
         tgt_children=$(remote_list "$remote_user" "$remote_host" \
             "listing the children of target '$tgt_dataset' for the -F collision scan" \
             "zfs list -H -o name -r '$tgt_dataset' 2>/dev/null") || return 1
-        tgt_children=$(printf '%s' "$tgt_children" | grep -v "^${tgt_dataset}$")
     else
-        tgt_children=$(zfs list -H -o name -r "$tgt_dataset" 2>/dev/null | grep -v "^${tgt_dataset}$")
+        tgt_children=$(zfs list -H -o name -r -- "$tgt_dataset" 2>/dev/null) || return 1
     fi
+    collision_scan_pairs "$src_dataset" "$tgt_dataset" "$tgt_children" || return 1
 
-    local tgt_child
-    for tgt_child in $tgt_children; do
-        local child_name="${tgt_child##*/}"
-        local src_child="${src_dataset}/${child_name}"
-
-        # Source is always local in snapsend.sh.
-        local tgt_guid
+    # Source is always local in snapsend.sh.
+    local tgt_child src_child tgt_guid src_guid
+    while IFS=$'\t' read -r tgt_child src_child; do
+        [ -n "$tgt_child" ] || continue
         tgt_guid=$(get_snapshot_guid "$tgt_child" "$base_name" "$remote_user" "$remote_host")
-        if [ -n "$tgt_guid" ]; then
-            local src_guid
-            src_guid=$(get_snapshot_guid "$src_child" "$base_name")
-            if [ -z "$src_guid" ] || [ "$src_guid" != "$tgt_guid" ]; then
-                NAME_COLLISIONS+=("${tgt_child}@${base_name}")
-            fi
+        [ -n "$tgt_guid" ] || continue
+        dataset_presence "$src_child"
+        case $? in
+            0) src_guid=$(get_snapshot_guid "$src_child" "$base_name") ;;
+            1) src_guid="" ;;
+            *) return 1 ;;
+        esac
+        if [ -z "$src_guid" ] || [ "$src_guid" != "$tgt_guid" ]; then
+            NAME_COLLISIONS+=("${tgt_child}@${base_name}")
         fi
-
-        find_recursive_name_collisions "$src_child" "$tgt_child" "$remote_user" "$remote_host" "$base_name"
-    done
+    done <<< "$COLLISION_PAIRS"
 }
 ###############################################################################
 #END 2E
@@ -1383,7 +1400,11 @@ process_dataset() {
         local reconcile_common
         reconcile_common=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host")
         NAME_COLLISIONS=()
-        find_recursive_name_collisions "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host" "$reconcile_common"
+        if ! find_recursive_name_collisions "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host" "$reconcile_common"; then
+            # REV-20261104-186 F4: an incomplete scan proves nothing -- never upgrade on it.
+            log 1 "Reconciling (-F): the collision scan of '$tgt_dataset' could not complete -- NOT upgrading to a full resend; the incremental path stays"
+            NAME_COLLISIONS=()
+        fi
         if [ ${#NAME_COLLISIONS[@]} -gt 0 ]; then
             log 1 "Reconciling (-F): name collision(s) with a mismatched GUID would block the incremental send:"
             printf '%s\n' "${NAME_COLLISIONS[@]}" | sort -u | while IFS= read -r collision; do log 1 "  $collision"; done
@@ -1452,7 +1473,14 @@ process_dataset() {
         fi
 
         if [ -n "$MESSAGE" ]; then
-            src_snaps=($(printf "%s\n" "${src_snaps[@]}" | grep "^$MESSAGE"))
+            # REV-20261104-186 F6: -m is a LITERAL prefix. `grep "^$MESSAGE"` read it as a
+            # regular expression ("daily.2026" also took "dailyX2026..."); a quoted right
+            # side of [[ == ]] is literal, no locale, no option parsing.
+            local _fam=() _s
+            for _s in "${src_snaps[@]}"; do
+                [[ "$_s" == "$MESSAGE"* ]] && _fam+=("$_s")
+            done
+            src_snaps=(${_fam[@]+"${_fam[@]}"})
             if [ ${#src_snaps[@]} -eq 0 ]; then
                 if [ $FLAT_RECURSE -eq 1 ]; then
                     log 1 "No '$MESSAGE*' family on '$src_dataset' -- scaffolding under -R -e, skipped"
@@ -1562,13 +1590,13 @@ process_dataset() {
             log 1 "Full resend activated (-F reconciliation)"
         fi
 
+        # REV-20261104-186 F1: fail-closed -- an unanswered listing stops here, before any destroy.
         local protected_snaps
-        if [ -n "$remote_host" ]; then
-            protected_snaps=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-                "zfs list -t snapshot -H -o name -r '$tgt_dataset' 2>/dev/null" | grep -E '@(__replicate_|__migration__|vzdump)' || true)
-        else
-            protected_snaps=$(zfs list -t snapshot -H -o name -r "$tgt_dataset" 2>/dev/null | grep -E '@(__replicate_|__migration__|vzdump)' || true)
+        if ! list_protected_snaps "$tgt_dataset" "$remote_user" "$remote_host"; then
+            abort_held_snapshot "$snapshot" "$tgt_dataset"
+            return 1
         fi
+        protected_snaps="$PROTECTED_SNAPS"
         if [ -n "$protected_snaps" ]; then
             log 0 "Refusing force full send: $tgt_dataset (or a descendant) holds snapshot(s) reserved by Proxmox VE (replication/migration/vzdump):"
             log 0 "$protected_snaps"
