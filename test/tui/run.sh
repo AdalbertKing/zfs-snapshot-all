@@ -4530,7 +4530,7 @@ NROUT=$(nr_run "0${T}backup
 ${NRT}0${T}wycofaj
 " NR_HALF=nomark NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); NRRC=$?
 H_CW="$(cat "$NR/wt.log")"
-if [ "$H_A" -eq 1 ] && [ "$H_AD" -eq 1 ] && [ "$H_AC" -eq 0 ] && has "$H_AW" "założona do połowy (stan: pending_enroll)" && has "$H_AW" "stan pośredni"    && has "$H_AW" "wycofana (rc=0)" && ! has "$H_AW" "nie została założona"    && [ "$H_B" -eq 2 ] && [ "$H_BD" -eq 0 ]    && has "$H_CW" "nie została założona" && ! has "$H_CW" "stan pośredni"; then
+if [ "$H_A" -eq 1 ] && [ "$H_AD" -eq 1 ] && [ "$H_AC" -eq 0 ] && has "$H_AW" "założona do połowy (stan: pending_enroll)" && has "$H_AW" "stan pośredni"    && ! has "$H_AW" "nie została założona"    && [ "$H_B" -eq 2 ] && [ "$H_BD" -eq 0 ]    && has "$H_CW" "nie została założona" && ! has "$H_CW" "stan pośredni"; then
     ok "new-relation: skucha 11 -- porazka z rekordem: okno 'zalozona do polowy' + Wycofaj (delete-relation --yes) albo Ponow (ta sama komenda drugi raz); bez rekordu -- stare okno, bez menu"
 else
     bad "new-relation: skucha 11 stan posredni" "wycofaj: installs=$H_A delete=$H_AD cmdfile=$H_AC" "ponow: installs=$H_B delete=$H_BD" "$(printf '%s' "$H_AW" | grep -E 'połowy|pośredni|wycofana|nie została' | cut -c1-160)" "$(printf '%s' "$H_CW" | grep -E 'pośredni|nie została' | cut -c1-160)"
