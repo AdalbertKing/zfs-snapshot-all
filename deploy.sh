@@ -356,6 +356,7 @@ REVOKE_QUIESCE_ACCOUNT=""
 SELF_UPDATE=0
 ROLLBACK=0
 RESUME_UPDATES=0
+HOLD_UPDATES=0
 # Where an unpacked package lives while it is being checked. Global so the
 # EXIT trap can still see it; see do_join.
 JOIN_WORKDIR=""
@@ -467,6 +468,7 @@ while [ "$#" -gt 0 ]; do
         --self-update)     SELF_UPDATE=1; shift ;;
         --rollback)        ROLLBACK=1; shift ;;
         --resume-updates)  RESUME_UPDATES=1; shift ;;
+        --hold-updates)    HOLD_UPDATES=1; shift ;;
         --allow-quiesce) ALLOW_QUIESCE=1; shift ;;
         --add-quiesce)   ALLOW_QUIESCE=1; QUIESCE_MERGE=1; shift ;;
         --revoke-quiesce=*) REVOKE_QUIESCE_ACCOUNT="${1#*=}"; shift ;;
@@ -717,6 +719,10 @@ Updating this checkout, and undoing an update:
                           not immediately undo it. Fails loudly when nothing
                           was recorded rather than guessing a target.
   --resume-updates        release that hold, so --self-update runs again.
+  --hold-updates          HOLD automatic updates by hand (e.g. production while a
+                          new release is tried on the lab); --resume-updates
+                          releases it. The hold covers the delegated accounts'
+                          own hourly pull too (/etc/zfs-snapshot-all/update-hold).
 
                           These three also live in update-control.sh, deployed
                           OUTSIDE the checkout for the obvious reason: a
@@ -2465,6 +2471,7 @@ remove_state_file() {
 emergency_disable() {
     local reason="$1"
     if write_state_file "$UPDATE_HOLD_FILE" "$reason"; then
+        sync_hold_marker
         return 0
     fi
     warn "could not write the update hold at $UPDATE_HOLD_FILE -- attempting an emergency circuit breaker instead"
@@ -2474,6 +2481,45 @@ emergency_disable() {
     fi
     warn "CRITICAL: could not write a hold, could not remove the cron line -- $UPDATE_STATE_DIR needs immediate manual attention or this host will keep retrying hourly"
     return 1
+}
+
+# PUNKT C (owner 2026-11-03: publish to the lab first, release production on consent). The
+# hold above is root's: $UPDATE_STATE_DIR is root-private, so a delegated account's own hourly
+# `git pull` cannot see it and pulled anyway -- root held on one revision, the account on
+# another. This world-readable copy of "held" is what the account's cron line checks
+# (deploy.sh Phase 8e). Derived state, never a second source of truth: every path that
+# writes or removes the hold calls this, and so does every hourly run.
+UPDATE_HOLD_MARKER="${UPDATE_HOLD_MARKER:-/etc/zfs-snapshot-all/update-hold}"
+sync_hold_marker() {
+    if [ -e "$UPDATE_HOLD_FILE" ] || [ -L "$UPDATE_HOLD_FILE" ]; then
+        [ -e "$UPDATE_HOLD_MARKER" ] && return 0
+        mkdir -p "${UPDATE_HOLD_MARKER%/*}" 2>/dev/null
+        if printf 'root updates are HELD (%s) -- delegated accounts do not pull either\n' "$UPDATE_HOLD_FILE" > "$UPDATE_HOLD_MARKER" 2>/dev/null; then
+            chmod 0644 "$UPDATE_HOLD_MARKER" 2>/dev/null || :
+        else
+            warn "could not write $UPDATE_HOLD_MARKER -- the delegated accounts' hourly pull is NOT held"
+            return 1
+        fi
+    elif [ -e "$UPDATE_HOLD_MARKER" ] || [ -L "$UPDATE_HOLD_MARKER" ]; then
+        rm -f "$UPDATE_HOLD_MARKER" 2>/dev/null \
+            || { warn "could not remove $UPDATE_HOLD_MARKER -- the delegated accounts stay held"; return 1; }
+    fi
+    return 0
+}
+
+do_hold_updates() {
+    ensure_update_state_dir || die "$UPDATE_STATE_DIR is not safe to use as update-control state -- see above"
+    [ -L "$UPDATE_HOLD_FILE" ] && die "$UPDATE_HOLD_FILE is a symlink -- refusing to touch it. Resolve manually: ls -la $UPDATE_HOLD_FILE"
+    if [ -e "$UPDATE_HOLD_FILE" ]; then
+        log "updates are already HELD ($(read_state_file "$UPDATE_HOLD_FILE"))"
+    else
+        write_state_file "$UPDATE_HOLD_FILE" "held by hand on $(date '+%Y-%m-%d %H:%M:%S')" \
+            || die "could not write the update hold at $UPDATE_HOLD_FILE"
+        log "automatic updates are now HELD (root and the delegated accounts)"
+    fi
+    sync_hold_marker || return 1
+    log "release with: bash $REPO_DIR/deploy.sh --resume-updates"
+    return 0
 }
 
 # The ultimate fallback if this script itself is what a bad update broke:
@@ -2542,6 +2588,7 @@ apply_repo_to_host() {   # <what> <revision-8> -> 0 applied/skipped, 1 not appli
 do_self_update() {
     [ -d "$REPO_DIR/.git" ] || die "no git checkout at $REPO_DIR"
     ensure_update_state_dir || { warn "refusing to update: $UPDATE_STATE_DIR is not safe to use as update-control state"; return 1; }
+    sync_hold_marker
 
     if [ -L "$UPDATE_HOLD_FILE" ]; then
         warn "$UPDATE_HOLD_FILE is a symlink -- treating update-control state as tampered with, refusing to update. Resolve manually: ls -la $UPDATE_HOLD_FILE"
@@ -2634,6 +2681,7 @@ do_rollback() {
     # attempt. This also satisfies "never report success without a hold": if
     # this write fails, rollback aborts before touching the checkout at all.
     write_state_file "$UPDATE_HOLD_FILE"         "rollback $(printf '%.8s' "$from") -> $(printf '%.8s' "$target") started $(date '+%Y-%m-%d %H:%M:%S')"         || die "could not record an update hold at $UPDATE_HOLD_FILE -- refusing to roll back without one. Fix $UPDATE_STATE_DIR and retry."
+    sync_hold_marker
 
     if ! git -C "$REPO_DIR" reset --hard "$target" >/dev/null 2>&1; then
         emergency_disable "rollback to $(printf '%.8s' "$target") FAILED at $(date '+%Y-%m-%d %H:%M:%S') -- checkout may be inconsistent, held for manual investigation" \
@@ -2727,6 +2775,7 @@ exec_deployed_update_control() {
 if [ "$SELF_UPDATE" -eq 1 ]; then exec_deployed_update_control --self-update; do_self_update; exit $?; fi
 if [ "$ROLLBACK" -eq 1 ]; then exec_deployed_update_control --rollback; do_rollback; exit $?; fi
 if [ "$RESUME_UPDATES" -eq 1 ]; then exec_deployed_update_control --resume-updates; do_resume_updates; exit $?; fi
+if [ "$HOLD_UPDATES" -eq 1 ]; then exec_deployed_update_control --hold-updates; do_hold_updates; exit $?; fi
 
 # ==============================================================================
 # RESTORE GRANT -- the fact on THIS machine that lets a collector overwrite it
@@ -7762,6 +7811,8 @@ elif [ "$CHECK_ONLY" -eq 1 ]; then
         [ -x "/home/$BACKUP_USER/notify-fail.sh" ] || warn "  /home/$BACKUP_USER/notify-fail.sh missing -- that account cannot report findings"
         [ -r "/home/$BACKUP_USER/alert-env.sh" ] || warn "  /home/$BACKUP_USER/alert-env.sh missing -- that account's notify scripts refuse to start"
         [ -f "/etc/logrotate.d/zfs-snapshot-all-$BACKUP_USER" ] || warn "  no logrotate stanza for $BACKUP_USER"
+        # Point c: a pull line from before 2026-11-04 does not see root's update hold.
+        crontab -u "$BACKUP_USER" -l 2>/dev/null | grep -F "/home/$BACKUP_USER/zfs-snapshot-all && git pull" | grep -qF "$UPDATE_HOLD_MARKER"             || warn "  $BACKUP_USER's auto-pull line does not check $UPDATE_HOLD_MARKER -- a held host would still pull this account (re-run without --check-only)"
     else
         warn "  account $BACKUP_USER does not exist -- re-run without --check-only to create it"
     fi
@@ -7865,19 +7916,27 @@ else
     # ------------------------------------------------------------------------------
     log "Phase 8e: auto-pull cron line (this account's own crontab)"
     # ------------------------------------------------------------------------------
-    PULL_LINE="15 * * * * cd $ACCOUNT_REPO_DIR && git pull --ff-only origin main >>$HOMEDIR/git-pull.log 2>&1"
-    # Into the account's own host block, and adopted rather than rewritten: this
-    # line was loose here too, and the account's crontab is the one that also
-    # carries a gen-cron managed block -- two neighbours that must never be able
-    # to overwrite one another.
-    if cron_block_adopt_line "$USERNAME" "$CRON_HOST_BLOCK" \
+    # The copy the line checks is written HERE too, not only by the next hourly run: a
+    # host held before this revision would otherwise leave its accounts pulling until :15.
+    sync_hold_marker || :
+    # Point c (2026-11-04): the line checks the world-readable copy of root's update hold,
+    # so a held host does not pull the account's checkout either. Rewritten, not adopted --
+    # the old text had no check -- but the SCHEDULE of an existing line is kept: that is
+    # what adoption promised an operator who tuned it by hand.
+    _acct_sched="$(crontab -u "$USERNAME" -l 2>/dev/null | grep -F "$ACCOUNT_REPO_DIR && git pull" | head -1 | awk '{print $1, $2, $3, $4, $5}')"
+    case "$_acct_sched" in ''|@*|*'['*) _acct_sched="15 * * * *" ;; esac
+    PULL_LINE="$_acct_sched [ -e $UPDATE_HOLD_MARKER ] || { cd $ACCOUNT_REPO_DIR && git pull --ff-only origin main >>$HOMEDIR/git-pull.log 2>&1; }"
+    # Into the account's own host block: this line was loose here too, and the account's
+    # crontab is the one that also carries a gen-cron managed block -- two neighbours that
+    # must never be able to overwrite one another.
+    if cron_block_ensure_line "$USERNAME" "$CRON_HOST_BLOCK" \
            "$ACCOUNT_REPO_DIR && git pull" "$PULL_LINE" "$CRON_HOST_TAIL"; then
         if [ "${CRON_CHANGED:-0}" -eq 0 ]; then
             log "auto-pull cron line already in $USERNAME's '$CRON_HOST_BLOCK' block, leaving it alone"
         elif [ "${CRON_ADOPTED:-0}" -gt 0 ]; then
             log "moved $USERNAME's auto-pull cron line into the '$CRON_HOST_BLOCK' block (schedule unchanged)"
         else
-            log "added auto-pull cron line to $USERNAME's crontab"
+            log "wrote $USERNAME's auto-pull cron line (it skips the pull while updates are held)"
         fi
     else
         warn "could not install auto-pull cron line for $USERNAME: $CRON_ERR -- add it manually"

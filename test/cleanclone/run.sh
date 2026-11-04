@@ -15,6 +15,9 @@ ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "FAIL $1"; shift; local l; for l in "$@"; do echo "     $l"; done; FAIL=$((FAIL+1)); }
 
 WORK="$(mktemp -d)"
+# Point c (2026-11-04): update-control mirrors its hold for the delegated accounts -- keep that
+# copy inside this test dir, never in the real /etc/zfs-snapshot-all of the host running the suite.
+export UPDATE_HOLD_MARKER="$WORK/etc-default/update-hold"
 BGPIDS=()
 cleanup() {
     local p
