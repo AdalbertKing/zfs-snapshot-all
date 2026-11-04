@@ -218,6 +218,13 @@ if [ -n "$_ZP" ]; then
         [ "$_sh" = "ONLINE" ] || STATE_BAD="$STATE_BAD pula:$_sn=$_sh"
     done <<< "$_ZP"
 fi
+# U157/U160 (owner 2026-11-04): the mail is a table of RELATIONS, with the full statistics
+# as an HTML attachment. The figures below are still gathered once, by this script; each
+# job row is also written as a record into DG_RD for relations_render. No directory -> the
+# job-table mail, as before.
+DG_RD=$(mktemp -d 2>/dev/null) || DG_RD=""
+[ -n "$DG_RD" ] && trap 'rm -rf "$DG_RD"' EXIT
+[ -n "$DG_RD" ] && printf '%s\n' "$_ZP" > "$DG_RD/pools.tsv"
 
 # WHICH cron.log. Jobs run as root on some hosts and as a delegated account on
 # others, and each writes its own. Reading only root's -- which is what the
@@ -807,6 +814,11 @@ $_k"
             _st="$_lw  (juz nie w cronie)"
         elif [ "$_lrc" = "0" ]; then
             _st="$_lw"
+        elif [ "$_lrc" = "8" ]; then
+            # U159 (pve11 2026-11-04): rc=8 is a run WITHOUT quiescing the guest -- the
+            # snapshot exists, crash-consistent (snapsend/snapget "exit 8"). A warning,
+            # not a failed run: it was read as "PADL" and counted as a fault.
+            _st="$_lw  (bez zamrozenia)"
         else
             _st="$_lw  (PADL rc=$_lrc)"
             STATE_BAD="$STATE_BAD zadanie:$_full"
@@ -897,6 +909,7 @@ $_k"
                 # noise the indentation was introduced to remove; the names
                 # still have to appear, because dropping the parenthetical took
                 # away the only other place this job states its scope.
+                [ -n "$DG_RD" ] && printf 'D\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$_k" "$_s" "$_dn" "$_dv" "$_dr" "$_dd" "$_da" "$_dm" >> "$DG_RD/jobs.tsv"
                 if [ "$_dv" = "-" ] && [ -z "$_dt" ]; then
                     _DSBLOCK="$_DSBLOCK$(printf '      %s' "$_s")
 "
@@ -932,6 +945,10 @@ $_k"
         STATE_BODY="$STATE_BODY$(printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s' "$_disp" "$_st" "$_n" "$_f" "$_vol" "$_rt" "$_dlast" "$_avg"s "$_mx"s)
 "
         STATE_BODY="$STATE_BODY$_DSBLOCK"
+        # U160: the same row as a record for the relations mail (relations_render).
+        case "$nl$SEND_LABELS$nl" in *"$nl$_k$nl"*) _snd=1 ;; *) _snd=0 ;; esac
+        [ -n "$DG_RD" ] && printf 'J\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$_k" "$_live" "$_n" "$_f" "$_lw" "$_lrc" "${_vb:-0}" "$_vol" "$_rt" "$_dlast" "$_avg" "$_mx" "$_tg" "$_snd" >> "$DG_RD/jobs.tsv"
     done <<< "$RUN_ROWS"
 fi
 
@@ -942,6 +959,7 @@ if [ -n "$LIVE_LABELS" ]; then
         [ -n "$_lk" ] || continue
         case "$nl$SEEN_LABELS$nl" in *"$nl$_lk$nl"*) continue ;; esac
         _disp=$(printf '%s' "${_lk#profile__*__}" | tr '+' ',')
+        [ -n "$DG_RD" ] && printf 'S\t%s\n' "$_lk" >> "$DG_RD/jobs.tsv"
         [ ${#_disp} -gt 38 ] && _disp="${_disp:0:35}..."
         STATE_BODY="$STATE_BODY$(printf '  %-38s %-17s' "$_disp" "brak przebiegu w oknie")
 "
@@ -955,7 +973,11 @@ SUBJ="[ZFS] $HOST $TODAY STAN: $VERDICT -- $N_ALERT alert / $N_WARN warn"
 # measuring something, which is the one thing this mail did not do.
 [ "$QUIET" = "1" ] && SUBJ="[ZFS] $HOST $TODAY -- cisza, kanal sprawny (raport okresowy)"
 
-if {
+# The job-table mail (the layout before U160). Kept whole: it is what goes out when the
+# relations mail cannot be built (no python3, no temp dir, a renderer error) -- this mail
+# is the host's proof that alerting works, so it must never fail to go out over a layout --
+# and on ZFS_DIGEST_LAYOUT=jobs.
+jobs_body() {
     # THE PERIOD THE EVENTS COVER, not the moment this mail is sent. `Doba:
     # $TODAY` was the send date, and since this runs at 07:00 over a queue
     # filled the day before, it stamped yesterday's events with today's date.
@@ -1070,7 +1092,417 @@ if {
         printf '\nTen list jest dowodem, ze droga alertu na tym hoscie dziala.\n'
         printf 'Jesli kolejny nie przyjdzie -- to jest alarm.\nKadencja: ZFS_DIGEST_QUIET=%s w /etc/zfs-alert.conf (tam tez ZFS_DIGEST_DAYS -- okno tabeli)\n' "$QUIET_WHEN"
     fi
-} | mail -s "$SUBJ" "${ZFS_ALERT_EMAIL:-root}"; then
+}
+
+# U157/U159/U160 (owner 2026-11-04): the relations mail. Inputs: the records in DG_RD
+# (jobs.tsv, pools.tsv, skip.tsv), the claimed queue, and -- when zfs-backup is there --
+# status --json (relation kind) and monitor --json (the current verdict, as F3 shows it).
+# Outputs in DG_RD: mail.eml (MIME, text + HTML attachment), subject.ascii, body.ascii.
+digest_zb() {
+    local z="${ZFS_DIGEST_ZB:-}"
+    [ -n "$z" ] || z=$(command -v zfs-backup 2>/dev/null)
+    [ -n "$z" ] || { [ -x /usr/local/bin/zfs-backup ] && z=/usr/local/bin/zfs-backup; }
+    [ -n "$z" ] && [ "$z" != none ] && printf '%s' "$z"
+}
+relations_render() {
+    local zb
+    zb=$(digest_zb)
+    if [ -n "$zb" ]; then
+        # The exit status is not read: monitor --json exits with the worst verdict (2 =
+        # CRITICAL) and still prints the whole document; a broken one fails to parse and
+        # the renderer goes on without it. --foreground: without it the verb, run in a
+        # background process group, printed nothing (measured on pve11).
+        timeout --foreground 120 "$zb" status --json > "$DG_RD/status.json" 2>/dev/null
+        timeout --foreground 300 "$zb" monitor --json > "$DG_RD/monitor.json" 2>/dev/null
+    fi
+    printf '%s\n' "$SKIP_ROWS" > "$DG_RD/skip.tsv"
+    DG_HOST="$HOST" DG_DAYS="$DIGEST_DAYS" DG_QUEUE="$PROCESSING" DG_QUIET="${QUIET:-0}" \
+    DG_QUIET_WHEN="$QUIET_WHEN" DG_TO="${ZFS_ALERT_EMAIL:-root}" DG_FROM="$(id -un 2>/dev/null || echo root)@$HOST" \
+    DG_LOGS="${CRON_LOGS# }" DG_WINDOW="${RUN_WINDOW:-}" DG_RD="$DG_RD" python3 - <<'PYEOF'
+import os, re, json, html, time
+from email.message import EmailMessage
+from email.utils import formatdate
+
+E = os.environ
+RD = E["DG_RD"]
+HOST = E.get("DG_HOST", "?")
+SHORT = HOST.split(".")[0]
+DAYS = int(E.get("DG_DAYS") or 7)
+NOW = time.localtime()
+
+def rd(name):
+    try:
+        with open(os.path.join(RD, name), encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+def js(name):
+    try:
+        return json.loads(rd(name) or "null")
+    except ValueError:
+        return None
+
+# --- words: the GUI's (tui/zfs-tui.py VERDICTS, rel_type), never the cron label's ---
+TIER_F = {"hourly": "godzinowa", "daily": "dobowa", "weekly": "tygodniowa",
+          "monthly": u"miesięczna", "yearly": "roczna", "annual": "roczna"}
+TIER_M = {"hourly": "godzinowy", "daily": "dobowy", "weekly": "tygodniowy",
+          "monthly": u"miesięczny", "yearly": "roczny", "annual": "roczny"}
+REL_RE = re.compile(r"^(?:\S+ )?profile__relacja-(.+?)__(\S+) (.+?)(?: \((.*)\))?$")
+ANY_RE = re.compile(r"^(?:\S+ )?(?:profile__.+?__)?(\S+) (.+?)(?: \((.*)\))?$")
+
+def tier_of(t):
+    base = (t or "").split("_")[-1]
+    side = u" (źródło)" if re.match(r"^(l?src)_", t or "") else ""
+    return base, side
+
+def parse_label(k):
+    """-> relation name (None for a job of no relation), task words, tier base."""
+    k = re.sub(r" -- .*$", "", k)
+    m = REL_RE.match(k)
+    if m:
+        rel, tier, word, scope = m.group(1), m.group(2), m.group(3), m.group(4)
+    else:
+        m = ANY_RE.match(k)
+        if not m:
+            return None, k, "", k
+        rel, tier, word, scope = None, m.group(1), m.group(2), m.group(3)
+    base, side = tier_of(tier)
+    f, mm = TIER_F.get(base, base), TIER_M.get(base, base)
+    # A snapshot is always made on the source, so only the prune says which side it cleans.
+    if word == "snapshot":
+        task = "migawka " + f
+    elif word == "backup":
+        task = "kopia " + f
+    elif word == "prune":
+        task = "czyszczenie, szczebel " + mm + side
+    elif word in ("stale", "getting stale", "monitor BROKEN"):
+        task = "monitor, szczebel " + mm
+    else:
+        task = tier + " " + word
+    return rel, task, base, (scope or "").replace("+", ", ")
+
+def kind_of(r):
+    mode = r.get("mode") or ""
+    if mode == "local":
+        k = "kopia lokalna" if (r.get("client_target") or r.get("landing")) else "migawki lokalne"
+    else:
+        k = {"sync": "lustro", "snaponly": "migawki zdalne"}.get(mode, mode or "backup")
+    if str(r.get("passive") or "").lower() in ("1", "yes", "true"):
+        k += ", pasywna"
+    return k
+
+def when(s):
+    m = re.search(r"(\d{4})-(\d\d)-(\d\d)[ T](\d\d):(\d\d)", s or "")
+    return "%s.%s %s:%s" % (m.group(3), m.group(2), m.group(4), m.group(5)) if m else (s or "-")
+
+def human(b):
+    for u, d in (("T", 1 << 40), ("G", 1 << 30), ("M", 1 << 20), ("K", 1 << 10)):
+        if b >= d:
+            return "%.1f%s" % (b / float(d), u)
+    return "%dB" % b
+
+def cls(j):
+    if j["rc"] not in ("0", "8", ""):
+        return "err"
+    return "warn" if j["rc"] == "8" or j["f"] else ""
+
+def plural(n, one, few, many):
+    if n == 1:
+        return one
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return few
+    return many
+
+# --- relations ---
+rels = {}
+def rel(name):
+    return rels.setdefault(name, {"name": name, "kind": "-", "jobs": [], "mons": [], "idle": []})
+
+for r in ((js("status.json") or {}).get("relations") or []):
+    if r.get("state") in ("removed", "deleted"):
+        continue
+    x = rel(r.get("name"))
+    x["kind"] = kind_of(r)
+    if r.get("paused_local") or r.get("disabled"):
+        x["paused"] = True
+
+jobs = {}
+for ln in rd("jobs.tsv").splitlines():
+    f = ln.split("\t")
+    if f[0] == "J" and len(f) >= 15:
+        if f[2] != "1":
+            continue    # not in cron any more: a deleted relation is not shown (U160 point 3)
+        relname, task, base, scope = parse_label(f[1])
+        j = {"k": f[1], "n": int(f[3] or 0), "f": int(f[4] or 0), "lw": f[5], "rc": f[6],
+             "vb": int(f[7]) if f[7].isdigit() else 0, "vol": f[8], "rate": f[9], "dlast": f[10],
+             "avg": f[11], "max": f[12], "tg": f[13], "send": f[14] == "1", "task": task,
+             "tier": base, "scope": scope, "ds": [], "err": ""}
+        jobs[f[1]] = j
+        rel(relname or scope or task)["jobs"].append(j)
+    elif f[0] == "D" and len(f) >= 9 and f[1] in jobs:
+        jobs[f[1]]["ds"].append(f[2:9])
+    elif f[0] == "S" and len(f) >= 2:
+        relname, task, base, scope = parse_label(f[1])
+        rel(relname or scope or task)["idle"].append(task + (" (" + scope + ")" if scope and relname else ""))
+
+# A relation with no copy has one side only: "(źródło)" on its prune says nothing there.
+for x in rels.values():
+    if not any(j["send"] and j["tg"] for j in x["jobs"]):
+        for j in x["jobs"]:
+            j["task"] = j["task"].replace(u" (źródło)", "")
+TASK_ORDER = ("migawka", "kopia", "czyszczenie", "monitor")
+def task_key(j):
+    return (cls(j) != "err", [i for i, w in enumerate(TASK_ORDER) if j["task"].startswith(w)][:1] or [9], j["task"])
+
+RANK = {"OK": 0, "CZEKA": 1, "WAITING": 1, "WARNING": 3, "UNKNOWN": 4, "CRITICAL": 5}
+for m in ((js("monitor.json") or {}).get("monitors") or []):
+    if m.get("label"):
+        rel(m["label"])["mons"].append(m)
+
+# The last error line of a failed job: the detail the job queued (daily alert mode).
+events = []
+try:
+    with open(E.get("DG_QUEUE", ""), encoding="utf-8", errors="replace") as fq:
+        qlines = fq.read().splitlines()
+except OSError:
+    qlines = []
+for ln in qlines:
+    f = ln.split("\t", 3)
+    if len(f) < 3:
+        continue
+    det = [x.strip() for x in (f[3] if len(f) > 3 else "").split("\x01") if x.strip()]
+    events.append((f[0], f[1], f[2], det))
+    key = re.sub(r"^\S+ (?=profile__)", "", f[2])
+    if key in jobs and det:
+        jobs[key]["err"] = det[-1]
+
+# --- verdict per relation, in the GUI's words ---
+def mon_tier(m):
+    return (m.get("pattern") or "").rstrip("_").split("_")[-1]
+
+def first_line(s, key):
+    for l in (s or "").splitlines():
+        if l.strip().startswith(key):
+            return l.strip()
+    return ((s or "").strip().splitlines() or [""])[0]
+
+todo = []
+for x in rels.values():
+    live = x["jobs"]
+    bad = [j for j in live if j["rc"] not in ("0", "8", "")]
+    deg = [j for j in live if j["rc"] == "8"]
+    mons = sorted(x["mons"], key=lambda m: -RANK.get(m.get("verdict"), 2))
+    worst = mons[0] if mons else None
+    wv = worst.get("verdict") if worst else None
+    okj = [j for j in live if j["rc"] in ("0", "8") and not j["task"].startswith(("czyszczenie", "monitor"))]
+    x["newest"] = max((j["lw"] for j in okj), default="")
+    if not x["newest"]:
+        # No run of the window succeeded: the newest snapshot the monitor saw, if any.
+        seen = [re.search(r"newest=\S*?(\d{4}-\d\d-\d\d)_(\d\d)-(\d\d)", m.get("reason") or "") for m in mons]
+        x["newest"] = max(("%s %s:%s" % g.groups() for g in seen if g), default="")
+    x["runs"] = sum(j["n"] for j in live)
+    x["fails"] = sum(j["f"] for j in live)
+    if bad:
+        j = bad[0]
+        x["rank"], x["state"] = 9, u"błąd biegu: " + j["task"]
+        todo.append((9, x["name"], u"%s nie powiodła się (%s, rc=%s)" % (j["task"], when(j["lw"]), j["rc"]),
+                     [j["err"]] if j["err"] else [], u"sprawdź: zfs-backup gui -> F2 (przebiegi)"))
+    elif wv == "CRITICAL":
+        r = first_line(worst.get("reason"), "CRITICAL")
+        a = re.search(r"age=(\S+)", r)
+        x["rank"], x["state"] = 8, "stare: " + TIER_F.get(mon_tier(worst), mon_tier(worst))
+        todo.append((8, x["name"], u"najnowsza %s sprzed %s (alarm po %s)" % (
+                     TIER_F.get(mon_tier(worst), mon_tier(worst)), a.group(1) if a else "?", worst.get("crit") or "?"),
+                     [r], u"sprawdź: zfs-backup gui -> F3"))
+    elif wv == "UNKNOWN":
+        x["rank"], x["state"] = 7, "nie odpowiada"
+        todo.append((7, x["name"], "monitor nie odpowiada", [first_line(worst.get("reason"), "")], ""))
+    elif deg:
+        j = deg[0]
+        x["rank"], x["state"] = 6, u"bez zamrożenia: " + j["task"]
+        todo.append((6, x["name"], u"%s bez zamrożenia gościa (%s, rc=8)" % (j["task"], when(j["lw"])),
+                     [u"migawka jest, ale spójna jak po nagłym wyłączeniu gościa"],
+                     u"sprawdź: qemu-guest-agent w gościu i prawo konta do zamrażania"))
+    elif wv == "WARNING":
+        x["rank"], x["state"] = 5, u"spóźnione: " + TIER_F.get(mon_tier(worst), mon_tier(worst))
+    elif x.get("paused"):
+        x["rank"], x["state"] = 2, "wstrzymana"
+    elif wv in ("CZEKA", "WAITING") or (not live and not mons):
+        x["rank"], x["state"] = 1, "czeka na pierwszy termin"
+    else:
+        x["rank"], x["state"] = 0, "aktualne"
+
+pools = []
+for ln in rd("pools.tsv").splitlines():
+    f = ln.split()
+    if len(f) >= 3:
+        pools.append(f[:3])
+        cap = int(re.sub(r"\D", "", f[2]) or 0)
+        if f[1] != "ONLINE" or cap >= 80:
+            todo.append((10, "pula " + f[0], u"%s, zajęte %s" % (f[1], f[2]), [],
+                         u"sprawdź: zpool status %s" % f[0]))
+todo.sort(key=lambda t: (-t[0], t[1]))
+
+order = sorted(rels.values(), key=lambda x: (-x["rank"], x["name"]))
+N = len(order)
+K = sum(1 for x in order if x["rank"] >= 5)
+pool_bad = [p for p in pools if p[1] != "ONLINE" or int(re.sub(r"\D", "", p[2]) or 0) >= 80]
+day = time.strftime("%d.%m", NOW)
+if K == 0 and not pool_bad:
+    subj = u"[ZFS] %s %s: OK, %d %s" % (SHORT, day, N, plural(N, "relacja", "relacje", "relacji"))
+else:
+    parts = []
+    if K:
+        parts.append(u"%d z %d relacji wymaga uwagi" % (K, N))
+    for p in pool_bad:
+        parts.append("pula %s %s %s" % (p[0], p[1], p[2]))
+    subj = u"[ZFS] %s %s: %s" % (SHORT, day, ", ".join(parts))
+if E.get("DG_QUIET") == "1":
+    subj += u" (raport okresowy)"
+
+# --- text body, 78 columns ---
+out = []
+out.append(u"%s  %s   pule: %s" % (SHORT, time.strftime("%Y-%m-%d %H:%M", NOW),
+           "   ".join("%s %s %s" % tuple(p) for p in pools) or "brak"))
+out.append("")
+w = min(max([len(x["name"]) for x in order] + [7]), 30)
+def cut(s, n):
+    return s if len(s) <= n else s[:n - 3] + "..."
+out.append("%-*s  %-16s  %-11s  %s" % (w, "RELACJA", "RODZAJ", "NAJNOWSZA", "STAN"))
+out.append("%s  %s  %s  %s" % ("-" * w, "-" * 16, "-" * 11, "-" * max(4, 74 - w - 31)))
+for x in order:
+    out.append(u"%-*s  %-16s  %-11s  %s" % (w, cut(x["name"], w), cut(x["kind"], 16),
+               when(x["newest"]) if x["newest"] else "-", x["state"]))
+if not order:
+    out.append(u"(brak relacji i zadań na tym hoście)")
+if todo:
+    out.append("")
+    out.append("DO ZROBIENIA")
+    for i, (_, who, what, lines, hint) in enumerate(todo, 1):
+        out.append(u"%d. %s -- %s" % (i, who, what))
+        for l in lines:
+            out.append("   " + cut(l, 75))
+        if hint:
+            out.append("   " + hint)
+runs = sum(x["runs"] for x in order)
+fails = sum(x["fails"] for x in order)
+frel = sum(1 for x in order if x["fails"])
+vol = sum(j["vb"] for x in order for j in x["jobs"] if j["send"] and j["tg"])
+span = u"Tydzień" if DAYS == 7 else u"Ostatnie %d dni" % DAYS
+out.append("")
+out.append(u"%s: %d %s, %d %s%s, dopisane %s." % (
+    span, runs, plural(runs, "bieg", "biegi", u"biegów"), fails, plural(fails, u"błąd", u"błędy", u"błędów"),
+    (" (%d %s)" % (frel, plural(frel, "relacja", "relacje", "relacji"))) if frel else "", human(vol)))
+fname = "statystyka-%s-%s.html" % (SHORT, time.strftime("%Y-%m-%d", NOW))
+out.append(u"Pełna statystyka: załącznik %s." % fname)
+if E.get("DG_QUIET") == "1":
+    out.append("")
+    out.append(u"Ten list jest dowodem, że droga alertu na tym hoście działa.")
+    out.append(u"Jeśli kolejny nie przyjdzie -- to jest alarm.")
+    out.append(u"Kadencja: ZFS_DIGEST_QUIET=%s w /etc/zfs-alert.conf." % E.get("DG_QUIET_WHEN", ""))
+body = "\n".join(out) + "\n"
+
+# --- the attachment: dark, monospace, one section per relation (palette in C) ---
+C = {"bg": "#101418", "fg": "#d8dee4", "dim": "#8b949e", "line": "#3a4450", "head": "#1c232b",
+     "err": "#ff6b6b", "errbg": "#3a1a1a", "warn": "#f2c14e", "warnbg": "#332a10", "acc": "#5fb3d9"}
+h = html.escape
+rows = []
+for x in order:
+    rows.append(u'<h2>&#9656; %s <span class="dim">(%s)</span><span class="sum">%d %s, %d %s</span></h2>' % (
+        h(x["name"]), h(x["kind"]), x["runs"], plural(x["runs"], "bieg", "biegi", u"biegów"),
+        x["fails"], plural(x["fails"], u"błąd", u"błędy", u"błędów")))
+    rows.append(u"<p class='st'>stan: %s</p>" % h(x["state"]))
+    if x["jobs"]:
+        rows.append(u"<table><tr><th>zadanie</th><th>ostatni bieg</th><th>biegów</th><th>błędy</th>"
+                    u"<th>dopisane</th><th>transfer</th><th>czas ost.</th><th>śr.</th><th>max</th><th>ostatni błąd</th></tr>")
+        for j in sorted(x["jobs"], key=task_key):
+            copy = j["send"] and bool(j["tg"])
+            rows.append(u"<tr class='%s'><td>%s%s</td><td>%s</td><td>%d</td><td>%d</td><td>%s</td><td>%s</td>"
+                        u"<td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>" % (
+                cls(j), h(j["task"]), (" <span class='dim'>(%s)</span>" % h(j["scope"])) if j["scope"] else "",
+                h(when(j["lw"])) + ("" if j["rc"] in ("0", "") else " rc=" + h(j["rc"])), j["n"], j["f"],
+                h(j["vol"]) if copy else "-", h(j["rate"]) if copy else "-", h(j["dlast"]),
+                h(j["avg"]) + "s", h(j["max"]) + "s", h(j["err"]) if cls(j) == "err" else ""))
+            if copy:
+                for d in j["ds"]:
+                    rows.append(u"<tr class='ds'><td>&nbsp;&nbsp;%s</td><td></td><td>%s</td><td></td><td>%s</td>"
+                                u"<td>%s</td><td>%s</td><td>%s</td><td>%s</td><td></td></tr>" % tuple(h(v) for v in (d[0], d[1], d[2], d[3], d[4], d[5], d[6])))
+        rows.append("</table>")
+    if x["idle"]:
+        rows.append(u"<p class='warn'>bez biegu w oknie: %s</p>" % h(", ".join(x["idle"])))
+if events:
+    rows.append(u"<h2>Zdarzenia z okresu</h2><table><tr><th>kiedy</th><th>rodzaj</th><th>zadanie</th><th>ostatnia linia</th></tr>")
+    for ep, sev, job, det in events:
+        try:
+            t = time.strftime("%d.%m %H:%M", time.localtime(int(ep)))
+        except ValueError:
+            t = ep
+        relname, task, base, scope = parse_label(job)
+        rows.append(u"<tr class='%s'><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>" % (
+            "err" if sev == "ALERT" else "warn", h(t), "alarm" if sev == "ALERT" else u"ostrzeżenie",
+            h((relname + ": " if relname else "") + task), h(det[-1] if det else "")))
+    rows.append("</table>")
+skips = [l.split("\t") for l in rd("skip.tsv").splitlines() if l.strip()]
+if skips:
+    rows.append(u"<h2>Pominięte przez blokadę</h2><p class='dim'>inne zadanie trzymało ten sam dataset; "
+                u"taki bieg kończy się rc=0</p><table>")
+    for s in skips:
+        rows.append(u"<tr><td>%s</td><td>%s</td></tr>" % (h(when(s[0])), h(s[1] if len(s) > 1 else "")))
+    rows.append("</table>")
+page = u"""<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>%(t)s</title><style>
+body{background:%(bg)s;color:%(fg)s;font:13px/1.45 Consolas,'DejaVu Sans Mono',monospace;margin:16px}
+h1{font-size:15px;border:1px solid %(line)s;background:%(head)s;padding:6px 10px;margin:0 0 12px}
+h2{font-size:14px;color:%(acc)s;margin:18px 0 4px}.sum{float:right;color:%(dim)s;font-weight:normal}
+.dim{color:%(dim)s}.st{margin:0 0 6px;color:%(dim)s}
+table{border-collapse:collapse;width:100%%;margin-bottom:6px}
+th,td{border:1px solid %(line)s;padding:2px 8px;text-align:left;white-space:nowrap}
+th{background:%(head)s;color:%(dim)s;font-weight:normal}td+td{text-align:right}td:last-child{text-align:left;white-space:normal}
+tr.err td{color:%(err)s;background:%(errbg)s}tr.warn td,p.warn{color:%(warn)s}tr.warn td{background:%(warnbg)s}
+tr.ds td{color:%(dim)s}
+</style></head><body><h1>%(t)s<span class="sum">pule: %(p)s</span></h1>%(r)s
+<p class="dim">okno: %(win)s (%(d)d dni); logi: %(logs)s</p></body></html>""" % dict(
+    C, t=h(u"%s -- statystyka biegów" % SHORT), p=h("   ".join("%s %s %s" % tuple(p) for p in pools)),
+    r="\n".join(rows), win=h(E.get("DG_WINDOW") or "-"), d=DAYS, logs=h(E.get("DG_LOGS") or "-"))
+
+msg = EmailMessage()
+msg["Subject"] = subj
+msg["From"] = "zfs-backup %s <%s>" % (SHORT, E.get("DG_FROM", "root"))
+msg["To"] = E.get("DG_TO", "root")
+msg["Date"] = formatdate(localtime=True)
+msg.set_content(body)
+msg.add_attachment(page, subtype="html", charset="utf-8", filename=fname)
+with open(os.path.join(RD, "mail.eml"), "wb") as f:
+    f.write(msg.as_bytes())
+
+# ASCII copies for "mail -s" when there is no sendmail (bsd-mailx sends what it is given).
+FOLD = dict(zip(u"ąćęłńóśźżĄĆĘŁŃÓŚŹŻ", "acelnoszzACELNOSZZ"))
+def fold(s):
+    return "".join(FOLD.get(c, c) for c in s).encode("ascii", "replace").decode("ascii")
+with open(os.path.join(RD, "subject.ascii"), "w") as f:
+    f.write(fold(subj))
+with open(os.path.join(RD, "body.ascii"), "w") as f:
+    f.write(fold(body.replace(u"Pełna statystyka: załącznik %s." % fname,
+                              u"(Bez załącznika: na hoście nie ma sendmail.)")))
+PYEOF
+}
+digest_send() {
+    if [ "${ZFS_DIGEST_LAYOUT:-relacje}" != jobs ] && [ -n "$DG_RD" ] \
+       && command -v python3 >/dev/null 2>&1 && relations_render 2>"$DG_RD/render.err"; then
+        local sm; sm=$(alert_sendmail)
+        if [ -n "$sm" ]; then
+            "$sm" -t -oi < "$DG_RD/mail.eml"
+        else
+            mail -s "$(cat "$DG_RD/subject.ascii")" "${ZFS_ALERT_EMAIL:-root}" < "$DG_RD/body.ascii"
+        fi
+        return
+    fi
+    # The renderer failed: say so where cron collects stderr, and send the old mail.
+    [ -s "${DG_RD:-/nonexistent}/render.err" ] && sed 's/^/alert-digest.sh: relations mail: /' "$DG_RD/render.err" | tail -5 >&2
+    jobs_body | mail -s "$SUBJ" "${ZFS_ALERT_EMAIL:-root}"
+}
+
+if digest_send; then
     rm -f "$PROCESSING"
 else
     # Mail failed (no MTA, relay refused, mailutils missing). Put the findings

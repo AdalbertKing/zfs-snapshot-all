@@ -282,6 +282,12 @@ printf '%s ZFS-JOB END %s rc=%s\n' "$(date -Is)" "$LABEL" "$rc" >>"$LOG" 2>/dev/
 if [ "$rc" -eq 75 ]; then
     [ -x "$WARN" ] && "$WARN" "$LABEL -- skipped, the previous run still holds the lock" \
         "$(tail -n "$DETAIL" "$e" 2>/dev/null)" 2>>"$LOG"
+elif [ "$rc" -eq 8 ]; then
+    # U159 (pve11 2026-11-04): exit 8 is a run that took its snapshots WITHOUT quiescing
+    # the guest (snapsend/snapget "continuing WITHOUT quiesce ... exit 8"). The snapshot
+    # exists, crash-consistent: a warning, not an alert -- it was mailed as a failure.
+    [ -x "$WARN" ] && "$WARN" "$LABEL -- without quiescing the guest (rc=8)" \
+        "$(tail -n "$DETAIL" "$e" 2>/dev/null)" 2>>"$LOG"
 elif [ "$rc" -ne 0 ] && [ -x "$NOTIFY" ]; then
     "$NOTIFY" "$LABEL" "$(tail -n "$DETAIL" "$e" 2>/dev/null)" 2>>"$LOG"
 elif [ -n "${tree_moved:-}" ]; then

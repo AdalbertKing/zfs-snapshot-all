@@ -79,11 +79,17 @@ if [ -f "$LASTFILE" ] && [ $(( NOW_EPOCH - $(cat "$LASTFILE") )) -lt "$COOLDOWN"
 fi
 echo "$NOW_EPOCH" > "$LASTFILE"
 
+# U158: the subject says which relation and what happened, the body what it means and
+# what to do; the job's own label stays in the body for grep. The log is the one beside
+# this script (an account's alerts come from its own home, not /root/scripts).
+alert_words "$JOB" "$DETAIL"
 {
-    printf "ZFS alert: '%s' na %s o %s.\n" "${JOB}" "${HOST}" "${NOW}"
+    printf '%s%s.\n' "${AW_REL:+$AW_REL -- }" "$AW_WHAT"
+    [ -n "$AW_SAY" ] && printf '%s\n' "$AW_SAY"
+    printf '\nHost: %s   czas: %s\nZadanie: %s\n' "${HOST}" "${NOW}" "${JOB}"
     if [ -n "$DETAIL" ]; then
         printf '\nCo zglosilo zadanie:\n\n'
         printf '%s\n' "$DETAIL" | sed 's/^/    /'
     fi
-    printf '\nPelny log: /root/scripts/cron.log na %s\n' "${HOST}"
-} | mail -s "[ZFS BACKUP] ALERT: ${JOB} na ${HOST}" "$EMAIL"
+    printf '\nPelny log: %s/cron.log na %s\n' "$(cd "$(dirname "$0")" && pwd)" "${HOST}"
+} | alert_mail "[ZFS] ${HOST%%.*}: ${AW_REL:+$AW_REL -- }${AW_WHAT} ($(date '+%d.%m %H:%M'))" "$EMAIL"

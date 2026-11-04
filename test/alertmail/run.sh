@@ -320,6 +320,12 @@ fi
 # lookup is pointed at nothing so a developer's /etc/zfs-alert.conf cannot leak
 # into the run (the environment wins over the file either way).
 export ZFS_ALERT_CONF=/dev/null
+# U160 (2026-11-04): the mail is a table of relations now, rendered by python3 and sent with
+# sendmail. The assertions below were written against the job-table body; that body is still
+# the product -- the fallback when the relations mail cannot be built, and
+# ZFS_DIGEST_LAYOUT=jobs -- so they keep guarding it, pinned here. No real sendmail and no
+# zfs-backup on the host under test may take part. The relations mail has its own section.
+export ZFS_DIGEST_LAYOUT=jobs ZFS_SENDMAIL=none ZFS_DIGEST_ZB=none
 if [ ! -r "$HS/alert-digest.sh" ] || [ ! -r "$HS/alert-env.sh" ]; then
     bad "the alert-digest script and alert-env.sh ship as files in hostscripts/" \
         "missing under $HS"
@@ -586,7 +592,7 @@ else
             # stub that does not list it.
             _fakelog="$hb_dir/cron.log"
             {   printf '%sT10:00:00+00:00 ZFS-JOB BEGIN h zombie job (gone)\n' "$_yd"
-                printf '%sT10:00:05+00:00 ZFS-JOB END h zombie job (gone) rc=8\n' "$_yd"
+                printf '%sT10:00:05+00:00 ZFS-JOB END h zombie job (gone) rc=1\n' "$_yd"
             } > "$_fakelog"
             printf '#!/bin/sh\nexit 0\n' > "$hb_dir/bin/crontab"
             chmod +x "$hb_dir/bin/crontab"
@@ -614,11 +620,99 @@ CTSTUB
             PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
                 bash "$hb_dir/digest.sh" >/dev/null 2>&1
             _live=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
-            if printf '%s' "$_live" | grep -q 'PADL rc=8' \
+            if printf '%s' "$_live" | grep -q 'PADL rc=1' \
                && printf '%s' "$_live" | grep -q 'STAN: UWAGA'; then
                 ok "digest: a scheduled job whose last run failed DOES make the state bad"
             else
                 bad "digest: a scheduled job whose last run failed DOES make the state bad" "$_live"
+            fi
+
+            # U157/U159/U160 (owner 2026-11-04): THE RELATIONS MAIL. Three relations in cron
+            # (alfa ok, beta failed, gamma rc=8 = no quiesce) and delta, gone from cron. The
+            # subject counts the relations needing attention; the table names them in GUI
+            # words; DO ZROBIENIA carries beta's last queued error line; gamma is a warning,
+            # not a failure; delta is not shown at all; the statistics are an HTML attachment.
+            # Controls: no sendmail -> mail -s with the ASCII body and no attachment;
+            # ZFS_DIGEST_LAYOUT=jobs -> the job-table mail.
+            cat > "$hb_dir/bin/crontab" <<'CTREL'
+#!/bin/sh
+echo '0 * * * * /x/zfs-job.sh "h profile__relacja-alfa__hourly snapshot (vm-1)" -- /x/y'
+echo '0 1 * * * /x/zfs-job.sh "h profile__relacja-beta__daily snapshot (vm-2)" -- /x/y'
+echo '0 2 * * * /x/zfs-job.sh "h profile__relacja-gamma__daily snapshot (vm-3)" -- /x/y'
+CTREL
+            chmod +x "$hb_dir/bin/crontab"
+            _rl="$hb_dir/rel.log"
+            {   for _r in "alfa__hourly snapshot (vm-1) rc=0" "beta__daily snapshot (vm-2) rc=1" \
+                          "gamma__daily snapshot (vm-3) rc=8" "delta__daily snapshot (vm-4) rc=1"; do
+                    printf '%sT10:00:00+00:00 ZFS-JOB BEGIN h profile__relacja-%s\n' "$_yd" "${_r% rc=*}"
+                    printf '%sT10:00:03+00:00 ZFS-JOB END h profile__relacja-%s\n' "$_yd" "$_r"
+                done; } > "$_rl"
+            printf '#!/bin/sh\ncase "$1" in\n status) echo %s ;;\n monitor) echo %s ;;\nesac\n' \
+                "'{\"relations\":[{\"name\":\"alfa\",\"state\":\"active\",\"mode\":\"local\",\"client_target\":\"\"},{\"name\":\"beta\",\"state\":\"active\",\"mode\":\"snaponly\"},{\"name\":\"gamma\",\"state\":\"active\",\"mode\":\"local\"}]}'" \
+                "'{\"monitors\":[{\"label\":\"alfa\",\"pattern\":\"automated_hourly\",\"verdict\":\"OK\",\"reason\":\"\"}]}'" > "$hb_dir/bin/zb"
+            printf '#!/bin/sh\ncat > "$0.eml"\nexit 0\n' > "$hb_dir/bin/sm"
+            chmod +x "$hb_dir/bin/zb" "$hb_dir/bin/sm"
+            _relq() { printf '%s\tALERT\th profile__relacja-beta__daily snapshot (vm-2)\tpierwsza linia\001ostatnia linia bledu\n' "$(date +%s)" > "$hb_dir/q"; }
+            rm -f "$hb_dir/q.processing" "$hb_dir/bin/mail.out" "$hb_dir/bin/sm.eml"; _relq
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_rl" ZFS_DIGEST_LAYOUT=relacje \
+            ZFS_SENDMAIL="$hb_dir/bin/sm" ZFS_DIGEST_ZB="$hb_dir/bin/zb" bash "$hb_dir/digest.sh" >/dev/null 2>"$hb_dir/rel.err"
+            _rm=$(python3 - "$hb_dir/bin/sm.eml" <<'PYREL' 2>&1
+import sys, email, email.policy
+m = email.message_from_binary_file(open(sys.argv[1], "rb"), policy=email.policy.default)
+print("SUBJECT:", m["Subject"]); print("FROM:", m["From"])
+for p in m.walk():
+    if p.get_content_type() == "text/plain":
+        print(p.get_content())
+    if p.get_content_type() == "text/html":
+        print("ATTACH:", p.get_filename(), "alfa" in p.get_content(), "beta" in p.get_content())
+PYREL
+)
+            if printf '%s' "$_rm" | grep -q 'SUBJECT: \[ZFS\] .*: 2 z 3 relacji wymaga uwagi' \
+               && printf '%s' "$_rm" | grep -q '^FROM: zfs-backup ' \
+               && printf '%s' "$_rm" | grep -qE '^beta +migawki zdalne +.*błąd biegu: migawka dobowa' \
+               && printf '%s' "$_rm" | grep -qE '^gamma +migawki lokalne +.*bez zamrożenia: migawka dobowa' \
+               && printf '%s' "$_rm" | grep -qE '^alfa +migawki lokalne +.*aktualne' \
+               && printf '%s' "$_rm" | grep -q '^1\. beta -- migawka dobowa nie powiodła się (.*rc=1)' \
+               && printf '%s' "$_rm" | grep -q '^   ostatnia linia bledu' \
+               && ! printf '%s' "$_rm" | grep -q 'delta' \
+               && printf '%s' "$_rm" | grep -q '^ATTACH: statystyka-.*\.html True True'; then
+                ok "digest U160: relations mail -- subject counts them, GUI words, the failed one's last error line, rc=8 a warning, a deleted relation absent, HTML attached"
+            else
+                bad "digest U160: relations mail" "$_rm" "stderr: $(head -5 "$hb_dir/rel.err")"
+            fi
+            rm -f "$hb_dir/q.processing" "$hb_dir/bin/mail.out"; _relq
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_rl" ZFS_DIGEST_LAYOUT=relacje \
+            ZFS_SENDMAIL=none ZFS_DIGEST_ZB="$hb_dir/bin/zb" bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _ra=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            rm -f "$hb_dir/q.processing" "$hb_dir/bin/mail.out"; _relq
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_rl" ZFS_DIGEST_LAYOUT=jobs \
+            ZFS_SENDMAIL="$hb_dir/bin/sm" ZFS_DIGEST_ZB="$hb_dir/bin/zb" bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _rj=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            if printf '%s' "$_ra" | grep -q 'DO ZROBIENIA' && printf '%s' "$_ra" | grep -q 'Bez zalacznika' \
+               && ! printf '%s' "$_ra" | LC_ALL=C grep -q '[^ -~]' \
+               && printf '%s' "$_rj" | grep -q 'STAN BIEZACY' && ! printf '%s' "$_rj" | grep -q 'DO ZROBIENIA'; then
+                ok "digest U160 controls: no sendmail -> the ASCII body by mail -s; ZFS_DIGEST_LAYOUT=jobs -> the job-table mail"
+            else
+                bad "digest U160 controls" "no sendmail: $_ra" "jobs: $(printf '%s' "$_rj" | head -5)"
+            fi
+
+            # U158: a single alert in the admin's words. notify-fail.sh in immediate mode:
+            # the subject names the relation and what happened; a monitor counting from the
+            # dataset's creation (no relation start) says so. Control: a real age -> no note.
+            cp "$HS/notify-fail.sh" "$hb_dir/notify-fail.sh"
+            _u158() { rm -rf "$hb_dir/nst" "$hb_dir/bin/sm.eml"
+                PATH="$hb_dir/bin:$PATH" ZFS_ALERT_MODE=immediate ZFS_ALERT_STATE_DIR="$hb_dir/nst" ZFS_SENDMAIL="$hb_dir/bin/sm" \
+                bash "$hb_dir/notify-fail.sh" "h profile__relacja-migawki-x__lsrc_yearly stale (local-subvol-102-disk-0)" "$1" >/dev/null 2>&1
+                cat "$hb_dir/bin/sm.eml" 2>/dev/null; }
+            _na=$(_u158 "CRITICAL dataset=d pattern=automated_yearly -- no snapshot found matching this pattern; age measured from dataset creation age=900h")
+            _nb=$(_u158 "CRITICAL dataset=d pattern=automated_yearly newest=automated_yearly_2025-01-01_00-00-01 age=9000h")
+            if printf '%s' "$_na" | grep -q '^Subject: \[ZFS\] [^ ]*: migawki-x -- brak jakiejkolwiek migawki rocznej (' \
+               && printf '%s' "$_na" | grep -q '^From: zfs-backup ' && printf '%s' "$_na" | grep -q 'liczy wiek od utworzenia datasetu' \
+               && printf '%s' "$_nb" | grep -q '^Subject: \[ZFS\] [^ ]*: migawki-x -- brak swiezej migawki rocznej (najnowsza sprzed 9000h)' \
+               && ! printf '%s' "$_nb" | grep -q 'liczy wiek od utworzenia datasetu'; then
+                ok "notify-fail U158: subject = relation -- what happened; a monitor without a relation start says so; a real age does not"
+            else
+                bad "notify-fail U158: alert in the admin's words" "$_na" "control: $_nb"
             fi
 
             # THE OTHER CRON FORMAT, and this one shipped broken.
