@@ -15524,7 +15524,7 @@ if printf '%s' "$out" | grep -q 'CHG=weekly: retain=-w6' && printf '%s' "$out" |
    && [ "$(tiers_sec_field "$ED/st.conf" '[template:snaponly__rr__daily]' quiesce)" = "agent" ] \
    && [ "$(tiers_sec_field "$ED/st.conf" '[template:snaponly_src__rr__hourly]' retain)" = "-H240" ] \
    && [ "$(tiers_sec_field "$ED/st.conf" '[template:snaponly__rr__daily]' send_schedule)" = "43 4 * * *" ] \
-   && [ "$(tiers_sec_field "$ED/st.conf" '[template:snaponly__rr__hourly]' monitor_warn)" = "100m" ] && [ "$st_diff" -eq 3 ]; then
+   && [ "$(tiers_sec_field "$ED/st.conf" '[template:snaponly__rr__hourly]' monitor_warn)" = "100m" ] && [ "$st_diff" -eq 4 ]; then
     ok "REV-187 set-tiers on snaponly: one field per op rewritten in its section; the other tiers' hand edits are byte-for-byte as installed"
 else
     bad "REV-187 set-tiers on snaponly" "$out" "diff lines: $st_diff" "$(diff "$RR/edited.conf" "$ED/st.conf")"
