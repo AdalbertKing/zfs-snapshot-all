@@ -200,7 +200,6 @@
 "  $n: $f migawek automated_*, najnowsza $when ($ago temu)": "  $n: $f automated_* snapshots, newest $when ($ago ago)",
 "  $n: $f migawek automated_*": "  $n: $f automated_* snapshots",
 "Migawki naszej rodziny już są na źródle": "Snapshots of our family are already on the source",
-"Nikt -- to resztki starej relacji, robię własne": "Nobody -- leftovers of an old relation, make our own",
 "WŁASNE MIGAWKI: stare migawki naszej rodziny na źródle to resztki -- ta relacja robi własne": "OWN SNAPSHOTS: the old snapshots of our family on the source are leftovers -- this relation makes its own",
 "  (--own-snapshots); stare wejdą do jej retencji i z czasem znikną.": "  (--own-snapshots); the old ones join its retention and age out.",
 "  niczego tam nie utworzy ani nie skasuje, szablon $PROFILE tego nie zmieni.": "  it creates and deletes nothing there; template $PROFILE does not change that.",
@@ -213,7 +212,6 @@
 "zatwierdzisz SAM -- instalacja zatrzyma się i poda komendę": "you approve it YOURSELF -- the install will stop and give the command",
 "Migawki zdalne: szablon z drabiną GFS na szczeblu zostanie odrzucony przy aktywacji -- wybierz szablon liczony, np. d7h24.\\n\\n": "Remote snapshots: a template with a GFS ladder per tier is refused at activation -- choose a counted template, e.g. d7h24.\\n\\n",
 "Na $HOST są już migawki naszej rodziny:\\n$facts\\n\\nKto je dziś robi? Najnowsza (sprzed godziny-dwóch) zwykle znaczy, że ktoś.\\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.": "There are already snapshots of our family on $HOST:\\n$facts\\n\\nWho is taking them today? The latest one (an hour or two old) usually\\nmeans someone is.\\nChain: this relation RECEIVES them and creates/deletes nothing there.\\nLeftovers: this relation makes its OWN; the old ones join its retention\\nand age out.",
-"Tworzy je inny kolektor, lub inna relacja albo stary cron -- łańcuch, przyjmuję": "They're made by another collector, another relation or an old cron job -- chain, take them",
 "ŁAŃCUCH: migawki o naszych prefiksach na źródle robi inny kolektor lub inna relacja, albo przenosi je inny mechanizm np. cluster synchro -- lustro będzie PASYWNE:": "CHAIN: Snapshots of our prefixes on the source are taken by another collector or another relation, or are transferred by another mechanism, such as a sync cluster -- the mirror will be PASSIVE:",
 "Adres hosta: $NAME": "Host address: $NAME",
 "list-profiles nie odpowiedział:\\n": "list-profiles did not answer:\\n",
@@ -616,7 +614,6 @@
 "                 do skopiowania plików; po wyjściu odmontowuje (datasety plikowe).": "                 to copy files, unmounted on exit (file datasets).",
 "to samo co kolektor: wszystkie jego migawki, także pośrednie": "The same as the collector: all of its snapshots, including the intermediate ones",
 "sprawdza to okno Przywróć -- źródło musi wydać zgodę na dostęp (deploy.sh --allow-restore)": "the “Restore” window checks it -- the source must grant access (deploy.sh --allow-restore)",
-"Na $HOST są już migawki naszej rodziny:\\n$facts\\n\\nKto je dziś robi? Najnowsza sprzed godziny-dwóch zwykle znaczy, że ktoś je robi.\\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.": "There are already snapshots of our family on $HOST:\\n$facts\\n\\nWho is taking them today? The latest one (an hour or two old) usually\\nmeans someone is.\\nChain: this relation RECEIVES them and creates/deletes nothing there.\\nLeftovers: this relation makes its OWN; the old ones join its retention\\nand age out.",
 "lokalna": "local",
 "   Po zmianie relacja obejmuje:": "   After the change the relation covers:",
 "(z dziećmi, także przyszłymi)": "(with children, future ones too)",
@@ -853,5 +850,8 @@
 "Nowe zadania tej relacji (dotychczasowe zostają bez zmian):": "New jobs of this relation (the existing ones stay unchanged):",
 "Nie mogę zrobić kopii obecnego szablonu $PROFILE -- nic nie zmieniono.": "Cannot back up the current template $PROFILE -- nothing was changed.",
 "Archiwum na tym hoście: $_arc (kopia pasywna).": "Archive on this host: $_arc (passive copy).",
-"UWAGA: na tym hoście NIE MA kopii pasywnej z ${B_ROOT[*]} -- załóż ją (kopia lokalna, Pasywnie), zanim migawki starsze niż $FASTPRUNE h znikną.": "WARNING: this host has NO passive copy of ${B_ROOT[*]} -- create one (local copy, Passive) before snapshots older than $FASTPRUNE h are gone."
+"UWAGA: na tym hoście NIE MA kopii pasywnej z ${B_ROOT[*]} -- załóż ją (kopia lokalna, Pasywnie), zanim migawki starsze niż $FASTPRUNE h znikną.": "WARNING: this host has NO passive copy of ${B_ROOT[*]} -- create one (local copy, Passive) before snapshots older than $FASTPRUNE h are gone.",
+"Na $HOST są już migawki naszej rodziny:\\n$facts\\n\\nSkąd się tu wzięły? Najczęściej przynosi je replikacja Proxmox (pvesr)\\nz drugiego węzła, rzadziej robi je inna relacja. Świeże (sprzed 1-2 godz.)\\nznaczą, że ktoś je wciąż robi.\\n\\nPrzyjmuję: kopia bierze te migawki; na źródle nic nie tworzy ani nie kasuje.\\nResztki: nikt ich już nie robi -- kopia robi własne; stare z czasem znikną.": "$HOST already has snapshots of our family:\\n$facts\\n\\nWhere do they come from? Most often a Proxmox replica (pvesr) brings them\\nfrom the other node; less often another relation makes them. Fresh ones\\n(1-2 h old) mean someone still makes them.\\n\\nTake them: the copy takes these snapshots; it creates or deletes nothing.\\nLeftovers: nobody makes them any more -- the copy makes its own,\\nthe old ones age out.",
+"Przynosi je pvesr albo robi inna relacja -- przyjmuję je": "A pvesr replica brings them or another relation makes them -- take them",
+"Nikt ich już nie robi (resztki) -- robię własne": "Nobody makes them any more (leftovers) -- make our own"
 }

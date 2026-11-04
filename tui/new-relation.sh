@@ -673,10 +673,12 @@ step_chain() {   # 0 = odpowiedź zapisana, 1 = wstecz
         CHAIN_ANS="$WT_OUT"; CHAIN_FOR="${B_ROOT[*]}"
         return 0
     fi
+    # U153 (właściciel 2026-11-04, Dąbrowska: „strasznie zagmatwany”, „nie wspominasz o pvesr”):
+    # najczęstsze źródło tych migawek -- replika pvesr -- nazwane wprost, odpowiedzi bez żargonu.
     wt --title "$(title 5 "$(T 'Migawki naszej rodziny już są na źródle')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
-       --menu "$(Tv 'Na $HOST są już migawki naszej rodziny:\n$facts\n\nKto je dziś robi? Najnowsza sprzed godziny-dwóch zwykle znaczy, że ktoś je robi.\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.' '$HOST' "$(T 'źródle') $( [ -n "$HOST" ] && hostw || hostname -s)" '$facts' "$facts")" "$H" "$W" 2 \
-       chain "$(T 'Tworzy je inny kolektor, lub inna relacja albo stary cron -- łańcuch, przyjmuję')" \
-       own "$(T 'Nikt -- to resztki starej relacji, robię własne')" || return 1
+       --menu "$(Tv 'Na $HOST są już migawki naszej rodziny:\n$facts\n\nSkąd się tu wzięły? Najczęściej przynosi je replikacja Proxmox (pvesr)\nz drugiego węzła, rzadziej robi je inna relacja. Świeże (sprzed 1-2 godz.)\nznaczą, że ktoś je wciąż robi.\n\nPrzyjmuję: kopia bierze te migawki; na źródle nic nie tworzy ani nie kasuje.\nResztki: nikt ich już nie robi -- kopia robi własne; stare z czasem znikną.' '$HOST' "$(T 'źródle') $( [ -n "$HOST" ] && hostw || hostname -s)" '$facts' "$facts")" "$H" "$W" 2 \
+       chain "$(T 'Przynosi je pvesr albo robi inna relacja -- przyjmuję je')" \
+       own "$(T 'Nikt ich już nie robi (resztki) -- robię własne')" || return 1
     CHAIN_ANS="$WT_OUT"; CHAIN_FOR="${B_ROOT[*]}"
     # "Resztki" z wybranym wcześniej passive-flat nie robiłyby niczego -- szablon do wyboru od nowa.
     [ "$CHAIN_ANS" = own ] && [ "$PROFILE" = "$REC_PROFILE" ] && { PROFILE=""; SRCPROF=""; VIS="${VIS/ profile / }"; }
