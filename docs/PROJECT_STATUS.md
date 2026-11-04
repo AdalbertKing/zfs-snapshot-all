@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 37130a2f1cba5f09 -->
+<!-- status-covers-digest: 9da8a46d25f31cec -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,7 +21,15 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **Maile admina (2026-11-04, gałąź `feat/maile`, niewydane; U157-U160).**
+- **Maile admina, wariant A (2026-11-04, gałąź `feat/maile-a`, niewydane).** Wybór właściciela z dwóch makiet:
+  tabela relacji bez kolumny rodzaju (STAN mówi, ile zadań relacji ma błąd), a „DO ZROBIENIA” wymienia zadania
+  z błędem z obiektem (źródła -> cel, jak w `zfs list`) i PRZYCZYNĄ z `cron.log` (stderr, który `zfs-job.sh`
+  dopisuje przed linią END) -- także gdy alerty idą od razu i kolejka jest pusta. Przy rc=8 przyczyną jest pierwsza
+  linia „Quiesce:” biegu (powód i polecenie naprawy). Przyczyny różniące się tylko nazwą w apostrofach -- raz.
+  Załącznik HTML ma kolumnę „obiekt”. Testy (pve9, `59f9c3d3`): `test/alertmail` 185/1 (ten sam środowiskowy FAIL
+  co na `main`); kontrola negatywna: test U160 pada na `alert-digest.sh` z `main`. Na żywo na pve11 (kopia w /tmp,
+  sendmail zastąpiony plikiem): przyczyna pve10 i powód rc=8 z prawdziwego `cron.log`.
+- **Maile admina (2026-11-04, gałąź `feat/maile`, scalone #1061, niewydane; U157-U160).**
   - Raport dzienny (`hostscripts/alert-digest.sh`): tabela RELACJI (nazwa, rodzaj, najnowsza, stan słowami
     GUI, błędy na górze), „DO ZROBIENIA” tylko gdy coś jest (co, kiedy, rc, ostatnia linia błędu z kolejki,
     gdzie sprawdzić), w nagłówku wszystkie pule hosta (DEGRADED albo >= 80% także w DO ZROBIENIA), jedna linia
