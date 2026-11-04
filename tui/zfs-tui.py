@@ -3477,7 +3477,11 @@ def rel_pairs(row, data, now, ch):
             else:
                 czas = times_cell(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s")) if srow else "-"
                 gb = hbytes_short(vol) if vol is not None else "-"
-            out.append({"src": src, "dst": dst, "job": j, "v": v, "vword": _(VERDICTS.get(v, (v, 0))[0]),
+            # U136 (fastprune, 2026-11-04): szczebel BEZ progow monitora w configu nie ma monitora
+            # z zalozenia (wieku rzadszych szczebli pilnuje archiwum) -- nie przeslania werdyktu
+            # szczebli pilnowanych tego samego datasetu.
+            nomon = v == "BEZ MONITORA" and not j.get("monitor_warn") and not j.get("monitor_crit")
+            out.append({"src": src, "dst": dst, "job": j, "v": v, "vword": _(VERDICTS.get(v, (v, 0))[0]), "nomon": nomon,
                          "czas": czas, "gb": gb, "vol": vol, "tiers": 1, "jobs": [j],
                          "czas_words": "?" if data.failed("stats") else (times_words(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s")) if srow else "-")})
         # JEDEN WIERSZ = JEDEN DATASET, nie jedna linia crona (2026-09-21).
@@ -3502,7 +3506,12 @@ def rel_pairs(row, data, now, ch):
             # NAJGORSZY liczony przez worst(), nie przez druga kolumne VERDICTS --
             # ta jest numerem KOLORU (OK=2, CRITICAL=1), wiec porownanie jej dalo
             # by "najgorszy = najjasniejszy". Zlapane przy czytaniu wlasnego diffu.
-            g["v"] = worst([g["v"], r["v"]])
+            if r.get("nomon"):
+                pass
+            elif g.get("nomon"):
+                g["v"], g["nomon"] = r["v"], False
+            else:
+                g["v"] = worst([g["v"], r["v"]])
             g["vword"] = _(VERDICTS.get(g["v"], (g["v"], 0))[0])
             if g.get("vol") is not None and r.get("vol") is not None:
                 g["vol"] = g["vol"] + r["vol"]

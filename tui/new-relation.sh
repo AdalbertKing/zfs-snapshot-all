@@ -36,6 +36,9 @@ MANUAL_P=""; NR_DONE=0
 drop_manual_draft() {
     [ -n "$MANUAL_P" ] && [ "$NR_DONE" -ne 1 ] && "$ZB" delete-profile "$MANUAL_P" --yes >/dev/null 2>&1
     MANUAL_P=""
+    # U136: szablon fastprune powstaje przy planie -- bez założonej relacji nie zostaje.
+    [ -n "${FP_P:-}" ] && [ "$NR_DONE" -ne 1 ] && "$ZB" delete-profile "$FP_P" --yes >/dev/null 2>&1
+    FP_P=""
 }
 trap 'drop_manual_draft; rm -rf "$TMPD"' EXIT
 
@@ -277,7 +280,7 @@ raw_default() {
 # --- krok 5: dokąd (tylko backup) ---------------------------------------------
 # Lekcja ze starego kreatora: lista pokazywała cudze lądowiska i podgląd jeździł za
 # kursorem. Tu kandydatów jest mało i każdy ma POWÓD; reszta to "inna ścieżka".
-TARGET=""; PROFILE=""; RNAME=""; ACCT="root"; ACCT_OTHER=""; SRCKEEP=""; FORCE_PASSIVE=0
+TARGET=""; PROFILE=""; RNAME=""; ACCT="root"; ACCT_OTHER=""; SRCKEEP=""; FORCE_PASSIVE=0; FASTPRUNE=""; FP_P=""
 EXFAM="__replicate_,vzdump,__migration__"; GRANT=1; MANUAL=0; SRCPROF=""; RAW=0
 # Zamrażanie ma DWIE połowy (zmierzone pve10 <- pve9b, 2026-09-20): szablon, który każe
 # zamrażać, ORAZ zgoda źródła, żeby konto kolektora mogło zamrażać jego gości. Bez zgody
@@ -596,6 +599,73 @@ step_passive() {   # U138: kopia lokalna pasywnie, choc na zrodle nie ma jeszcze
        yes "$(T 'Tak -- pasywnie, przyjmuje cudze migawki (łańcuch)')" || return 1
     [ "$WT_OUT" = yes ] && FORCE_PASSIVE=1 || FORCE_PASSIVE=0
     return 0
+}
+# U136 (właściciel 2026-11-04: Zaawansowane, „jedno pole”): migawki zdalne, źródło bez miejsca.
+# Każdy szczebel wybranego szablonu: retain = -h<N>, czyszczenie co godzinę; monitor zostaje
+# tylko szczeblom częstszym niż N -- wieku rzadszych pilnuje archiwum (kopia pasywna z repliki).
+step_fastprune() {
+    local v="$FASTPRUNE"
+    while :; do
+        geom
+        wt --title "$(T 'Szybkie czyszczenie źródła (fastprune)')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
+           --inputbox "$(T 'Ile godzin żyje na źródle każda migawka (wszystkie szczeble). Puste = wyłączone.\nCzyszczenie co godzinę; monitor zostaje tylko szczeblom częstszym niż ta liczba --\nwieku rzadszych pilnuje archiwum (kopia pasywna z repliki na kolektorze).')" 12 "$W" "$v" || return 1
+        v="${WT_OUT// /}"
+        case "$v" in
+            ''|0) FASTPRUNE=""; return 0 ;;
+            *[!0-9]*) wt --title "$(T 'Zła liczba')" --msgbox "$(T 'Liczba godzin: same cyfry, puste = wyłączone.')" 8 "$W"; continue ;;
+        esac
+        v=$((10#$v))
+        if [ "$v" -lt 4 ]; then
+            wt --title "$(T 'Za mało')" --msgbox "$(T 'Najmniej 4 godziny: replika pvesr co 2 h musi zdążyć przenieść migawkę dwa razy.')" 8 "$W"; continue
+        fi
+        if [ "$v" -lt 24 ]; then
+            wt --title "$(T 'Mniej niż doba')" --yes-button "$(T Dalej)" --no-button "$(T Wstecz)" \
+               --yesno "$(Tv 'Migawka dobowa przeżyje na źródle tylko $v godz. Jeśli replika albo archiwum stoją dłużej, migawka zniknie, zanim trafi do archiwum.' '$v' "$v")" 10 "$W" || continue
+        fi
+        FASTPRUNE="$v"; return 0
+    done
+}
+fp_build() {   # FASTPRUNE -> ukryty szablon FP_P (kopia PROFILE); 1 = błąd (okno pokazane)
+    if [ -z "$FASTPRUNE" ] || [ "$MODE" != snaponly ]; then
+        [ -n "$FP_P" ] && "$ZB" delete-profile "$FP_P" --yes >/dev/null 2>&1
+        FP_P=""; return 0
+    fi
+    local name="relacja-$RNAME-fastprune" args=()
+    load_profiles
+    mapfile -t args < <("$PY" - "$TMPD/prof.json" "$PROFILE" "$FASTPRUNE" <<'PYEOF'
+import sys, json
+d = json.load(open(sys.argv[1], encoding="utf-8")); name = sys.argv[2]; n = int(sys.argv[3])
+def every(s):   # odstęp send_schedule w godzinach
+    f = s.split()
+    if len(f) < 5: return 8760
+    m, h, dom, mon, dow = f[:5]
+    if h == "*": return 1
+    if h.startswith("*/") and h[2:].isdigit(): return int(h[2:])
+    if dow != "*": return 168
+    if dom == "*" and mon == "*": return 24
+    if mon == "*": return 744
+    return 8760
+for p in d.get("profiles", []):
+    if p.get("name") != name: continue
+    for t in p.get("tiers", []):
+        if not t.get("send_schedule"): continue
+        print("--tier=" + t["name"]); print("--retain=-h%d" % n); print("--keep=")
+        print("--prune_schedule=21 * * * *")
+        if every(t["send_schedule"]) >= n:
+            print("--monitor_warn="); print("--monitor_crit=")
+PYEOF
+)
+    if [ "${#args[@]}" -eq 0 ]; then
+        wt --title "$(T 'Fastprune niemożliwy')" --msgbox "$(Tv 'Szablon $PROFILE nie ma szczebli, które robią migawki -- fastprune nie ma czego skracać.' '$PROFILE' "$PROFILE")" 9 "$W"; return 1
+    fi
+    if ! "$ZB" save-profile "--from=$PROFILE" "--as=$name" --hidden --force \
+         "--description=$(Tv 'Fastprune $FASTPRUNE h z $PROFILE (relacja $RNAME)' '$FASTPRUNE' "$FASTPRUNE" '$PROFILE' "$PROFILE" '$RNAME' "$RNAME")" \
+         "${args[@]}" >/dev/null 2>"$TMPD/fp.err"; then
+        wt --title "$(T 'Fastprune: szablonu nie zapisano')" --msgbox "$(tail -4 "$TMPD/fp.err")" 14 "$W"; return 1
+    fi
+    # nazwa relacji zmieniona po poprzednim planie: stara kopia szablonu nie zostaje
+    [ -n "$FP_P" ] && [ "$FP_P" != "$name" ] && "$ZB" delete-profile "$FP_P" --yes >/dev/null 2>&1
+    FP_P="$name"
 }
 chain_ans() {   # -> chain | own | "" (brak odpowiedzi dla obecnego koszyka)
     # IFS ze spacją: CHAIN_FOR zapisano "${B_ROOT[*]}" przy zwykłym IFS, a build_argv woła tę
@@ -1016,7 +1086,7 @@ build_argv() {   # [install] -> ARGV[]
     if [ "$MODE" = sync ]; then ARGV+=("--mode=sync")
     elif [ "$MODE" = snaponly ]; then ARGV+=("--mode=snaponly")
     elif [ "$MODE" != local ]; then ARGV+=("--target=$TARGET" "--landing=$(landing)"); fi
-    [ -n "$PROFILE" ] && ARGV+=("--profile=$PROFILE")
+    [ -n "$PROFILE" ] && ARGV+=("--profile=${FP_P:-$PROFILE}")
     [ -n "$SRCPROF" ] && ARGV+=("--source-profile=$SRCPROF")
     [ -n "$RNAME" ] && ARGV+=("--name=$RNAME")
     [ "$RECURSION" = atomic ] && ARGV+=("--recursive=atomic")
@@ -1111,7 +1181,8 @@ summary_text() {
     fi
     echo "$(Tv 'Sposób:  $(mode_words).   Nazwa: $RNAME.   Konto: ${a:-root}.' '$(mode_words)' "$(mode_words)" '$RNAME' "$RNAME" '${a:-root}' "${a:-root}")"
     # W6 (kampania 2026-11-03): kopia pasywna niczego nie zamraża -- opis szablonu bez "zamraża".
-    echo "$(T 'Szablon:') $( [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ] && echo "$(Tv 'Ręcznie -- $PROFILE' '$PROFILE' "$PROFILE")" || echo "$PROFILE")$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" -v pas="$( { is_passive_copy || passive_forced; } && echo 1)" '$1==n{print "  (" $3 "; " $2 (pas ? "" : "; " $4) ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "$(Tv '; u źródła: $SRCPROF' '$SRCPROF' "$SRCPROF")")"
+    echo "$(T 'Szablon:') $( [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ] && echo "$(Tv 'Ręcznie -- $PROFILE' '$PROFILE' "$PROFILE")" || echo "$PROFILE")$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" -v pas="$( { is_passive_copy || passive_forced; } && echo 1)" -v fp="$([ "$MODE" = snaponly ] && [ -n "$FASTPRUNE" ] && echo 1)" '$1==n{print "  (" $3 (fp ? "" : "; " $2) (pas ? "" : "; " $4) ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "$(Tv '; u źródła: $SRCPROF' '$SRCPROF' "$SRCPROF")")"
+    [ "$MODE" = snaponly ] && [ -n "$FASTPRUNE" ] && echo "$(Tv 'Źródło: fastprune $FASTPRUNE h -- każda migawka żyje tyle godzin, czyszczenie co godzinę; bez monitorów szczebli rzadszych niż $FASTPRUNE h -- ich wiek pilnuje archiwum. Bez kopii pasywnej na kolektorze starszych migawek nie będzie nigdzie.' '$FASTPRUNE' "$FASTPRUNE")"
     if [ "$MODE" = snaponly ] || [ "$NOCOPY" -eq 1 ]; then :    # bez kopii: prefiksy nie dotyczą
     elif [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
     else echo "$(T 'Pomijane migawki: żadne (kopiowane wszystkie).')"; fi
@@ -1217,6 +1288,7 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
         # w poprzednim oknie... WYKONAJ?”. Karta przed UTWÓRZ jest już podsumowaniem; teraz
         # po UTWÓRZ jest jedno okno: zdanie po polsku, komenda, ostrzeżenia czasownika i
         # WYKONAJ. Pełny plan (sekcje configu, linie crona) idzie do pliku obok dziennika.
+        fp_build || return 1
         build_argv install
         summary_text >"$TMPD/summary.txt"
         check_pruners; rc=$?
@@ -1235,6 +1307,7 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
           if [ "$NOCOPY" -eq 1 ]; then echo "$(Tv 'Cel: brak (same migawki).  Szablon: $PROFILE.' '$PROFILE' "$PROFILE")"
           # Kampania 2026-10-22: migawki zdalne dostawały zdanie lustra ("ta sama ścieżka").
           elif [ "$MODE" = snaponly ]; then echo "$(Tv 'Bez kopii: migawki na $HOST, jego datasety.  Szablon: $PROFILE.' '$HOST' "$(hostw)" '$PROFILE' "$PROFILE")"
+               [ -n "$FP_P" ] && echo "$(Tv 'Fastprune $FASTPRUNE h: szablon relacji $FP_P (kopia $PROFILE).' '$FASTPRUNE' "$FASTPRUNE" '$FP_P' "$FP_P" '$PROFILE' "$PROFILE")"
           else echo "$(T 'Cel:') ${TARGET:-$(T '(lustro: ta sama ścieżka)')}.  $(Tv 'Trzyma tutaj: $PROFILE.  U źródła:' '$PROFILE' "$PROFILE") $(if is_passive_copy; then T 'nic (pasywnie)'; else printf '%s' "${SRCPROF:-$(T 'jak tutaj')}"; fi)."; fi
           if [ "$MODE" = snaponly ] || [ "$NOCOPY" -eq 1 ]; then :
           elif [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
@@ -1325,6 +1398,7 @@ field_applies() {   # <pole> -> 0, gdy pole jest w tej relacji
         srcret) { [ "$MODE" = backup ] && ! passive_forced; } || { is_local_copy && ! is_passive_copy; } ;;
         # U138: pasywnie bez okna lancucha -- kopia lokalna, backup, lustro, gdy na zrodle nie ma migawek rodziny.
         passive) passive_offered ;;
+        fastprune) [ "$MODE" = snaponly ] ;;
         extra)  [ "$NOCOPY" -eq 0 ] ;;
         # Tylko gdy źródło ma już migawki naszej rodziny (lustro, backup).
         chain)  { [ "$MODE" = sync ] || [ "$MODE" = backup ] || [ "$MODE" = snaponly ] || is_local_copy; } && sync_from_chain ;;
@@ -1356,6 +1430,8 @@ field_value() {   # <pole> -> wartość na karcie ("" = jeszcze nie ustawione)
             [ -n "$PROFILE" ] || return 0
             if [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ]; then echo "$(T 'własne (tabela szczebli)')"; return; fi
             a="$(awk -F'\t' -v n="$PROFILE" '$1==n{print $2; exit}' "$TMPD/prof.tsv" 2>/dev/null)"
+            # U136: z fastprune szablon daje szczeble, nie czas życia -- "trzyma 24 h, 7 dni" byłoby nieprawdą
+            [ "$MODE" = snaponly ] && [ -n "$FASTPRUNE" ] && a="$(Tv 'fastprune $FASTPRUNE h' '$FASTPRUNE' "$FASTPRUNE")"
             echo "$PROFILE${a:+ -- $a}" ;;
         srcret) case "$VIS" in *" srcret "*) src_words ;; esac ;;
         chain)  case "$(chain_ans)" in
@@ -1367,6 +1443,7 @@ field_value() {   # <pole> -> wartość na karcie ("" = jeszcze nie ustawione)
         name)   echo "$RNAME" ;;
         acct)   a="$(account_name)"; echo "${a:-root}" ;;
         passive) [ "${FORCE_PASSIVE:-0}" -eq 1 ] && echo "$(T 'tak -- przyjmuje cudze migawki (łańcuch)')" || echo "$(T 'nie')" ;;
+        fastprune) [ -n "$FASTPRUNE" ] && echo "$(Tv '$FASTPRUNE godz. -- wszystkie szczeble' '$FASTPRUNE' "$FASTPRUNE")" || echo "$(T 'nie')" ;;
         extra)
             # Kampania wariantów 2026-10-22: raw jest domyślne od kroku datasetów (raw_default), a karta
             # nieodwiedzonych Dodatkowych go nie wymieniała -- nie było widać, że kopia pójdzie zaszyfrowana.
@@ -1409,6 +1486,7 @@ run_field() {   # <pole> -> rc okna pola (0 = ustawione)
         name)    step_name; rc=$? ;;
         acct)    step_account; rc=$? ;;
         passive) step_passive; rc=$? ;;
+        fastprune) step_fastprune; rc=$? ;;
         extra)   step_extra; rc=$? ;;
         *)       rc=1 ;;
     esac
@@ -1428,7 +1506,7 @@ CARD_NAMES_OF() {
         mode) echo "$(T 'Rodzaj')" ;; host) echo "$(T 'Źródło')" ;; ds) echo "$(T 'Datasety')" ;; target) echo "$(T 'Cel')" ;;
         profile) echo "$(T 'Harmonogram')" ;; srcret) echo "$(T 'Retencja źródła')" ;; silnik) echo "$(T 'Silnik')" ;;
         chain) echo "$(T 'Migawki na źródle')" ;;
-        name) echo "$(T 'Nazwa')" ;; acct) echo "$(T 'Konto')" ;; passive) echo "$(T 'Pasywnie')" ;; extra) echo "$(T 'Dodatkowe')" ;;
+        name) echo "$(T 'Nazwa')" ;; acct) echo "$(T 'Konto')" ;; passive) echo "$(T 'Pasywnie')" ;; fastprune) echo "$(T 'Fastprune')" ;; extra) echo "$(T 'Dodatkowe')" ;;
     esac
 }
 
@@ -1472,13 +1550,14 @@ wz_adv() {   # Zaawansowane: dodatki i pasywnie; wraca do podsumowania
         WZ_SN=""
         CARD_TAGS=(); CARD_NAMES=(); CARD_VALUES=(); CARD_FIXED=()
         field_applies passive && { CARD_TAGS+=(passive); CARD_NAMES+=("$(T 'Pasywnie')"); CARD_VALUES+=("$(field_value passive)"); CARD_FIXED+=(0); }
+        field_applies fastprune && { CARD_TAGS+=(fastprune); CARD_NAMES+=("$(T 'Fastprune')"); CARD_VALUES+=("$(field_value fastprune)"); CARD_FIXED+=(0); }
         field_applies extra && { CARD_TAGS+=(extra); CARD_NAMES+=("$(T 'Dodatkowe')"); CARD_VALUES+=("$(field_value extra)"); CARD_FIXED+=(0); }
         [ "${#CARD_TAGS[@]}" -gt 0 ] || return 0
         [ -n "$pick" ] || pick="${CARD_TAGS[0]}"
         CARD_ACT_TAGS=(); CARD_ACT_LABELS=()
         card_menu "$(T 'Nowa relacja: zaawansowane')" "$(T 'Rzeczy, których zwykle się nie zmienia.')" "$pick" "$(T Wstecz)" || return 0
         pick="$WT_OUT"
-        case "$pick" in passive|extra) run_field "$pick" ;; *) return 0 ;; esac
+        case "$pick" in passive|fastprune|extra) run_field "$pick" ;; *) return 0 ;; esac
     done
 }
 wz_profile() {   # szablon z podsumowania: retencja źródła zależy od szablonu -> od razu też ona
@@ -1496,7 +1575,9 @@ while :; do
         CARD_TAGS+=("$f"); CARD_NAMES+=("$(CARD_NAMES_OF "$f")"); CARD_VALUES+=("$(field_value "$f")"); CARD_FIXED+=(0)
     done
     CARD_TAGS+=(adv); CARD_NAMES+=("$(T 'Zaawansowane')")
-    a=""; field_applies passive && a="$(T 'pasywnie:') $(field_value passive)"; [ "$NOCOPY" -eq 0 ] && a="${a:+$a; }$(field_value extra)"
+    a=""; field_applies passive && a="$(T 'pasywnie:') $(field_value passive)"
+    field_applies fastprune && [ -n "$FASTPRUNE" ] && a="$(Tv 'fastprune $FASTPRUNE h' '$FASTPRUNE' "$FASTPRUNE")"
+    [ "$NOCOPY" -eq 0 ] && a="${a:+$a; }$(field_value extra)"
     CARD_VALUES+=("$a"); CARD_FIXED+=(0)
     miss="$(missing_fields)"
     CARD_ACT_TAGS=(create); CARD_ACT_LABELS=("$(T 'UTWÓRZ RELACJĘ -- plan, WYKONAJ')${miss:+   ($(T 'brak:') $miss)}")
