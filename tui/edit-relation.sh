@@ -132,6 +132,10 @@ SRCHOST="$(host_name "$PEER" "$NAME")"; LDS_ARGS=("$PEER"); HOST="$SRCHOST"
 SRCNAME="$PEER"
 if [ "$PEER" = - ]; then SRCHOST="$(T 'tego hosta') ($(hostname -s 2>/dev/null || hostname))"; LDS_ARGS=(); HOST="$SRCHOST"; SRCNAME="$(hostname -s 2>/dev/null || hostname)"; fi
 [ "$CUR_P" = - ] && CUR_P=""; [ "$CUR_S" = - ] && CUR_S=""
+# U136: fastprune relacji -- raz, z zainstalowanego szablonu (plik bywa przepisany pod plan).
+FP_CUR_N=""; FP_CUR_BASE=""; P_FP=""
+if [ "${RMODE:-}" = snaponly ]; then _fp="$(fp_of "$CUR_P")"; [ -n "$_fp" ] && { FP_CUR_N="${_fp%% *}"; FP_CUR_BASE="${_fp#* }"; }; fi
+fp_words() { if [ -n "$1" ] && [ "$1" != off ]; then Tv '$FASTPRUNE godz. -- wszystkie szczeble' '$FASTPRUNE' "$1"; else T 'nie'; fi; }
 # ADRES HOSTA (właściciel 2026-10-17): kolektor wyniesiony za VPN, źródło widać pod
 # innym IP. Jedno pole, jedno WYKONAJ, potem zwykłe `activate --host=NOWY
 # --skip-final-catchup --yes`: zapis adresu, sprawdzenie, że odpowiada TEN SAM host
@@ -208,6 +212,7 @@ fi
 RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=0
 title() { T 'Zmień relację %s -- %s' "$NAME" "$2"; }
 cur_words() {   # słowa o obecnym szablonie celu
+    if [ -n "${FP_CUR_N:-}" ]; then echo "$FP_CUR_BASE -- $(Tv 'fastprune $FASTPRUNE h' '$FASTPRUNE' "$FP_CUR_N")"; return; fi
     if [ "$CUR_P" = "$HNAME" ]; then echo "$(T 'własne ustawienia relacji (tabela szczebli)')"; else echo "${CUR_P:-$(T '<nie zapisany>')}"; fi
 }
 
@@ -815,7 +820,8 @@ while :; do
     _sz="$(cur_words)"
     _pw="$(awk -F'\t' -v n="$CUR_P" '$1==n{print $2; exit}' "$TMPD/prof.tsv" 2>/dev/null | sed -e "s/^$CUR_P  *//" -e 's/  */ /g')"
     [ -n "$_pw" ] && _sz="$_sz -- $_pw"
-    [ "${#P_EDIT[@]}" -gt 0 ] && _sz="$(cur_words) -> $P_EDIT_WORDS $_zm"
+    [ -n "$FP_CUR_N" ] && _sz="$(cur_words)"      # opis szablonu bazy, nie słowa ukrytej kopii
+    [ "${#P_EDIT[@]}" -gt 0 ] && [ -z "$P_FP" ] && _sz="$(cur_words) -> $P_EDIT_WORDS $_zm"
     [ "${#P_RARGS[@]}" -gt 0 ] && _sz="$_sz, $(T tabela) $_zm"
     # U65 (uwaga 3: "Silnik: jak w configu -- nie wiadomo co"): wartości słowami, nie "jak w configu".
     _sr="$(srcret_words)"
@@ -834,14 +840,14 @@ while :; do
     _epn="$(host_name "${_ep%:*}" "$NAME")"; [ "$_epn" = "${_ep%:*}" ] || _ep="$_epn ($_ep)"
     if [ "$PEER" != - ]; then er_row adres "$(T Źródło)" "$_ep${P_HOST:+ -> $P_HOST $_zm}" "$([ -n "$P_HOST" ] && echo 1 || echo 0)"; fi
     er_row dane "$(T Datasety)" "$_ds$_dsp" "$([ -n "$_dsp" ] && echo 1 || echo 0)"
-    er_row harmon "$(T Harmonogram)" "$_sz" "$([ "${#P_EDIT[@]}" -gt 0 ] || [ "${#P_RARGS[@]}" -gt 0 ] && echo 1 || echo 0)"
+    er_row harmon "$(T Harmonogram)" "$_sz" "$({ [ "${#P_EDIT[@]}" -gt 0 ] && [ -z "$P_FP" ]; } || [ "${#P_RARGS[@]}" -gt 0 ] && echo 1 || echo 0)"
     case "$_rodzaj" in backup|"kopia lokalna")
         er_row srcret "$(T 'Retencja źródła')" "$_sr" "$([ "${#P_SARGS[@]}" -gt 0 ] && echo 1 || echo 0)" ;; esac
     # U136: fastprune migawek zdalnych -- N i szablon bazowy ze znacznika w opisie szablonu relacji.
     if [ "$SNAPONLY" -eq 1 ]; then
-        _fp="$(fp_of "$CUR_P")"; FP_CUR_N="${_fp%% *}"; FP_CUR_BASE="${_fp#* }"; [ -n "$_fp" ] || { FP_CUR_N=""; FP_CUR_BASE=""; }
-        if [ -n "$FP_CUR_N" ]; then _fpv="$(Tv '$FASTPRUNE godz. -- wszystkie szczeble' '$FASTPRUNE' "$FP_CUR_N") ($FP_CUR_BASE)"; else _fpv="$(T 'nie')"; fi
-        er_row fastprune "$(T 'Fastprune')" "$_fpv" 0
+        _fpv="$(fp_words "$FP_CUR_N")"; [ -n "$FP_CUR_BASE" ] && _fpv="$_fpv ($FP_CUR_BASE)"
+        [ -n "$P_FP" ] && _fpv="$(fp_words "$FP_CUR_N") -> $(fp_words "$P_FP") $_zm"
+        er_row fastprune "$(T 'Fastprune')" "$_fpv" "$([ -n "$P_FP" ] && echo 1 || echo 0)"
     fi
     # Pasywna kopia lokalna (replika pvesr, MIRROR=1): bez historii i bez łącza okno silnika
     # było puste -- "Przywróć fabryczne" i "Gotowe" (właściciel 2026-10-26, pve2-nextcloud).
@@ -994,10 +1000,22 @@ while :; do
         # starym N wracają, gdy nowe N je obejmuje); puste = powrót do bazy, bez fastprune.
         fp_ask "$FP_CUR_N" || continue 2
         if [ -z "$FP_ANS" ]; then
-            [ -n "$FP_CUR_BASE" ] || continue 2          # nie było i nie ma -- nic do zmiany
+            if [ -z "$FP_CUR_BASE" ]; then              # nie było i nie ma -- cofnij czekającą zmianę
+                if [ -n "$P_FP" ]; then
+                    P_EDIT=(); P_FP=""
+                    [ "$FP_DIRTY" -eq 1 ] && [ -z "$FP_BAK" ] && "$ZB" delete-profile "$FPNAME" --yes >/dev/null 2>&1 && FP_DIRTY=0 && load_lists
+                fi
+                continue 2
+            fi
             PROFILE="$FP_CUR_BASE"; step=2; continue
         fi
-        [ "$FP_ANS" = "$FP_CUR_N" ] && continue 2       # to samo N -- nic do zmiany
+        if [ "$FP_ANS" = "$FP_CUR_N" ]; then             # z powrotem to, co zainstalowane
+            if [ -n "$P_FP" ]; then
+                P_EDIT=(); P_FP=""
+                [ "$FP_DIRTY" -eq 1 ] && [ -n "$FP_BAK" ] && cp -p "$FP_BAK" "$FP_FILE" && FP_DIRTY=0 && load_lists
+            fi
+            continue 2
+        fi
         _base="${FP_CUR_BASE:-${CUR_P:-default}}"
         if [ "$FP_DIRTY" -eq 0 ] && [ "$CUR_P" = "$FPNAME" ]; then
             FP_FILE="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); print(next((p.get("file") or "" for p in d.get("profiles",[]) if p.get("name")==sys.argv[2]),""))' "$TMPD/prof.json" "$FPNAME" 2>/dev/null | tr -d '\r')"
@@ -1165,6 +1183,8 @@ PYEOF
     # Szablon i tabela szczebli to dwie drogi do tego samego (sekcje od nowa) -- obowiązuje ostatnia.
     P_EDIT=("${ARGV[@]:3}"); cp "$TMPD/plan2.txt" "$TMPD/p_edit.txt"; P_TIERS=(); P_RARGS=(); P_SARGS=()
     P_EDIT_WORDS="$PROFILE"; [ "$PROFILE" = "$HNAME" ] && P_EDIT_WORDS="$(T 'własne ustawienia (tabela)')"
+    # U136: zmiana z wiersza Fastprune pokazuje się na nim (inaczej -- zwykły szablon -- nie)
+    P_FP=""; [ "$ACTION" = fastprune ] && P_FP="${FP_ANS:-off}"
     continue 2
 done
 done
