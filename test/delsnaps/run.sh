@@ -704,6 +704,79 @@ check "-G remote, ssh transport fails on the creation read (rc 255): rc 1, no de
       "1|0|auto_1 auto_2 auto_3 auto_4|1" "$(RS_SSH_FAIL=1 GFS_NOW=$RT rs_case rsbad root@shimhost: -H24 | cut -d'|' -f1-3,5)"
 rm -rf "$RSHIM"
 
+# --- REV-20261104-186 F2/F3: unreadable creation time, failed -R walk ---------
+# A shim zfs first on PATH (the -G shim's shape) breaks ONE thing and passes the rest
+# to the real zfs, recording each destroy:
+#   F2: `get ... creation` for the object whose name ends in @/# + $F_BAD (fail/empty/text);
+#   F3: `list ... -r <root>` -- fail (rc 1 after printing the root and one child),
+#       noroot (rc 0, children only), outside (rc 0, a dataset from another tree too).
+FSHIM="$(mktemp -d)"; FREAL="$(command -v zfs)"
+cat > "$FSHIM/zfs" <<SHIM
+#!/bin/bash
+if [ "\$1" = destroy ]; then echo "destroy \$*" >> "$FSHIM/destroys"; fi
+last="\${!#}"
+if [ "\$1 \$2 \$3 \$4 \$5 \$6" = "get -H -p -o value creation" ] && [ -n "\${F_BAD:-}" ]; then
+    case "\$last" in *"@\$F_BAD"|*"#\$F_BAD")
+        case "\$F_MODE" in
+            fail)  echo "cannot open '\$last': permission denied" >&2; exit 1 ;;
+            empty) exit 0 ;;
+            text)  echo "-"; exit 0 ;;
+        esac ;;
+    esac
+fi
+if [ "\$1" = list ] && [ -n "\${F_WALK:-}" ] && printf '%s ' "\$@" | grep -q -- ' -r '; then
+    case "\$F_WALK" in
+        fail)    printf '%s\n%s\n' "\$last" "\$last/c1"; echo "cannot iterate: I/O error" >&2; exit 1 ;;
+        noroot)  printf '%s\n' "\$last/c1"; exit 0 ;;
+        outside) printf '%s\n%s\n' "\$last" "${POOL}-other/x"; exit 0 ;;
+    esac
+fi
+exec "$FREAL" "\$@"
+SHIM
+chmod +x "$FSHIM/zfs"
+f_run() {   # <args...> -> "rc|destroys"; stderr kept in $FSHIM/err
+    : > "$FSHIM/destroys"
+    PATH="$FSHIM:$PATH" "$DELSNAPS" "$@" >/dev/null 2>"$FSHIM/err"; RC=$?
+    printf '%s|%s' "$RC" "$(grep -c . "$FSHIM/destroys")"
+}
+
+# F2, snapshot age mode: three old enough (-h0 after a 2 s sleep); the creation read of
+# the middle one fails / is empty / is not a number -> the other two go, it stays,
+# it is named, rc 1. On the old engine: rc 0 and the unreadable one silently "kept".
+for m in fail empty text; do
+    mkds "f2s$m"; mksnaps "f2s$m" auto_1 auto_2 auto_3; sleep 2
+    r=$(F_BAD=auto_2 F_MODE=$m f_run "$POOL/f2s$m" "auto_" -h0)
+    check "F2 age '$m': rc 1, two deleted, the unreadable kept and named" \
+          "1|2|auto_2|1" "$r|$(snaps_of "f2s$m")|$(grep -c "creation time unreadable for snapshot $POOL/f2s$m@auto_2" "$FSHIM/err")"
+done
+# F2, bookmark mode: the same contract.
+mkds f2b; mksnaps f2b seed_1
+zfs bookmark "$POOL/f2b@seed_1" "$POOL/f2b#tgt-bad1" || exit 1
+zfs bookmark "$POOL/f2b@seed_1" "$POOL/f2b#tgt-ok1" || exit 1
+sleep 2
+r=$(F_BAD=tgt-bad1 F_MODE=fail f_run -B "$POOL/f2b" "tgt-" -h0)
+check "F2 bookmark: rc 1, the readable one deleted, the unreadable kept and named" \
+      "1|1|tgt-bad1|1" "$r|$(marks_of f2b)|$(grep -c "creation time unreadable for bookmark $POOL/f2b#tgt-bad1" "$FSHIM/err")"
+# Positive control through the SAME shim, nothing broken: rc 0, all deleted.
+mkds f2ok; mksnaps f2ok auto_1 auto_2; sleep 2
+check "F2 control: shim, nothing broken -> rc 0, both deleted" \
+      "0|2|" "$(f_run "$POOL/f2ok" "auto_" -h0)|$(snaps_of f2ok)"
+
+# F3, -R walk: root + child c1, three snapshots each, keep 1 (-H1). A failed, rootless or
+# out-of-tree listing prunes NOTHING (not even the root) and ends rc 1, named.
+for w in fail noroot outside; do
+    mkds "f3$w/c1"; mksnaps "f3$w" auto_1 auto_2 auto_3; mksnaps "f3$w/c1" auto_1 auto_2 auto_3
+    r=$(F_WALK=$w f_run -R "$POOL/f3$w" "auto_" -H1)
+    check "F3 -R walk '$w': rc 1, nothing deleted, all kept, named" \
+          "1|0|auto_1 auto_2 auto_3|auto_1 auto_2 auto_3|1" \
+          "$r|$(snaps_of "f3$w")|$(snaps_of "f3$w/c1")|$(grep -c -- "-R on $POOL/f3$w:" "$FSHIM/err")"
+done
+# Positive control: the same tree through the shim, walk intact -> both pruned to one.
+mkds f3ok/c1; mksnaps f3ok auto_1 auto_2 auto_3; mksnaps f3ok/c1 auto_1 auto_2 auto_3
+check "F3 control: shim, walk intact -> rc 0, root and child keep the newest" \
+      "0|4|auto_3|auto_3" "$(f_run -R "$POOL/f3ok" "auto_" -H1)|$(snaps_of f3ok)|$(snaps_of f3ok/c1)"
+rm -rf "$FSHIM"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"
