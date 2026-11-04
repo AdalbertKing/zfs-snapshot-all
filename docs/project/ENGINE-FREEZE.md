@@ -3,7 +3,7 @@
 <!-- frozen: snapsend.sh 100755 fd00b49d0e1873c3554a4635dd3c630ab17ea1ed -->
 <!-- frozen: snapget.sh 100755 cb6f18dd62e9b62c9e30774bb5cdc570803551dd -->
 <!-- frozen: delsnaps.sh 100755 d02e8d449e56913b8a8794d0483758a77ee0e505 -->
-<!-- frozen: check-snap-age.sh 100755 93a0f5b77b43d48d6960d7ab088550c6b83ae10d -->
+<!-- frozen: check-snap-age.sh 100755 821030d457b18a73a3ba1cbb755d533434027add -->
 <!-- frozen: lib-zfs-snap.sh 100644 54dc026d1cfb81a360f13812ae5a593ab8f26cbe -->
 <!-- unfreeze: - -->
 
@@ -1242,6 +1242,17 @@ Owner-authorized refreezes:
     name the root and stay under it; otherwise nothing in the tree is pruned, rc 1.
   twin: snapsend.sh <-> snapget.sh changed symmetrically (F1, F4, F5, F6); the shared parts
   live in lib-zfs-snap.sh.
+- 2026-11-04 (check-snap-age.sh): **U164 -- an -R root with a foreign snapshot is a container.**
+  Owner direction ("Proszę przejść do implementacji", the U161-U164 batch, 2026-11-04), found
+  on Dąbrowska pve0 the same day: the archive relation read "czeka" for hours because its -R
+  root `rpool/data` carried one snapshot of another family (a chain marker), while every child
+  held a fresh copy. v2.8 -> v2.9.
+  - In -R mode, a root that has snapshots but none of the family is deferred: if the walk
+    finds the family anywhere below, the root is a container (said under -v); if it finds
+    none, the root is checked as an explicit target, exactly as before.
+  - Untouched: a root with the family, a bare root, explicit (non -R) targets (test/monitor
+    S10 and its two controls).
+  twin: none -- check-snap-age.sh is the only monitor engine.
 
 ## How it is enforced
 
