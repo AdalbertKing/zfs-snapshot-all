@@ -3375,8 +3375,12 @@ apply_recorded_grant_datasets
 # first (works if package lists are already cached); only fall back to
 # `apt-get update` (tolerating the enterprise-repo failure) if that doesn't
 # work. Shared by every package we need below.
+# APT_LAST_ERR: apt's own last "E:" line when every try failed -- check_dep's
+# callers silence this function, and the reason belongs in their message.
+APT_LAST_ERR=""
 apt_install_with_fallback() {
-    local pkg="$1"
+    local pkg="$1" out ver
+    APT_LAST_ERR=""
     apt-get install -y "$pkg" 2>/dev/null && return 0
     warn "plain install of $pkg failed, running apt-get update first (pve-enterprise 401 is expected/harmless here)"
     apt-get update || true
@@ -3384,7 +3388,23 @@ apt_install_with_fallback() {
     # A recommended package can fail alone -- measured on pve2 2026-10-26: mc pulled unzip,
     # whose security-repo URL was a 404, and the whole install failed. The package itself
     # does not need its recommendations.
-    apt-get install -y --no-install-recommends "$pkg"
+    out=$(apt-get install -y --no-install-recommends "$pkg" 2>&1) && return 0
+    printf '%s\n' "$out"
+    # A 404 for the package itself (first install on Debian 11, 2026-11-04):
+    # the lists named bullseye-security debs (git deb11u5, sudo deb11u4) that
+    # security.debian.org no longer served, and the same package from the main
+    # archive installed. One try with the newest version from a non-security
+    # origin, said out loud.
+    if printf '%s' "$out" | grep -q '404'; then
+        ver=$(apt-cache madison "$pkg" 2>/dev/null | awk -F'|' '$3 !~ /security/ { gsub(/[[:space:]]/, "", $2); print $2; exit }')
+        if [ -n "$ver" ]; then
+            warn "apt could not fetch $pkg (404 from the archive its package list names) -- trying $pkg=$ver from the main archive"
+            out=$(apt-get install -y --no-install-recommends "$pkg=$ver" 2>&1) && return 0
+            printf '%s\n' "$out"
+        fi
+    fi
+    APT_LAST_ERR=$(printf '%s\n' "$out" | grep -E '^E: ' | tail -1)
+    return 1
 }
 
 # ---- can this host actually DELIVER an alert? ------------------------------
@@ -4883,14 +4903,14 @@ check_dep() {
 
     case "$sev" in
         required)
-            die "$cmd is REQUIRED and could not be installed from '$pkg' -- $why"
+            die "$cmd is REQUIRED and could not be installed from '$pkg' -- $why${APT_LAST_ERR:+ (apt: $APT_LAST_ERR)}"
             ;;
         compression)
-            warn "$cmd could not be installed from '$pkg' -- $why"
+            warn "$cmd could not be installed from '$pkg' -- $why${APT_LAST_ERR:+ (apt: $APT_LAST_ERR)}"
             MISSING_OPTIONAL="$MISSING_OPTIONAL $cmd"
             ;;
         *)
-            warn "$cmd not available ('$pkg') -- $why"
+            warn "$cmd not available ('$pkg') -- $why${APT_LAST_ERR:+ (apt: $APT_LAST_ERR)}"
             MISSING_OPTIONAL="$MISSING_OPTIONAL $cmd"
             ;;
     esac
@@ -4925,6 +4945,11 @@ check_dep pigz     pigz             compression "alternative compressor, selecte
 
 check_dep ssh      openssh-client   optional    "remote push/pull; local-only hosts do not need it"
 check_dep mail     mailutils        optional    "notify-fail.sh / capacity + staleness alerting"
+# First install, 2026-11-04: a default Proxmox VE has no sudo, and the guest-freeze
+# grant (--allow-quiesce) is a sudoers rule. Installed here, in the phase every run
+# (--join included) goes through, instead of first inside --commit-scope -- after
+# the join and the replication grant, where a failed apt left a half-enrolled pair.
+check_dep sudo     sudo             optional    "the guest-freeze grant (--allow-quiesce) is a sudoers rule"
 
 # ------------------------------------------------------------------------------
 log "Part 1b: ZFS itself"

@@ -15081,6 +15081,20 @@ DS
 # ---------------------------------------------------------------------------
 SOURCE_REPO_DIR="${SOURCE_REPO_DIR:-/root/scripts/zfs-snapshot-all}"
 
+# remote_apt_install_cmd <package> -> a command for a remote root shell
+#
+# The same tries as deploy.sh's apt_install_with_fallback: plain install, then
+# apt-get update and once more, then -- when apt answered 404 -- the newest
+# version from a non-security origin (first install on Debian 11, 2026-11-04:
+# security.debian.org no longer served the bullseye debs the lists named; the
+# main-archive version installed). Runs in a subshell, so `exit` ends only it;
+# on failure apt's own output is what it prints. The package name is a literal
+# from this file, never data.
+remote_apt_install_cmd() {
+    local p="$1"
+    printf '%s' "( export DEBIAN_FRONTEND=noninteractive; apt-get install -y $p >/dev/null 2>&1 && exit 0; apt-get update >/dev/null 2>&1; o=\$(apt-get install -y $p 2>&1) && exit 0; case \"\$o\" in *404*) v=\$(apt-cache madison $p 2>/dev/null | awk -F'|' '\$3 !~ /security/ { gsub(/[[:space:]]/, \"\", \$2); print \$2; exit }'); if [ -n \"\$v\" ]; then echo \"apt: 404 for $p from the archive its list names -- trying $p=\$v from the main archive\"; o=\$(apt-get install -y $p=\$v 2>&1) && exit 0; fi ;; esac; printf '%s\\n' \"\$o\"; exit 1 )"
+}
+
 source_probe() {   # <host> <port> -> sets PROBE_* ; returns 0 when ssh answered
     local host="$1" port="$2" out rc=0
     PROBE_SSH_ERR=""; PROBE_HOSTNAME=""; PROBE_POOLS=""; PROBE_ZFS=0; PROBE_GIT=0; PROBE_APT=0; PROBE_SUDO=0; PROBE_DIR=""; PROBE_PKG=""; PROBE_REV=""
@@ -15214,7 +15228,7 @@ cmd_prepare_source() {
     esac
     [ "$PROBE_GIT" -eq 1 ] || [ "$PROBE_APT" -eq 1 ] || die "prepare-source: $SRC_HOST has no git and no apt-get -- install git there first. Nothing was changed."
     echo "PLAN (prepare-source $SRC_HOST):"
-    [ "$PROBE_GIT" -eq 1 ] || echo "  on $SRC_HOST as root:  apt-get install -y git   (no git there; apt-get update and a retry if the first try fails)"
+    [ "$PROBE_GIT" -eq 1 ] || echo "  on $SRC_HOST as root:  apt-get install -y git   (no git there; apt-get update and a retry if the first try fails; on a 404, the main-archive version)"
     echo "  on $SRC_HOST as root:  git clone $url $SOURCE_REPO_DIR"
     echo "  if the host cannot reach $url: a bundle of this checkout goes over scp and the clone is made from it"
     echo "  nothing else: no cron, no relationship, no key (add-client's JOIN does those)"
@@ -15224,9 +15238,7 @@ cmd_prepare_source() {
     fi
     local err
     if [ "$PROBE_GIT" -ne 1 ]; then
-        # The first two tries of deploy.sh's apt_install_with_fallback, over SSH:
-        # a stale package index fails the first try, so update and try once more.
-        err=$(rux_root_ssh "$SRC_HOST" "$SRC_PORT" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y git >/dev/null 2>&1 || { apt-get update >/dev/null 2>&1; apt-get install -y git; }; command -v git >/dev/null" 2>&1) \
+        err=$(rux_root_ssh "$SRC_HOST" "$SRC_PORT" "$(remote_apt_install_cmd git) && command -v git >/dev/null" 2>&1) \
             || die "prepare-source: apt-get install git on $SRC_HOST failed: $(printf '%s' "$err" | tr -d '\r' | grep -v '^$' | tail -1). Install it there by hand, then re-run."
         echo ">>> installed git on $SRC_HOST"
     fi
@@ -22416,7 +22428,7 @@ rux_source_sudo_ready() {
     case "$out" in *SUDO=yes*) return 0 ;; esac
     case "$out" in *APT=yes*) ;; *) die "--grant-quiesce: $host has no sudo and no apt-get -- install sudo there first, or drop --grant-quiesce. Nothing was changed anywhere." ;; esac
     log "--grant-quiesce: $host has no sudo (a default Proxmox VE has none) -- installing it there before the first change: apt-get install -y sudo"
-    out=$(rux_root_ssh "$host" "$port" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y sudo >/dev/null 2>&1 || { apt-get update >/dev/null 2>&1; apt-get install -y sudo; }; command -v sudo >/dev/null 2>&1 && { command -v visudo >/dev/null 2>&1 || [ -x /usr/sbin/visudo ] || [ -x /sbin/visudo ]; }" 2>&1) \
+    out=$(rux_root_ssh "$host" "$port" "$(remote_apt_install_cmd sudo) && command -v sudo >/dev/null 2>&1 && { command -v visudo >/dev/null 2>&1 || [ -x /usr/sbin/visudo ] || [ -x /sbin/visudo ]; }" 2>&1) \
         || die "--grant-quiesce: apt-get install sudo on $host failed: $(printf '%s' "$out" | tr -d '\r' | grep -v '^$' | tail -1). Install sudo there by hand (or drop --grant-quiesce), then re-run. Nothing else was changed anywhere."
     log "--grant-quiesce: sudo installed on $host"
 }
