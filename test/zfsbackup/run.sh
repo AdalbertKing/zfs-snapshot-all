@@ -11543,6 +11543,19 @@ if printf '%s' "$o1" | grep -q 'is a FACTORY template' && printf '%s' "$o2" | gr
 else
     bad "saveprof: delete-profile" "$o1" "$o2" "$o3"
 fi
+# --if-unused (first install, 2026-11-04): the wizard's clean-up deleted its draft
+# relacja-<NAME> although add-client had already left a PENDING relationship naming
+# it, and the retry died "profile not found". A named one is kept, a free one goes.
+pf_run --from=d7h24 --as=relacja-pve0 --tier=hourly --keep=4 >/dev/null 2>&1
+pf_run --from=d7h24 --as=relacja-free --tier=hourly --keep=4 >/dev/null 2>&1
+printf 'CLIENT_NAME=pve0\nSTATE=pending_enroll\nPROFILE=relacja-pve0\n' > "$PF/clients/pve0.conf"
+o4=$(dp_run relacja-pve0 --yes --if-unused); o5=$(dp_run relacja-free --yes --if-unused)
+if [ -f "$PF/user/relacja-pve0.conf" ] && printf '%s' "$o4" | grep -q "'relacja-pve0' kept -- 1 relationship" \
+   && [ ! -f "$PF/user/relacja-free.conf" ] && printf '%s' "$o5" | grep -q 'deleted'; then
+    ok "saveprof: delete-profile --if-unused keeps a template a PENDING relationship names, deletes a free one"
+else
+    bad "saveprof: delete-profile --if-unused" "$o4" "$o5" "$(ls "$PF/user")"
+fi
 rm -rf "$PF/clients"
 
 # --add-tier (owner, 2026-10-09: the F5 table shows all five tiers, an absent one
@@ -13970,10 +13983,14 @@ if ! ( bash "$ZFSBACKUP" --source=h:p/x --target=t/b --grant-quiesce ) >/dev/nul
 else
     bad "delrel: --grant-quiesce guard" "$(cat "$DR/err")"
 fi
-if [ "$(grep -c -- "--commit-scope='\$COLLECTOR_LABEL'\$aq\"" "$ZFSBACKUP")" -eq 3 ] && ! grep -q -- "deploy.sh --commit-scope='\$COLLECTOR_LABEL'\" 2>&1" "$ZFSBACKUP"; then
+# The three runs share rux_remote_commit_scope (#5, first install 2026-11-04):
+# its one ssh line carries $aq, and each of the three calls passes it.
+if [ "$(grep -c -- "--commit-scope='\$COLLECTOR_LABEL'\$aq\" 2>&1" "$ZFSBACKUP")" -eq 1 ] \
+        && [ "$(grep -cE '^ +rux_remote_commit_scope "\$host" "\$port" "\$[a-z_]+" "\$aq" ' "$ZFSBACKUP")" -eq 3 ] \
+        && ! grep -q -- "deploy.sh --commit-scope='\$COLLECTOR_LABEL'\" 2>&1" "$ZFSBACKUP"; then
     ok "delrel: every remote commit-scope --grant-remotely runs (first commit, extension, already-covered re-commit) carries the freeze grant when asked -- none was left without it"
 else
-    bad "delrel: a remote commit-scope without \$aq" "$(grep -n -- "--commit-scope='\$COLLECTOR_LABEL'" "$ZFSBACKUP" | cut -c1-160)"
+    bad "delrel: a remote commit-scope without \$aq" "$(grep -n -- "--commit-scope='\$COLLECTOR_LABEL'\|rux_remote_commit_scope" "$ZFSBACKUP" | cut -c1-160)"
 fi
 # U154 (Dabrowska 2026-11-04): a run of the relationship in flight stops delete-relation
 # --yes before anything is touched (record kept, no zfs call); the plan names the run.

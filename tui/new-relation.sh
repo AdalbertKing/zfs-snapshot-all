@@ -35,10 +35,12 @@ TMPD="$(mktemp -d)" || exit 1
 # Szkic ukrytego szablonu relacji ("Ręcznie" w kroku 6) znika, gdy relacja nie powstała.
 MANUAL_P=""; NR_DONE=0
 drop_manual_draft() {
-    [ -n "$MANUAL_P" ] && [ "$NR_DONE" -ne 1 ] && "$ZB" delete-profile "$MANUAL_P" --yes >/dev/null 2>&1
+    # --if-unused (pierwsza instalacja 2026-11-04): gdy czasownik zdążył założyć relację
+    # (pending), ona wskazuje ten szablon -- bez niego ponowny bieg padał "profile not found".
+    [ -n "$MANUAL_P" ] && [ "$NR_DONE" -ne 1 ] && "$ZB" delete-profile "$MANUAL_P" --yes --if-unused >/dev/null 2>&1
     MANUAL_P=""
     # U136: szablon fastprune powstaje przy planie -- bez założonej relacji nie zostaje.
-    [ -n "${FP_P:-}" ] && [ "$NR_DONE" -ne 1 ] && "$ZB" delete-profile "$FP_P" --yes >/dev/null 2>&1
+    [ -n "${FP_P:-}" ] && [ "$NR_DONE" -ne 1 ] && "$ZB" delete-profile "$FP_P" --yes --if-unused >/dev/null 2>&1
     FP_P=""
 }
 trap 'drop_manual_draft; rm -rf "$TMPD"' EXIT
@@ -140,7 +142,7 @@ $(T 'pozycja „Datasety”.\n\nWskaż host, z którym nie ma jeszcze relacji.')
 
 # --- krok 3: diagnoza -------------------------------------------------------
 probe() {   # check-source -> zmienne C_*
-    C_SSH=0; C_ERR=""; C_NAME=""; C_ZFS=0; C_POOLS=""; C_PKG=0; C_REV=""; C_DIR=""; C_GIT=1; C_BLK=""
+    C_SSH=0; C_ERR=""; C_NAME=""; C_ZFS=0; C_POOLS=""; C_PKG=0; C_REV=""; C_DIR=""; C_GIT=1; C_BLK=""; C_SUDO=1
     # U55 (kampania 2026-10-21): 15 s czarnego okna to sufit ConnectTimeout dla crona
     # (martwy host, nazwa na obcy adres -- U56). Żywy host w sieci odpowiada w 0,2-0,4 s
     # (pve10 -> pve9, zmierzone 2026-10-23); w oknie konsoli wystarczy 5 s, jak przy
@@ -163,14 +165,16 @@ for v in (1 if ssh.get("ok") else 0, one(ssh.get("error")), one(d.get("hostname"
           1 if z.get("ok") else 0,
           one(", ".join(_(u"%s (%s, wolne %s)") % (x.get("name"), x.get("size"), x.get("free")) for x in z.get("pools") or [])),
           1 if p.get("ok") else 0, one(p.get("rev")), one(p.get("path") or d.get("repo_dir")),
-          0 if d.get("git") is False else 1, one(d.get("repo_dir_blocked"))):
+          0 if d.get("git") is False else 1, one(d.get("repo_dir_blocked")),
+          0 if d.get("sudo") is False else 1):
     print(v)
 PYEOF
     { IFS= read -r C_SSH; IFS= read -r C_ERR; IFS= read -r C_NAME; IFS= read -r C_ZFS
       IFS= read -r C_POOLS; IFS= read -r C_PKG; IFS= read -r C_REV; IFS= read -r C_DIR
-      IFS= read -r C_GIT; IFS= read -r C_BLK; } <"$TMPD/check.vals"
+      IFS= read -r C_GIT; IFS= read -r C_BLK; IFS= read -r C_SUDO; } <"$TMPD/check.vals"
     case "$C_SSH" in 0|1) ;; *) C_SSH=0 ;; esac
     case "$C_GIT" in 0|1) ;; *) C_GIT=1 ;; esac
+    case "$C_SUDO" in 0|1) ;; *) C_SUDO=1 ;; esac
     case "$C_ZFS" in 0|1) ;; *) C_ZFS=0 ;; esac
     case "$C_PKG" in 0|1) ;; *) C_PKG=0 ;; esac
     [ "$C_SSH" -eq 1 ] || [ -n "$C_ERR" ] || C_ERR="$(tail -1 "$TMPD/check.err" 2>/dev/null)"
@@ -1341,6 +1345,7 @@ summary_text() {
     fi
     if [ "$FREEZE" -eq 1 ]; then
         if [ "$GRANT" -eq 1 ] && [ "$GQUIESCE" -eq 1 ]; then echo "$(T 'Zamrażanie: źródło dostanie zgodę stąd (--grant-quiesce).')"
+            [ "${C_SUDO:-1}" -eq 1 ] || echo "$(T '  (na źródle nie ma sudo: przed pierwszą zmianą zostanie doinstalowane, apt-get install sudo)')"
         else echo "$(T 'Zamrażanie: BEZ zgody źródła migawki wyjdą jako '\''_crash_'\'' (niezamrożone).')"; fi
     fi
     echo "$(T 'Prawa na źródle:') $( [ "$GRANT" -eq 1 ] && echo "$(T 'nadane stąd, od razu')" || echo "$(T 'zatwierdzisz SAM -- instalacja zatrzyma się i poda komendę')" )$( [ "$MANUAL" -eq 1 ] && echo "$(T '; parowanie ręczne')")"

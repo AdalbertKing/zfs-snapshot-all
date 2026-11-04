@@ -267,7 +267,11 @@ ZFS_PERMS="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canm
 # instead of being read by eye.
 PROBLEMS=0
 log() { echo ">>> $*"; }
-warn() { echo "!!! $*" >&2; PROBLEMS=$((PROBLEMS + 1)); }
+# One problem, one count. A message opening with four spaces continues the warn
+# above it (every such call in this file follows another warn), so it is printed
+# but not counted: --check-only said "2 issue(s)" for one stuck mail queue
+# (first install, 2026-11-04).
+warn() { echo "!!! $*" >&2; case "$*" in "    "*) ;; *) PROBLEMS=$((PROBLEMS + 1)) ;; esac; }
 die() { echo "FATAL: $*" >&2; exit 1; }
 
 CHECK_ONLY=0

@@ -140,6 +140,7 @@
 "  (--own-snapshots); stare wejdą do jej retencji i z czasem znikną.": "  (--own-snapshots); the old ones join its retention and age out.",
 "  (brak migawek)": "  (no snapshots)",
 "  (linie crona: list-jobs bez pola cron_lines -- starszy czytelnik)": "  (cron lines: list-jobs without the cron_lines field -- older reader)",
+"  (na źródle nie ma sudo: przed pierwszą zmianą zostanie doinstalowane, apt-get install sudo)": "  (the source has no sudo: it will be installed before the first change, apt-get install sudo)",
 "  (teraz podłączony)": "  (connected now)",
 "  (zmiana istniejącej)": "  (change of an existing one)",
 "  --  kursor na nowej relacji": "  --  cursor on the new relation",

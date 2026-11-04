@@ -974,6 +974,109 @@ else
     bad "27. no root channel is refused by the early gate too" "rc=$rc out=$out"
 fi
 
+# 27a-c. --grant-quiesce and sudo (first install, 2026-11-04): a default Proxmox VE
+#     has no sudo; deploy.sh found out inside --commit-scope, after the join and
+#     the replication grant, and apt failed there -- a half-enrolled pair. The
+#     early gate now asks, installs it before the first change, and refuses with
+#     apt's own reason when that fails. $WORK/27/calls is the order of remote calls.
+q_gate() {   # <sudo present 0|1> <apt rc> -> out, rc
+    rm -rf "$WORK/27"; mkdir -p "$WORK/27"
+    out="$( (
+        COLLECTOR_LABEL=colhost; RUX_GRANT_QUIESCE=1; Q_SUDO="$1"; Q_APT="$2"
+        rux_root_ssh() {
+            shift 2
+            case "$*" in
+                true) echo true >> "$WORK/27/calls"; return 0 ;;
+                *"echo SUDO=yes"*) echo probe >> "$WORK/27/calls"
+                    [ "$Q_SUDO" -eq 1 ] && echo SUDO=yes; echo APT=yes; return 0 ;;
+                *"apt-get install -y sudo"*) echo apt >> "$WORK/27/calls"
+                    [ "$Q_APT" -eq 0 ] || { echo "E: Failed to fetch http://security.debian.org/pool/updates/main/s/sudo/sudo_1.9.5p2-3+deb11u4_amd64.deb  404  Not Found"; return 100; }
+                    return 0 ;;
+                *"test -s"*) echo manifest >> "$WORK/27/calls"; return 0 ;;
+                *) echo "UNEXPECTED rux_root_ssh: $*" >&2; return 9 ;;
+            esac
+        }
+        rux_grant_remotely_preflight pve2 22
+    ) 2>&1 )"; rc=$?
+}
+q_gate 0 0
+if [ "$rc" -eq 0 ] && [ "$(tr '\n' ' ' < "$WORK/27/calls")" = "true probe apt manifest " ] && printf '%s' "$out" | grep -q "sudo installed on pve2"; then
+    ok "27a. --grant-quiesce, no sudo on the source: installed by the early gate, before anything else is asked or changed"
+else
+    bad "27a. --grant-quiesce, no sudo on the source: installed by the early gate" "rc=$rc calls=$(cat "$WORK/27/calls" 2>/dev/null) out=$out"
+fi
+q_gate 0 100
+if [ "$rc" -ne 0 ] && [ "$(tr '\n' ' ' < "$WORK/27/calls")" = "true probe apt " ] \
+   && printf '%s' "$out" | grep -q "apt-get install sudo on pve2 failed: E: Failed to fetch .*404  Not Found" \
+   && printf '%s' "$out" | grep -q "Nothing else was changed anywhere"; then
+    ok "27b. apt cannot install sudo: refused with apt's own last line, before the join manifest is even asked"
+else
+    bad "27b. apt cannot install sudo: refused with apt's reason" "rc=$rc calls=$(cat "$WORK/27/calls" 2>/dev/null) out=$out"
+fi
+q_gate 1 0
+if [ "$rc" -eq 0 ] && [ "$(tr '\n' ' ' < "$WORK/27/calls")" = "true probe manifest " ] && [ -z "$out" ]; then
+    ok "27c. sudo already there: no apt call, silent (positive control for 27a/b)"
+else
+    bad "27c. sudo already there: no apt call, silent" "rc=$rc calls=$(cat "$WORK/27/calls" 2>/dev/null) out=$out"
+fi
+
+# 27d-e. The remote --commit-scope run (first install, 2026-11-04): cut to `| tail -4`,
+#     the line that said WHY never reached this host's log and the wizard showed an
+#     unrelated mail warning as the reason. On failure the whole output is kept and
+#     the remote's !!!/FATAL lines are repeated marked "!!! [on HOST]".
+out="$( (
+    COLLECTOR_LABEL=colhost
+    rux_root_ssh() {
+        printf '>>> Phase 1\n!!! could not install the %s package -- no quiesce grant was created for zfsbackup-colhost\r\n' "'sudo'"
+        printf '>>> line %s\n' 1 2 3 4 5 6
+        printf '!!! the guest quiesce whitelist for zfsbackup-colhost could NOT be updated to this scope.\nFATAL: commit-scope did NOT complete\n'
+        return 1
+    }
+    rux_remote_commit_scope pve2 22 /root/scripts/zfs-snapshot-all " --allow-quiesce"
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 1 ] && printf '%s\n' "$out" | grep -q "^--- deploy.sh --commit-scope='colhost' --allow-quiesce on pve2: rc=1, its whole output ---$" \
+   && printf '%s\n' "$out" | grep -qx "    >>> Phase 1" \
+   && printf '%s\n' "$out" | grep -qx "!!! \[on pve2\] could not install the 'sudo' package -- no quiesce grant was created for zfsbackup-colhost" \
+   && printf '%s\n' "$out" | grep -qx "!!! \[on pve2\] commit-scope did NOT complete" \
+   && ! printf '%s' "$out" | grep -q $'\r'; then
+    ok "27d. a failed remote commit-scope: its WHOLE output in this log, its own reasons marked [on HOST], no CR"
+else
+    bad "27d. a failed remote commit-scope keeps the whole output" "rc=$rc out=$out"
+fi
+out="$( (
+    COLLECTOR_LABEL=colhost
+    rux_root_ssh() { printf '>>> line %s\n' 1 2 3 4 5 6; return 0; }
+    rux_remote_commit_scope pve2 22 /root/scripts/zfs-snapshot-all ""
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "$(printf '>>> line %s\n' 3 4 5 6)" ]; then
+    ok "27e. a successful remote commit-scope still prints only its last four lines"
+else
+    bad "27e. a successful remote commit-scope prints its tail" "rc=$rc out=$out"
+fi
+
+# 27f. The RESUME skips the early gate (state already exists), so the grant step
+#     asks for sudo itself: apt fails -> refused before the scope is written.
+rm -rf "$WORK/27"; mkdir -p "$WORK/27"
+out="$( (
+    COLLECTOR_LABEL=colhost; RUX_GRANT_QUIESCE=1
+    rux_root_ssh() {
+        shift 2
+        case "$*" in
+            true) return 0 ;;
+            *"echo SUDO=yes"*) echo APT=yes; return 0 ;;
+            *"apt-get install -y sudo"*) echo "E: Unable to locate package sudo"; return 100 ;;
+            *) echo "$*" >> "$WORK/27/later"; return 0 ;;
+        esac
+    }
+    rux_root_ssh_in() { echo "scope write" >> "$WORK/27/later"; cat >/dev/null; return 0; }
+    rux_grant_remotely pve2 22 rpool/data
+) 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "apt-get install sudo on pve2 failed: E: Unable to locate package sudo" && [ ! -e "$WORK/27/later" ]; then
+    ok "27f. a resume with --grant-quiesce and no sudo: refused by the grant step before any scope is read, written or committed"
+else
+    bad "27f. resume asks for sudo before the scope" "rc=$rc out=$out later=$(cat "$WORK/27/later" 2>/dev/null)"
+fi
+
 # 28. The gate is WIRED where it claims to be: ahead of every line in rux_deploy
 #     that changes something. Asserted against the source because placement is
 #     the whole finding -- the old checks existed and ran too late.

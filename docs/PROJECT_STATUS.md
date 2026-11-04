@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8ef5e0f81f44d1c9 -->
+<!-- status-covers-digest: ed76f8c5b8aabb5c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,40 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Pierwsza instalacja, druga paczka (2026-11-04, `41a7ce62` + `77e758be`, NIEWYDANE).** Też z pierwszej
+  instalacji pary PVE 7.4. (A) `--grant-quiesce` na źródle bez sudo (domyślny Proxmox go nie ma):
+  `deploy.sh` instalował sudo dopiero w `--commit-scope`, po joinie i grancie replikacji, apt tam
+  zawiódł i para została wpół zapisana. Teraz, przy `--grant-quiesce`, wczesna bramka
+  `rux_grant_remotely_preflight` (nowa relacja) pyta o sudo i instaluje je przed pierwszą zmianą, a
+  przy wznowieniu robi to `rux_grant_remotely` przed zapisem zakresu (gdy pierwsza próba zawiedzie:
+  `apt-get update` i druga próba).
+  Gdy apt zawiedzie, odmowa podaje ostatnią linię apt. `check-source` ma pole `sudo`, a podsumowanie
+  kreatora mówi, że sudo zostanie doinstalowane. (B) Zdalne `--commit-scope` szło przez `| tail -4`,
+  więc przyczyna nie trafiała do dziennika kolektora, a „Powód” w oknie zaczynał się od lokalnego
+  ostrzeżenia o poczcie. Teraz przy porażce całe zdalne wyjście jest w dzienniku, a zdalne linie
+  `!!!`/`FATAL` są powtórzone z oznaczeniem `!!! [on HOST]`. Gdy takie linie są, `verb_refusal`
+  pokazuje je i FATAL-e. (C) `could not refresh` klonu konta na git 2.30.2: przyczyna prawdopodobna wg
+  dokumentacji, nieodtworzona. Kontrola `safe.directory` (git 2.35.2) czyta to ustawienie tylko z
+  configu systemowego i globalnego, nie z `-c`, a Debian 11 ma ją jako backport od
+  `1:2.30.2-1+deb11u1` (CVE-2022-24765, DSA-5332-1); czasownik podawał je przez `-c`. Teraz
+  `safe.directory` idzie też z tymczasowego globalnego configu, a ostrzeżenie zawiera powód podany przez
+  git. Bez testu, bez hosta z tym gitem. (D) `warn()` w `deploy.sh`: linia-kontynuacja (4
+  spacje, zawsze pod innym `warn`) jest wypisywana, ale nie liczona. `--check-only` liczył „2 issue(s)”
+  za jedną zablokowaną kolejkę poczty; `test/alertmail` przypina teraz 1. (E) Ustalenie, bez zmiany
+  kodu: kreator dokleja `--grant-quiesce`, gdy szablon zamraża (przy „Ręcznie” bazą jest bieżący
+  szablon, a gdy go nie ma, `d7h24`, który ma `quiesce = auto,degrade` na szczeblu dobowym), prawa na
+  źródle idą stąd, a pole „Nadaj też zgodę
+  na zamrażanie gości” w Zaawansowanych jest domyślnie włączone. Którą tabelę ustawił właściciel, nie
+  sprawdziłem: ukryty szablon został skasowany (F). (F) Przy porażce kreator kasował szkic
+  `relacja-<NAZWA>`, choć `add-client` zostawił już relację w stanie `pending_enroll`, która go
+  wskazuje; ponowny bieg padał na „profile not found”. `delete-profile --if-unused` zostawia szablon,
+  który wskazuje jakakolwiek relacja na tym hoście, i tej opcji używa sprzątanie kreatora. Odmowa snaponly wymienia
+  oba katalogi szablonów. Testy: `test/rux` 27a-e, `test/zfsbackup` saveprof `--if-unused`, `test/tui`
+  okno odmowy, `test/alertmail` problems=1. Każdy wycięty i uruchomiony osobno: zielony na gałęzi,
+  czerwony na `main`. **Nie sprawdzone na żywo:** A, B i F (żaden host labu nie jest bez sudo), C.
+  Zostają do decyzji właściciela (pozycje #10, #11, #13, #14 listy z tego wdrożenia): retencja poza
+  configiem, transakcja kreatora, deinstalacja pakietu.
 
 - **Pierwsza instalacja: git i stary katalog (2026-11-04, `269dbe0d` + `203260d7`, NIEWYDANE).** Wyszło przy
   wdrożeniu A-TASSA (PVE 7.4). (1) Źródło bez gita: `prepare-source` odmawiał, choć miał kanał root.

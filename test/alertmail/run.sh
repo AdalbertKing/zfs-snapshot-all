@@ -85,26 +85,29 @@ run_verdict() {
 # ---------------------------------------------------------------------------
 # Baseline hard failures: missing pieces stay loud. (Review criterion 3.)
 # ---------------------------------------------------------------------------
+# problems=1, not 2: the indented "fix:"/"look:" line under each verdict continues
+# the same warn and is not a second problem (--check-only counted 2 for one stuck
+# queue until 2026-11-04).
 R=$( (
     PROBLEMS=0
     PATH="$TMPD/nowhere" alert_delivery_verdict >"$TMPD/out" 2>&1
     echo "rc=$? problems=$PROBLEMS"
 ) )
-if [ "$R" = "rc=1 problems=2" ] && grep -q "no 'mail' command" "$TMPD/out"; then
+if [ "$R" = "rc=1 problems=1" ] && grep -q "no 'mail' command" "$TMPD/out"; then
     ok "no mail(1) at all: hard failure, PROBLEMS incremented"
 else
     bad "no mail(1) at all: hard failure, PROBLEMS incremented" "got: $R" "$(cat "$TMPD/out")"
 fi
 
 R=$(run_verdict 1 "NONE")
-if [ "$R" = "rc=1 problems=2" ] && grep -q "no MTA provides sendmail" "$TMPD/out"; then
+if [ "$R" = "rc=1 problems=1" ] && grep -q "no MTA provides sendmail" "$TMPD/out"; then
     ok "mail(1) present but no MTA: hard failure, PROBLEMS incremented"
 else
     bad "mail(1) present but no MTA: hard failure, PROBLEMS incremented" "got: $R" "$(cat "$TMPD/out")"
 fi
 
 R=$(run_verdict 0 "3")
-if [ "$R" = "rc=1 problems=2" ] && grep -q "STUCK IN THE QUEUE" "$TMPD/out"; then
+if [ "$R" = "rc=1 problems=1" ] && grep -q "STUCK IN THE QUEUE" "$TMPD/out"; then
     ok "3 messages queued: hard failure, PROBLEMS incremented"
 else
     bad "3 messages queued: hard failure, PROBLEMS incremented" "got: $R" "$(cat "$TMPD/out")"
