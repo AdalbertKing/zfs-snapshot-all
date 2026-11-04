@@ -4508,17 +4508,26 @@ fi
 # hostach. Okno mowi "zalozona do polowy (stan: ...)" i daje Wycofaj (delete-relation NAZWA --yes:
 # tu i na zrodle) albo Ponow (ta sama komenda, bez nowego planu). Kontrola: porazka bez rekordu --
 # stare "nie zostala zalozona", bez menu. Na main: zawsze "nie zostala zalozona", zadnego wyjscia.
-NROUT=$(nr_run "${NRT}0${T}wycofaj
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+${NRT}0${T}wycofaj
 0${T}
 " NR_HALF=1 NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); NRRC=$?
 H_A=$(grep -c -- '--grant-remotely --install --yes' "$NR/zb.log"); H_AW="$(cat "$NR/wt.log")"
 H_AD=0; grep -qx 'delete-relation pve9b --yes' "$NR/zb.log" && H_AD=1
 H_AC=0; [ -e "$NR/new-relation-pve9b.cmd" ] && H_AC=1
-NROUT=$(nr_run "${NRT}0${T}ponow
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+${NRT}0${T}ponow
 0${T}
 " NR_HALF=once NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); NRRC=$?
 H_B=$(grep -c -- '--grant-remotely --install --yes' "$NR/zb.log"); H_BD=0; grep -q '^delete-relation' "$NR/zb.log" && H_BD=1
-NROUT=$(nr_run "${NRT}0${T}wycofaj
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+${NRT}0${T}wycofaj
 " NR_HALF=nomark NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); NRRC=$?
 H_CW="$(cat "$NR/wt.log")"
 if [ "$H_A" -eq 1 ] && [ "$H_AD" -eq 1 ] && [ "$H_AC" -eq 0 ] && has "$H_AW" "założona do połowy (stan: pending_enroll)" && has "$H_AW" "stan pośredni"    && has "$H_AW" "wycofana (rc=0)" && ! has "$H_AW" "nie została założona"    && [ "$H_B" -eq 2 ] && [ "$H_BD" -eq 0 ]    && has "$H_CW" "nie została założona" && ! has "$H_CW" "stan pośredni"; then
