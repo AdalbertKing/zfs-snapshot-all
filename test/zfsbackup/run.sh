@@ -11543,6 +11543,19 @@ if printf '%s' "$o1" | grep -q 'is a FACTORY template' && printf '%s' "$o2" | gr
 else
     bad "saveprof: delete-profile" "$o1" "$o2" "$o3"
 fi
+# --if-unused (first install, 2026-11-04): the wizard's clean-up deleted its draft
+# relacja-<NAME> although add-client had already left a PENDING relationship naming
+# it, and the retry died "profile not found". A named one is kept, a free one goes.
+pf_run --from=d7h24 --as=relacja-pve0 --tier=hourly --keep=4 >/dev/null 2>&1
+pf_run --from=d7h24 --as=relacja-free --tier=hourly --keep=4 >/dev/null 2>&1
+printf 'CLIENT_NAME=pve0\nSTATE=pending_enroll\nPROFILE=relacja-pve0\n' > "$PF/clients/pve0.conf"
+o4=$(dp_run relacja-pve0 --yes --if-unused); o5=$(dp_run relacja-free --yes --if-unused)
+if [ -f "$PF/user/relacja-pve0.conf" ] && printf '%s' "$o4" | grep -q "'relacja-pve0' kept -- 1 relationship" \
+   && [ ! -f "$PF/user/relacja-free.conf" ] && printf '%s' "$o5" | grep -q 'deleted'; then
+    ok "saveprof: delete-profile --if-unused keeps a template a PENDING relationship names, deletes a free one"
+else
+    bad "saveprof: delete-profile --if-unused" "$o4" "$o5" "$(ls "$PF/user")"
+fi
 rm -rf "$PF/clients"
 
 # --add-tier (owner, 2026-10-09: the F5 table shows all five tiers, an absent one
@@ -13713,6 +13726,72 @@ else
     bad "preparesource: real probe" "old=$r_old empty=$r_empty file=$r_file none=$r_none rc=$r_rc" "$(ls -A "$PS/real-old")" "$(cat "$PS/err")"
 fi
 rm -rf "$PS/real-old" "$PS/real-empty" "$PS/real-file"
+# apt 404 from the security archive (first install on Debian 11, 2026-11-04):
+# the lists named bullseye-security debs security.debian.org no longer served;
+# the same package from the main archive installed. Stub apt-get fails every
+# install with that 404 (APT404=1) or with a plain "Unable to locate"
+# (APT404=0), except PKG=<the main-archive version>; apt-cache madison lists
+# the security version first, as the real one sorts it. Both installers --
+# the remote command prepare-source/the sudo check send, and deploy.sh's own
+# apt_install_with_fallback -- run for real against it.
+AP="$PS/apt"; mkdir -p "$AP"
+cat > "$AP/apt-get" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "${APT_LOG:?}"
+[ "$1" = update ] && exit 0
+for a in "$@"; do case "$a" in *=1:2.30.2-1+deb11u2) exit 0 ;; esac; done
+if [ "${APT404:-1}" -eq 1 ]; then
+    echo "E: Failed to fetch http://security.debian.org/debian-security/pool/updates/main/g/git/git_2.30.2-1+deb11u5_amd64.deb  404  Not Found [IP: 151.101.2.132 80]"
+else
+    echo "E: Unable to locate package git"
+fi
+exit 100
+EOF
+cat > "$AP/apt-cache" <<'EOF'
+#!/bin/bash
+echo "       git | 1:2.30.2-1+deb11u5 | http://security.debian.org bullseye-security/main amd64 Packages"
+echo "       git | 1:2.30.2-1+deb11u2 | http://ftp.debian.org/debian bullseye/main amd64 Packages"
+EOF
+chmod +x "$AP/apt-get" "$AP/apt-cache"
+if grep -q '^remote_apt_install_cmd() {' "$ZFSBACKUP"; then
+    eval "$(product_fn "$ZFSBACKUP" remote_apt_install_cmd)"
+    : > "$AP/log"; r404_rc=0; r404=$(PATH="$AP:$PATH" APT_LOG="$AP/log" APT404=1 bash -c "$(remote_apt_install_cmd git)" 2>&1) || r404_rc=$?
+    r404_log=$(cat "$AP/log")
+    : > "$AP/log"; rno_rc=0; rno=$(PATH="$AP:$PATH" APT_LOG="$AP/log" APT404=0 bash -c "$(remote_apt_install_cmd git)" 2>&1) || rno_rc=$?
+    rno_log=$(cat "$AP/log")
+    if [ "$r404_rc" -eq 0 ] && printf '%s' "$r404" | grep -q 'trying git=1:2.30.2-1+deb11u2 from the main archive' \
+            && printf '%s\n' "$r404_log" | grep -qx 'install -y git=1:2.30.2-1+deb11u2' \
+            && [ "$rno_rc" -eq 1 ] && printf '%s' "$rno" | grep -q '^E: Unable to locate package git' \
+            && ! printf '%s\n' "$rno_log" | grep -q 'git='; then
+        ok "apt 404: the remote install command takes the main-archive version on a 404 and says so; any other failure is apt's own line, rc 1"
+    else
+        bad "apt 404: remote install command" "404: rc=$r404_rc $r404" "$r404_log" "other: rc=$rno_rc $rno" "$rno_log"
+    fi
+else
+    bad "apt 404: remote install command" "zfs-backup.sh has no remote_apt_install_cmd"
+fi
+(
+    warn() { echo "!!! $*" >&2; }
+    eval "$(product_fn "$REPO/deploy.sh" apt_install_with_fallback)"
+    export PATH="$AP:$PATH" APT_LOG="$AP/log"
+    : > "$AP/log"; d404_rc=0; APT404=1 apt_install_with_fallback git > "$AP/d404.out" 2>&1 || d404_rc=$?
+    d404_log=$(cat "$AP/log")
+    : > "$AP/log"; dno_rc=0; APT404=0 apt_install_with_fallback git > "$AP/dno.out" 2>&1 || dno_rc=$?
+    dno_err="$APT_LAST_ERR"; dno_log=$(cat "$AP/log")
+    if [ "$d404_rc" -eq 0 ] && grep -q 'trying git=1:2.30.2-1+deb11u2 from the main archive' "$AP/d404.out" \
+            && printf '%s\n' "$d404_log" | grep -qx 'install -y --no-install-recommends git=1:2.30.2-1+deb11u2' \
+            && [ "$dno_rc" -ne 0 ] && [ "$dno_err" = "E: Unable to locate package git" ] \
+            && ! printf '%s\n' "$dno_log" | grep -q 'git='; then
+        echo "PASS"
+    else
+        echo "FAIL 404: rc=$d404_rc $(tr '\n' ' ' < "$AP/d404.out") | $d404_log || other: rc=$dno_rc err='$dno_err' | $dno_log"
+    fi
+) > "$AP/deploy.res" 2>&1
+case "$(tail -1 "$AP/deploy.res")" in
+    PASS) ok "apt 404: deploy.sh's apt_install_with_fallback takes the main-archive version on a 404 and says so; otherwise APT_LAST_ERR carries apt's line for check_dep" ;;
+    *)    bad "apt 404: deploy.sh apt_install_with_fallback" "$(cat "$AP/deploy.res")" ;;
+esac
+rm -rf "$AP"
 rm -f "$PS/ssh.argv"
 if ! ps_run prepare-source dead --yes >"$PS/out" && grep -q 'no root SSH channel to dead' "$PS/err" && grep -q 'ssh-copy-id root@dead' "$PS/err" && ! grep -q 'git clone' "$PS/ssh.argv"; then
     ok "preparesource: no ssh channel = refusal naming ssh-copy-id as the operator's step; nothing attempted"
@@ -13970,10 +14049,14 @@ if ! ( bash "$ZFSBACKUP" --source=h:p/x --target=t/b --grant-quiesce ) >/dev/nul
 else
     bad "delrel: --grant-quiesce guard" "$(cat "$DR/err")"
 fi
-if [ "$(grep -c -- "--commit-scope='\$COLLECTOR_LABEL'\$aq\"" "$ZFSBACKUP")" -eq 3 ] && ! grep -q -- "deploy.sh --commit-scope='\$COLLECTOR_LABEL'\" 2>&1" "$ZFSBACKUP"; then
+# The three runs share rux_remote_commit_scope (#5, first install 2026-11-04):
+# its one ssh line carries $aq, and each of the three calls passes it.
+if [ "$(grep -c -- "--commit-scope='\$COLLECTOR_LABEL'\$aq\" 2>&1" "$ZFSBACKUP")" -eq 1 ] \
+        && [ "$(grep -cE '^ +rux_remote_commit_scope "\$host" "\$port" "\$[a-z_]+" "\$aq" ' "$ZFSBACKUP")" -eq 3 ] \
+        && ! grep -q -- "deploy.sh --commit-scope='\$COLLECTOR_LABEL'\" 2>&1" "$ZFSBACKUP"; then
     ok "delrel: every remote commit-scope --grant-remotely runs (first commit, extension, already-covered re-commit) carries the freeze grant when asked -- none was left without it"
 else
-    bad "delrel: a remote commit-scope without \$aq" "$(grep -n -- "--commit-scope='\$COLLECTOR_LABEL'" "$ZFSBACKUP" | cut -c1-160)"
+    bad "delrel: a remote commit-scope without \$aq" "$(grep -n -- "--commit-scope='\$COLLECTOR_LABEL'\|rux_remote_commit_scope" "$ZFSBACKUP" | cut -c1-160)"
 fi
 # U154 (Dabrowska 2026-11-04): a run of the relationship in flight stops delete-relation
 # --yes before anything is touched (record kept, no zfs call); the plan names the run.

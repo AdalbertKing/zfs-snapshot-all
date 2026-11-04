@@ -6,8 +6,8 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-
 <!-- status-covers-digest: 5cf9dc98f5d8c6d8 -->
+<!-- status-covers-digest: 0e4d078b7398eac8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,64 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Pierwsza instalacja, trzecia paczka (2026-11-05, `e31a6e80`, `49089baf`, `--uninstall`; NIEWYDANE).**
+  (A) apt i 404: na Debianie 11 listy pakietów wskazywały pakiety .deb z bullseye-security (git deb11u5, sudo
+  deb11u4), których security.debian.org już nie podawał, więc każda próba apt kończyła się błędem.
+  Ten sam pakiet z głównego archiwum instalował się bez problemu. `apt_install_with_fallback` w `deploy.sh` i zdalna instalacja
+  (`remote_apt_install_cmd`: git w `prepare-source`, sudo przed pierwszą zmianą przebiegu `--grant-quiesce`) robią przy 404 jeszcze jedną
+  próbę: najnowsza wersja spoza archiwum security, z komunikatem. Gdy wszystko zawiedzie, `check_dep`
+  podaje ostatnią linię `E:` z apt zamiast ją gubić. sudo jest w fazie zależności `deploy.sh`, więc
+  `--join` instaluje je przed pierwszą zmianą (zależność opcjonalna: nieudana instalacja to ostrzeżenie). Skutek uboczny: `--check-only` na hoście bez sudo
+  zgłasza `[missing] sudo`. (B) Delegacja kolektora (#12 z listy uwag pierwszej instalacji), ocena: grant fazy 8g na
+  `rpool/data rpool/ROOT/pve-1` to prawo konta delegowanego do WŁASNYCH datasetów hosta; pętla grantu nie
+  sprawdza roli hosta. Cel kopii dostaje grant osobno, per relacja (`--pair --local-user`, `activate`). Zachowanie
+  bez zmian, a linia `grant-datasets: using the list recorded` mówi teraz, czyje to datasety. (C)
+  `deploy.sh --uninstall [--yes]`: odwrotność zwykłego wdrożenia. Usuwa dwa bloki crona narzędzia (root i
+  konta delegowane), konto delegowane rozpoznane po GECOS z `useradd` (granty zfs, zgoda na
+  zamrażanie, logrotate, `userdel -r`), siedem skryptów hosta z `/root/scripts` (po nazwie), link `zfs-backup`, konfigurację alertów i
+  logrotate, bramkę par, helper zamrażania, `/etc/zfs-snapshot-all`, `/var/lib/zfs-snapshot-all`,
+  stan aktualizacji i pauzy, pusty katalog kluczy par oraz grupę `zfsalert`, gdy nie ma już członków. Bez `--yes`
+  i bez blokad pokazuje tylko plan. Relacji nie rozbiera: dopóki na hoście jest żywy rekord relacji, manifest pary albo
+  konto peera, wypisuje czasownik dla każdego (`delete-relation`, `--leave`, `--unpair`) i odmawia
+  wykonania (rc 1, także bez `--yes`). Zostają datasety, migawki, pakiety, `known_hosts` i checkout. Testy: test/zfsbackup
+  „apt 404” x2, test/joinmanifest „--uninstall”, czerwone na origin/main. NA ŻYWO: plan
+  `--uninstall` na pve11 (odmowa z listą relacji, crontab bez zmian); `deploy.sh --check-only` z drzewa gałęzi na
+  pve10 i pve11 (oba z kontem delegowanym): `[ok] sudo`, jedyny problem to bramka par różna od checkoutu (hosty na 1.0.10). NIE na żywo: `--uninstall --yes`
+  na prawdziwym hoście i instalacja apt przy prawdziwym 404.
+- **Pierwsza instalacja, druga paczka (2026-11-04, `41a7ce62` + `77e758be`, NIEWYDANE).** Też z pierwszej
+  instalacji pary PVE 7.4. (A) `--grant-quiesce` na źródle bez sudo (domyślny Proxmox go nie ma):
+  `deploy.sh` instalował sudo dopiero w `--commit-scope`, po joinie i grancie replikacji, apt tam
+  zawiódł i para została wpół zapisana. Teraz, przy `--grant-quiesce`, wczesna bramka
+  `rux_grant_remotely_preflight` (nowa relacja) pyta o sudo i instaluje je przed pierwszą zmianą, a
+  przy wznowieniu robi to `rux_grant_remotely` przed zapisem zakresu (gdy pierwsza próba zawiedzie:
+  `apt-get update` i druga próba).
+  Gdy apt zawiedzie, odmowa podaje ostatnią linię apt. `check-source` ma pole `sudo`, a podsumowanie
+  kreatora mówi, że sudo zostanie doinstalowane. (B) Zdalne `--commit-scope` szło przez `| tail -4`,
+  więc przyczyna nie trafiała do dziennika kolektora, a „Powód” w oknie zaczynał się od lokalnego
+  ostrzeżenia o poczcie. Teraz przy porażce całe zdalne wyjście jest w dzienniku, a zdalne linie
+  `!!!`/`FATAL` są powtórzone z oznaczeniem `!!! [on HOST]`. Gdy takie linie są, `verb_refusal`
+  pokazuje je i FATAL-e. (C) `could not refresh` klonu konta na git 2.30.2: przyczyna prawdopodobna wg
+  dokumentacji, nieodtworzona. Kontrola `safe.directory` (git 2.35.2) czyta to ustawienie tylko z
+  configu systemowego i globalnego, nie z `-c`, a Debian 11 ma ją jako backport od
+  `1:2.30.2-1+deb11u1` (CVE-2022-24765, DSA-5332-1); czasownik podawał je przez `-c`. Teraz
+  `safe.directory` idzie też z tymczasowego globalnego configu, a ostrzeżenie zawiera powód podany przez
+  git. Bez testu, bez hosta z tym gitem. (D) `warn()` w `deploy.sh`: linia-kontynuacja (4
+  spacje, zawsze pod innym `warn`) jest wypisywana, ale nie liczona. `--check-only` liczył „2 issue(s)”
+  za jedną zablokowaną kolejkę poczty; `test/alertmail` przypina teraz 1. (E) Ustalenie, bez zmiany
+  kodu: kreator dokleja `--grant-quiesce`, gdy szablon zamraża (przy „Ręcznie” bazą jest bieżący
+  szablon, a gdy go nie ma, `d7h24`, który ma `quiesce = auto,degrade` na szczeblu dobowym), prawa na
+  źródle idą stąd, a pole „Nadaj też zgodę
+  na zamrażanie gości” w Zaawansowanych jest domyślnie włączone. Którą tabelę ustawił właściciel, nie
+  sprawdziłem: ukryty szablon został skasowany (F). (F) Przy porażce kreator kasował szkic
+  `relacja-<NAZWA>`, choć `add-client` zostawił już relację w stanie `pending_enroll`, która go
+  wskazuje; ponowny bieg padał na „profile not found”. `delete-profile --if-unused` zostawia szablon,
+  który wskazuje jakakolwiek relacja na tym hoście, i tej opcji używa sprzątanie kreatora. Odmowa snaponly wymienia
+  oba katalogi szablonów. Testy: `test/rux` 27a-e, `test/zfsbackup` saveprof `--if-unused`, `test/tui`
+  okno odmowy, `test/alertmail` problems=1. Każdy wycięty i uruchomiony osobno: zielony na gałęzi,
+  czerwony na `main`. **Nie sprawdzone na żywo:** A, B i F (żaden host labu nie jest bez sudo), C.
+  Zostają do decyzji właściciela (pozycje #10, #11, #13, #14 listy z tego wdrożenia): retencja poza
+  configiem, transakcja kreatora, deinstalacja pakietu.
 
 - **Pierwsza instalacja: git i stary katalog (2026-11-04, `269dbe0d` + `203260d7`, NIEWYDANE).** Wyszło przy
   wdrożeniu A-TASSA (PVE 7.4). (1) Źródło bez gita: `prepare-source` odmawiał, choć miał kanał root.

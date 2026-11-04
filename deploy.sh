@@ -267,7 +267,11 @@ ZFS_PERMS="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canm
 # instead of being read by eye.
 PROBLEMS=0
 log() { echo ">>> $*"; }
-warn() { echo "!!! $*" >&2; PROBLEMS=$((PROBLEMS + 1)); }
+# One problem, one count. A message opening with four spaces continues the warn
+# above it (every such call in this file follows another warn), so it is printed
+# but not counted: --check-only said "2 issue(s)" for one stuck mail queue
+# (first install, 2026-11-04).
+warn() { echo "!!! $*" >&2; case "$*" in "    "*) ;; *) PROBLEMS=$((PROBLEMS + 1)) ;; esac; }
 die() { echo "FATAL: $*" >&2; exit 1; }
 
 CHECK_ONLY=0
@@ -434,6 +438,8 @@ PEER_LOCAL_USER=""
 # Opt-in for a --peer name that resolves outside RFC1918. Off by default, see
 # assert_peer_address_sane.
 PEER_ALLOW_PUBLIC=0
+UNINSTALL_MODE=0
+UNINSTALL_YES=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -481,6 +487,8 @@ while [ "$#" -gt 0 ]; do
         --draft-scope)          DRAFT_SCOPE_MODE=1; DRAFT_SCOPE_LABEL="${2:-}"; shift 2 ;;
         --leave=*)               LEAVE_MODE=1; LEAVE_LABEL="${1#*=}"; shift ;;
         --leave)                 LEAVE_MODE=1; LEAVE_LABEL="${2:-}"; shift 2 ;;
+        --uninstall)             UNINSTALL_MODE=1; shift ;;
+        --yes)                   UNINSTALL_YES=1; shift ;;
         --draft-scope-check=*)  DRAFT_SCOPE_CHECK=1; DRAFT_SCOPE_LABEL="${1#*=}"; shift ;;
         --draft-scope-check)    DRAFT_SCOPE_CHECK=1; DRAFT_SCOPE_LABEL="${2:-}"; shift 2 ;;
         --commit-scope-check=*) COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${1#*=}"; shift ;;
@@ -685,6 +693,15 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                           account. Refuses if a granted dataset has an
                           in-flight transfer hold rather than stranding it.
                           Safe to re-run after a partial failure.
+  --uninstall [--yes]     remove what deploy.sh installed on THIS host: the
+                          tool's cron blocks (root and delegated accounts),
+                          the delegated account (its zfs grants, quiesce grant
+                          and home), host scripts, the zfs-backup link, alert
+                          and logrotate config, state under /etc and /var/lib.
+                          Without --yes: the plan only. Refused while a
+                          relationship or a pairing is still on this host --
+                          each is removed with its own verb first. Datasets,
+                          snapshots, packages and the checkout stay.
 
 Maintenance window -- stop and later restore what this host's crontabs run
 (root's, and the delegated account's if one exists or --backup-user names
@@ -3352,7 +3369,11 @@ apply_recorded_grant_datasets() {
     recorded=$(read_state_file "$GRANT_DATASETS_FILE") || return 0
     [ -n "$recorded" ] || return 0
     BACKUP_USER_DATASETS="$recorded"
-    log "grant-datasets: using the list recorded at $GRANT_DATASETS_FILE (${recorded}) -- pass --grant-datasets= to override"
+    # First install, 2026-11-04: on a collector whose copies land in hdd, this line
+    # read as the copies' grant on the wrong pool. It is the delegated account's
+    # right over THIS host's own datasets (Phase 8g); a copy's target is granted
+    # per relationship (--pair --local-user, activate).
+    log "grant-datasets: using the list recorded at $GRANT_DATASETS_FILE (${recorded}) -- this host's own datasets for the delegated account; a copy's target is granted per relationship. Pass --grant-datasets= to override"
 }
 apply_recorded_grant_datasets
 
@@ -3371,8 +3392,12 @@ apply_recorded_grant_datasets
 # first (works if package lists are already cached); only fall back to
 # `apt-get update` (tolerating the enterprise-repo failure) if that doesn't
 # work. Shared by every package we need below.
+# APT_LAST_ERR: apt's own last "E:" line when every try failed -- check_dep's
+# callers silence this function, and the reason belongs in their message.
+APT_LAST_ERR=""
 apt_install_with_fallback() {
-    local pkg="$1"
+    local pkg="$1" out ver
+    APT_LAST_ERR=""
     apt-get install -y "$pkg" 2>/dev/null && return 0
     warn "plain install of $pkg failed, running apt-get update first (pve-enterprise 401 is expected/harmless here)"
     apt-get update || true
@@ -3380,7 +3405,23 @@ apt_install_with_fallback() {
     # A recommended package can fail alone -- measured on pve2 2026-10-26: mc pulled unzip,
     # whose security-repo URL was a 404, and the whole install failed. The package itself
     # does not need its recommendations.
-    apt-get install -y --no-install-recommends "$pkg"
+    out=$(apt-get install -y --no-install-recommends "$pkg" 2>&1) && return 0
+    printf '%s\n' "$out"
+    # A 404 for the package itself (first install on Debian 11, 2026-11-04):
+    # the lists named bullseye-security debs (git deb11u5, sudo deb11u4) that
+    # security.debian.org no longer served, and the same package from the main
+    # archive installed. One try with the newest version from a non-security
+    # origin, said out loud.
+    if printf '%s' "$out" | grep -q '404'; then
+        ver=$(apt-cache madison "$pkg" 2>/dev/null | awk -F'|' '$3 !~ /security/ { gsub(/[[:space:]]/, "", $2); print $2; exit }')
+        if [ -n "$ver" ]; then
+            warn "apt could not fetch $pkg (404 from the archive its package list names) -- trying $pkg=$ver from the main archive"
+            out=$(apt-get install -y --no-install-recommends "$pkg=$ver" 2>&1) && return 0
+            printf '%s\n' "$out"
+        fi
+    fi
+    APT_LAST_ERR=$(printf '%s\n' "$out" | grep -E '^E: ' | tail -1)
+    return 1
 }
 
 # ---- can this host actually DELIVER an alert? ------------------------------
@@ -4767,6 +4808,151 @@ fi
 # the recorded uid, removes the account and deletes state files. Nothing it
 # touches is built by the phases; it needs root, zfs and userdel, which are
 # properties of the host.
+# do_uninstall -- the inverse of a plain deploy (first install, 2026-11-04: there
+# was none, and a from-zero lab test had to clean a host by hand).
+#
+# RELATIONSHIPS AND PAIRINGS ARE NOT TORN DOWN HERE. Each has its own verb with
+# its own guards -- delete-relation (the collector's record, cron and grants),
+# --leave (a joined peer account: holds, residue check by uid), --unpair -- and a
+# second copy of those guards in here would be the one that drifts. While any is
+# left, --uninstall prints the verbs and refuses --yes, so it never strands a
+# relationship whose other side still runs.
+#
+# What it removes is what Phase 2-8 put on the host, recognised by what deploy.sh
+# itself wrote: the two named cron blocks, accounts whose GECOS is the one
+# useradd here gives them, the files at the paths the phases use. It never
+# touches a dataset, a snapshot, a package, known_hosts, or the checkout it runs
+# from (named at the end, for rm by hand). Re-running after a partial failure
+# finishes the rest: every step treats "already gone" as done.
+UNINSTALL_ACCOUNT_GECOS="zfs-snapshot-all delegated backup account"
+UNINSTALL_PEER_GECOS="zfs-snapshot-all peer account for "
+uninstall_last_state() {   # <record> -> the last STATE= value
+    sed -n 's/^STATE=//p' "$1" 2>/dev/null | tail -1
+}
+do_uninstall() {
+    local yes="$1" f st gecos blockers="" acct accounts="" peers="" p ds list acl
+    local clients="${CLIENTS_DIR:-/etc/zfs-snapshot-all/clients}"
+    local link="${ZFS_CMD_LINK:-/usr/local/bin/zfs-backup}"
+    local gate="${PAIR_GATE_PATH:-/usr/local/sbin/zfs-pair-gate}"
+    local helper="${QUIESCE_HELPER_PATH:-/usr/local/sbin/zfs-quiesce-helper}"
+    local qallow="${QUIESCE_ALLOW_DIR:-/etc/zfs-quiesce-allow}"
+    local scripts="${HOST_SCRIPTS_DEST:-/root/scripts}"
+    local etc_dir="${UNINSTALL_ETC_DIR:-/etc/zfs-snapshot-all}"
+    local files=() dirs=() s
+
+    # --- what blocks it --------------------------------------------------------
+    for f in "$clients"/*.conf; do
+        [ -f "$f" ] || continue
+        st=$(uninstall_last_state "$f")
+        case "$st" in removed|"") continue ;; esac
+        blockers="$blockers
+    relationship $(basename "$f" .conf) (STATE=$st): zfs-backup.sh delete-relation $(basename "$f" .conf) --yes"
+    done
+    for f in "$PEER_STATE_DIR"/*.conf; do
+        [ -f "$f" ] || continue
+        p=$(basename "$f" .conf)
+        st=$(sed -n 's/^PEER_JOIN_ROLE=//p' "$f" 2>/dev/null | tail -1)
+        if [ "$st" = pull ]; then
+            blockers="$blockers
+    joined peer $p (this host is its source): deploy.sh --leave=$p"
+        else
+            blockers="$blockers
+    pairing $p ($f): remove the relationship that uses it (delete-relation), or deploy.sh --unpair --peer=<its address>"
+        fi
+    done
+    while IFS=: read -r acct _ _ _ gecos _; do
+        case "$gecos" in
+            "$UNINSTALL_ACCOUNT_GECOS") accounts="$accounts $acct" ;;
+            "$UNINSTALL_PEER_GECOS"*) peers="$peers $acct" ;;
+        esac
+    done < <(getent passwd)
+    for acct in $peers; do
+        blockers="$blockers
+    peer account $acct: deploy.sh --leave=${acct#zfsbackup-}"
+    done
+
+    # --- what it would remove --------------------------------------------------
+    for s in alert-env notify-fail notify-warn alert-digest check-pool-capacity capacity-guard growth-guard; do
+        files+=("$scripts/$s.sh")
+    done
+    files+=("${ALERT_CONF:-/etc/zfs-alert.conf}" "${LOGROTATE_CONF:-/etc/logrotate.d/zfs-snapshot-all}" "$gate" "$helper")
+    dirs=("$qallow" "$etc_dir" "${ALERT_SHARED_DIR:-/var/lib/zfs-snapshot-all}" "${UPDATE_STATE_DIR:-/root/.zfs-snapshot-all-update-state}" "${PAUSE_STATE_DIR:-/root/.zfs-snapshot-all-pause-state}")
+
+    log "PLAN (--uninstall) on $(hostname):"
+    log "  cron: the $CRON_HOST_BLOCK and zfs-backup-managed blocks of root$(for acct in $accounts; do printf ', %s' "$acct"; done)"
+    for acct in $accounts; do
+        log "  account $acct: its zfs delegations on every dataset, its quiesce grant, its logrotate stanza, then userdel -r (home /home/$acct)"
+    done
+    [ -L "$link" ] && log "  link $link -> $(readlink "$link")"
+    for f in "${files[@]}"; do [ -e "$f" ] && log "  file $f"; done
+    for f in "${dirs[@]}"; do [ -e "$f" ] && log "  directory $f (whole)"; done
+    [ -d "$PEER_KEY_DIR" ] && log "  directory $PEER_KEY_DIR, if empty"
+    getent group zfsalert >/dev/null 2>&1 && log "  group zfsalert, once no account is in it"
+    log "  KEPT: every dataset and snapshot, installed packages, /root/.ssh/known_hosts, and the checkout ${REPO_DIR} (remove it by hand: rm -rf ${REPO_DIR})"
+
+    if [ -n "$blockers" ]; then
+        warn "refusing --uninstall: this host still takes part in relationships -- remove each with its own verb first:$blockers"
+        warn "  Nothing was changed."
+        return 1
+    fi
+    if [ "$yes" -ne 1 ]; then
+        log "plan only. Re-run with --yes to remove the above."
+        return 0
+    fi
+
+    # --- doing it: cron first, so nothing new starts while the rest goes ------
+    for acct in root $accounts; do
+        for s in "$CRON_HOST_BLOCK" zfs-backup-managed; do
+            cron_block_remove "$acct" "$s" || die "--uninstall: could not remove the $s cron block of $acct: $CRON_ERR -- nothing after this step was done; fix it and re-run"
+        done
+    done
+    log "removed the tool's cron blocks (root$(for acct in $accounts; do printf ', %s' "$acct"; done))"
+    for acct in $accounts; do
+        list=$(zfs list -H -o name -t filesystem,volume) || die "--uninstall: zfs list failed -- could not find $acct's delegations; nothing more was changed"
+        while IFS= read -r ds; do
+            [ -n "$ds" ] || continue
+            acl=$(zfs allow "$ds") || die "--uninstall: could not read the zfs delegations on $ds -- $acct kept"
+            printf '%s\n' "$acl" | grep -qE "^[[:space:]]+user $acct " || continue
+            zfs unallow -u "$acct" "$ds" || die "--uninstall: zfs unallow -u $acct $ds failed -- $acct kept"
+            log "revoked $acct's delegation on $ds"
+        done <<< "$list"
+        revoke_quiesce_grant "$acct" || die "--uninstall: the quiesce grant of $acct could not be removed -- $acct kept"
+        rm -f "${LOGROTATE_CONF:-/etc/logrotate.d/zfs-snapshot-all}-$acct"
+        leave_end_account_processes "$acct" || die "--uninstall: $acct still has processes -- not removed; re-run once they end"
+        userdel -r "$acct" >/dev/null 2>&1 || userdel "$acct" || die "--uninstall: userdel $acct failed"
+        log "removed account $acct"
+    done
+    if [ -L "$link" ]; then rm -f "$link" && log "removed $link"; fi
+    for f in "${files[@]}"; do
+        [ -e "$f" ] || continue
+        rm -f "$f" || die "--uninstall: could not remove $f"
+        log "removed $f"
+    done
+    for f in "${dirs[@]}"; do
+        [ -e "$f" ] || continue
+        rm -rf "$f" || die "--uninstall: could not remove $f"
+        log "removed $f"
+    done
+    [ -d "$PEER_KEY_DIR" ] && rmdir "$PEER_KEY_DIR" 2>/dev/null && log "removed $PEER_KEY_DIR (empty)"
+    if getent group zfsalert >/dev/null 2>&1; then
+        if [ -z "$(getent group zfsalert | cut -d: -f4)" ]; then
+            groupdel zfsalert && log "removed group zfsalert"
+        else
+            warn "group zfsalert kept -- still has members: $(getent group zfsalert | cut -d: -f4)"
+        fi
+    fi
+    log "uninstalled. Left on purpose: datasets, snapshots, packages, and ${REPO_DIR} (rm -rf ${REPO_DIR})"
+}
+
+if [ "$UNINSTALL_YES" -eq 1 ] && [ "$UNINSTALL_MODE" -eq 0 ]; then
+    die "--yes only goes with --uninstall"
+fi
+if [ "$UNINSTALL_MODE" -eq 1 ]; then
+    [ "$(id -u)" -eq 0 ] || die "--uninstall must run as root (it reads and edits other accounts' crontabs)"
+    do_uninstall "$UNINSTALL_YES" || exit 1
+    exit 0
+fi
+
 if [ "$LEAVE_MODE" -eq 1 ]; then
     do_leave "$LEAVE_LABEL"
     exit 0
@@ -4879,14 +5065,14 @@ check_dep() {
 
     case "$sev" in
         required)
-            die "$cmd is REQUIRED and could not be installed from '$pkg' -- $why"
+            die "$cmd is REQUIRED and could not be installed from '$pkg' -- $why${APT_LAST_ERR:+ (apt: $APT_LAST_ERR)}"
             ;;
         compression)
-            warn "$cmd could not be installed from '$pkg' -- $why"
+            warn "$cmd could not be installed from '$pkg' -- $why${APT_LAST_ERR:+ (apt: $APT_LAST_ERR)}"
             MISSING_OPTIONAL="$MISSING_OPTIONAL $cmd"
             ;;
         *)
-            warn "$cmd not available ('$pkg') -- $why"
+            warn "$cmd not available ('$pkg') -- $why${APT_LAST_ERR:+ (apt: $APT_LAST_ERR)}"
             MISSING_OPTIONAL="$MISSING_OPTIONAL $cmd"
             ;;
     esac
@@ -4921,6 +5107,11 @@ check_dep pigz     pigz             compression "alternative compressor, selecte
 
 check_dep ssh      openssh-client   optional    "remote push/pull; local-only hosts do not need it"
 check_dep mail     mailutils        optional    "notify-fail.sh / capacity + staleness alerting"
+# First install, 2026-11-04: a default Proxmox VE has no sudo, and the guest-freeze
+# grant (--allow-quiesce) is a sudoers rule. Installed here, in the phase every run
+# (--join included) goes through, instead of first inside --commit-scope -- after
+# the join and the replication grant, where a failed apt left a half-enrolled pair.
+check_dep sudo     sudo             optional    "the guest-freeze grant (--allow-quiesce) is a sudoers rule"
 
 # ------------------------------------------------------------------------------
 log "Part 1b: ZFS itself"

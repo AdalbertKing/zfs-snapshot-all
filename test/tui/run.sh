@@ -6651,6 +6651,22 @@ if printf '%s' "$u67_why" | grep -q "source='hdd' is a pool name" && printf '%s'
 else
     bad "U67: verb_refusal" "$u67_why"
 fi
+# First install, 2026-11-04: the reason was the REMOTE one (no sudo), cut off, and the
+# window's "Reason" led with a local mail warning. zfs-backup.sh now repeats the remote
+# lines marked "!!! [on HOST]"; when they are there, they and the FATALs are the reason.
+printf '%s\n' "!!!   mail transport present (postfix) but 3 message(s) are STUCK IN THE QUEUE" \
+    "!!!     a relayhost/smarthost is the usual missing piece; which relay ..." \
+    "    !!! could not install the 'sudo' package -- no quiesce grant was created for zfsbackup-pve1" \
+    "!!! [on 192.168.0.11] could not install the 'sudo' package -- no quiesce grant was created for zfsbackup-pve1" \
+    "!!! [prune-bookmarks:hdd] covers 'hdd/x', the source of a replica" \
+    "FATAL: --grant-remotely: deploy.sh --commit-scope='pve1' FAILED on 192.168.0.11 (see above)" > "$U67/remote.txt"
+u67_rem="$(bash -c '. "$1/tui/wt-lib.sh" 2>/dev/null; verb_refusal "$2"' x "$REPO" "$U67/remote.txt")"
+if [ "$(printf '%s\n' "$u67_rem" | head -1)" = "[on 192.168.0.11] could not install the 'sudo' package -- no quiesce grant was created for zfsbackup-pve1" ] \
+        && printf '%s' "$u67_rem" | grep -q 'FAILED on 192.168.0.11' && ! printf '%s' "$u67_rem" | grep -q 'relayhost\|STUCK\|prune-bookmarks'; then
+    ok "refusal window: the remote reason marked [on HOST] leads, an unrelated local mail warning is not shown as the reason"
+else
+    bad "refusal window: remote reason" "$u67_rem"
+fi
 u67_left="$(grep -n "grep -E '^FATAL'" "$REPO"/tui/*.sh | head -3)"
 [ -z "$u67_left" ] && ok "U67: no refusal window greps the FATAL line alone any more" || bad "U67: leftover FATAL-only refusal" "$u67_left"
 # pool_roots_to_children: the shipped function from tui/replica.sh on a fake tree.
