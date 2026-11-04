@@ -4,6 +4,25 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [1.0.8] — 2026-11-04
+
+- **Fastprune for remote snapshots** (wizard: Advanced -> Fastprune; edit window: Fastprune row). One
+  number of hours N for every tier of the chosen template: `retain = -h<N>`, pruned every hour;
+  monitor thresholds stay only on tiers more frequent than N. Meant for a source with no room, whose
+  history lives in a passive copy on the collector; the plan names that copy or warns there is none.
+- **Update hold covers the delegated accounts.** `update-control.sh --hold-updates` (and
+  `deploy.sh --hold-updates`) hold automatic updates; `--resume-updates` releases them. The hold is
+  mirrored to `/etc/zfs-snapshot-all/update-hold`, and the account's hourly `git pull` line skips the
+  pull while it exists. Takes effect on a host once it runs this release.
+- Wizard: backup and mirror can be passive when the source has no snapshots of the family yet
+  (Advanced -> Passive); the `passive-flat` template is listed for them; remote snapshots no longer
+  offer GFS-ladder templates; the "another creator" answer is shown in the summary; a passive plan no
+  longer says "freezes".
+- GUI: a relation with one tier up to date and the rest waiting for their first run is "up to date";
+  a tier without monitor thresholds no longer turns its dataset into "no monitor"; the relation panel
+  counts a flat tier's own prune jobs; plan texts read as paragraphs; an edit that only adds jobs
+  says so.
+
 ## [1.0.7] — 2026-11-03
 
 - **A new copy relationship no longer mails "monitor BROKEN" before its first run.** Since 1.0.6 a
