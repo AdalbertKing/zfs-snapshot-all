@@ -3638,17 +3638,16 @@ else
 fi
 # 3. wyjatki otwarte drugi raz pamietaja stan (odznaczone wraca odznaczone)
 # X12: dawne okna wyjatkow zniknely. "Otwarte drugi raz" to teraz ponowne otwarcie pola Datasety:
-# U66: Wstecz z menu "Dokad" (odpowiedz `1`) to POPRZEDNI krok -- drzewo, ktore
-# dostaje z koszyka ten sam wybor -- wiec drugi ekran w tree.log ma subvol-302 znow odznaczony,
-# a 301 zaznaczony. Dwa wywolania okna = dwie linie NR_TREE.
+# U66: Wstecz z kroku "Dokad" (od U155 drzewo: Esc) to POPRZEDNI krok -- drzewo, ktore
+# dostaje z koszyka ten sam wybor -- wiec drugi ekran Datasetow w tree.log ma subvol-302 znow
+# odznaczony, a 301 zaznaczony. Wywolania drzewa: Datasety, Dokad (Esc), Datasety, Dokad.
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-1${T}
-${NRT}" NR_TREE='goto:hdd/ct,space,goto:hdd/ct/subvol-302-disk-0,space,enter|enter|goto:hdd/backups,enter')
+${NRT}" NR_TREE='goto:hdd/ct,space,goto:hdd/ct/subvol-302-disk-0,space,enter|esc|enter|goto:hdd/backups,enter')
 NRTL="$(cat "$NR/tree.log" 2>/dev/null)"
 if has "$NROUT" " --exclude-child=^hdd/ct/subvol-302-disk-0\$ " && ! has "$NROUT" "subvol-301-disk-0" \
-   && [ "$(grep -c '^┌─' "$NR/tree.log")" -eq 2 ] && [ "$(grep -cF '[ ] subvol-302-disk-0' "$NR/tree.log")" -eq 2 ] \
+   && [ "$(grep -c '^┌─.*Co kopiować' "$NR/tree.log")" -eq 2 ] && [ "$(grep -cF '[ ] subvol-302-disk-0' "$NR/tree.log")" -eq 2 ] \
    && [ "$(grep -cF '[x] subvol-301-disk-0' "$NR/tree.log")" -eq 2 ] && ! has "$NRTL" '[ ] subvol-301-disk-0'; then
     ok "new-relation: drzewo otwarte drugi raz (Wstecz z kroku Dokad, U66) pamieta stan -- odznaczone 302 wraca odznaczone, 301 zaznaczone; w komendzie tylko 302"
 else
@@ -3954,7 +3953,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}__browse__
 0${T}default
 0${T}pve9b
 0${T}root
@@ -3970,24 +3968,23 @@ ok = s.get("single") is True and "hdd" in names and "hdd/backups" in names \
 sys.exit(0 if ok else 1)
 PYEOF
 then
-    ok "new-relation: Przegladaj w kroku Dokad = drzewo jednej pozycji (U68), kopie innych relacji ukryte i policzone, wybor idzie do --target"
+    ok "new-relation: krok Dokad = drzewo jednej pozycji (U68, od U155 od razu), kopie innych relacji ukryte i policzone, wybor idzie do --target"
 else
     bad "new-relation: Przegladaj = drzewo" "$NROUT" "$(cat "$NR/tree-spec.last" 2>/dev/null | cut -c1-400)"
 fi
 
-# Kampania 2026-10-22: cel kopii lokalnej WEWNATRZ zrodla odrzucony w kroku Dokad (nie dopiero w planie).
+# Kampania 2026-10-22: cel kopii lokalnej nakladajacy sie na zrodlo odrzucony w kroku Dokad (nie
+# dopiero w planie). Od U155 cel wybiera drzewo: hdd/backups lezy NAD zrodlem -- odmowa (okno,
+# odpowiedz ""), drzewo wraca, Ins pod hdd i nazwa "kopie" -- drugi cel przechodzi.
 NROUT=$(nr_run "0${T}local
-0${T}__other__
-0${T}hdd/backups/192.168.28.99/hdd/lab/kopie
 0${T}
-0${T}__other__
-0${T}hdd/kopie
+0${T}kopie
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
 0${T}root
 0${T}create
 0${T}
-" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
+" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter|goto:hdd/backups,enter|goto:hdd,ins'); NRRC=$?
 if grep -qF 'Cel nakłada się na źródło' "$NR/wt.log" && grep -q -- '--target=hdd/kopie' "$NR/zb.log" && ! grep -q -- 'lab/kopie' "$NR/zb.log"; then
     ok "new-relation: kopia lokalna -- cel wewnatrz zrodla odrzucony od razu w kroku Dokad, drugi cel przechodzi"
 else
@@ -3998,8 +3995,7 @@ fi
 #     (zawsze -R), w ustawieniach bez praw/zamrazania/parowania (U25: tytuly okien bez
 #     numerow krokow), komenda = wsad local-backup z --name. Bez okna "Pobieram z hosta".
 NROUT=$(nr_run "0${T}local
-0${T}__other__
-0${T}hdd/kopie
+0${T}kopie
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
 0${T}root
@@ -4009,13 +4005,13 @@ NROUT=$(nr_run "0${T}local
 1${T}
 0${T}create
 0${T}
-" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
+" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter|goto:hdd,ins'); NRRC=$?
 # Tytul i brak 'Sposób:' sprawdza ekran drzewa (tree.log), nie dziennik whiptaila.
 if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=hdd/backups/192.168.28.99/hdd/lab --target=hdd/kopie --recursive=flat --profile=default --name=lokalna-hdd-backups-192.168.28.99-hdd-lab --exclude-family=__replicate_,vzdump,__migration__ --install --yes " \
    && grep -q '^list-datasets --json --own-snapshots$' "$NR/zb.log" && ! grep -q '^check-source' "$NR/zb.log" \
    && grep -qF 'Co kopiować z' "$NR/tree.log" && ! grep -qF 'Sposób:' "$NR/tree.log" \
    && ! grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | grep -qE ' ~ (grant|quies|man) ~ ' \
-   && grep -F 'Dokąd na tym hoście' "$NR/wt.log" | head -1 | grep -qF 'Kopie wylądują pod:  <wybrane>/<dataset źródła>' \
+   && grep -qF 'Kopie trafią pod:  {cur}/<dataset źródła>' "$NR/tree-spec.last" \
    && grep -F 'Nazwa relacji' "$NR/wt.log" | grep -qF ' ~ lokalna-hdd-backups-192.168.28.99-hdd-lab ~ '; then
     ok "new-relation: kopia lokalna -- bez hosta i diagnozy, datasety tego hosta, zawsze -R, bez praw/parowania, komenda local-backup z --name"
 else
@@ -4026,8 +4022,7 @@ fi
 # moze byc wymuszona jako pasywna (Zaawansowane -> Pasywnie -> tak): komenda niesie --passive,
 # plan mowi PASYWNIE. Kontrola: ta sama kopia bez przelacznika -- bez --passive.
 NRPF=$(nr_run "0${T}local
-0${T}__other__
-0${T}hdd/kopie
+0${T}kopie
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
 0${T}root
@@ -4037,7 +4032,7 @@ NRPF=$(nr_run "0${T}local
 1${T}
 0${T}create
 0${T}
-" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRPFW="$(cat "$NR/wt.log")"
+" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter|goto:hdd,ins'); NRPFW="$(cat "$NR/wt.log")"
 pf_acct_before=$(printf '%s\n' "$NRPFW" | grep -n 'Na jakim koncie' | head -1 | cut -d: -f1)
 pf_sum=$(printf '%s\n' "$NRPFW" | grep -n 'Nowa relacja -- podsumowanie' | head -1 | cut -d: -f1)
 pf_adv=$(printf '%s\n' "$NRPFW" | grep -F 'Nowa relacja: zaawansowane' | head -1)
@@ -4078,8 +4073,7 @@ PYEOF
 nrl_ans() {   # <chain|own> -> odpowiedzi kreatora kopii lokalnej ze zrodlem z rodzina
     printf '%s' "0${T}local
 0${T}$1
-0${T}__other__
-0${T}hdd/kopie
+0${T}kopie
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
 0${T}root
@@ -4090,8 +4084,8 @@ nrl_ans() {   # <chain|own> -> odpowiedzi kreatora kopii lokalnej ze zrodlem z r
 0${T}create
 0${T}
 "; }
-NRLA=$(nr_run "$(nrl_ans chain)" NR_FIX="$NRL" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRLW="$(cat "$NR/wt.log")"
-NRLO=$(nr_run "$(nrl_ans own)" NR_FIX="$NRL" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRLOW="$(cat "$NR/wt.log")"
+NRLA=$(nr_run "$(nrl_ans chain)" NR_FIX="$NRL" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter|goto:hdd,ins'); NRLW="$(cat "$NR/wt.log")"
+NRLO=$(nr_run "$(nrl_ans own)" NR_FIX="$NRL" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter|goto:hdd,ins'); NRLOW="$(cat "$NR/wt.log")"
 if has "$NRLA" 'CMD: --source=hdd/backups/192.168.28.99/hdd/lab --target=hdd/kopie ' && has "$NRLA" ' --passive ' \
    && has "$NRLW" 'Migawki naszej rodziny już są na źródle' && has "$NRLW" ' ~ chain ~ ' && has "$NRLW" ' ~ own ~ ' \
    && ! has "$NRLW" '--title ~ Retencja źródła ~' && ! has "$NRLW" '[polecany]' && has "$NRLW" 'PASYWNIE:'; then
@@ -4118,7 +4112,7 @@ NROUT=$(nr_run "0${T}snap
 0${T}root
 0${T}create
 0${T}
-" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
+" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter|goto:hdd,ins'); NRRC=$?
 NRSI="$(grep -E -- '^--source=hdd/backups/192.168.28.99/hdd/lab --target= .* --no-copy --install --yes$' "$NR/zb.log")"
 if [ "$NRRC" -eq 0 ] && [ -n "$NRSI" ] \
    && printf '%s' "$NRSI" | grep -qF -- ' --name=migawki-hdd-backups-192.168.28.99-hdd-lab ' \
@@ -4478,8 +4472,10 @@ NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 ${NRT}" NR_STATUS="$NR/status-empty-target.json" NR_TREE="$NRTK|goto:hdd/backups,enter"); NRRC=$?
-NRTGT="$(grep -F -- 'Dokąd na tym hoście' "$NR/wt.log" | head -1)"
-if [ "$NRRC" -eq 0 ] && ! hasE "$NRTGT" ' ~ active ~ '; then
+# Od U155 krok 5 to drzewo: cele z rel.tsv trafiaja do spec (Uwagi, "Kto tu kopiuje") -- 'active' nie
+# moze tam byc ani jako dataset, ani jako cel relacji.
+NRTGT="$(cat "$NR/tree-spec.last" 2>/dev/null)"
+if [ "$NRRC" -eq 0 ] && [ -n "$NRTGT" ] && ! has "$NRTGT" '"name": "active"' && ! has "$NRTGT" '"active"'; then
     ok "new-relation: relacja synchro z PUSTYM client_target nie wypycha 'active' na liste celow w kroku 5 (owner note 11: puste pole staje sie '-', nie zlepia sie z nastepnym)"
 else
     bad "new-relation: 'active' jako cel w kroku 5" "$NROUT" "$NRTGT"
