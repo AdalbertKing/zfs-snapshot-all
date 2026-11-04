@@ -9,4 +9,3 @@ Do not edit. Owner decisions that are not reviews live in
 | REV-20261104-186 | OPEN | Claude | implement and respond |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
-
