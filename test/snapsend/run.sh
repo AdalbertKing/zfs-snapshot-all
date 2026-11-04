@@ -1666,7 +1666,7 @@ check "F4 send probe unknown: NOT upgraded to a full" "0" "$(r186_said 'Upgradin
 check "F4 send probe unknown: the scan says it could not complete" "yes" \
       "$([ "$(r186_said 'could not complete -- NOT upgrading')" -ge 1 ] && echo yes || echo no)"
 
-# F5: get_sorted_snapshots lifted from each engine (+ probe_dataset from the lib) and
+# F5: get_sorted_snapshots lifted from each engine (+ probe_dataset and dataset_presence from the lib) and
 # run with a fake ssh that executes its command locally, so the "remote" is this pool.
 # The fake zfs fails `list -t snapshot` for ONE named dataset (F5_BAD).
 cat > "$R186D/f5bin/ssh" <<'SHIM'
@@ -1691,7 +1691,7 @@ zfs snapshot "$POOL/f5ok@auto_1"; zfs snapshot "$POOL/f5bad@auto_1"
 tick; zfs snapshot "$POOL/f5ok@auto_2"
 for engfile in "$SNAPSEND" "$SNAPGET"; do
     en="$(basename "$engfile" .sh)"
-    { r186_fn "$engfile" get_sorted_snapshots; r186_fn "$REPO/lib-zfs-snap.sh" probe_dataset; } > "$R186D/fn-$en.sh"
+    { r186_fn "$engfile" get_sorted_snapshots; r186_fn "$REPO/lib-zfs-snap.sh" probe_dataset; r186_fn "$REPO/lib-zfs-snap.sh" dataset_presence; } > "$R186D/fn-$en.sh"
     [ -s "$R186D/fn-$en.sh" ] || { echo "cannot lift get_sorted_snapshots/probe_dataset for $en" >&2; exit 1; }
     f5() {   # <dataset> <bad-dataset-or-empty> -> "rc|names"
         local o r
