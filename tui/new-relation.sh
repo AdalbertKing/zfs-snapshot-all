@@ -140,7 +140,7 @@ $(T 'pozycja „Datasety”.\n\nWskaż host, z którym nie ma jeszcze relacji.')
 
 # --- krok 3: diagnoza -------------------------------------------------------
 probe() {   # check-source -> zmienne C_*
-    C_SSH=0; C_ERR=""; C_NAME=""; C_ZFS=0; C_POOLS=""; C_PKG=0; C_REV=""; C_DIR=""
+    C_SSH=0; C_ERR=""; C_NAME=""; C_ZFS=0; C_POOLS=""; C_PKG=0; C_REV=""; C_DIR=""; C_GIT=1; C_BLK=""
     # U55 (kampania 2026-10-21): 15 s czarnego okna to sufit ConnectTimeout dla crona
     # (martwy host, nazwa na obcy adres -- U56). Żywy host w sieci odpowiada w 0,2-0,4 s
     # (pve10 -> pve9, zmierzone 2026-10-23); w oknie konsoli wystarczy 5 s, jak przy
@@ -162,12 +162,15 @@ ssh = d.get("ssh") or {}; z = d.get("zfs") or {}; p = d.get("package") or {}
 for v in (1 if ssh.get("ok") else 0, one(ssh.get("error")), one(d.get("hostname")),
           1 if z.get("ok") else 0,
           one(", ".join(_(u"%s (%s, wolne %s)") % (x.get("name"), x.get("size"), x.get("free")) for x in z.get("pools") or [])),
-          1 if p.get("ok") else 0, one(p.get("rev")), one(p.get("path") or d.get("repo_dir"))):
+          1 if p.get("ok") else 0, one(p.get("rev")), one(p.get("path") or d.get("repo_dir")),
+          0 if d.get("git") is False else 1, one(d.get("repo_dir_blocked"))):
     print(v)
 PYEOF
     { IFS= read -r C_SSH; IFS= read -r C_ERR; IFS= read -r C_NAME; IFS= read -r C_ZFS
-      IFS= read -r C_POOLS; IFS= read -r C_PKG; IFS= read -r C_REV; IFS= read -r C_DIR; } <"$TMPD/check.vals"
+      IFS= read -r C_POOLS; IFS= read -r C_PKG; IFS= read -r C_REV; IFS= read -r C_DIR
+      IFS= read -r C_GIT; IFS= read -r C_BLK; } <"$TMPD/check.vals"
     case "$C_SSH" in 0|1) ;; *) C_SSH=0 ;; esac
+    case "$C_GIT" in 0|1) ;; *) C_GIT=1 ;; esac
     case "$C_ZFS" in 0|1) ;; *) C_ZFS=0 ;; esac
     case "$C_PKG" in 0|1) ;; *) C_PKG=0 ;; esac
     [ "$C_SSH" -eq 1 ] || [ -n "$C_ERR" ] || C_ERR="$(tail -1 "$TMPD/check.err" 2>/dev/null)"
@@ -216,8 +219,15 @@ step_diag() {   # 0 = dalej, 1 = wróć do hosta
             DIAG_OK_FOR="$(hostport)"
             return 0
         fi
+        # A-TASSA, 2026-11-04: stare skrypty bez .git w katalogu pakietu. prepare-source
+        # odmawia przed jakąkolwiek zmianą; okno mówi to od razu, bez przycisku Zainstaluj.
+        if [ -n "$C_BLK" ]; then
+            wt --title "$(title 3 "$(T 'Katalog pakietu zajęty')")" --msgbox "${facts}$(Tv '  [-] Pakiet  $C_DIR istnieje, ale to nie pakiet (stare skrypty?)\n\ngit clone tam nie wejdzie. Na $HOST, jako root: sprawdź w crontabie\nroota, czy coś stamtąd chodzi, potem odsuń katalog, np.:\n\n  mv $C_DIR $C_DIR.stare-RRRRMMDD\n\nPo naprawie wróć tutaj.' '$C_DIR' "$C_DIR" '$HOST' "$HOST")" 17 "$W"
+            return 1
+        fi
+        [ "$C_GIT" -eq 1 ] || facts="${facts}$(T '  [-] git     brak; Zainstaluj najpierw go doinstaluje (apt-get install git)')\n"
         wt --title "$(title 3 "$(T 'Brak pakietu na źródle')")" --yes-button "$(T Zainstaluj)" --no-button "$(T Wstecz)" \
-           --yesno "${facts}$(Tv '  [-] Pakiet  nie ma go w $C_DIR\n\nBez pakietu źródło nie dołączy do relacji.\n\n'\''Zainstaluj'\'' = prepare-source: git clone pakietu jako root.\nNie rusza crona, nie zakłada relacji ani kluczy.' '$C_DIR' "$C_DIR")" 16 "$W" || return 1
+           --yesno "${facts}$(Tv '  [-] Pakiet  nie ma go w $C_DIR\n\nBez pakietu źródło nie dołączy do relacji.\n\n'\''Zainstaluj'\'' = prepare-source: git clone pakietu jako root.\nNie rusza crona, nie zakłada relacji ani kluczy.' '$C_DIR' "$C_DIR")" 17 "$W" || return 1
         info "$(Tv 'Instaluję pakiet na $HOST' '$HOST' "$HOST")" "$(Tv 'prepare-source $(hostport) ... (do minuty)' '$(hostport)' "$(hostport)")"
         if "$ZB" prepare-source "$(hostport)" --yes >"$TMPD/prep.log" 2>&1; then
             continue    # sprawdź jeszcze raz i pokaż wynik

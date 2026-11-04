@@ -39,6 +39,7 @@ Zrzut ekranu GUI (okno F3 Relacje) jest w [README.md](README.md); te same ekrany
 Na kolektorze, jako root:
 
 ```bash
+apt-get install -y git      # świeży Proxmox nie ma gita
 git clone https://github.com/AdalbertKing/zfsbackup.git /root/scripts/zfs-snapshot-all
 cd /root/scripts/zfs-snapshot-all
 ./deploy.sh --backup-user=zfsbackup

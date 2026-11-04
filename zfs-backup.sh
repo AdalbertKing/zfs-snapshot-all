@@ -15066,8 +15066,11 @@ SOURCE_REPO_DIR="${SOURCE_REPO_DIR:-/root/scripts/zfs-snapshot-all}"
 
 source_probe() {   # <host> <port> -> sets PROBE_* ; returns 0 when ssh answered
     local host="$1" port="$2" out rc=0
-    PROBE_SSH_ERR=""; PROBE_HOSTNAME=""; PROBE_POOLS=""; PROBE_ZFS=0; PROBE_GIT=0; PROBE_PKG=""; PROBE_REV=""
-    out=$(rux_root_ssh "$host" "$port" "echo HOSTNAME=\$(hostname); command -v zfs >/dev/null 2>&1 && echo ZFS=yes; command -v git >/dev/null 2>&1 && echo GIT=yes; zpool list -H -o name,size,free 2>/dev/null | while IFS=\$(printf '\\t') read -r n sz fr; do echo POOL=\$n,\$sz,\$fr; done; [ -x '$SOURCE_REPO_DIR/zfs-backup.sh' ] && { echo PKG=$SOURCE_REPO_DIR; echo REV=\$(git -C '$SOURCE_REPO_DIR' rev-parse --short HEAD 2>/dev/null); }; echo PROBE=done" 2>&1) || rc=$?
+    PROBE_SSH_ERR=""; PROBE_HOSTNAME=""; PROBE_POOLS=""; PROBE_ZFS=0; PROBE_GIT=0; PROBE_APT=0; PROBE_DIR=""; PROBE_PKG=""; PROBE_REV=""
+    # DIR= is what stands in the way of a clone when there is no package: a
+    # non-empty directory (old zfs-snapshot-all scripts without .git, found on
+    # A-TASSA 2026-11-04) or a file. An empty directory is fine for git clone.
+    out=$(rux_root_ssh "$host" "$port" "echo HOSTNAME=\$(hostname); command -v zfs >/dev/null 2>&1 && echo ZFS=yes; command -v git >/dev/null 2>&1 && echo GIT=yes; command -v apt-get >/dev/null 2>&1 && echo APT=yes; if [ -d '$SOURCE_REPO_DIR' ]; then [ -z \"\$(ls -A '$SOURCE_REPO_DIR' 2>/dev/null)\" ] || echo DIR=notempty; elif [ -e '$SOURCE_REPO_DIR' ]; then echo DIR=notadir; fi; zpool list -H -o name,size,free 2>/dev/null | while IFS=\$(printf '\\t') read -r n sz fr; do echo POOL=\$n,\$sz,\$fr; done; [ -x '$SOURCE_REPO_DIR/zfs-backup.sh' ] && { echo PKG=$SOURCE_REPO_DIR; echo REV=\$(git -C '$SOURCE_REPO_DIR' rev-parse --short HEAD 2>/dev/null); }; echo PROBE=done" 2>&1) || rc=$?
     if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^PROBE=done$'; then
         # OpenSSH ends its diagnostics with CR LF. A raw CR inside a JSON string
         # is INVALID JSON and json_escape (a frozen twin) does not escape it, so
@@ -15083,6 +15086,8 @@ source_probe() {   # <host> <port> -> sets PROBE_* ; returns 0 when ssh answered
             HOSTNAME=*) PROBE_HOSTNAME="${line#*=}" ;;
             ZFS=yes)    PROBE_ZFS=1 ;;
             GIT=yes)    PROBE_GIT=1 ;;
+            APT=yes)    PROBE_APT=1 ;;
+            DIR=*)      PROBE_DIR="${line#*=}" ;;
             POOL=*)     PROBE_POOLS="${PROBE_POOLS}${PROBE_POOLS:+ }${line#*=}" ;;
             PKG=*)      PROBE_PKG="${line#*=}" ;;
             REV=*)      PROBE_REV="${line#*=}" ;;
@@ -15128,9 +15133,10 @@ cmd_check_source() {
         first=0
         printf '{"name":"%s","size":"%s","free":"%s"}' "$(json_escape "$n")" "$(json_escape "$sz")" "$(json_escape "$fr")"
     done
-    printf ']},"package":{"ok":%s,"path":"%s","rev":"%s"},"git":%s,"repo_dir":"%s"}\n' \
+    printf ']},"package":{"ok":%s,"path":"%s","rev":"%s"},"git":%s,"apt":%s,"repo_dir":"%s","repo_dir_blocked":"%s"}\n' \
         "$([ -n "$PROBE_PKG" ] && echo true || echo false)" "$(json_escape "$PROBE_PKG")" "$(json_escape "$PROBE_REV")" \
-        "$([ "$PROBE_GIT" -eq 1 ] && echo true || echo false)" "$(json_escape "$SOURCE_REPO_DIR")"
+        "$([ "$PROBE_GIT" -eq 1 ] && echo true || echo false)" "$([ "$PROBE_APT" -eq 1 ] && echo true || echo false)" \
+        "$(json_escape "$SOURCE_REPO_DIR")" "$([ -z "$PROBE_PKG" ] && json_escape "$PROBE_DIR")"
 }
 
 # source-pruners HOST[:PORT] [--port=N] DATASET... (owner note 4, 2026-10-08)
@@ -15182,8 +15188,15 @@ cmd_prepare_source() {
         echo ">>> next: zfs-backup.sh add-client NAME --host=$SRC_HOST ... (its JOIN runs deploy.sh --join there)"
         return 0
     fi
-    [ "$PROBE_GIT" -eq 1 ] || die "prepare-source: $SRC_HOST has no git -- install it there first (apt install git). Nothing was changed."
+    # Every refusal comes before the first change. The old directory is not
+    # moved for the operator: old scripts there may still be in root's crontab.
+    case "$PROBE_DIR" in
+        notempty) die "prepare-source: $SOURCE_REPO_DIR on $SRC_HOST exists, is not empty and holds no package (old scripts?) -- git clone cannot go there. Check root's crontab on $SRC_HOST for lines using it, then move it aside, e.g. mv $SOURCE_REPO_DIR $SOURCE_REPO_DIR.stare-$(date +%Y%m%d). Nothing was changed." ;;
+        notadir)  die "prepare-source: $SOURCE_REPO_DIR on $SRC_HOST exists and is not a directory -- move it aside first. Nothing was changed." ;;
+    esac
+    [ "$PROBE_GIT" -eq 1 ] || [ "$PROBE_APT" -eq 1 ] || die "prepare-source: $SRC_HOST has no git and no apt-get -- install git there first. Nothing was changed."
     echo "PLAN (prepare-source $SRC_HOST):"
+    [ "$PROBE_GIT" -eq 1 ] || echo "  on $SRC_HOST as root:  apt-get install -y git   (no git there; apt-get update and a retry if the first try fails)"
     echo "  on $SRC_HOST as root:  git clone $url $SOURCE_REPO_DIR"
     echo "  if the host cannot reach $url: a bundle of this checkout goes over scp and the clone is made from it"
     echo "  nothing else: no cron, no relationship, no key (add-client's JOIN does those)"
@@ -15192,6 +15205,13 @@ cmd_prepare_source() {
         return 0
     fi
     local err
+    if [ "$PROBE_GIT" -ne 1 ]; then
+        # deploy.sh's apt_install_with_fallback, over SSH: a stale package index
+        # fails the first try, so update and try once more.
+        err=$(rux_root_ssh "$SRC_HOST" "$SRC_PORT" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y git >/dev/null 2>&1 || { apt-get update >/dev/null 2>&1; apt-get install -y git; }; command -v git >/dev/null" 2>&1) \
+            || die "prepare-source: apt-get install git on $SRC_HOST failed: $(printf '%s' "$err" | tr -d '\r' | grep -v '^$' | tail -1). Install it there by hand, then re-run."
+        echo ">>> installed git on $SRC_HOST"
+    fi
     if err=$(rux_root_ssh "$SRC_HOST" "$SRC_PORT" "git clone -q '$url' '$SOURCE_REPO_DIR'" 2>&1); then
         echo ">>> cloned $url into $SOURCE_REPO_DIR on $SRC_HOST"
     else

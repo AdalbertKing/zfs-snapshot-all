@@ -21,10 +21,16 @@ Wszystko w bashu, zadania chodzą z crona, a do codziennej pracy jest tekstowe G
 1. Na kolektorze, jako root: pobierz pakiet i przygotuj host.
 
    ```bash
+   apt-get install -y git      # świeży Proxmox nie ma gita
    git clone https://github.com/AdalbertKing/zfsbackup.git /root/scripts/zfs-snapshot-all
    cd /root/scripts/zfs-snapshot-all
    ./deploy.sh --backup-user=zfsbackup
    ```
+
+   Jeśli `/root/scripts/zfs-snapshot-all` już istnieje (stare skrypty, bez `.git`), `git clone` tam nie wejdzie:
+   sprawdź w `crontab -l` roota, czy coś stamtąd chodzi, i odsuń katalog, np.
+   `mv /root/scripts/zfs-snapshot-all /root/scripts/zfs-snapshot-all.stare-RRRRMMDD`. Na źródle kreator
+   sprawdza to samo i odmawia, zanim cokolwiek zmieni; gita na źródle doinstalowuje sam.
 
 2. Uruchom GUI i załóż pierwszą relację: **F3 Relacje**, klawisz **Ins**. Kreator pyta o rodzaj relacji,
    host źródłowy, datasety, cel, szablon, ile migawek zostaje na źródle i nazwę, pokazuje podsumowanie

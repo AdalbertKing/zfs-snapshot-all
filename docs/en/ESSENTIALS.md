@@ -22,10 +22,16 @@ server console.
 1. On the collector, as root: fetch the package and prepare the host.
 
    ```bash
+   apt-get install -y git      # a fresh Proxmox has no git
    git clone https://github.com/AdalbertKing/zfsbackup.git /root/scripts/zfs-snapshot-all
    cd /root/scripts/zfs-snapshot-all
    ./deploy.sh --backup-user=zfsbackup
    ```
+
+   If `/root/scripts/zfs-snapshot-all` already exists (old scripts, no `.git`), `git clone` cannot go there:
+   check root's `crontab -l` for anything running from it, then move it aside, e.g.
+   `mv /root/scripts/zfs-snapshot-all /root/scripts/zfs-snapshot-all.old-YYYYMMDD`. On the source the wizard checks
+   the same and refuses before changing anything; it installs git on the source itself.
 
 2. Start the GUI and create the first relation: **F3 Relations**, key **Ins**. The wizard asks for the kind
    of relation, the source host, the datasets, the target, the template, how many snapshots stay on the source

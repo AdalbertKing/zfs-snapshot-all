@@ -22,6 +22,7 @@ Plain bash; no daemon, no database.
 On the collector, as root:
 
 ```bash
+apt-get install -y git      # a fresh Proxmox has no git
 git clone https://github.com/AdalbertKing/zfs-snapshot-all.git /root/scripts/zfs-snapshot-all
 cd /root/scripts/zfs-snapshot-all
 ./deploy.sh --backup-user=zfsbackup
