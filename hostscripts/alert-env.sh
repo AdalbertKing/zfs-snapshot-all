@@ -137,7 +137,7 @@ alert_words() {
         "without quiescing the guest"*)
             AW_WHAT="migawka $f bez zamrozenia goscia"
             AW_SAY="Migawka jest, ale zrobiona bez zamrozenia goscia -- spojna jak po naglym wylaczeniu.
-Sprawdz qemu-guest-agent w gosciu i prawo konta do zamrazania (zfs-backup gui -> F3, relacja)." ;;
+Powod jest w logu biegu (ponizej): zwykle agent goscia albo konto bez dostepu do gosci." ;;
         skipped*)
             AW_WHAT="bieg pominiety, poprzedni jeszcze trwa"
             AW_SAY="Poprzedni bieg tego zadania trzymal blokade; ten nie ruszyl. Jednorazowo to nic; stale -- bieg trwa dluzej niz odstep." ;;

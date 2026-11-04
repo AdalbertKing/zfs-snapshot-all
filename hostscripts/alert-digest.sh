@@ -1323,7 +1323,7 @@ for x in rels.values():
         x["rank"], x["state"] = 6, u"bez zamrożenia: " + j["task"]
         todo.append((6, x["name"], u"%s bez zamrożenia gościa (%s, rc=8)" % (j["task"], when(j["lw"])),
                      [u"migawka jest, ale spójna jak po nagłym wyłączeniu gościa"],
-                     u"sprawdź: qemu-guest-agent w gościu i prawo konta do zamrażania"))
+                     u"powód w logu biegu (F2): zwykle agent gościa albo konto bez dostępu do gości"))
     elif wv == "WARNING":
         x["rank"], x["state"] = 5, u"spóźnione: " + TIER_F.get(mon_tier(worst), mon_tier(worst))
     elif x.get("paused"):
@@ -1388,12 +1388,15 @@ if todo:
 runs = sum(x["runs"] for x in order)
 fails = sum(x["fails"] for x in order)
 frel = sum(1 for x in order if x["fails"])
-vol = sum(j["vb"] for x in order for j in x["jobs"] if j["send"] and j["tg"])
+copies = [j for x in order for j in x["jobs"] if j["send"] and j["tg"]]
+vol = sum(j["vb"] for j in copies)
 span = u"Tydzień" if DAYS == 7 else u"Ostatnie %d dni" % DAYS
 out.append("")
-out.append(u"%s: %d %s, %d %s%s, dopisane %s." % (
+# "dopisane" only where something is copied: on a host of snapshots only it is always 0B.
+out.append(u"%s: %d %s, %d %s%s%s." % (
     span, runs, plural(runs, "bieg", "biegi", u"biegów"), fails, plural(fails, u"błąd", u"błędy", u"błędów"),
-    (" (%d %s)" % (frel, plural(frel, "relacja", "relacje", "relacji"))) if frel else "", human(vol)))
+    (" (%d %s)" % (frel, plural(frel, "relacja", "relacje", "relacji"))) if frel else "",
+    (", dopisane %s" % human(vol)) if copies else ""))
 fname = "statystyka-%s-%s.html" % (SHORT, time.strftime("%Y-%m-%d", NOW))
 out.append(u"Pełna statystyka: załącznik %s." % fname)
 if E.get("DG_QUIET") == "1":

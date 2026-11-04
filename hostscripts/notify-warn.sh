@@ -33,6 +33,7 @@ if [ "${ZFS_WARN_MODE:-daily}" = "immediate" ]; then
         [ -n "$AW_SAY" ] && printf '%s\n' "$AW_SAY"
         printf '\nHost: %s   czas: %s\nZadanie: %s\n' "${HOST}" "$(date '+%Y-%m-%d %H:%M:%S')" "${JOB}"
         [ -n "$DETAIL" ] && { printf '\nSzczegoly:\n\n'; printf '%s\n' "$DETAIL" | sed 's/^/    /'; }
+        printf '\nPelny log: %s/cron.log na %s\n' "$(cd "$(dirname "$0")" && pwd)" "${HOST}"
     } | alert_mail "[ZFS] ${HOST%%.*}: ${AW_REL:+$AW_REL -- }${AW_WHAT} ($(date '+%d.%m %H:%M'))" "${ZFS_ALERT_EMAIL:-root}"
     exit 0
 fi
