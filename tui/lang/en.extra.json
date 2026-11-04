@@ -849,5 +849,6 @@
 "Fastprune": "Fastprune",
 "fastprune $FASTPRUNE h": "fastprune $FASTPRUNE h",
 "Źródło: fastprune $FASTPRUNE h -- każda migawka żyje tyle godzin, czyszczenie co godzinę; bez monitorów szczebli rzadszych niż $FASTPRUNE h -- ich wiek pilnuje archiwum. Bez kopii pasywnej na kolektorze starszych migawek nie będzie nigdzie.": "Source: fastprune $FASTPRUNE h -- every snapshot lives that many hours, pruning every hour; no monitors on tiers rarer than $FASTPRUNE h -- the archive watches their age. Without a passive copy on the collector, older snapshots exist nowhere.",
-"Fastprune $FASTPRUNE h: szablon relacji $FP_P (kopia $PROFILE).": "Fastprune $FASTPRUNE h: relation template $FP_P (a copy of $PROFILE)."
+"Fastprune $FASTPRUNE h: szablon relacji $FP_P (kopia $PROFILE).": "Fastprune $FASTPRUNE h: relation template $FP_P (a copy of $PROFILE).",
+"Nowe zadania tej relacji (dotychczasowe zostają bez zmian):": "New jobs of this relation (the existing ones stay unchanged):"
 }

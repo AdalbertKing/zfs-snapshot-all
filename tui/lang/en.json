@@ -922,6 +922,7 @@
 "Nowa replika -- 1/6 nazwa": "New replica -- 1/6 name",
 "Nowa replika -- kolektor $(hostname)": "New replica -- collector $(hostname)",
 "Nowa replika: przerwać?": "New replica: abort?",
+"Nowe zadania tej relacji (dotychczasowe zostają bez zmian):": "New jobs of this relation (the existing ones stay unchanged):",
 "Nowy adres źródła $SRCNAME po przeniesieniu kolektora:\\nIP albo nazwa, opcjonalnie :port.\\n\\nZapisany: ${cur:--}   Cron idzie przez: ${inst:--}\\n\\nUżywaj PO przeniesieniu, gdy nowy adres już odpowiada.": "New address of source $SRCNAME after moving the collector:\\nIP or name, optionally :port.\\n\\nSaved: ${cur:--}   Cron goes through: ${inst:--}\\n\\nUse AFTER the move, when the new address already answers.",
 "Nowy prefiks": "New prefix",
 "Nowy szablon %s": "New template %s",

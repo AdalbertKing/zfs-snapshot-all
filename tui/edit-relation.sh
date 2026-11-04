@@ -1088,7 +1088,11 @@ for l in lines:
     lbl = re.sub(r"^profile__.*?__", "", lbl)
     r = re.search(r'\s(-[HDWMY]\d+)\s*$', body)
     new.append("  %-14s %s%s" % (when, lbl, ("  " + r.group(1)) if r else ""))
-if new or gone:
+# W18 (kampania 2026-11-03): zmiana, ktora tylko DODAJE szczeble, nie usuwa zadnej linii --
+# "zastepuja 0 dotychczasowych" bylo prawda, ale czytalo sie jak blad.
+if new and not gone:
+    print(u"\n" + _(u"Nowe zadania tej relacji (dotychczasowe zostają bez zmian):"))
+elif new or gone:
     print(u"\n" + (_(u"Zadania tej relacji po zmianie (zastępują %d dotychczasowych):") % gone))
     for x in new:
         print(x)

@@ -891,6 +891,18 @@ if hasE "$FP" "^║ $KD +sx +lokalny prune " && hasE "$FPD" 'Kiedy +co godzinę 
 else
     bad "zadania: porzadki szczebla plaskiego (uwaga 4)" "minuty wierszy 'lokalny prune': '$FPMIN'" "$FP"
 fi
+# W1 (kampania 2026-11-03): F3 licznik "porządki" liczy te same wlasne porzadki co F2 -- szczebel
+# plaski sx ma jedna wlasna linie delsnaps ("(sx-a)"); linia sasiada z bloku ("(sx-b)") sie nie liczy.
+# Dawniej: "porządki 0", bo licznik znal tylko osobne sekcje [prune:].
+W1D="$(mktemp -d)"
+printf '%s' '{"relations":[{"name":"sx","state":"active","peer":"192.168.28.99","profile":"p"}]}' > "$W1D/status.json"
+W1S="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $FPARGS --status "$W1D/status.json" --screen relacje --width 200 --height 50 2>&1)"
+rm -rf "$W1D"
+if hasE "$W1S" 'Zadania +2: kopie lub migawki 1, porządki 1'; then
+    ok "relacje W1: szczebel plaski -- licznik 'porządki' widzi wlasne porzadki z sekcji [dataset:] (1), bez cudzej linii z bloku"
+else
+    bad "relacje W1: licznik porzadkow" "$(printf '%s\n' "$W1S" | grep -E 'Zadania|── ' | head -4)"
+fi
 # Panel wiersza 'lokalny prune' ma statystyki WLASNEJ linii delsnaps (przejscie GUI pve10,
 # 2026-10-28): wiersz byl dorabiany z srow=None i panel mowil "brak biegow w dzienniku",
 # choc lista obok pokazywala te biegi.
