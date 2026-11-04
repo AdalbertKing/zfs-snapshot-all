@@ -378,6 +378,22 @@ else
     bad "lustro: -M we WLASNEJ linii pobrania czyni zadanie lustrem; cudza linia z -M w tym samym bloku -- nie" "got=$MIOUT"
 fi
 
+# NASTEPNY KROK relacji nieaktywnej = czasownik, ktory ja przyjmie: pending_enroll -> seed (activate
+# odmawia "not seeded yet"), migawki zdalne pending_enroll -> activate (nie maja seeda). Skucha 11
+# (A-TASSA): F3 radzilo "activate", ktore odmawia.
+NSOUT="$("$PY" - "$TUI" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+print(m.next_step({"state": "pending_enroll"}), "|", m.next_step({"state": "pending_enroll", "mode": "snaponly"}), "|", m.next_step({"state": "seed_complete"}))
+PYEOF
+)"
+if [ "$NSOUT" = "seed NAME | activate NAME | activate NAME" ]; then
+    ok "F3 nastepny krok: pending_enroll -> seed, migawki zdalne pending_enroll -> activate, seed_complete -> activate"
+else
+    bad "F3 nastepny krok relacji nieaktywnej" "$NSOUT"
+fi
 # ODSWIEZANIE PO POWROCIE (wlasciciel 2026-10-09, uwaga 1: zapisany szablon pojawial sie na
 # F5 dopiero po Odswiez). Pelne refresh() czyta od nowa takze dane czytane na zadanie:
 # szablony (F5) i config relacji (panel F3). Plik szablonow podmieniony miedzy odczytami
