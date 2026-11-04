@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c84fd7d62b6b69b9 -->
+<!-- status-covers-digest: 8ef5e0f81f44d1c9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,26 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Pierwsza instalacja: git i stary katalog (2026-11-04, `269dbe0d` + `203260d7`, NIEWYDANE).** Wyszło przy
+  wdrożeniu A-TASSA (PVE 7.4). (1) Źródło bez gita: `prepare-source` odmawiał, choć miał kanał root.
+  Teraz sonda zgłasza też `apt-get`, plan pokazuje `apt-get install -y git`, a `--yes` instaluje go
+  przed klonem; gdy pierwsza próba zawiedzie, `apt-get update` i druga próba. Gdy apt zawiedzie,
+  klonu nie ma. Bez gita i bez apt-get: odmowa jak dotąd. (2) `/root/scripts/zfs-snapshot-all` ze
+  starymi skryptami bez `.git`: sonda zgłasza `DIR=notempty`/`notadir`, a `prepare-source` odmawia
+  przed jakąkolwiek zmianą i podaje `mv … .old-<data>` oraz sprawdzenie crontaba. Katalogu nie
+  przenosi sam, bo stare skrypty mogą być w cronie. `check-source` ma pola `apt` i
+  `repo_dir_blocked`. W kreatorze ekran „Co jest na źródle?” (na żywo: „krok 2 z 8”) pokazuje zajęty katalog w osobnym oknie, bez przycisku
+  Zainstaluj, a brak gita jako linię faktu. (3) Kolektor: `apt-get install -y git` przed `git clone`
+  w ESENCJA/ESSENTIALS, README, README.pl, release/README i WDROZENIE/DEPLOYMENT, a w ESENCJA i
+  ESSENTIALS uwaga o starym katalogu. Testy: 7 nowych przypadków w `test/zfsbackup` (sekcja wycięta i
+  uruchomiona osobno: 17/0 na gałęzi; nowe przypadki czerwone na `main`), w tym prawdziwa powłoka sondy
+  na katalogu ze starymi skryptami, pustym katalogu, pliku i braku ścieżki. Na żywo (pve10, pve11 jako
+  kolektor, źródła pve11/pve9, `SOURCE_REPO_DIR` na katalog testowy): odmowa przy starym katalogu, bez
+  zmian w nim; prawdziwy klon na nową ścieżkę; okno „Katalog pakietu zajęty” PL i EN; po usunięciu
+  katalogu zwykłe okno „Brak pakietu na źródle”. **Nie sprawdzone na żywo:** sama instalacja gita (żaden host
+  labu nie jest bez gita). Polecenie apt w kształcie wysyłanym przez czasownik dało rc 0 na pve11, gdzie
+  git już był. Niepotwierdzone i poza tą zmianą: 404 dla `git` deb11u5 z bullseye-security na A-TASSA.
 
 - **`off: command not found` przy świeżej instalacji (2026-11-04, `e0b6c64d`, NIEWYDANE).** Heredok
   `/etc/zfs-alert.conf` w `deploy.sh` jest niecytowany celowo (rozwija `${ALERT_MODE}` i resztę), a

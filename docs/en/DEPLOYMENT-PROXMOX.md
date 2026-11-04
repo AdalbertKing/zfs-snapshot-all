@@ -60,6 +60,7 @@ itself** — you do not have to do it manually.
 Clone the repository onto both hosts, to the same location:
 
 ```bash
+apt-get install -y git      # a fresh Proxmox has no git
 git clone https://github.com/AdalbertKing/zfsbackup.git /root/zfs-snapshot-all
 ```
 

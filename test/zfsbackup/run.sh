@@ -13535,9 +13535,21 @@ host=""; for a in "$@"; do case "$a" in root@*) host="${a#root@}";; esac; done
 cmd="${@: -1}"
 case "$host" in dead) echo "ssh: connect to host dead port 22: No route to host" >&2; exit 255;; esac
 case "$host" in deadcr) printf 'ssh: connect to host deadcr port 22: Connection timed out\r\n' >&2; exit 255;; esac
+# real: the command the verb sends is RUN, here, by bash -- the probe's own shell
+# snippet is what is under test, not an answer this stub makes up.
+case "$host" in real) exec bash -c "$cmd";; esac
 case "$cmd" in
+    *"apt-get install -y git"*)
+        case "$host" in aptfail) echo "E: Unable to locate package git" >&2; exit 100;; esac
+        touch "$PS_ARGS/git-$host";;
     *PROBE=done*)
-        echo "HOSTNAME=$host"; echo "ZFS=yes"; echo "GIT=yes"; echo "POOL=hdd,39.5G,38.3G"
+        echo "HOSTNAME=$host"; echo "ZFS=yes"; echo "POOL=hdd,39.5G,38.3G"
+        case "$host" in
+            nogitnoapt) ;;
+            nogit|aptfail) [ -e "$PS_ARGS/git-$host" ] && echo "GIT=yes"; echo "APT=yes";;
+            olddir) echo "GIT=yes"; echo "APT=yes"; echo "DIR=notempty";;
+            *) echo "GIT=yes";;
+        esac
         if [ "$host" = withpkg ] || [ -e "$PS_ARGS/installed-$host" ]; then echo "PKG=/root/scripts/zfs-snapshot-all"; echo "REV=abc1234"; fi
         echo "PROBE=done";;
     *"git init -q "*) touch "$PS_ARGS/installed-$host";;
@@ -13635,6 +13647,72 @@ if ps_run prepare-source withpkg --yes >"$PS/out" && grep -q 'already there: /ro
 else
     bad "preparesource: already there" "$(cat "$PS/out")" "$(cat "$PS/ssh.argv")"
 fi
+# FIRST INSTALL ON A-TASSA (2026-11-04): a fresh PVE source had no git, and the
+# verb refused although it already had the root channel to install it. Now the
+# plan names apt-get, --yes runs it BEFORE the clone, a failed apt stops before
+# the clone, and a host with neither git nor apt-get is still refused.
+rm -f "$PS/ssh.argv" "$PS/scp.argv" "$PS"/installed-* "$PS"/git-*
+if ps_run prepare-source nogit >"$PS/out" && grep -q 'apt-get install -y git' "$PS/out" && grep -q 'plan only' "$PS/out" \
+        && ! grep -q 'apt-get install' "$PS/ssh.argv" && ! grep -q 'git clone' "$PS/ssh.argv"; then
+    ok "preparesource: no git on the source -- the plan names apt-get install git; without --yes nothing is installed"
+else
+    bad "preparesource: no-git plan" "$(cat "$PS/out")" "$(cat "$PS/err")" "$(cat "$PS/ssh.argv")"
+fi
+rm -f "$PS/ssh.argv" "$PS/scp.argv" "$PS"/installed-* "$PS"/git-*
+ps_rc=0; ps_run prepare-source nogit --yes >"$PS/out" || ps_rc=$?
+n_apt=$(grep -n 'apt-get install -y git' "$PS/ssh.argv" | head -1 | cut -d: -f1)
+n_cln=$(grep -n 'git clone -q ' "$PS/ssh.argv" | head -1 | cut -d: -f1)
+if [ "$ps_rc" -eq 0 ] && [ -n "$n_apt" ] && [ -n "$n_cln" ] && [ "$n_apt" -lt "$n_cln" ] \
+        && grep -q '>>> installed git on nogit' "$PS/out" && grep -q '>>> verified: /root/scripts/zfs-snapshot-all' "$PS/out"; then
+    ok "preparesource: no git + --yes -- apt-get install git over root ssh first, then the clone, then the verify probe"
+else
+    bad "preparesource: no-git --yes" "rc=$ps_rc apt@$n_apt clone@$n_cln" "$(cat "$PS/out")" "$(cat "$PS/err")" "$(cat "$PS/ssh.argv")"
+fi
+rm -f "$PS/ssh.argv" "$PS/scp.argv" "$PS"/installed-* "$PS"/git-*
+if ! ps_run prepare-source aptfail --yes >"$PS/out" && grep -q 'apt-get install git on aptfail failed: E: Unable to locate package git' "$PS/err" \
+        && ! grep -q 'git clone' "$PS/ssh.argv" && [ ! -e "$PS/scp.argv" ]; then
+    ok "preparesource: apt-get failing on the source stops before the clone, with apt's own last line"
+else
+    bad "preparesource: apt fails" "$(cat "$PS/out")" "$(cat "$PS/err")" "$(cat "$PS/ssh.argv")"
+fi
+rm -f "$PS/ssh.argv" "$PS/scp.argv" "$PS"/installed-* "$PS"/git-*
+if ! ps_run prepare-source nogitnoapt --yes >"$PS/out" && grep -q 'has no git and no apt-get' "$PS/err" \
+        && ! grep -q 'apt-get install\|git clone' "$PS/ssh.argv"; then
+    ok "preparesource: neither git nor apt-get on the source -- refused, nothing attempted"
+else
+    bad "preparesource: no git no apt" "$(cat "$PS/err")" "$(cat "$PS/ssh.argv")"
+fi
+# OLD LAYOUT (A-TASSA): /root/scripts/zfs-snapshot-all holding old scripts and no
+# .git. git clone cannot go there; the verb refuses before ANY change (no apt,
+# no clone, no scp) and names the move; nothing is moved for the operator.
+rm -f "$PS/ssh.argv" "$PS/scp.argv" "$PS"/installed-* "$PS"/git-*
+if ! ps_run prepare-source olddir --yes >"$PS/out" && grep -q 'exists, is not empty and holds no package' "$PS/err" \
+        && grep -q "mv /root/scripts/zfs-snapshot-all /root/scripts/zfs-snapshot-all.old-" "$PS/err" && grep -q "crontab" "$PS/err" \
+        && ! grep -q 'apt-get install\|git clone\|git init\|mv ' "$PS/ssh.argv" && [ ! -e "$PS/scp.argv" ]; then
+    ok "preparesource: an old non-empty package directory without the package -- refused before any change, the move is named, nothing moved"
+else
+    bad "preparesource: old dir" "$(cat "$PS/out")" "$(cat "$PS/err")" "$(cat "$PS/ssh.argv")"
+fi
+got=$(ps_run check-source olddir --json | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["package"]["ok"], d["apt"], repr(d["repo_dir_blocked"]))' 2>/dev/null)
+if [ "$got" = "False True 'notempty'" ]; then
+    ok "preparesource: check-source carries apt and repo_dir_blocked for the wizard"
+else
+    bad "preparesource: check-source olddir" "$got" "$(cat "$PS/err")"
+fi
+# The probe's own shell, run for real (host 'real' = bash -c of the sent command)
+# against a directory with old scripts, an empty one and a plain file.
+mkdir -p "$PS/real-old" "$PS/real-empty"; : > "$PS/real-old/delsnaps.sh"; : > "$PS/real-file"
+real_blk() { SOURCE_REPO_DIR="$1" ps_run check-source real --json | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["ssh"]["ok"], repr(d["repo_dir_blocked"]))' 2>/dev/null; }
+r_old=$(real_blk "$PS/real-old"); r_empty=$(real_blk "$PS/real-empty"); r_file=$(real_blk "$PS/real-file"); r_none=$(real_blk "$PS/real-none")
+rm -f "$PS/ssh.argv"
+r_rc=0; SOURCE_REPO_DIR="$PS/real-old" ps_run prepare-source real --yes >"$PS/out" || r_rc=$?
+if [ "$r_old" = "True 'notempty'" ] && [ "$r_empty" = "True ''" ] && [ "$r_file" = "True 'notadir'" ] && [ "$r_none" = "True ''" ] \
+        && [ "$r_rc" -ne 0 ] && [ -e "$PS/real-old/delsnaps.sh" ] && [ "$(ls -A "$PS/real-old")" = delsnaps.sh ] && ! grep -q 'git clone' "$PS/ssh.argv"; then
+    ok "preparesource: the real probe tells an old non-empty dir, an empty dir, a file and no path apart; prepare-source leaves the old dir as it was"
+else
+    bad "preparesource: real probe" "old=$r_old empty=$r_empty file=$r_file none=$r_none rc=$r_rc" "$(ls -A "$PS/real-old")" "$(cat "$PS/err")"
+fi
+rm -rf "$PS/real-old" "$PS/real-empty" "$PS/real-file"
 rm -f "$PS/ssh.argv"
 if ! ps_run prepare-source dead --yes >"$PS/out" && grep -q 'no root SSH channel to dead' "$PS/err" && grep -q 'ssh-copy-id root@dead' "$PS/err" && ! grep -q 'git clone' "$PS/ssh.argv"; then
     ok "preparesource: no ssh channel = refusal naming ssh-copy-id as the operator's step; nothing attempted"

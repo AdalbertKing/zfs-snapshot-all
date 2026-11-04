@@ -65,6 +65,7 @@ restore path they can walk in a console — without running a backup server.
 On the collector, as root:
 
 ```bash
+apt-get install -y git      # a fresh Proxmox has no git
 git clone https://github.com/AdalbertKing/zfsbackup.git /root/scripts/zfs-snapshot-all
 cd /root/scripts/zfs-snapshot-all
 ./deploy.sh --backup-user=zfsbackup
