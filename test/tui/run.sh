@@ -250,6 +250,32 @@ if has "$S4" 'lab-vm101: [Datasety]  Zadania' && [ -n "$S4H" ] && [ -n "$S4R" ] 
 else
     bad "relacje: pary przy 200" "$S4"
 fi
+# U136 (fastprune, 2026-11-04): szczebel bez progow monitora w configu (tygodniowy w fastprune)
+# nie przeslania werdyktu pilnowanego godzinowego tego samego datasetu -- wiersz "aktualne".
+# Kontrola: ten sam szczebel Z progami w configu, a bez linii monitora -- "bez monitora".
+U136D="$(mktemp -d)"
+"$PY" - "$P10/list-jobs.json" "$U136D" <<'PYEOF'
+import json, sys, copy
+jobs = json.load(open(sys.argv[1], encoding="utf-8"))
+hj = [j for j in jobs["jobs"] if j.get("label") == "lab-vm101" and j.get("section_kind") == "dataset"][0]
+wj = copy.deepcopy(hj)
+wj.update(tier="profile__default__standard_weekly", schedule="21 2 * * 0", prefix="automated_weekly_",
+          pattern="automated_weekly", monitor_warn="", monitor_crit="")
+a = copy.deepcopy(jobs); a["jobs"].append(wj)
+json.dump(a, open(sys.argv[2] + "/a.json", "w", encoding="utf-8"))
+wj = copy.deepcopy(wj); wj.update(monitor_warn="10d", monitor_crit="14d")
+b = copy.deepcopy(jobs); b["jobs"].append(wj)
+json.dump(b, open(sys.argv[2] + "/b.json", "w", encoding="utf-8"))
+PYEOF
+U136A="$(screen relacje down,down,down,down --width 260 --height 40 --jobs "$U136D/a.json")"
+U136B="$(screen relacje down,down,down,down --width 260 --height 40 --jobs "$U136D/b.json")"
+U136R='^║ pve9:hdd/lab/vm-101 → hdd/backups/192.168.28.99/hdd/lab/vm-101 +'
+if hasE "$U136A" "${U136R}aktualne +2 " && hasE "$U136B" "${U136R}bez monitora +2 "; then
+    ok "relacje U136: szczebel bez progow monitora (fastprune) nie zmienia werdyktu datasetu -- 'aktualne'; z progami a bez monitora -- 'bez monitora'"
+else
+    bad "relacje U136: werdykt datasetu" "$(printf '%s\n' "$U136A" | grep 'vm-101 →' | head -2)" "$(printf '%s\n' "$U136B" | grep 'vm-101 →' | head -2)"
+fi
+rm -rf "$U136D"
 # ZEPSUTE ZRODLO MA NAZWAC KOMENDE. Ekran mowil "uruchom czasownik recznie",
 # czyli kazal zgadnac, ktory to czasownik i z jaka flaga -- a zna jedno i drugie.
 # (Ten sam kontrakt dla verba "monitor" byl tu sprawdzany na usunietym ekranie
