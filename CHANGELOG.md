@@ -4,6 +4,14 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [1.0.9] — 2026-11-04
+
+- **A local copy into an archive that keeps longer than its source installs.** The rehearsal before
+  `--install` read the engine's dry-run exit code 1 as a failure, but the dry-run lists every
+  snapshot the target has and the source no longer has -- an archive's older daily and weekly
+  history. Such snapshots older than the common base are now history, as in activate-client; a
+  target snapshot newer than the base still refuses the install.
+
 ## [1.0.8] — 2026-11-04
 
 - **Fastprune for remote snapshots** (wizard: Advanced -> Fastprune; edit window: Fastprune row). One
