@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9da8a46d25f31cec -->
+<!-- status-covers-digest: 30c1081d2bb179e6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,24 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Krok „Dokąd” i drzewo datasetów w układzie F2 (2026-11-04, gałąź `feat/drzewo-f2`, niewydane; U147, U155,
+  U156).** Makieta zaakceptowana przez właściciela („Tak, koduj”).
+  - `tui/tree.py`: od 110 kolumn terminala okno wygląda jak F2 -- tabela w ramce ╔═ z kolumnami (Użyte, Wolne,
+    Migawki, Uwagi), wcięcie „│”, panel faktów o wierszu z prawej, zakładka na dole. Fakty i zakładkę liczy
+    wołający (tree.py nadal nie woła zfs). Ins (gdy wołający pozwala) kończy z akcją „new”. Węższy terminal --
+    dotychczasowe okno. Ten wygląd dostaje siedem okien z tego drzewa (źródła przy nowej relacji, zmianie relacji
+    i replice, „Dokąd”, przeglądanie kopii, odzysk: „skąd” i „co”); na żywo sprawdzone tylko źródła i „Dokąd”.
+  - Krok „Dokąd” (`tui/new-relation.sh`): od razu drzewo, bez menu z „Przeglądaj…”/„Wpisz ścieżkę…”. Panel mówi,
+    gdzie wylądują kopie, co już jest w celu, czy pierwsza kopia będzie przyrostowa (wspólna migawka źródła i
+    celu z jednego `zfs list -t snapshot`) czy pełna (i ile) i która relacja tam kopiuje. Kursor startuje (przy pierwszym wejściu; po Wstecz -- na wcześniejszym wyborze) na celu,
+    pod którym leżą już kopie tych danych ze wspólną migawką (U147); inny cel ostrzega, gdzie pójdzie
+    przyrostowo. Nowy cel: Ins i nazwa. Bez listy datasetów -- ścieżka z palca jak dotąd.
+  - Testy: `test/tui` na pve9 479/0. 49 scenariuszy kreatora przepisanych mechanicznie (cel wybierany w drzewie);
+    nowe: układ F2 i Ins (kontrola: 80 kolumn), propozycja celu z kopią (kontrola: bez wspólnej migawki).
+    Kontrola negatywna: oba nowe testy padają na `tree.py`/`new-relation.sh` z `main`. Na żywo na pve10 (tmux,
+    klon gałęzi w /tmp, bez instalacji): kursor sam na `gwlive/replica` z kopią `hdd/archive`, „PRZYROSTOWO,
+    wszystkie 4”; na `hdd/backups` -- „PEŁNA” i ostrzeżenie; Ins pyta o nazwę, Wstecz wraca do drzewa.
 
 - **Maile admina, wariant A (2026-11-04, gałąź `feat/maile-a`, niewydane).** Wybór właściciela z dwóch makiet:
   tabela relacji bez kolumny rodzaju (STAN mówi, ile zadań relacji ma błąd), a „DO ZROBIENIA” wymienia zadania
