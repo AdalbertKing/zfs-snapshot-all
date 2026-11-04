@@ -115,6 +115,19 @@ class Tree(object):
         # kolumny USED/AVAIL jak `zfs list`, okno wysokości treści, a w dolnej linii prawdziwa
         # ścieżka dla wiersza pod kursorem ("cursor_line" z {cur}). Inne okna bez zmian.
         self.cols = any(isinstance(d, dict) and "avail" in d for d in spec.get("datasets", []))
+        # U156 (właściciel 2026-11-04, makieta „Dokąd” w układzie F2): przy szerokim terminalu
+        # okno wygląda jak F2 -- tabela z kolumnami, panel faktów o wierszu z prawej, zakładka
+        # na dole. Fakty i zakładkę liczy wołający (tree.py nie woła zfs): "facts" =
+        # {dataset: [[rodzaj, tekst], ...]} (rodzaj: h nagłówek grupy, g dobrze, w uwaga, "" zwykły),
+        # "tab" = {"title", "heads", "rows": {dataset: [[rodzaj, [komórki]], ...]}}. "allow_new":
+        # Ins kończy z action "new" i kursorem w roots -- wołający pyta o nazwę nowego datasetu.
+        # Na wąskim terminalu (< WIDE kolumn) zostaje dotychczasowe okno.
+        self.facts = spec.get("facts") or {}
+        self.tab = spec.get("tab") or {}
+        self.allow_new = bool(spec.get("allow_new")) and self.single
+        self.spans = []
+        self.wide = False
+        self.W, self.H = 80, 24
         self.fit = bool(spec.get("fit"))
         self.cursor_line = spec.get("cursor_line") or u""
         sel = spec.get("selectable")
@@ -170,7 +183,8 @@ class Tree(object):
             p = n.rsplit("/", 1)[0] if "/" in n else None
             self.nodes[n] = {"name": n, "parent": p if p in seen else None, "kids": [], "sub": [],
                              "depth": 0, "used": info[n].get("used"), "type": info[n].get("type"),
-                             "avail": info[n].get("avail")}
+                             "avail": info[n].get("avail"), "snaps": info[n].get("snaps"),
+                             "note": info[n].get("note") or u""}
         self.tops = []
         for n in names:
             p = self.nodes[n]["parent"]
@@ -326,6 +340,9 @@ class Tree(object):
         nd = self.nodes.get(self.cur)
         if k == "esc":
             self.done = "back"
+        elif k == "ins" and self.allow_new:
+            if rows:
+                self.roots, self.done = [self.cur], "new"
         elif k in ("enter", "space") and self.single:
             if not rows:
                 return
@@ -365,6 +382,9 @@ class Tree(object):
                 self.cur = nd["parent"]
 
     def result(self):
+        if self.done == "new":
+            return {"action": "new", "roots": [self.cur], "excl": {self.cur: []},
+                    "closed": [], "recursion": self.recursion}
         if self.done != "next":
             return {"action": self.done or "back", "roots": self.init["roots"],
                     "excl": self.init["excl"], "recursion": self.init["recursion"],
@@ -380,9 +400,175 @@ class Tree(object):
     def resize(self, width, height):
         self.w = max(78, min(width - 2, 100))
         self.h = max(14, min(height - 2, 50))
+        self.W, self.H = max(78, width), max(14, height)
+        self.wide = self.W >= WIDE
 
     def list_height(self, msg_lines):
+        if self.wide:
+            return max(3, self.top_h() - 5 - (1 if self.show_mode else 0) - msg_lines)
         return max(3, self.h - 6 - (1 if self.show_mode else 0) - msg_lines)
+
+    # -- obraz F2 (szeroki terminal) -----------------------------------------------
+    def lbw_inner(self):
+        return max(60, int((self.W - 1) * 0.6)) - 1
+
+    def tab_rows(self):
+        return (self.tab.get("rows") or {}).get(self.cur) or [] if self.tab else []
+
+    def top_h(self):
+        if not self.tab:
+            return self.H - 1
+        return self.H - 1 - min(max(len(self.tab_rows()), 1) + 4, max(6, self.H // 3))
+
+    def panel(self):
+        """Fakty o wierszu pod kursorem: od wołającego albo ogólne (nazwa, rozmiar, migawki)."""
+        f = self.facts.get(self.cur)
+        if f:
+            return [(k or u"", t) for k, t in f]
+        nd = self.nodes.get(self.cur)
+        if not nd:
+            return []
+        out = [(u"h", _(u"Dataset")), (u"", self.cur)]
+        if nd["used"] is not None:
+            out.append((u"", (_(u"Użyte     %s") % used_text(nd["used"])) + (u"  (zvol)" if nd["type"] == "volume" else u"")))
+        if nd.get("avail") is not None:
+            out.append((u"", _(u"Wolne     %s") % used_text(nd["avail"])))
+        if nd.get("snaps") not in (None, u""):
+            out.append((u"", _(u"Migawki   %s") % nd["snaps"]))
+        if nd.get("note"):
+            out.append((u"", _(u"Uwagi     %s") % nd["note"]))
+        if nd["kids"]:
+            out.append((u"", _(u"Pod nim   %d datasetów") % len(nd["sub"])))
+        legend = _(self.spec.get("legend") or u"") or (u"" if self.single else
+                 _(u"[x] kopiowane z potomnymi, także przyszłymi   [-] tylko obecne albo część   [ ] nie"))
+        if legend.strip():
+            out += [(u"", u""), (u"h", _(u"Oznaczenia") if not self.single else _(u"Opis"))]
+        return out, legend.strip()
+
+    def wide_row(self, n, chk, nw, cw):
+        nd = self.nodes[n]
+        exp = (u"- " if n in self.expanded else u"+ ") if nd["kids"] else u"  "
+        m = self.mark(n, chk)
+        name = n if nd["depth"] == 0 else n.rsplit("/", 1)[1]
+        left = u" " + u"│ " * nd["depth"] + exp + (m + u" " if m else u"") + name
+        if len(left) > nw:
+            left = left[:max(1, nw - 1)] + u"…"
+        size = used_text(nd["used"])
+        if not self.cols and nd["type"] == "volume":
+            size = (u"zvol " + size).strip()
+        cells = [size.rjust(cw[0])]
+        if self.cols:
+            cells.append(used_text(nd.get("avail")).rjust(cw[1]))
+        cells.append((u"%s" % (nd.get("snaps") if nd.get("snaps") not in (None, u"") else u"")).rjust(cw[2]))
+        cells.append((nd.get("note") or u"")[:cw[3]].ljust(cw[3]))
+        return left.ljust(nw) + u"  " + u"  ".join(cells)
+
+    def render_wide(self):
+        W, H = self.W - 1, self.H          # ostatnia kolumna terminala zostaje pusta (curses)
+        rows, chk = self.rows(), self.checked_map()
+        lbw = max(60, int(W * 0.6))
+        pw = W - lbw
+        iw = lbw - 2
+        th = self.top_h()
+        mlines = [u" " + l for l in wrap(self.msg, iw - 2)] if self.msg else []
+        cw = [7, 7, 7, 14] if self.cols else [9, 0, 7, 14]
+        nw = iw - sum(cw) - 2 * len([c for c in cw if c]) - (0 if self.cols else 0)
+        if not self.cols:
+            cw = [9, 0, 7, 14]
+            nw = iw - (9 + 7 + 14) - 6
+        hdr_cells = [_(u"Użyte").rjust(cw[0])] + ([_(u"Wolne").rjust(cw[1])] if self.cols else []) + \
+                    [_(u"Migawki").rjust(cw[2]), _(u"Uwagi").ljust(cw[3])]
+        hdr = (u" " + _(u"Dataset")).ljust(nw) + u"  " + u"  ".join(hdr_cells)
+        lh = self.list_height(len(mlines))
+        idx = rows.index(self.cur) if self.cur in rows else 0
+        self.top = max(0, min(self.top, len(rows) - lh))
+        if idx < self.top:
+            self.top = idx
+        elif idx >= self.top + lh:
+            self.top = idx - lh + 1
+        left = [hdr]
+        more_up = _(u" ↑ więcej ") if self.top > 0 else u""
+        left.append(u" " + u"─" * (iw - 2 - len(more_up)) + more_up)
+        if self.show_mode:
+            left.append(_(u" Sposób: cała gałąź atomowo (-r)") if self.recursion == "atomic"
+                        else _(u" Sposób: każdy dataset osobno (-R)"))
+        first = len(left)
+        for n in rows[self.top:self.top + lh]:
+            left.append(self.wide_row(n, chk, nw, cw))
+        left += [u""] * (first + lh - len(left))
+        nexc = sum(1 for r in self.roots for e in self.excl.get(r, []) if e not in self.hide)
+        auto = any(e in self.hide for r in self.roots for e in self.excl.get(r, []))
+        down = _(u"   ↓ więcej") if self.top + lh < len(rows) else u""
+        if self.single and self.cursor_line:
+            left.append(u" " + self.cursor_line.replace(u"{cur}", self.cur or u"-") + down)
+        elif self.single:
+            left.append(_(u" Kursor: %s") % (self.cur or u"-") + down)
+        else:
+            left.append(_(u" Wybrane miejsca: %d   pominięte: %d%s") % (
+                len(self.roots), nexc, _(u"   (cel kopii pominięty automatycznie)") if auto else u"") + down)
+        mfirst = len(left)
+        left += mlines
+        left = left[:th - 2] + [u""] * max(0, th - 2 - len(left))
+        # prawy panel
+        pnl = self.panel()
+        legend = u""
+        if isinstance(pnl, tuple):
+            pnl, legend = pnl
+        right = []
+        for k, t in pnl:
+            if k == u"h":
+                right.append((u"h", u" ── " + t))
+            else:
+                for i, l in enumerate(wrap(t, pw - 4) or [u""]):
+                    right.append((k, u" " + (l if i == 0 else u"  " + l)))
+        for l in wrap(legend, pw - 4):
+            right.append((u"", u" " + l))
+        right = right[:th - 2]
+        title = u" %s " % (self.spec.get("title") or _(u"Wybór datasetów"))
+        if len(title) > lbw - 6:
+            title = title[:lbw - 8] + u"… "
+        hint = (_(u"Enter wybiera  → rozwija  ← zwija  Esc wraca") + (_(u"  Ins nowy dataset") if self.allow_new else u"")
+                if self.single else
+                _(u"Spacja zaznacza  → rozwija  ← zwija  Enter dalej  Esc wraca") + (_(u"  S tryb") if self.show_mode else u""))
+        ptitle = u" %s " % (self.cur or u"")
+        if len(ptitle) > pw - 4:
+            ptitle = u" …" + ptitle[-(pw - 6):]
+        out = [u"╔═" + title + u"═" * max(0, lbw - 3 - len(title)) + u"╗" +
+               u"┌─" + ptitle + u"─" * max(0, pw - 3 - len(ptitle)) + u"┐"]
+        self.spans = []
+        for i in range(th - 2):
+            l = left[i] if i < len(left) else u""
+            k, r = right[i] if i < len(right) else (u"", u"")
+            out.append(u"║" + l[:iw].ljust(iw) + u"║" + u"│" + r[:pw - 2].ljust(pw - 2) + u"│")
+            if k:
+                self.spans.append((i + 1, lbw + 1, r[:pw - 2], k))
+        hb = hint[:lbw - 6]
+        out.append(u"╚═ " + hb + u" " + u"═" * max(0, lbw - 5 - len(hb)) + u"╝" + u"└" + u"─" * (pw - 2) + u"┘")
+        if self.tab:
+            trows = self.tab_rows()
+            heads = self.tab.get("heads") or []
+            tw = W - 2
+            ncol = max(len(heads), max([len(c) for _k, c in trows] or [0]))
+            widths = [len(h) for h in heads] + [0] * (ncol - len(heads))
+            for _k, c in trows:
+                for j, v in enumerate(c):
+                    widths[j] = max(widths[j], len(v))
+            def line(cells):
+                return u" " + u"   ".join(cells[j].ljust(widths[j]) for j in range(len(cells)))
+            ttl = u" %s: [%s] " % (self.cur or u"", self.tab.get("title") or u"")
+            out.append(u"╔═" + ttl + u"═" * max(0, tw - 1 - len(ttl)) + u"╗")
+            body = [(u"", line(heads))] if heads else []
+            body.append((u"", u" " + u"─" * (tw - 2)))
+            body += [(k or u"", line(c)) for k, c in trows] or [(u"", _(u" (nic do pokazania)"))]
+            for i in range(H - len(out) - 1):
+                k, l = body[i] if i < len(body) else (u"", u"")
+                out.append(u"║" + l[:tw].ljust(tw) + u"║")
+                if k:
+                    self.spans.append((len(out) - 1, 1, l[:tw], k))
+            out.append(u"╚" + u"═" * tw + u"╝")
+        self.msg_rows = [mfirst + i + 1 for i in range(len(mlines))] if self.msg else []
+        focus = (first + (idx - self.top) + 1, 1, lbw - 1) if rows else None
+        return out, focus
 
     def row_text(self, n, chk, iw):
         nd = self.nodes[n]
@@ -404,6 +590,8 @@ class Tree(object):
         return (left.ljust(iw - len(right) - 1) + right + u" ") if right else left
 
     def render(self):
+        if self.wide:
+            return self.render_wide()
         w, iw = self.w, self.w - 2
         rows, chk = self.rows(), self.checked_map()
         mlines = [u" " + l for l in wrap(self.msg, iw - 2)] if self.msg else [u""]
@@ -459,6 +647,8 @@ class Tree(object):
         return out, focus
 
 
+WIDE = 110       # od tylu kolumn terminala okno w układzie F2 (U156); węższe -- dotychczasowe
+
 KEYNAMES = {"\t": "tab", " ": "space", "\n": "enter", "\r": "enter", "\x1b": "esc", "\x7f": "bs", "\x08": "bs"}
 
 # Home/End z PuTTY (i tmuxa) przy TERM=xterm: terminal wysyła ESC [ 1 ~ / ESC [ 4 ~, a opis
@@ -467,7 +657,7 @@ KEYNAMES = {"\t": "tab", " ": "space", "\n": "enter", "\r": "enter", "\x1b": "es
 # Esc dobieramy resztę ciągu sami, jak zfs-tui.py.
 ESCSEQ = {"[A": "up", "[B": "down", "[C": "right", "[D": "left", "OA": "up", "OB": "down", "OC": "right", "OD": "left",
           "[H": "home", "OH": "home", "[1~": "home", "[7~": "home", "[F": "end", "OF": "end", "[4~": "end", "[8~": "end",
-          "[5~": "pgup", "[6~": "pgdn", "[3~": "del"}
+          "[5~": "pgup", "[6~": "pgdn", "[3~": "del", "[2~": "ins"}
 
 
 def esc_tail(scr):
@@ -519,18 +709,28 @@ def run_curses(t):
             curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLUE)
             curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_CYAN)
             curses.init_pair(3, curses.COLOR_YELLOW, curses.COLOR_BLUE)
+            # układ F2 (U156): tło terminala, jak zfs-tui.py; kolory słów z prawego panelu
+            try:
+                curses.use_default_colors()
+                bg = -1
+            except curses.error:
+                bg = curses.COLOR_BLACK
+            curses.init_pair(4, curses.COLOR_GREEN, bg)
+            curses.init_pair(5, curses.COLOR_YELLOW, bg)
+            curses.init_pair(6, curses.COLOR_WHITE, bg)
         scr.keypad(True)
         km = {curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_LEFT: "left", curses.KEY_RIGHT: "right",
               curses.KEY_PPAGE: "pgup", curses.KEY_NPAGE: "pgdn", curses.KEY_ENTER: "enter", 10: "enter", 13: "enter",
-              curses.KEY_HOME: "home", curses.KEY_END: "end", 27: "esc", 32: "space"}
+              curses.KEY_HOME: "home", curses.KEY_END: "end", curses.KEY_IC: "ins", 27: "esc", 32: "space"}
         while t.done is None:
             h, wd = scr.getmaxyx()
             t.resize(wd, h)
             lines, focus = t.render()
             scr.erase()
-            base = curses.color_pair(1) if curses.has_colors() else curses.A_NORMAL
-            y0 = max(0, (h - len(lines)) // 2)
-            x0 = max(0, (wd - len(lines[0])) // 2)
+            col = curses.has_colors()
+            base = curses.color_pair(1) if col and not t.wide else curses.A_NORMAL
+            y0 = 0 if t.wide else max(0, (h - len(lines)) // 2)
+            x0 = 0 if t.wide else max(0, (wd - len(lines[0])) // 2)
             for y, l in enumerate(lines):
                 if y0 + y >= h:
                     break
@@ -542,14 +742,22 @@ def run_curses(t):
                 fy, a, b = focus
                 try:
                     scr.addstr(y0 + fy, x0 + a, lines[fy][a:b][:wd - x0 - a - 1],
-                               (curses.color_pair(2) if curses.has_colors() else curses.A_REVERSE) | curses.A_BOLD)
+                               curses.A_REVERSE if t.wide else
+                               (curses.color_pair(2) if col else curses.A_REVERSE) | curses.A_BOLD)
+                except curses.error:
+                    pass
+            for sy, sx, st, sk in (t.spans if t.wide else []):
+                attr = {"h": curses.A_BOLD, "g": curses.color_pair(4) if col else curses.A_BOLD,
+                        "w": curses.color_pair(5) if col else curses.A_BOLD}.get(sk, curses.A_NORMAL)
+                try:
+                    scr.addstr(y0 + sy, x0 + sx, st[:max(0, wd - x0 - sx - 1)], attr)
                 except curses.error:
                     pass
             for my in t.msg_rows:
                 if y0 + my < h:
                     try:
-                        scr.addstr(y0 + my, x0 + 1, lines[my][1:-1][:wd - x0 - 2],
-                                   (curses.color_pair(3) if curses.has_colors() else curses.A_BOLD))
+                        scr.addstr(y0 + my, x0 + 1, (lines[my][1:-1] if not t.wide else lines[my][1:t.lbw_inner()])[:wd - x0 - 2],
+                                   (curses.color_pair(5 if t.wide else 3) if col else curses.A_BOLD))
                     except curses.error:
                         pass
             scr.refresh()
@@ -591,7 +799,7 @@ def main(argv):
         run_curses(t)
     with open(a.out, "w", encoding="utf-8") as f:
         json.dump(t.result(), f, ensure_ascii=False)
-    return 0 if t.done == "next" else 1
+    return 0 if t.done in ("next", "new") else 1
 
 
 if __name__ == "__main__":
