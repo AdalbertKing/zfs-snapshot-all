@@ -4021,7 +4021,8 @@ fi
 # leza juz kopie tych danych ze wspolna migawka -- tam stawia kursor i mowi PRZYROSTOWO, a przy
 # innym celu ostrzega. Dane: kopia zrodla pod hdd/arch (dodana do list-datasets), migawki z
 # atrapy zfs (NR_SNAPS). Enter bez ruszania kursora = proponowany cel -> --target=hdd/arch.
-# Kontrola: te same datasety BEZ wspolnej migawki -- kursor nie na hdd/arch, panel bez PRZYROSTOWO.
+# Kontrola: te same datasety BEZ wspolnej migawki -- kursor startuje gdzie indziej (cel wybrany jawnie,
+# zeby kreator doszedl do konca), panel hdd/arch bez PRZYROSTOWO, z powodem.
 NRA="$(mktemp -d)"; cp "$P10"/*.json "$NRA/"
 "$PY" - "$NRA/list-datasets.json" <<'PYEOF'
 import sys, json
@@ -4031,25 +4032,25 @@ for n in ("hdd/arch", "hdd/arch/hdd", "hdd/arch/hdd/backups", "hdd/arch/hdd/back
     d["datasets"].append({"name": n, "type": "filesystem", "used": 1048576, "avail": 1073741824})
 json.dump(d, open(sys.argv[1], "w", encoding="utf-8"))
 PYEOF
-u147_run() {   # <NR_SNAPS> -> stdout kreatora; spec drzewa Dokad w $NR/tree-spec.last
+u147_run() {   # <NR_SNAPS> <klawisze drzewa Dokad> -> stdout kreatora; spec drzewa Dokad w $NR/tree-spec.last
     nr_run "0${T}local
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
 0${T}root
 0${T}create
 0${T}
-" NR_FIX="$NRA" NR_SNAPS="$1" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter|enter'
+" NR_FIX="$NRA" NR_SNAPS="$1" NR_TREE="goto:hdd/backups/192.168.28.99/hdd/lab,space,enter|$2"
 }
-U147I=$(u147_run 'hdd/backups/192.168.28.99/hdd/lab@automated_daily_2026-11-01\nhdd/backups/192.168.28.99/hdd/lab@automated_daily_2026-11-02\nhdd/arch/hdd/backups/192.168.28.99/hdd/lab@automated_daily_2026-11-01')
+U147I=$(u147_run 'hdd/backups/192.168.28.99/hdd/lab@automated_daily_2026-11-01\nhdd/backups/192.168.28.99/hdd/lab@automated_daily_2026-11-02\nhdd/arch/hdd/backups/192.168.28.99/hdd/lab@automated_daily_2026-11-01' enter)
 U147IS="$(cat "$NR/tree-spec.last" 2>/dev/null)"
-U147F=$(u147_run 'hdd/backups/192.168.28.99/hdd/lab@automated_daily_2026-11-02\nhdd/arch/hdd/backups/192.168.28.99/hdd/lab@automated_daily_2026-10-01')
+U147F=$(u147_run 'hdd/backups/192.168.28.99/hdd/lab@automated_daily_2026-11-02\nhdd/arch/hdd/backups/192.168.28.99/hdd/lab@automated_daily_2026-10-01' 'goto:hdd/arch,enter')
 U147FS="$(cat "$NR/tree-spec.last" 2>/dev/null)"
 u147_chk() {   # <spec> <wyrażenie python na s (spec)> -> rc
     printf '%s' "$1" | "$PY" -c 'import sys, json; s = json.load(sys.stdin); sys.exit(0 if eval(sys.argv[1]) else 1)' "$2"
 }
 if has "$U147I" ' --target=hdd/arch ' \
    && u147_chk "$U147IS" 's["roots"] == ["hdd/arch"] and any("PRZYROSTOWO" in t for k, t in s["facts"]["hdd/arch"]) and any("automated_daily_2026-11-01" in t for k, t in s["facts"]["hdd/arch"]) and any("hdd/arch" in t and k == "w" for k, t in s["facts"]["hdd/arch/hdd"]) and s["facts"]["hdd"][0][1] == "Źródło" and s["datasets"][[d["name"] for d in s["datasets"]].index("hdd/arch")]["note"] == "te dane tu"' \
-   && ! has "$U147F" ' --target=hdd/arch ' \
+\
    && u147_chk "$U147FS" 's["roots"] != ["hdd/arch"] and not any("PRZYROSTOWO" in t for k, t in s["facts"]["hdd/arch"]) and any("bez wspólnej migawki" in t for k, t in s["facts"]["hdd/arch"])'; then
     ok "new-relation U147/U155: Dokad stawia kursor na celu z kopia tych danych i wspolna migawka (PRZYROSTOWO, migawka nazwana), inny cel ostrzega; bez wspolnej migawki -- nie proponuje, mowi dlaczego"
 else
