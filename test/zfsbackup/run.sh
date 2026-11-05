@@ -185,7 +185,8 @@ fi
 out="$( (
     profile_validate_file() { return 0; }
     read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
-    CLIENTS_DIR="$SF/clients"; RELATIONSHIPS_DIR="$SF/relationships"; PVE_NODES_DIR="$SF/pve-nodes"
+    mkdir -p "$SF/d10/clients" "$SF/d10/relationships"   # own record dir: the lifecycle cases below count *.conf in $SF/clients
+    CLIENTS_DIR="$SF/d10/clients"; RELATIONSHIPS_DIR="$SF/d10/relationships"; PVE_NODES_DIR="$SF/pve-nodes"
     DEPLOY="$SF_DEPLOY"
     cmd_add_client pve3 --host=192.168.28.9:22 --target=hdd/backups --landing=pve3x
 ) 2>&1)"; rc=$?
