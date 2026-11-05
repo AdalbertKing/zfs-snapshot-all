@@ -104,6 +104,11 @@ fi
 # STDERR on purpose: restore_grant_parse and restore_point_unique have their
 # value read through $( ), and a diagnostic printed on stdout would BECOME the
 # value -- silently, and in the direction that looks like success.
+# grep_q: grep -q that reads ALL of its input (U149, 2026-11-05). Under pipefail
+# `writer | grep -q` is 141 when grep leaves at the first match and the writer
+# is still writing (SIGPIPE) -- a found match reported as a failure. -c reads
+# to the end; its status is grep -q's (0 match, 1 none, 2 error).
+grep_q() { grep -c "$@" >/dev/null; }
 log() {   # <level> <message...>
     local lvl="${1:-0}"; shift
     [ "${VERBOSE:-1}" -ge "$lvl" ] && printf '%s
@@ -444,7 +449,7 @@ cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
     done
     [ -n "$copy" ] || die "restore: '$want_ds' is not a source or a copy in $config -- run 'restore --plan' to see what is restorable"
 
-    zfs list -H -o name -t snapshot -d 1 "$copy" 2>/dev/null | grep -qFx -- "${copy}@${snap}" \
+    zfs list -H -o name -t snapshot -d 1 "$copy" 2>/dev/null | grep_q -Fx -- "${copy}@${snap}" \
         || die "restore: '${copy}@${snap}' does not exist. Run 'restore --plan --dataset=$want_ds' for the recovery points that actually exist."
 
     local landing; landing="$(restore_landing_path "$copy" "$src")"
@@ -591,7 +596,7 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
             bad+=("$c: has no snapshot to restore from"); snaps+=(""); continue
         fi
         if [ -n "$snapshot" ]; then
-            if printf '%s\n' "$rows" | cut -f1 | grep -qFx -- "${c}@${snapshot}"; then
+            if printf '%s\n' "$rows" | cut -f1 | grep_q -Fx -- "${c}@${snapshot}"; then
                 snaps+=("$snapshot")
             else
                 bad+=("${c}@${snapshot}: no such snapshot on that copy"); snaps+=("")
@@ -935,7 +940,7 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     local sname screat sg
     while IFS=$'\t' read -r sname screat sg; do
         [ -n "$sg" ] || continue
-        printf '%s\n' "$srcguids" | grep -qxF -- "$sg" && { base_snap="$sname"; base_guid="$sg"; }
+        printf '%s\n' "$srcguids" | grep_q -xF -- "$sg" && { base_snap="$sname"; base_guid="$sg"; }
     done <<< "$snaps"
 
     if [ -z "$base_guid" ]; then
@@ -4105,7 +4110,7 @@ restore_engine_argv() {   # <copy dataset> <account@host:dataset> <exact snapsho
     # cmd_restore's whole-relation branch for why the scope grew.
     RESTORE_ENGINE_RECURSED=0
     if [ "${RESTORE_SCOPE_EXPANDED:-0}" -ne 1 ] \
-       && zfs list -H -o name -d 1 "$copy" 2>/dev/null | grep -qv "^${copy}$"; then
+       && zfs list -H -o name -d 1 "$copy" 2>/dev/null | grep_q -v "^${copy}$"; then
         RESTORE_ENGINE_ARGV+=(-r)
         RESTORE_ENGINE_RECURSED=1
     fi
@@ -4925,7 +4930,7 @@ restore_plan_json() {
             [ "$a" = "$dataset" ] || [ "$b" = "$dataset" ] || continue
         fi
         if [ -n "$addr_filter" ]; then
-            printf '%s\n' "$addr_filter" | grep -qxF -- "$a" || continue
+            printf '%s\n' "$addr_filter" | grep_q -xF -- "$a" || continue
         fi
         [ "$first" -eq 1 ] || printf ','
         first=0
@@ -5357,7 +5362,7 @@ cmd_restore() {
         # A whole-relation address narrows the plan to the datasets the resolver
         # selected -- `restore pve2` must not print other relations' rows.
         if [ -n "$addr_filter" ]; then
-            printf '%s\n' "$addr_filter" | grep -qxF -- "${src[$i]}" || continue
+            printf '%s\n' "$addr_filter" | grep_q -xF -- "${src[$i]}" || continue
         fi
         shown=$((shown + 1))
         echo

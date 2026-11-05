@@ -86,6 +86,11 @@ HOME_ROOT="${HOME_ROOT:-/home}"
 DEPLOY="${DEPLOY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/deploy.sh}"
 ZFSBACKUP="${ZFSBACKUP:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/zfs-backup.sh}"
 
+# grep_q: grep -q that reads ALL of its input (U149, 2026-11-05). Under pipefail
+# `writer | grep -q` is 141 when grep leaves at the first match and the writer
+# is still writing (SIGPIPE) -- a found match reported as a failure. -c reads
+# to the end; its status is grep -q's (0 match, 1 none, 2 error).
+grep_q() { grep -c "$@" >/dev/null; }
 log()  { echo ">>> $*"; }
 warn() { echo "!!! $*" >&2; }
 die()  { echo "clean-relationships.sh: error: $*" >&2; exit 1; }
@@ -689,7 +694,7 @@ hold_load_facts() {
     #
     # A bracketed first character so the pattern cannot match the grep that is
     # carrying it -- both are in the process table at the same moment.
-    if $HOLD_PS_CMD 2>/dev/null | grep -qE '[s]napsend\.sh|[s]napget\.sh|[z]fs send'; then
+    if $HOLD_PS_CMD 2>/dev/null | grep_q -E '[s]napsend\.sh|[s]napget\.sh|[z]fs send'; then
         HOLD_ENGINE_RUNNING=1
     fi
     local d f
@@ -702,7 +707,7 @@ $(cat "$f" 2>/dev/null)"
         done
     done
     if command -v "$ZFS_BIN" >/dev/null 2>&1; then
-        if "$ZFS_BIN" get -H -o value receive_resume_token 2>/dev/null | grep -qv '^-$'; then
+        if "$ZFS_BIN" get -H -o value receive_resume_token 2>/dev/null | grep_q -v '^-$'; then
             HOLD_LOCAL_RESUME=1
         fi
     fi
@@ -713,7 +718,7 @@ $(cat "$f" 2>/dev/null)"
 hold_verdict() {   # <snapshot>
     local snap="$1"
     hold_load_facts
-    if printf '%s\n' "$HOLD_INFLIGHT_CLAIMS" | grep -qxF -- "$snap"; then
+    if printf '%s\n' "$HOLD_INFLIGHT_CLAIMS" | grep_q -xF -- "$snap"; then
         printf 'IN-USE inflight a transfer recorded this exact snapshot as in flight'
         return 0
     fi
@@ -764,7 +769,7 @@ report_leaked_holds() {
         # OURS only. A pvesr hold on a replicated dataset is load-bearing for
         # somebody else's replication, and this project already measured what
         # touching one costs.
-        "$ZFS_BIN" holds -H "$snap" 2>/dev/null | cut -f2 | grep -qxF "$HOLD_TAG" || continue
+        "$ZFS_BIN" holds -H "$snap" 2>/dev/null | cut -f2 | grep_q -xF "$HOLD_TAG" || continue
         v="$(hold_verdict "$snap")"
         if [ "$shown" -eq 0 ]; then
             echo
@@ -823,7 +828,7 @@ report_leaked_holds() {
 release_named_hold() {   # <snapshot>
     local snap="$1" v
     command -v "$ZFS_BIN" >/dev/null 2>&1 || die "no $ZFS_BIN on this host -- cannot release anything"
-    "$ZFS_BIN" holds -H "$snap" 2>/dev/null | cut -f2 | grep -qxF "$HOLD_TAG" \
+    "$ZFS_BIN" holds -H "$snap" 2>/dev/null | cut -f2 | grep_q -xF "$HOLD_TAG" \
         || die "'$snap' does not carry a '$HOLD_TAG' hold -- nothing here to release. 'zfs holds $snap' will say what it does carry, and a hold that is not ours is not this tool's to touch."
     # The REASON CODE, not the wording. hold_verdict prints
     # "<class> <code> <reason>", and only ONE code may be overridden by a human:
@@ -866,7 +871,7 @@ release_orphaned_holds() {
     while IFS="$(printf '\t')" read -r snap refs; do
         [ -n "$snap" ] || continue
         case "$refs" in ''|0|*[!0-9]*) continue ;; esac
-        "$ZFS_BIN" holds -H "$snap" 2>/dev/null | cut -f2 | grep -qxF "$HOLD_TAG" || continue
+        "$ZFS_BIN" holds -H "$snap" 2>/dev/null | cut -f2 | grep_q -xF "$HOLD_TAG" || continue
         v="$(hold_verdict "$snap")"
         [ "${v%% *}" = ORPHANED ] || { log "  hold on $snap NOT released -- ${v#* }"; continue; }
         if "$ZFS_BIN" release "$HOLD_TAG" "$snap" 2>/dev/null; then

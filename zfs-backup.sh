@@ -218,6 +218,11 @@ PVE_NODES_DIR="/etc/pve/nodes"
 # relocation" is still true. --allow-stale-catchup overrides it, loudly.
 CATCHUP_MAX_AGE="${CATCHUP_MAX_AGE:-$(settings_get catchup_max_age 1800)}"
 
+# grep_q: grep -q that reads ALL of its input (U149, 2026-11-05). Under pipefail
+# `writer | grep -q` is 141 when grep leaves at the first match and the writer
+# is still writing (SIGPIPE) -- a found match reported as a failure. -c reads
+# to the end; its status is grep -q's (0 match, 1 none, 2 error).
+grep_q() { grep -c "$@" >/dev/null; }
 log()  { echo ">>> $*"; }
 # warn/die live in lib-backup-common.sh since the restore split.
 
@@ -1122,7 +1127,7 @@ check_inherited_grants() {
             echo "    zfs allow $path :"
             printf '%s\n' "$out" | sed 's/^/      /'
         fi
-        if printf '%s' "$out" | grep -qF "$account"; then
+        if printf '%s' "$out" | grep_q -F "$account"; then
             if [ "$path" = "$ds" ]; then
                 found_exact=1
             else
@@ -1157,7 +1162,7 @@ assert_source_prune_grant() {   # <account> <host> <port> <keyfile> <alias> <ali
         [ "$rc" -eq 0 ] || die "source-prune grant check: 'zfs allow $ds' on $host as $account failed (ssh/zfs exit $rc) -- refusing to install a remote source prune whose authorization cannot be confirmed. Output: $(printf '%s' "$out" | tail -2)"
         # The account's own permission line carries a comma-list of perms; `destroy`
         # is bounded by commas/space so grep -w matches it inside snapshot,destroy,send.
-        if ! printf '%s\n' "$out" | grep -F -- "$account" | grep -qw destroy; then
+        if ! printf '%s\n' "$out" | grep -F -- "$account" | grep_q -w destroy; then
             die "source-prune grant check FAILED CLOSED: the delegated identity '$account' does not hold 'destroy' on the source '$ds' (needed by delsnaps.sh's zfs destroy). The pairing already grants destroy via deploy.sh --commit-scope; re-run --commit-scope on $host if it is missing. Refusing to install a source-prune job that would fail every run -- and NOT widening the grant here."
         fi
         # REV-20260812-111 A: the SECOND capability managed source retention
@@ -1175,7 +1180,7 @@ assert_source_prune_grant() {   # <account> <host> <port> <keyfile> <alias> <ali
         # Same discipline as `destroy` above: deploy.sh --commit-scope already
         # delegates `bookmark` (ZFS_PERMS / do_commit_scope), so this VERIFIES
         # and never widens.
-        if ! printf '%s\n' "$out" | grep -F -- "$account" | grep -qw bookmark; then
+        if ! printf '%s\n' "$out" | grep -F -- "$account" | grep_q -w bookmark; then
             die "source-prune grant check FAILED CLOSED: the delegated identity '$account' holds 'destroy' but NOT 'bookmark' on the source '$ds'. Managed source retention will eventually age out the ordinary common snapshot, and the bookmark that would still anchor the next incremental cannot be created -- the transfer keeps exiting 0 while carrying no continuity insurance, then refuses permanently once the common base is gone. deploy.sh --commit-scope already grants bookmark; re-run --commit-scope on $host if it is missing. Refusing to install source retention on a relationship whose continuity cannot be maintained -- and NOT widening the grant here."
         fi
     done
@@ -1944,7 +1949,7 @@ profile_declares_ladder() {   # -> 0 when the loaded profile carries a [prune] f
     # or directory" from profile_emit's redirection and made a shape question
     # look like a crash.
     [ -s "${PROFILE_PRUNE_FILE:-}" ] || return 1
-    profile_emit "$PROFILE_PRUNE_FILE" | grep -q '[^[:space:]]'
+    profile_emit "$PROFILE_PRUNE_FILE" | grep_q '[^[:space:]]'
 }
 
 # One rendered [template:NS] section, whole.
@@ -2342,7 +2347,7 @@ append_source_templates_if_missing() {   # <workfile> <rendered prune fragment>
             # fields (measured on pve9b, 2026-10-12: it outlived its relationship
             # and every later remote install with that profile died on it). It is
             # nobody's policy, so it is replaced, not inherited.
-            config_referenced_templates "$wf" | grep -qxF "$src" && continue
+            config_referenced_templates "$wf" | grep_q -xF "$src" && continue
             remove_template_section "$wf" "$src"
         fi
         sec="$(profile_template_section "$id" "${SRC_PROFILE_TPL_FILE:-$PROFILE_TPL_FILE}")"
@@ -3662,19 +3667,19 @@ foreign_protections_kept() {   # <installed line> <proposed line> -> 0 when exac
                | grep -oE '\-P "[^"]*"' | sed -E 's/^-P "(.*)"$/\1/')
     while IFS= read -r tok; do
         [ -n "$tok" ] || continue
-        printf '%s\n' "$new" | grep -qxF -- "$tok" || return 1        # removed, or its count changed
+        printf '%s\n' "$new" | grep_q -xF -- "$tok" || return 1        # removed, or its count changed
     done <<< "$old"
     while IFS= read -r tok; do
         [ -n "$tok" ] || continue
-        printf '%s\n' "$old" | grep -qxF -- "$tok" && continue
+        printf '%s\n' "$old" | grep_q -xF -- "$tok" && continue
         # a new token for a prefix the installed line already protects is a changed floor
         printf '%s\n' "$old" | awk -v p="${tok%:*}" '{ q = $0; sub(/:[^:]*$/, "", q) } q == p { found = 1 } END { exit !found }' && return 1
         # ...and an added one must be what gen-cron reported adding for this scope
-        printf '%s\n' "$expected" | grep -qxF -- "$tok" || return 1
+        printf '%s\n' "$expected" | grep_q -xF -- "$tok" || return 1
     done <<< "$new"
     while IFS= read -r tok; do
         [ -n "$tok" ] || continue
-        printf '%s\n' "$new" | grep -qxF -- "$tok" || return 1
+        printf '%s\n' "$new" | grep_q -xF -- "$tok" || return 1
     done <<< "$expected"
     return 0
 }
@@ -4015,7 +4020,7 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
         while IFS= read -r line; do
             [ -n "$line" ] || continue
             norm=$(printf '%s\n' "$line" | endpoint_normalized_identity)
-            if printf '%s\n' "$proposed_norm" | grep -qxF -- "$norm"; then
+            if printf '%s\n' "$proposed_norm" | grep_q -xF -- "$norm"; then
                 continue
             fi
             # Second exemption, same shape as the endpoint one: not "this line
@@ -4029,7 +4034,7 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
             # changes the endpoint and the schedule together is still matched
             # by what it actually is -- one job, moved twice.
             if printf '%s\n' "$proposed_norm" \
-                 | schedule_normalized_identity | grep -qxF -- \
+                 | schedule_normalized_identity | grep_q -xF -- \
                      "$(printf '%s\n' "$norm" | schedule_normalized_identity)"; then
                 continue
             fi
@@ -4065,7 +4070,7 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
             fi
             # Sixth exemption: sync became a mirror (see
             # mirror_normalized_identity). Like the two above it speaks.
-            if printf '%s\n' "$proposed_norm" | mirror_normalized_identity | grep -qxF -- "$norm"; then
+            if printf '%s\n' "$proposed_norm" | mirror_normalized_identity | grep_q -xF -- "$norm"; then
                 warn "  the pull now mirrors its source (-M), the job itself stays:"
                 warn "    $line"
                 continue
@@ -4103,7 +4108,7 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
             # other line is held to the seven rules above. Speaks.
             if [ -n "${EDIT_RELATION_NAME:-}" ] \
                && printf '%s\n' "$line" | grep -qF -- " -L $EDIT_RELATION_NAME " \
-               && printf '%s\n' "$proposed" | grep -qF -- " -L $EDIT_RELATION_NAME "; then
+               && printf '%s\n' "$proposed" | grep_q -F -- " -L $EDIT_RELATION_NAME "; then
                 warn "  edited relationship '$EDIT_RELATION_NAME': this job is replaced by its regenerated set:"
                 warn "    $line"
                 continue
@@ -10141,7 +10146,7 @@ Taking over older jobs (a v4 config written manually): remove their sections fir
     # the block still is not there.
     local installed_block
     installed_block="$(crontab_for_target 2>/dev/null | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p')"
-    printf '%s' "$installed_block" | grep -qF -- "$target" \
+    printf '%s' "$installed_block" | grep_q -F -- "$target" \
         || die "the install reported success, but the read-back did not find '$target' in the installed block -- check the crontab manually before you consider the backup working"
 
     if [ -n "$lb_name" ]; then
@@ -12955,7 +12960,7 @@ snaponly_probe() {   # [host] [port]
     for ds in $PEER_SAVED_DATASETS; do
         client_recursive_args "$ds"
         out=$(bash "$SNAPGET" -n -s ${REC_ARGS[@]+"${REC_ARGS[@]}"} $pflags "${LOAD_ACCOUNT}@${phost}:${ds}" 2>&1); rc=$?
-        if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^PLAN=SNAPSHOT-ONLY src='; then
+        if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep_q '^PLAN=SNAPSHOT-ONLY src='; then
             failed=$((failed + 1))
             PROBE_DETAIL="${PROBE_DETAIL}  FAILED (rc=$rc): $ds"$'\n'"$(printf '%s\n' "$out" | tail -4 | sed 's/^/    /')"$'\n'
             continue
@@ -14498,7 +14503,7 @@ remove_templates_orphaned_by() {   # <file> <templates referenced before, newlin
     while IFS= read -r t; do
         [ -n "$t" ] || continue
         case "$t" in profile__*) ;; *) continue ;; esac
-        printf '%s\n' "$after" | grep -qxF "$t" && continue
+        printf '%s\n' "$after" | grep_q -xF "$t" && continue
         grep -qxF "[template:$t]" "$file" || continue
         remove_template_section "$file" "$t"
         log "removed [template:$t] -- the edit left nothing referencing it"
@@ -15420,7 +15425,7 @@ source_probe() {   # <host> <port> -> sets PROBE_* ; returns 0 when ssh answered
     # one, the wizard skipped the busy-directory window and the join's git init
     # failed inside it, leaving a half-created relation (install test, 2026-11-05).
     out=$(rux_root_ssh "$host" "$port" "echo HOSTNAME=\$(hostname); command -v zfs >/dev/null 2>&1 && echo ZFS=yes; command -v git >/dev/null 2>&1 && echo GIT=yes; command -v apt-get >/dev/null 2>&1 && echo APT=yes; command -v sudo >/dev/null 2>&1 && { command -v visudo >/dev/null 2>&1 || [ -x /usr/sbin/visudo ] || [ -x /sbin/visudo ]; } && echo SUDO=yes; if [ -d '$SOURCE_REPO_DIR' ]; then [ -z \"\$(ls -A '$SOURCE_REPO_DIR' 2>/dev/null)\" ] || echo DIR=notempty; elif [ -e '$SOURCE_REPO_DIR' ]; then echo DIR=notadir; fi; zpool list -H -o name,size,free 2>/dev/null | while IFS=\$(printf '\\t') read -r n sz fr; do echo POOL=\$n,\$sz,\$fr; done; [ -x '$SOURCE_REPO_DIR/zfs-backup.sh' ] && [ -e '$SOURCE_REPO_DIR/.git' ] && { echo PKG=$SOURCE_REPO_DIR; echo REV=\$(git -C '$SOURCE_REPO_DIR' rev-parse --short HEAD 2>/dev/null); }; echo PROBE=done" 2>&1) || rc=$?
-    if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^PROBE=done$'; then
+    if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep_q '^PROBE=done$'; then
         # OpenSSH ends its diagnostics with CR LF. A raw CR inside a JSON string
         # is INVALID JSON and json_escape (a frozen twin) does not escape it, so
         # the reason is flattened HERE: no CR, tabs to spaces, one line.
@@ -15988,10 +15993,10 @@ local_source_change() {   # <add|remove> <name> <dataset> <yes 0|1>
     [ "${#srcs[@]}" -gt 0 ] || die "$how-source: $cronfile has no [dataset:] section of '$name'"
     local s
     if [ "$how" = remove ]; then
-        printf '%s\n' "${srcs[@]}" | grep -qxF -- "$ds" || die "remove-source: '$ds' is not a source of '$name'. Nothing was changed."
+        printf '%s\n' "${srcs[@]}" | grep_q -xF -- "$ds" || die "remove-source: '$ds' is not a source of '$name'. Nothing was changed."
         [ "${#srcs[@]}" -gt 1 ] || die "remove-source: '$ds' is the last source of '$name' -- remove the relationship instead: zfs-backup delete-relation $name"
     else
-        printf '%s\n' "${srcs[@]}" | grep -qxF -- "$ds" && die "add-source: '$ds' is already in '$name'. Nothing was changed."
+        printf '%s\n' "${srcs[@]}" | grep_q -xF -- "$ds" && die "add-source: '$ds' is already in '$name'. Nothing was changed."
         case "$ds" in *:*) die "add-source: '$ds' names a remote host -- '$name' is a LOCAL copy" ;; esac
         zfs list -H -o name -- "$ds" >/dev/null 2>&1 \
             || die "add-source: source '$ds' does not exist on this host (zfs list found nothing). Nothing was changed."
@@ -18660,7 +18665,7 @@ save_profile_add_tier() {
 save_profile_free_minute() {
     local line="$1" taken="$2" m h rest n=0
     read -r m h rest <<<"$line"
-    while printf '%s\n' "$taken" | grep -qxF "$m $h" && [ "$n" -lt 12 ]; do
+    while printf '%s\n' "$taken" | grep_q -xF "$m $h" && [ "$n" -lt 12 ]; do
         m=$(( (m + 5) % 60 )); n=$((n + 1))
     done
     echo "$m $h $rest"
@@ -18793,7 +18798,7 @@ cmd_save_profile() {
         _t="${ftier[$i]}"
         [ -n "$_t" ] || { rm -rf "$workdir"; die "save-profile: --${fname[$i]} comes before any --tier= -- say which tier it changes. Nothing was written."; }
         [ -n "${amap[$_t]+x}" ] && _t="${amap[$_t]}"
-        cron_config_section "$work" "[template:$_t]" | grep -q . \
+        cron_config_section "$work" "[template:$_t]" | grep_q . \
             || { rm -rf "$workdir"; die "save-profile: '$from' has no tier '$_t'. It has: $(sed -n -E 's/^\[template:([^]]*)\]$/\1/p' "$src" | tr '\n' ' '). Nothing was written."; }
         set_or_remove_section_field "$work" "[template:$_t]" "${fname[$i]}" "${fvalue[$i]}" \
             || { rm -rf "$workdir"; die "save-profile: could not write '${fname[$i]}' into [template:$_t] -- nothing was written"; }
@@ -18812,7 +18817,7 @@ cmd_save_profile() {
     # first guard refused every tier of such a template).
     local d _pat _others _makers
     for d in ${drop[@]+"${drop[@]}"}; do
-        cron_config_section "$work" "[template:$d]" | grep -q . \
+        cron_config_section "$work" "[template:$d]" | grep_q . \
             || { rm -rf "$workdir"; die "save-profile: --drop-tier: '$from' has no tier '$d'. Nothing was written."; }
         _pat=$(cron_config_section "$work" "[template:$d]" | sed -n -E 's/^[[:space:]]*pattern[[:space:]]*=[[:space:]]*//p' | head -1)
         _others=$(awk -v me="[template:$d]" -v pat="$_pat" '
@@ -21217,7 +21222,7 @@ status_snaponly_view() {
     if [ "$(id -un 2>/dev/null)" = "$acct" ]; then _tab="$(crontab -l 2>&1)"; _trc=$?
     elif [ "$(id -u)" = 0 ]; then _tab="$(crontab -u "$acct" -l 2>&1)"; _trc=$?; fi
     if [ "$_trc" -eq 0 ]; then ncron=""
-    elif printf '%s' "${_tab:-}" | grep -q "^no crontab for"; then _tab=""; ncron=""; fi
+    elif printf '%s' "${_tab:-}" | grep_q "^no crontab for"; then _tab=""; ncron=""; fi
     [ "$ncron" = "?" ] || ncron="$(printf '%s\n' "$_tab" | grep -cF -e "-L $name " -e "-L $name\"")" || ncron=0
     if [ "$ncron" = "?" ]; then echo "Cron:              ? (crontab of account '$acct' unreadable)"
     elif [ "$ncron" -gt 0 ]; then echo "Cron:              $ncron lines in the crontab of account '$acct'"
@@ -21264,7 +21269,7 @@ status_local_view() {
         _tab="$(crontab -u "$acct" -l 2>&1)"; _trc=$?
     fi
     if [ "$_trc" -eq 0 ]; then ncron=""
-    elif printf '%s' "${_tab:-}" | grep -q "^no crontab for"; then _tab=""; ncron=""
+    elif printf '%s' "${_tab:-}" | grep_q "^no crontab for"; then _tab=""; ncron=""
     fi
     [ "$ncron" = "?" ] || ncron="$(printf '%s\n' "$_tab" | grep -cF -e "-L $name " -e "-L $name\"")" || ncron=0
     if [ "$ncron" = "?" ]; then

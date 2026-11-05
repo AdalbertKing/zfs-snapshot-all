@@ -731,7 +731,7 @@ done
 # target by name. Push has no -M (sync is pull-only), so this is snapget's alone.
 SG="${SNAPGET:-$REPO/snapget.sh}"
 MT="$(mktemp -d)"
-sed -n '/^mirror_target() {/,/^}/p' "$SG" > "$MT/fn.sh"
+{ sed -n '/^mirror_target() {/,/^}/p' "$SG"; sed -n '/^grep_q() {/p' "$(dirname "$SG")/lib-zfs-snap.sh"; } > "$MT/fn.sh"   # + the shipped grep_q it calls (U149)
 if grep -q '^mirror_target() {' "$MT/fn.sh"; then
     ok "M mirror_target is extracted from the shipped snapget.sh"
 else

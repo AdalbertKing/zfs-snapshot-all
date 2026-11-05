@@ -266,6 +266,11 @@ ZFS_PERMS="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canm
 # account included -- so an audit can be driven from a loop over 18 hosts
 # instead of being read by eye.
 PROBLEMS=0
+# grep_q: grep -q that reads ALL of its input (U149, 2026-11-05). Under pipefail
+# `writer | grep -q` is 141 when grep leaves at the first match and the writer
+# is still writing (SIGPIPE) -- a found match reported as a failure. -c reads
+# to the end; its status is grep -q's (0 match, 1 none, 2 error).
+grep_q() { grep -c "$@" >/dev/null; }
 log() { echo ">>> $*"; }
 # One problem, one count. A message opening with four spaces continues the warn
 # above it (every such call in this file follows another warn), so it is printed
@@ -1586,7 +1591,7 @@ do_draft_scope() {
             # and naming is wanting (LAB6-F1). The branch heuristic applies only
             # to the estate draft, where the stanzas are proposals, not asks.
             if [ "$from_request" -eq 0 ] \
-               && zfs list -H -o name -r -- "$ds" 2>/dev/null | grep -qv "^${ds}$"; then
+               && zfs list -H -o name -r -- "$ds" 2>/dev/null | grep_q -v "^${ds}$"; then
                 echo "include_parent = no"
             else
                 echo "include_parent = yes"
@@ -3197,7 +3202,7 @@ restore_ns_other_owners() {   # <label being withdrawn> <account> <namespace> ->
         fi
         # Known to be another account, or a scope on another pool: not an owner.
         [ -n "$_a" ] && [ "$_a" != "$acct" ] && continue
-        [ -n "$_ds" ] && ! restore_grant_namespaces "$_ds" | grep -qxF -- "$ns" && continue
+        [ -n "$_ds" ] && ! restore_grant_namespaces "$_ds" | grep_q -xF -- "$ns" && continue
         # Account or scope unknown and it may share this namespace (REV-170 R1, point 4):
         # not silently "not an owner" -- reported with '?', and the caller holds back.
         if [ -z "$_a" ] || [ -z "$_ds" ]; then printf '?%s\n' "$_l"; continue; fi
@@ -3454,7 +3459,7 @@ apt_install_with_fallback() {
     # security.debian.org no longer served, and the same package from the main
     # archive installed. One try with the newest version from a non-security
     # origin, said out loud.
-    if printf '%s' "$out" | grep -q '404'; then
+    if printf '%s' "$out" | grep_q '404'; then
         ver=$(apt-cache madison "$pkg" 2>/dev/null | awk -F'|' '$3 !~ /security/ { gsub(/[[:space:]]/, "", $2); print $2; exit }')
         if [ -n "$ver" ]; then
             warn "apt could not fetch $pkg (404 from the archive its package list names) -- trying $pkg=$ver from the main archive"
@@ -4059,7 +4064,7 @@ do_resume() {
         for f in "$PAUSE_STATE_DIR"/*.saved; do
             [ -e "$f" ] || continue
             user=$(basename "$f" .saved)
-            printf '%s\n' "$seen" | grep -qxF "$user" && continue
+            printf '%s\n' "$seen" | grep_q -xF "$user" && continue
             any=1
             do_resume_one "$user" || rc=1
         done
@@ -4180,7 +4185,7 @@ commit_scope_dataset_held() {   # <dataset>
     while IFS= read -r snap; do
         [ -n "$snap" ] || continue
         h="$(zfs holds -H -- "$snap" 2>/dev/null)" || return 2
-        printf '%s\n' "$h" | awk '{print $2}' | grep -qxF "$COMMIT_SCOPE_HOLD_TAG" && return 0
+        printf '%s\n' "$h" | awk '{print $2}' | grep_q -xF "$COMMIT_SCOPE_HOLD_TAG" && return 0
     done <<< "$snaps"
     return 1
 }
@@ -4633,7 +4638,7 @@ new_account_drop_inherited_grants() {   # <account just created> <its home path>
         if ! acl="$(zfs allow "$ds")"; then
             new_account_abort "$account" "$uid" "could not read the zfs delegations on $ds (zfs allow failed)"
         fi
-        printf '%s\n' "$acl" | grep -qE "^[[:space:]]+user $account " || continue
+        printf '%s\n' "$acl" | grep_q -E "^[[:space:]]+user $account " || continue
         found="$found $ds"
     done <<< "$list"
     [ -n "$found" ] || return 0
@@ -4771,7 +4776,7 @@ do_leave() {
             # `zfs allow` piped into grep read as "no grant left" and opened userdel.
             acl="$(zfs allow "$ds" 2>&1)" \
                 || die "refusing --leave='$label': could not read the zfs delegations on $ds to verify that uid $uid ($account) has none left (zfs allow: ${acl%%$'\n'*}) -- an unreadable ACL is not an empty one. $left_some"
-            printf '%s\n' "$acl" | grep -Eq "(^|[[:space:]])user (${uid}|\(unknown: ${uid}\)|${account})([[:space:],]|$)" \
+            printf '%s\n' "$acl" | grep_q -E "(^|[[:space:]])user (${uid}|\(unknown: ${uid}\)|${account})([[:space:],]|$)" \
                 && residual+=("$ds")
         done
         if [ "${#residual[@]}" -gt 0 ]; then
@@ -4966,7 +4971,7 @@ do_uninstall() {
         while IFS= read -r ds; do
             [ -n "$ds" ] || continue
             acl=$(zfs allow "$ds") || die "--uninstall: could not read the zfs delegations on $ds -- $acct kept"
-            printf '%s\n' "$acl" | grep -qE "^[[:space:]]+user $acct " || continue
+            printf '%s\n' "$acl" | grep_q -E "^[[:space:]]+user $acct " || continue
             zfs unallow -u "$acct" "$ds" || die "--uninstall: zfs unallow -u $acct $ds failed -- $acct kept"
             log "revoked $acct's delegation on $ds"
         done <<< "$list"
@@ -5841,9 +5846,9 @@ host_script_ensure alert-digest.sh "$DIGEST_SCRIPT" 0755 \
 _sched_digest="$(settings_time_to_cron "$(settings_get alerts.digest_time 07:00)" 2>/dev/null)" || _sched_digest="0 7 * * *"
 DIGEST_LINE="${_sched_digest:-0 7 * * *} $DIGEST_SCRIPT 2>>/root/scripts/cron.log"
 if [ "$CHECK_ONLY" -eq 1 ]; then
-    if ! crontab -l 2>/dev/null | grep -qF "$DIGEST_SCRIPT"; then
+    if ! crontab -l 2>/dev/null | grep_q -F "$DIGEST_SCRIPT"; then
         warn "digest cron line MISSING -- findings would queue forever and nobody would ever be told"
-    elif ! crontab -l 2>/dev/null | sed -n "/^# BEGIN $CRON_HOST_BLOCK/,/^# END $CRON_HOST_BLOCK/p" | grep -qF "$DIGEST_SCRIPT"; then
+    elif ! crontab -l 2>/dev/null | sed -n "/^# BEGIN $CRON_HOST_BLOCK/,/^# END $CRON_HOST_BLOCK/p" | grep_q -F "$DIGEST_SCRIPT"; then
         warn "digest cron line is present but LOOSE, outside the '$CRON_HOST_BLOCK' block -- a plain run adopts it into the block, keeping its current schedule"
     else
         log "digest cron line already in the '$CRON_HOST_BLOCK' block"
@@ -5975,7 +5980,7 @@ done
 _in_block=0
 if crontab -l 2>/dev/null \
    | sed -n "/^# BEGIN $CRON_HOST_BLOCK/,/^# END $CRON_HOST_BLOCK/p" \
-   | grep -qxF "$PULL_LINE"; then
+   | grep_q -xF "$PULL_LINE"; then
     _in_block=1
 fi
 
@@ -6082,9 +6087,9 @@ host_script_ensure check-pool-capacity.sh "$CAPACITY_SCRIPT" 0755 \
 _sched_cap="$(settings_time_to_cron "$(settings_get capacity.check_time 08:00)" 2>/dev/null)" || _sched_cap="0 8 * * *"
 CAPACITY_LINE="${_sched_cap:-0 8 * * *} $CAPACITY_SCRIPT 2>>/root/scripts/cron.log"
 if [ "$CHECK_ONLY" -eq 1 ]; then
-    if ! crontab -l 2>/dev/null | grep -qF "$CAPACITY_SCRIPT"; then
+    if ! crontab -l 2>/dev/null | grep_q -F "$CAPACITY_SCRIPT"; then
         warn "capacity-check cron line MISSING -- no early warning before a pool fills up"
-    elif ! crontab -l 2>/dev/null | sed -n "/^# BEGIN $CRON_HOST_BLOCK/,/^# END $CRON_HOST_BLOCK/p" | grep -qF "$CAPACITY_SCRIPT"; then
+    elif ! crontab -l 2>/dev/null | sed -n "/^# BEGIN $CRON_HOST_BLOCK/,/^# END $CRON_HOST_BLOCK/p" | grep_q -F "$CAPACITY_SCRIPT"; then
         warn "capacity-check cron line is present but LOOSE, outside the '$CRON_HOST_BLOCK' block -- a plain run adopts it into the block, keeping its current schedule"
     else
         log "capacity-check cron line already in the '$CRON_HOST_BLOCK' block"
@@ -6115,7 +6120,7 @@ host_script_ensure capacity-guard.sh "$GUARD_SCRIPT" 0755 \
     "cannot prune when a pool fills up, even if turned on in F10"
 GUARD_LINE="*/15 * * * * $GUARD_SCRIPT 2>>/root/scripts/cron.log"
 if [ "$CHECK_ONLY" -eq 1 ]; then
-    crontab -l 2>/dev/null | grep -qF "$GUARD_SCRIPT" \
+    crontab -l 2>/dev/null | grep_q -F "$GUARD_SCRIPT" \
         && log "capacity-guard cron line present" \
         || warn "capacity-guard cron line MISSING -- the guard cannot run even when turned on"
 elif cron_block_adopt_line root "$CRON_HOST_BLOCK" "$GUARD_SCRIPT" "$GUARD_LINE" "$CRON_HOST_TAIL"; then
@@ -6135,7 +6140,7 @@ host_script_ensure growth-guard.sh "$GROWTH_SCRIPT" 0755 \
     "no alarm on a suspicious incompressible increment, even if turned on in F10"
 GROWTH_LINE="23 * * * * $GROWTH_SCRIPT 2>>/root/scripts/cron.log"
 if [ "$CHECK_ONLY" -eq 1 ]; then
-    crontab -l 2>/dev/null | grep -qF "$GROWTH_SCRIPT" \
+    crontab -l 2>/dev/null | grep_q -F "$GROWTH_SCRIPT" \
         && log "growth-guard cron line present" \
         || warn "growth-guard cron line MISSING -- the growth alarm cannot run even when turned on"
 elif cron_block_adopt_line root "$CRON_HOST_BLOCK" "$GROWTH_SCRIPT" "$GROWTH_LINE" "$CRON_HOST_TAIL"; then
@@ -8054,7 +8059,7 @@ elif [ "$CHECK_ONLY" -eq 1 ]; then
         [ -r "/home/$BACKUP_USER/alert-env.sh" ] || warn "  /home/$BACKUP_USER/alert-env.sh missing -- that account's notify scripts refuse to start"
         [ -f "/etc/logrotate.d/zfs-snapshot-all-$BACKUP_USER" ] || warn "  no logrotate stanza for $BACKUP_USER"
         # Point c: a pull line from before 2026-11-04 does not see root's update hold.
-        crontab -u "$BACKUP_USER" -l 2>/dev/null | grep -F "/home/$BACKUP_USER/zfs-snapshot-all && git pull" | grep -qF "$UPDATE_HOLD_MARKER"             || warn "  $BACKUP_USER's auto-pull line does not check $UPDATE_HOLD_MARKER -- a held host would still pull this account (re-run without --check-only)"
+        crontab -u "$BACKUP_USER" -l 2>/dev/null | grep -F "/home/$BACKUP_USER/zfs-snapshot-all && git pull" | grep_q -F "$UPDATE_HOLD_MARKER"             || warn "  $BACKUP_USER's auto-pull line does not check $UPDATE_HOLD_MARKER -- a held host would still pull this account (re-run without --check-only)"
     else
         warn "  account $BACKUP_USER does not exist -- re-run without --check-only to create it"
     fi

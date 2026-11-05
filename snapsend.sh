@@ -1040,7 +1040,7 @@ validate_subtree() {   # <src> <tgt> <snapshot> [ruser] [rhost] -> 0 ok, 1 somet
         # `pool/t/a@s3` and was being accepted as proof that @s3 exists.
         # Review finding, reproduced. -F literal, -x whole line.
         printf '%s
-' "$tgt_have" | grep -Fxq "$tgt/$rel@$snap"             || missing="$missing $tgt/$rel"
+' "$tgt_have" | grep_q -Fx "$tgt/$rel@$snap"             || missing="$missing $tgt/$rel"
     done <<< "$src_have"
 
     [ -z "$missing" ] && return 0
@@ -1864,7 +1864,7 @@ process_dataset() {
     local p0_no_force=0
     if [ $FORCE_FULL_SEND -ne 1 ] && [[ "$common_snapshot" != "null" ]] && [ "${#tgt_snaps[@]}" -gt 0 ]; then
         local recv_base="" p0_written="" p0_guid p0_t
-        if printf '%s\n' "${tgt_snaps[@]}" | grep -qFx -- "$common_snapshot"; then
+        if printf '%s\n' "${tgt_snaps[@]}" | grep_q -Fx -- "$common_snapshot"; then
             recv_base="$common_snapshot"
         else
             # A renamed base matched by GUID: the target's own name for it.
