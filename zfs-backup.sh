@@ -2999,8 +2999,8 @@ cron_block_source() {   # <stdin: crontab or block text> -> the config path, or 
     # forgets is exactly the failure this consolidation exists to prevent.
     #
     # awk, not `grep -m1`: an early reader leaves sed writing into a closed pipe
-    # (status 4 and "couldn't flush stdout" when SIGPIPE is ignored, 141 otherwise;
-    # pipefail makes either the function's status). U165, the U149 family.
+    # (status 4 and "couldn't flush stdout" when SIGPIPE is ignored, 141 otherwise),
+    # and pipefail makes that the function's status. U165, the U149 family.
     sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
         | awk '!f && /^# Source: / { f = 1; print }' | sed -E 's/^# Source: (.*) -- .*/\1/'
 }
