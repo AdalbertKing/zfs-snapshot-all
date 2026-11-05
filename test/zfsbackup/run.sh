@@ -13766,8 +13766,7 @@ rm -rf "$PS/real-old" "$PS/real-empty" "$PS/real-file"
 # 2026-11-05): not a package -- the directory is busy. The same files with a
 # .git are the package.
 mkdir -p "$PS/real-oldpkg" "$PS/real-git/.git"
-printf '#!/bin/bash
-' > "$PS/real-oldpkg/zfs-backup.sh"; cp "$PS/real-oldpkg/zfs-backup.sh" "$PS/real-git/"
+printf '#!/bin/bash\n' > "$PS/real-oldpkg/zfs-backup.sh"; cp "$PS/real-oldpkg/zfs-backup.sh" "$PS/real-git/"
 chmod +x "$PS/real-oldpkg/zfs-backup.sh" "$PS/real-git/zfs-backup.sh"
 real_pkg() { SOURCE_REPO_DIR="$1" ps_run check-source real --json | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["package"]["ok"], repr(d["repo_dir_blocked"]))' 2>/dev/null; }
 r_op=$(real_pkg "$PS/real-oldpkg"); r_g=$(real_pkg "$PS/real-git")
