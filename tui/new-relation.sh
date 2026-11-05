@@ -1485,7 +1485,7 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
                 } >"$TMPD/stop.txt"
                 textbox_read "$(T 'Nowa relacja: zatrzymane zgodnie z wyborem')" "$TMPD/stop.txt" "$(T 'Zamknij')"
             else
-                # SKUCHA 11 (A-TASSA 2026-11-04): porażka po zapisie rekordu zostawiała relację wpół
+                # SKUCHA 11 (pierwsza instalacja 2026-11-04): porażka po zapisie rekordu zostawiała relację wpół
                 # założoną na dwóch hostach (rekord pending, konto i zgody na źródle), a okno mówiło
                 # "nie została założona". Teraz okno mówi prawdę i daje wyjście: wycofać (delete-relation
                 # -- kolektor i źródło) albo ponowić (ta sama komenda wznawia od miejsca porażki).
