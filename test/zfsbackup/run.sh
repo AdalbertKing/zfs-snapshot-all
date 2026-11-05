@@ -13987,6 +13987,40 @@ if [ -z "$r188_bad" ] && [ "$(printf '%s\n' "$_ctl" | sed -n 2p)" = "? hdd/lxc/s
 else
     bad "REV-188: failed enumeration in the quiesce preflight" "${r188_bad:- none}" "ctl=[$_ctl] root=[$_wroot]" "warn=[$_wctl]"
 fi
+# REV-188 round 1: the INSTALL PATH itself. The shipped atomic_replace_and_install runs
+# with its outside neighbours stubbed -- gen-cron renders the block above and records
+# --install, the crontab reads empty, the runnability check (not the subject) passes --
+# and the real quiesce functions, warn and zfs (with the failure injected). Asserted:
+# the operator's stderr carries UNKNOWN with the dataset and reason, the install still
+# happens (config swapped, gen-cron --install called) and the status is 0. Control:
+# a healthy listing warns the known gap and no UNKNOWN, same status.
+mkdir -p "$QG/inst"
+qgi() {   # <QG_FAIL> -> "rc=<n>" line, then stderr of the install
+    printf 'new config\n' > "$QG/inst/work.conf"; printf 'old config\n' > "$QG/inst/real.conf"; rm -f "$QG/inst/installed"
+    ( source "$ZFSBACKUP" >/dev/null 2>&1
+      export PATH="$QG/bin:$PATH" QUIESCE_ALLOW_DIR="$QG/allow" QG_FAIL="$1"
+      cron_target_user() { echo zfsbackup; }
+      gencron_as_target() { case " $* " in *" --install "*) : > "$QG/inst/installed" ;; *) cat "$QG/blk1" ;; esac; }
+      crontab_for_target() { :; }; assert_block_runnable_by() { return 0; }
+      warn_if_block_has_other_source() { :; }; workfile_untrack() { :; }
+      atomic_replace_and_install "$QG/inst/real.conf" "$QG/inst/work.conf" 2>"$QG/inst/err" >/dev/null
+      echo "rc=$?" ) 2>/dev/null
+    cat "$QG/inst/err"
+}
+r188i_bad=""
+for _m in before after; do
+    _i=$(qgi "hdd/lxc:$_m")
+    case "$_i" in "rc=0"*) ;; *) r188i_bad="$r188i_bad $_m-status=[$(printf '%s' "$_i" | head -1)]" ;; esac
+    case "$_i" in *"is UNKNOWN -- hdd/lxc: zfs list rc=77: cannot "*) ;; *) r188i_bad="$r188i_bad $_m-no-unknown=[$(printf '%s' "$_i" | tail -n +2 | cut -c1-200)]" ;; esac
+    { [ -e "$QG/inst/installed" ] && [ "$(cat "$QG/inst/real.conf")" = "new config" ]; } || r188i_bad="$r188i_bad $_m-not-installed"
+done
+_ih=$(qgi "")
+if [ -z "$r188i_bad" ] && case "$_ih" in "rc=0"*"does not cover: 105 (hdd/lxc/subvol-105-disk-0)"*) ! printf '%s' "$_ih" | grep -q UNKNOWN ;; *) false ;; esac \
+        && [ -e "$QG/inst/installed" ]; then
+    ok "REV-188: the real install path (atomic_replace_and_install) with a failed zfs list -- UNKNOWN with the dataset and reason on stderr, config swapped, gen-cron --install run, status 0; healthy control warns the known gap only"
+else
+    bad "REV-188: install path with a failed listing" "${r188i_bad:- none}" "healthy=[$(printf '%s' "$_ih" | tr '\n' ' ' | cut -c1-300)]"
+fi
 rm -rf "$QG"
 # T7 (install test 2026-11-05): two live records with NO peer are not a shared
 # pairing -- the plan names no "other relationships" and no empty peer.
