@@ -6761,8 +6761,10 @@ fi
 #      reaching their parsers needs a config, a crontab and a peer.
 for fn in cmd_audit_source_retention; do
     body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
-    if printf '%s\n' "$body" | grep -q -- '--config=\*)' \
-       && printf '%s\n' "$body" | grep -q -- '--local-user=\*)'; then
+    # Here-strings, not `printf | grep -q`: the body is ~10 KB and this suite
+    # runs under pipefail -- an early grep is 141 on a match (U149).
+    if grep -q -- '--config=\*)' <<<"$body" \
+       && grep -q -- '--local-user=\*)' <<<"$body"; then
         ok "64g: $fn accepts --config and --local-user"
     else
         bad "64g: $fn accepts --config and --local-user" "not both found in $fn"
