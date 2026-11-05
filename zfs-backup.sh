@@ -15711,9 +15711,11 @@ cmd_delete_relation() {
     fi
 
     # Who else uses this peer? Counted from the records, in a subshell per file so
-    # one record's fields never leak into the next.
+    # one record's fields never leak into the next. No peer is nobody's peer: two
+    # records without PEER_HOST are not a shared pairing (install test 2026-11-05,
+    # "the pairing with  stays: migawki-b").
     local others="" f o
-    for f in "$CLIENTS_DIR"/*.conf; do
+    [ -n "$peer" ] && for f in "$CLIENTS_DIR"/*.conf; do
         [ -f "$f" ] || continue
         [ "$f" = "$cpath" ] && continue
         o=$( CLIENT_NAME=""; STATE=""; PEER_HOST=""; record_load client "$f"

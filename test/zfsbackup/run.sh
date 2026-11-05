@@ -13904,6 +13904,18 @@ if [ "$rc" -eq 0 ] && printf '%s' "$DROUT" | grep -q '1\. collector : remove-cli
 else
     bad "delrel: plan for a shared peer" "rc=$rc" "$DROUT" "$(cat "$DR/err")"
 fi
+# T7 (install test 2026-11-05): two live records with NO peer are not a shared
+# pairing -- the plan names no "other relationships" and no empty peer.
+printf 'CLIENT_NAME=np1\nSTATE=active\n' > "$DR/clients/np1.conf"
+printf 'CLIENT_NAME=np2\nSTATE=active\n' > "$DR/clients/np2.conf"
+DROUT=$(dr_run np1)
+if printf '%s' "$DROUT" | grep -q '2\. source    : skipped -- the record names no peer' \
+   && ! printf '%s' "$DROUT" | grep -q 'other relationships still use'; then
+    ok "delrel: records without a peer do not share one -- no 'other relationships still use :' for an empty peer"
+else
+    bad "delrel: empty peer counted as shared" "$DROUT" "$(cat "$DR/err")"
+fi
+rm -f "$DR/clients/np1.conf" "$DR/clients/np2.conf"
 DROUT=$(dr_run c)
 if printf '%s' "$DROUT" | grep -q "1\. collector : skipped -- the record already says 'removed'" \
    && printf '%s' "$DROUT" | grep -q '2\. source    : on 10.0.0.9 (10.0.0.9:2222), as root over SSH: deploy.sh --leave=' \
