@@ -2295,6 +2295,32 @@ else
     bad "remove-client: a relationship recorded as root targets root, inventing no account" "$(cat "$RC/calls")"
 fi
 
+# ONE NAME, TWO RELATIONSHIPS, the remove-client half (lab 2026-11-05, pve10 <-> pve11,
+# reproduced twice): $RELATIONSHIPS_DIR/<name> is also the pair gate's state of a
+# collector of that name joined to this host. remove-client's rmdir took the empty gate
+# dir and the other direction's jobs got PAIR_UNKNOWN (exit 92); the purge's own guard
+# (src_keep) tests that directory and so came too late. relationship_dir_rmdir runs on
+# real directories: kept while a join manifest of the name is alive, removed without
+# one, removed when the manifest of that name is a pairing (no PEER_JOIN_) one.
+RD="$WORK/reldir"; rm -rf "$RD"; mkdir -p "$RD/rel/joined" "$RD/rel/plain" "$RD/rel/paironly" "$RD/peers"
+printf 'PEER_JOIN_ROLE=pull\nPEER_JOIN_ACCOUNT=zfsbackup-joined\n' > "$RD/peers/joined.conf"
+printf 'PEER_CONF_ROLE=pull\n' > "$RD/peers/paironly.conf"
+rd_out=$( (
+    log() { echo ">>> $*"; }
+    eval "$(product_fn "$ZFSBACKUP" relationship_dir_rmdir)"
+    RELATIONSHIPS_DIR="$RD/rel" PEER_STATE_DIR="$RD/peers"
+    relationship_dir_rmdir joined; relationship_dir_rmdir plain; relationship_dir_rmdir paironly
+) 2>&1 )
+if [ -d "$RD/rel/joined" ] && [ ! -e "$RD/rel/plain" ] && [ ! -e "$RD/rel/paironly" ] \
+        && printf '%s' "$rd_out" | grep -q "kept $RD/rel/joined -- it is also the pair gate's state of the collector 'joined'" \
+        && [ "$(grep -c '^ *rmdir "\$RELATIONSHIPS_DIR/' "$ZFSBACKUP")" -eq 1 ] \
+        && [ "$(grep -c '^ *relationship_dir_rmdir "\$name"$' "$ZFSBACKUP")" -eq 3 ]; then
+    ok "remove-client: the client's state dir is kept while a joined collector of the same name uses it as its gate state; every rmdir of it goes through that check"
+else
+    bad "remove-client: gate dir of the reverse relationship" "$rd_out" "$(ls -A "$RD/rel")" "$(grep -n 'rmdir "\$RELATIONSHIPS_DIR/\|relationship_dir_rmdir' "$ZFSBACKUP")"
+fi
+rm -rf "$RD"
+
 # The other half of the same review note: final-catchup must NOT have gained a
 # read_server_conf. It resolves the account from the peer manifest
 # (PEER_SAVED_LOCAL_USER), and read_server_conf RESETS LOCAL_USER and

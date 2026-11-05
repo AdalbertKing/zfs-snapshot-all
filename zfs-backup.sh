@@ -875,6 +875,22 @@ client_conf_path() { echo "$CLIENTS_DIR/$1.conf"; }
 RELATIONSHIPS_DIR="${RELATIONSHIPS_DIR:-/var/lib/zfs-snapshot-all/relationships}"
 pause_marker_path() { echo "$RELATIONSHIPS_DIR/$1/paused"; }
 client_paused() { [ -f "$(pause_marker_path "$1")" ]; }
+# ONE NAME, TWO RELATIONSHIPS -- the half clean-relationships.sh (src_keep) could
+# not reach. $RELATIONSHIPS_DIR/<name> is ALSO the pair gate's state directory for
+# a collector of the same name that joined this host (zfs-pair-gate.sh reads
+# $RELATIONSHIPS_DIR/<label>). A collector record "pve11" on pve10 and pve11's own
+# pull from pve10 share it: removing the record rmdir'ed the (empty) gate dir and
+# pve11's jobs got PAIR_UNKNOWN, exit 92 (lab, 2026-11-05, reproduced twice).
+# The purge's own guard tests that directory, so it was already gone when the
+# purge looked. Same test as there: a join manifest of this name is alive.
+relationship_dir_rmdir() {   # <name> -- rmdir the client's state dir unless a joined collector's gate lives there
+    if [ -f "${PEER_STATE_DIR:-/etc/zfs-snapshot-all/peers}/$1.conf" ] \
+       && grep -q '^PEER_JOIN_' "${PEER_STATE_DIR:-/etc/zfs-snapshot-all/peers}/$1.conf" 2>/dev/null; then
+        log "kept $RELATIONSHIPS_DIR/$1 -- it is also the pair gate's state of the collector '$1' this host is the source of"
+        return 0
+    fi
+    rmdir "$RELATIONSHIPS_DIR/$1" 2>/dev/null || :
+}
 # peer_scope_path / peer_scope_granted_hash_path (REV-20260802-033 slices
 # 4/T3) and local_keyfile_path / local_knownhosts_path: lib-pairing.sh. This
 # reads what --draft-scope/--commit-scope already wrote on the PEER and where
@@ -10428,7 +10444,7 @@ cmd_add_client() {
     if client_paused "$name"; then
         warn "a stale PAUSED_LOCAL marker exists under $RELATIONSHIPS_DIR/$name (left by a previous relationship of this name) -- clearing it so the new client does not start paused"
         rm -f "$(pause_marker_path "$name")" || die "could not remove the stale pause marker $(pause_marker_path "$name")"
-        rmdir "$RELATIONSHIPS_DIR/$name" 2>/dev/null || :
+        relationship_dir_rmdir "$name"
     fi
 
     mkdir -p "$CLIENTS_DIR" || die "could not create $CLIENTS_DIR"
@@ -21719,7 +21735,7 @@ remove_local_relation() {
         printf 'REMOVED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
     if client_paused "$name"; then rm -f "$(pause_marker_path "$name")" || :; fi
-    rmdir "$RELATIONSHIPS_DIR/$name" 2>/dev/null || :
+    relationship_dir_rmdir "$name"
     log "local relationship '$name' removed. The copies stay: ${MANAGED_DATASETS:-none recorded}"
 }
 
@@ -21909,7 +21925,7 @@ cmd_remove_client() {
             && log "cleared this client's PAUSED_LOCAL marker" \
             || warn "could not remove $(pause_marker_path "$name") -- remove it manually, or the next client named '$name' will report (and clear) it at add-client"
     fi
-    rmdir "$RELATIONSHIPS_DIR/$name" 2>/dev/null || :
+    relationship_dir_rmdir "$name"
 
     if [ "${#peer_shared_with[@]}" -gt 0 ]; then
         log "client '$name' removed locally. NO peer-side commands to run: the pairing with $PEER_HOST stays, because ${peer_shared_with[*]} still uses it."
