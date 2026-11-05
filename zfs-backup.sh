@@ -7485,6 +7485,83 @@ relblock_mech() {   # <tier> <side> -> gfs|age|flat|""
     case "$r" in -[hdwmy]*) printf age ;; *) printf flat ;; esac
 }
 
+# A SNAPONLY RELATIONSHIP'S TIERS ARE ITS CONFIG (REV-20261104-187). They live in
+#   [template:snaponly__<name>__<tier>]      schedule, family, quiesce, monitor
+#   [template:snaponly_src__<name>__<tier>]  its retention on the source
+# (emit_snaponly_sections writes them once, from the profile, at creation). show-tiers
+# reads them and set-tiers rewrites them in place: the profile -- the hidden
+# relacja-<name> one included -- is not read again after creation. Only an explicit
+# "use template" (edit-relation --profile=) renders the sections anew.
+snaponly_cfg_tiers() {   # <config> <name> -> its tiers, in file order
+    awk -v h="[template:snaponly__$2__" -v mk="# managed-by: zfs-backup.sh client=$2" '
+        /^\[/ { if (t != "" && mine) print t; t = ""; mine = 0
+                if (index($0, h) == 1) { t = substr($0, length(h) + 1); sub(/\][ \t]*$/, "", t) } next }
+        { l = $0; sub(/^[ \t]+/, "", l); if (t != "" && l == mk) mine = 1 }
+        END { if (t != "" && mine) print t }' "$1"
+}
+snaponly_show_tiers_json() {   # <config> <name> -> the "target":[...],"source":[] part of show-tiers --json
+    local cfg="$1" name="$2" t arr="" tf=1 hs hp r g mech keep retain
+    while IFS= read -r t; do
+        [ -n "$t" ] || continue
+        hs="[template:snaponly__${name}__$t]"; hp="[template:snaponly_src__${name}__$t]"
+        r=$(tiers_sec_field "$cfg" "$hp" retain); g=$(tiers_sec_field "$cfg" "$hp" gfs)
+        mech=""; keep=""; retain=""
+        if [ -n "$r" ]; then
+            case "$g" in yes|true|1) mech=gfs ;; *) case "$r" in -[hdwmy]*) mech=age ;; *) mech=flat ;; esac ;; esac
+            if [ "$mech" = age ]; then retain="$r"; else keep="${r#-?}"; fi
+        fi
+        [ "$tf" -eq 1 ] || arr="$arr,"; tf=0
+        arr="$arr{\"name\":\"$(json_escape "$t")\",\"template\":\"\",\"mechanism\":\"$mech\",\"pattern\":\"$(json_escape "$(tiers_sec_field "$cfg" "$hs" pattern)")\",\"prefix\":\"$(json_escape "$(tiers_sec_field "$cfg" "$hs" prefix)")\",\"keep\":\"$keep\",\"retain\":\"$(json_escape "$retain")\",\"gfs\":\"$(json_escape "$g")\",\"quiesce\":\"$(json_escape "$(tiers_sec_field "$cfg" "$hs" quiesce)")\",\"send_schedule\":\"$(json_escape "$(tiers_sec_field "$cfg" "$hs" send_schedule)")\",\"prune_schedule\":\"$(json_escape "$(tiers_sec_field "$cfg" "$hp" prune_schedule)")\",\"monitor_warn\":\"$(json_escape "$(tiers_sec_field "$cfg" "$hs" monitor_warn)")\",\"monitor_crit\":\"$(json_escape "$(tiers_sec_field "$cfg" "$hs" monitor_crit)")\"}"
+    done < <(snaponly_cfg_tiers "$cfg" "$name")
+    printf '"target":[%s],"source":[]' "$arr"
+}
+# set-tiers on a snaponly relationship: the ops applied to its sections in the working copy.
+# A tier's retention is the source's (there is no copy), so --tier and --src-tier name the
+# same tier. Changing the SET of tiers or the counting method re-shapes the families on the
+# source -- that stays the explicit template action. Dies (working copy removed) on a refusal.
+snaponly_tiers_apply_ops() {   # <config working copy> <name> <ops...> -> TIERS_CHANGES
+    local wf="$1" name="$2"; shift 2
+    fail() { rm -f "$wf"; die "set-tiers: $* -- nothing was changed"; }
+    local -a tiers=(); mapfile -t tiers < <(snaponly_cfg_tiers "$wf" "$name")
+    [ "${#tiers[@]}" -gt 0 ] || fail "'$name' has no snaponly tier section in its config"
+    TIERS_CHANGES=()
+    local op v key="" hs hp r field sec
+    for op in "$@"; do
+        v="${op#*=}"
+        case "$op" in
+            --tier=*|--src-tier=*)
+                key="$v"
+                case " ${tiers[*]} " in *" $key "*) ;; *) fail "no tier '$key' (tiers: ${tiers[*]})" ;; esac
+                hs="[template:snaponly__${name}__$key]"; hp="[template:snaponly_src__${name}__$key]" ;;
+            --keep=*|--retain=*|--quiesce=*|--send-schedule=*|--prune-schedule=*)
+                [ -n "$key" ] || fail "'$op' names no tier -- put --tier=T before it"
+                case "$op" in
+                    --keep=*)
+                        # The family lives only on the source: 0 would delete every snapshot of the tier.
+                        case "$v" in ''|*[!0-9]*|0*) fail "--keep='$v' -- a whole number above 0 (a snaponly tier has no copy elsewhere)" ;; esac
+                        r=$(tiers_sec_field "$wf" "$hp" retain)
+                        [ -n "$r" ] || fail "tier '$key' has no retention line in $hp -- nothing to set a number on"
+                        sec="$hp"; field=retain; v="-${r:1:1}$v" ;;
+                    --retain=*)
+                        case "$v" in -[HDWMYhdwmy][0-9]*) ;; *) fail "--retain='$v' -- like -D7 (count) or -d14 (age)" ;; esac
+                        sec="$hp"; field=retain ;;
+                    --quiesce=*)        sec="$hs"; field=quiesce ;;
+                    --send-schedule=*)  [ -n "$v" ] || fail "--send-schedule='' -- a snaponly tier without a schedule takes no snapshot"
+                                        sec="$hs"; field=send_schedule ;;
+                    --prune-schedule=*) [ -n "$v" ] || fail "--prune-schedule='' -- a snaponly tier needs its source cleanup"
+                                        sec="$hp"; field=prune_schedule ;;
+                esac
+                if [ "$(tiers_sec_field "$wf" "$sec" "$field")" != "$v" ]; then
+                    set_or_remove_section_field "$wf" "$sec" "$field" "$v" || fail "could not write $field in $sec"
+                    TIERS_CHANGES+=("$key: $field=${v:-(none)}")
+                fi ;;
+            --add-tier=*|--add-src-tier=*|--drop-tier=*|--drop-src-tier=*|--method=*)
+                fail "'$op' on a snaponly relationship changes which snapshot families exist on the source -- use the template action (edit-relation $name --profile=P), which previews the whole re-render" ;;
+        esac
+    done
+    [ "${#TIERS_CHANGES[@]}" -gt 0 ] || TIERS_CHANGES=("(no change -- the config already says this)")
+}
+
 # show-tiers NAME [--json] -- the tiers of ONE relationship, read from its block, in the
 # shape list-profiles gives a profile's tiers (so the GUI table reads both).
 cmd_show_tiers() {
@@ -7500,6 +7577,16 @@ cmd_show_tiers() {
     cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
     local cfg="$CRON_CTX_FILE"
     [ -r "$cfg" ] || die "show-tiers: no config $cfg for '$name'"
+    if snaponly_is; then
+        local so; so=$(snaponly_show_tiers_json "$cfg" "$name")
+        [ "$so" != '"target":[],"source":[]' ] || die "show-tiers: '$name' has no snaponly tier section in $cfg"
+        if [ "$json" -eq 1 ]; then
+            printf '{"name":"%s","mode":"snaponly","config":"%s",%s}\n' "$(json_escape "$name")" "$(json_escape "$cfg")" "$so"
+        else
+            printf '%s\n' "$so"
+        fi
+        return 0
+    fi
     relblock_require "$cfg" "$name" show-tiers
     local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
     relblock_load "$cfg" "$name"
@@ -7681,7 +7768,6 @@ cmd_set_tiers() {
             *)  [ -z "$name" ] || die "set-tiers: takes exactly one NAME"; name="$a" ;;
         esac
     done
-    [ -n "$name" ] && snaponly_refuse set-tiers "$name"
     [ -n "$name" ] || die "usage: zfs-backup.sh set-tiers NAME [--tier=T --keep=N ...] [--plan|--yes]"
     [ "${#ops[@]}" -gt 0 ] || die "set-tiers: nothing to change"
     local cpath; cpath=$(client_conf_path "$name")
@@ -7692,7 +7778,7 @@ cmd_set_tiers() {
     local cronfile="$CRON_CTX_FILE"
     [ -f "$cronfile" ] || die "set-tiers: no config $cronfile for '$name'"
     assert_cron_config_matches_installed "$cronfile"
-    relblock_require "$cronfile" "$name" set-tiers
+    snaponly_is || relblock_require "$cronfile" "$name" set-tiers
     # MIGAWKI LOKALNE (a local relationship with a blank target): the source is its
     # only side, so a copy-side tier op means the source one. Left as it was, --tier
     # changed a target side no line is rendered from -- rc 0, "hourly: keep=12" in
@@ -7714,7 +7800,11 @@ cmd_set_tiers() {
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
     chmod 0644 "$workfile" 2>/dev/null || :
     local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
-    tiers_apply_ops "$workfile" "$name" "${ops[@]}"
+    if snaponly_is; then
+        snaponly_tiers_apply_ops "$workfile" "$name" "${ops[@]}"
+    else
+        tiers_apply_ops "$workfile" "$name" "${ops[@]}"
+    fi
     log "validating the changed config (working copy only, nothing real touched yet)..."
     if ! gencron_as_target -c "$workfile" >/dev/null; then
         rm -f "$workfile"

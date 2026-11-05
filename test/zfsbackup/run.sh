@@ -15620,6 +15620,72 @@ if printf '%s' "$out" | grep -q '"kind":"snaponly","name":"zfsbackup-pve10@10.0.
 else
     bad "snaponly show-config" "$out"
 fi
+# REV-20261104-187: a snaponly relationship's tiers ARE its config. show-tiers reads its
+# [template:snaponly(_src)__rr__*] sections -- the record names a profile that does not
+# exist, so a profile read cannot pass -- and set-tiers rewrites ONE field in place: the
+# hand edits of F1.1 above (-H240, the daily schedule, the hourly threshold) survive a
+# change of another tier. On main show-tiers died on relblock_require and set-tiers on
+# snaponly_refuse (the control: either refusal fails these checks).
+printf 'CLIENT_NAME=rr\nSTATE=active\nRUX_MODE=snaponly\nPROFILE=relacja-rr\nCRON_CONFIG=%s\n' "$RR/edited.conf" > "$ED/clients/rr.conf"
+out=$( ( CLIENTS_DIR="$ED/clients"; SERVER_CONF="$ED/no-such-server-conf"; PROFILE_USER_ROOT="$ED/no-profiles"; cmd_show_tiers rr --json ) 2>&1 )
+st=$(printf '%s' "$out" | python -c "
+import json,sys
+d=json.load(sys.stdin); t={x['name']:x for x in d['target']}
+print(d['mode'], len(d['source']), sorted(t), t['hourly']['mechanism'], t['hourly']['keep'], t['daily']['retain'], t['daily']['send_schedule'], t['hourly']['monitor_warn'])" 2>&1)
+if [ "$st" = "snaponly 0 ['daily', 'hourly', 'monthly', 'weekly'] flat 240 -d7 43 4 * * * 100m" ]; then
+    ok "REV-187 show-tiers on snaponly: tiers, counts, schedules and thresholds come from the config (hand edits included), no profile read"
+else
+    bad "REV-187 show-tiers on snaponly" "got: $st" "$(printf '%s' "$out" | head -3)"
+fi
+cp "$RR/edited.conf" "$ED/st.conf"
+out=$( ( snaponly_tiers_apply_ops "$ED/st.conf" rr --tier=weekly --keep=6 --tier=daily --quiesce=agent; printf 'CHG=%s\n' "${TIERS_CHANGES[@]}" ) 2>&1 )
+st_diff=$(diff "$RR/edited.conf" "$ED/st.conf" | grep -c '^[<>]')
+if printf '%s' "$out" | grep -q 'CHG=weekly: retain=-w6' && printf '%s' "$out" | grep -q 'CHG=daily: quiesce=agent' \
+   && [ "$(tiers_sec_field "$ED/st.conf" '[template:snaponly_src__rr__weekly]' retain)" = "-w6" ] \
+   && [ "$(tiers_sec_field "$ED/st.conf" '[template:snaponly__rr__daily]' quiesce)" = "agent" ] \
+   && [ "$(tiers_sec_field "$ED/st.conf" '[template:snaponly_src__rr__hourly]' retain)" = "-H240" ] \
+   && [ "$(tiers_sec_field "$ED/st.conf" '[template:snaponly__rr__daily]' send_schedule)" = "43 4 * * *" ] \
+   && [ "$(tiers_sec_field "$ED/st.conf" '[template:snaponly__rr__hourly]' monitor_warn)" = "100m" ] && [ "$st_diff" -eq 4 ]; then
+    ok "REV-187 set-tiers on snaponly: one field per op rewritten in its section; the other tiers' hand edits are byte-for-byte as installed"
+else
+    bad "REV-187 set-tiers on snaponly" "$out" "diff lines: $st_diff" "$(diff "$RR/edited.conf" "$ED/st.conf")"
+fi
+st_ref=""
+for op in "--tier=hourly --keep=0" "--add-tier=yearly" "--drop-tier=weekly" "--method=gfs" "--tier=nosuch --keep=3" "--keep=3"; do
+    cp "$RR/edited.conf" "$ED/st2.conf"
+    # shellcheck disable=SC2086
+    o=$( ( snaponly_tiers_apply_ops "$ED/st2.conf" rr $op; echo PASSED ) 2>&1 )
+    if printf '%s' "$o" | grep -q PASSED || ! printf '%s' "$o" | grep -q 'nothing was changed' || [ -e "$ED/st2.conf" ]; then st_ref="$st_ref [$op]"; fi
+done
+if [ -z "$st_ref" ]; then
+    ok "REV-187 set-tiers on snaponly refuses keep=0, a change of the tier set or method (that is the template action), an unknown tier and an op without a tier -- the working copy removed"
+else
+    bad "REV-187 set-tiers on snaponly refusals" "not refused cleanly:$st_ref"
+fi
+# The VERB: cmd_set_tiers on the installed config, the real gen-cron.sh validating the working
+# copy, the install step replaced by a copy. The cron rendered from the result carries the new
+# weekly count and the hand-edited hourly -H240; a failing generator leaves the config as it was.
+so_st_run() {   # <args...> -> output; installed config $ED/vt.conf
+    ( CLIENTS_DIR="$ED/clients"; PROFILE_USER_ROOT="$ED/no-profiles"
+      cron_context_resolve() { CRON_CTX_FILE="$ED/vt.conf"; }
+      assert_cron_config_matches_installed() { :; }
+      gencron_as_target() { [ -n "${ST_GEN_FAILS:-}" ] && return 1; bash "$REPO/gen-cron.sh" "$@" >/dev/null 2>&1; }
+      show_activation_proposal() { :; }
+      atomic_replace_and_install() { cp "$2" "$1"; }
+      cmd_set_tiers rr "$@" ) 2>&1
+}
+printf 'CLIENT_NAME=rr\nSTATE=active\nRUX_MODE=snaponly\nPROFILE=relacja-rr\nCRON_CONFIG=%s\n' "$ED/vt.conf" > "$ED/clients/rr.conf"
+cp "$RR/edited.conf" "$ED/vt.conf"
+vt_out=$(so_st_run --tier=weekly --keep=6 --yes); vt_rc=$?
+bash "$REPO/gen-cron.sh" -c "$ED/vt.conf" > "$ED/vt.cron" 2>&1
+cp "$RR/edited.conf" "$ED/vt.conf"
+vt_out2=$(ST_GEN_FAILS=1 so_st_run --tier=weekly --keep=6 --yes); vt_rc2=$?
+if [ "$vt_rc" -eq 0 ] && grep -q 'automated_weekly_" -w6$' "$ED/vt.cron" && grep -q 'automated_hourly_" -H240$' "$ED/vt.cron" \
+   && [ "$vt_rc2" -ne 0 ] && cmp -s "$RR/edited.conf" "$ED/vt.conf"; then
+    ok "REV-187 set-tiers verb on snaponly: the cron from the result has weekly -w6 and the hand-edited hourly -H240; a failing generator changes nothing"
+else
+    bad "REV-187 set-tiers verb on snaponly" "rc=$vt_rc $vt_out" "gen-fails rc=$vt_rc2 $vt_out2" "$(grep -E 'weekly|hourly' "$ED/vt.cron" | head -4)"
+fi
 # EXPORT / IMPORT (owner campaign 2026-10-18: export refused "not supported yet").
 # The replay is add-client --snaponly with the host and the source datasets, then
 # activate -- never --mode=snaponly (add-client refuses it beside --snaponly), never
