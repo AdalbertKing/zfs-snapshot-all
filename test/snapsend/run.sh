@@ -1757,6 +1757,71 @@ for eng in send get; do
               "$RC|$(snaps_of "$(r186_tgt $eng f6c$f6i$eng)")"
     done
 done
+
+# F5, round 3 (REV-186 verification of 92c81fcf): the -n CALLER, through the real engine.
+# A pair with a common snapshot; one discovery step is broken at a time: the local filter
+# (an awk that fails only on get_sorted_snapshots' program), the target listing in
+# find_common_snapshot (1st call) or in the conflict scan (2nd call), the source listing in
+# the conflict scan. Each must end rc 2 with INCOMPLETE on stderr, the diagnostic, no PLAN=
+# line, no conflict list, no destroy, the target untouched. Old engines answered rc 0/1 with
+# an empty or partial picture. Controls: the healthy pair (rc 0, PLAN=INCREMENTAL) and a
+# real conflict (rc 1, the extra snapshot listed).
+mkdir -p "$R186D/f5cbin"
+export R186D_C="$R186D/f5c.count" R186_AWK="$(command -v awk)"
+cat > "$R186D/f5cbin/zfs" <<'SHIM'
+#!/bin/bash
+if [ -n "${F5C_DS:-}" ] && [ "$1" = list ] && [ "${!#}" = "$F5C_DS" ] \
+   && [[ " $* " == *" -t snapshot "* ]] && [[ " $* " == *" -s creation "* ]]; then
+    n=$(( $(cat "$R186D_C" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$R186D_C"
+    if [ "$n" -gt "${F5C_SKIP:-0}" ]; then echo "cannot iterate '$F5C_DS': simulated I/O error" >&2; exit 1; fi
+fi
+if [ "$1" = destroy ]; then echo "destroy $*" >> "$R186_LOG"; fi
+exec "$R186_REAL" "$@"
+SHIM
+cat > "$R186D/f5cbin/awk" <<'SHIM'
+#!/bin/bash
+if [ -n "${F5C_AWK:-}" ] && [ "$1" = -F ] && [ "$2" = @ ] && [ "$3" = 'NF > 1 {print $2}' ]; then
+    exit 2
+fi
+exec "$R186_AWK" "$@"
+SHIM
+chmod +x "$R186D/f5cbin/zfs" "$R186D/f5cbin/awk"
+f5c_run() {   # <send|get> <name> -> RC, OUT of `-n -m auto_` through the f5c shims
+    local p0="$PATH"; PATH="$R186D/f5cbin:$PATH"; rm -f "$R186D_C"
+    r186_run "$1" "$2" -n -m "auto_"; PATH="$p0"
+}
+f5c_plans() { printf '%s\n' "$OUT" | grep -c '^PLAN='; }
+for eng in send get; do
+    S="$(r186_src $eng f5c$eng)"; T="$(r186_tgt $eng f5c$eng)"
+    zfs create -p "$S" || exit 1; zfs snapshot "$S@auto_1"
+    r186_run $eng f5c$eng -e -m "auto_"
+    check "F5c $eng: setup -- the pair has its common snapshot" "0|auto_1" "$RC|$(snaps_of "$T")"
+
+    f5c_run $eng f5c$eng
+    check "F5c $eng: control -- a healthy pair, -n rc 0 and one PLAN=INCREMENTAL" "0|1" \
+          "$RC|$(printf '%s\n' "$OUT" | grep -c '^PLAN=INCREMENTAL base=auto_1 ')"
+    zfs snapshot "$T@extra_1"
+    f5c_run $eng f5c$eng
+    check "F5c $eng: control -- a real conflict, -n rc 1 and the extra snapshot listed" "1|1" \
+          "$RC|$(printf '%s\n' "$OUT" | grep -c "^$T@extra_1\$")"
+    zfs destroy "$T@extra_1"
+
+    for f5c in "filter|F5C_AWK=1|Could not filter the snapshot list" \
+               "target listing in find_common_snapshot|F5C_DS=$T F5C_SKIP=0|Could not list the snapshots of '$T'" \
+               "target listing in the conflict scan|F5C_DS=$T F5C_SKIP=1|Could not list the snapshots of '$T'" \
+               "source listing in the conflict scan|F5C_DS=$S F5C_SKIP=1|Could not list the snapshots of '$S'"; do
+        what="${f5c%%|*}"; rest="${f5c#*|}"; envs="${rest%%|*}"; diag="${rest#*|}"
+        d0=$(cat "$R186_LOG" 2>/dev/null | wc -l)
+        # shellcheck disable=SC2086
+        eval "export $envs"; f5c_run $eng f5c$eng; unset F5C_AWK F5C_DS F5C_SKIP
+        d1=$(cat "$R186_LOG" 2>/dev/null | wc -l)
+        calls=$(cat "$R186D_C" 2>/dev/null || echo 0)
+        want_calls=0; case "$envs" in *SKIP=0*) want_calls=1 ;; *SKIP=1*) want_calls=2 ;; esac
+        check "F5c $eng: $what fails -> rc 2, INCOMPLETE, the diagnostic, no PLAN=, no conflict list, no destroy, target as before" \
+              "2|1|1|0|0|$want_calls|0|auto_1" \
+              "$RC|$(printf '%s\n' "$OUT" | grep -c "^INCOMPLETE: ")|$([ "$(r186_said "$diag")" -gt 0 ] && echo 1 || echo 0)|$(f5c_plans)|$(printf '%s\n' "$OUT" | grep -c "^$T@")|$calls|$((d1 - d0))|$(snaps_of "$T")"
+    done
+done
 rm -rf "$R186D"
 unset R186_LOG R186_REAL
 

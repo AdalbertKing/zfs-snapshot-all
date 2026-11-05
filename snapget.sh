@@ -718,7 +718,10 @@ get_sorted_snapshots() {
         }
     else
         local _out
-        _out=$(zfs list -H -o name -t snapshot -s creation $depth_option "$dataset" 2>/dev/null) || return 1
+        _out=$(zfs list -H -o name -t snapshot -s creation $depth_option "$dataset" 2>/dev/null) || {
+            log 0 "Could not list the snapshots of '$dataset' (exit $?) -- treating this as a failure, not as an empty dataset."
+            return 1
+        }
     fi
     # The filter runs on a list whose status was already checked -- no pipe, no reliance
     # on the caller's pipefail. Every line must be a snapshot name.
@@ -730,7 +733,12 @@ get_sorted_snapshots() {
             *) log 0 "The snapshot list of '$dataset' contains a line that is not a snapshot ('$_l') -- treating this as a failure, not as a list."; return 1 ;;
         esac
     done <<< "$_out"
-    snaps=$(printf '%s\n' "$_out" | awk -F '@' 'NF > 1 {print $2}')
+    # REV-20261104-186 round 3: the filter's own status counts too -- a failed awk used to
+    # leave an empty or partial list behind a successful echo.
+    snaps=$(awk -F '@' 'NF > 1 {print $2}' <<< "$_out") || {
+        log 0 "Could not filter the snapshot list of '$dataset' (exit $?) -- treating this as a failure, not as a list."
+        return 1
+    }
     echo "$snaps"
 }
 ###############################################################################
@@ -746,8 +754,17 @@ find_conflicting_snapshots() {
     local remote_host="$4"
     local parent_common="${5:-}"
 
-    local src_snaps=($(get_sorted_snapshots "$src_dataset" "$remote_user" "$remote_host"))
-    local tgt_snaps=($(get_sorted_snapshots "$tgt_dataset"))
+    # REV-20261104-186 round 3: every list this scan decides from is checked. `local a=($(f))`
+    # returns local's status, not f's, so a failed discovery used to become an empty conflict
+    # set. Status 1 = the scan is incomplete (already logged); the caller must not report it.
+    local src_snaps tgt_snaps=() _tp
+    src_snaps=($(get_sorted_snapshots "$src_dataset" "$remote_user" "$remote_host")) || return 1
+    target_exists "$tgt_dataset"; _tp=$?
+    case $_tp in
+        0) tgt_snaps=($(get_sorted_snapshots "$tgt_dataset")) || return 1 ;;
+        1) ;;   # no target yet (first copy): nothing on it can conflict
+        *) return 1 ;;
+    esac
 
     for tgt_snap in "${tgt_snaps[@]}"; do
         if [[ ! " ${src_snaps[*]} " == *" ${tgt_snap} "* ]] || ! validate_snapshot "$src_dataset" "$tgt_dataset" "$tgt_snap" "$remote_user" "$remote_host"; then
@@ -755,9 +772,13 @@ find_conflicting_snapshots() {
         fi
     done
 
-    if [ $RECURSIVE -eq 1 ]; then
+    if [ $RECURSIVE -eq 1 ] && [ $_tp -eq 0 ]; then
         local tgt_children
-        tgt_children=$(zfs list -H -o name -r "$tgt_dataset" | grep -v "^${tgt_dataset}$")
+        tgt_children=$(zfs list -H -o name -r "$tgt_dataset") || {
+            log 0 "Could not list the children of target '$tgt_dataset' -- the conflict scan is incomplete."
+            return 1
+        }
+        tgt_children=$(printf '%s\n' "$tgt_children" | grep -v "^${tgt_dataset}$")
 
         for tgt_child in $tgt_children; do
             local child_name="${tgt_child##*/}"
@@ -767,31 +788,34 @@ find_conflicting_snapshots() {
             # child a conflict. An unreachable host must NOT produce that
             # verdict: it would report a whole healthy target subtree as
             # conflicting, and this list is what -n shows the operator before
-            # they reach for -f. So case 2 skips the child instead, having
-            # already logged that the answer is unknown.
+            # they reach for -f. Nor may it skip the child and go on: the scan
+            # would then end as a complete list with a hole in it (REV-186
+            # round 3). Case 2 fails the scan, having already logged why.
             probe_dataset "$src_child" "$remote_user" "$remote_host" "source child dataset"
             case $? in
                 1)
-                    local tgt_child_snaps=($(get_sorted_snapshots "$tgt_child"))
+                    local tgt_child_snaps
+                    tgt_child_snaps=($(get_sorted_snapshots "$tgt_child")) || return 1
                     for snap in "${tgt_child_snaps[@]}"; do
                         CONFLICT_SNAPSHOTS+=("${tgt_child}@${snap}")
                     done
                     continue
                     ;;
-                2) continue ;;
+                2) return 1 ;;
             esac
 
             local child_common
-            child_common=$(find_common_snapshot "$src_child" "$tgt_child" "$remote_user" "$remote_host")
+            child_common=$(find_common_snapshot "$src_child" "$tgt_child" "$remote_user" "$remote_host") || return 1
 
             if [[ "$child_common" == "null" ]] || [[ -n "$parent_common" && "$child_common" != "$parent_common" ]]; then
-                local tgt_child_snaps=($(get_sorted_snapshots "$tgt_child"))
+                local tgt_child_snaps
+                tgt_child_snaps=($(get_sorted_snapshots "$tgt_child")) || return 1
                 for snap in "${tgt_child_snaps[@]}"; do
                     CONFLICT_SNAPSHOTS+=("${tgt_child}@${snap}")
                 done
             fi
 
-            find_conflicting_snapshots "$src_child" "$tgt_child" "$remote_user" "$remote_host" "$child_common"
+            find_conflicting_snapshots "$src_child" "$tgt_child" "$remote_user" "$remote_host" "$child_common" || return 1
         done
     fi
 }
@@ -1363,8 +1387,13 @@ process_dataset() {
 
     if [ $DRY_RUN -eq 1 ]; then
         local common_snapshot
-        common_snapshot=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host")
-        find_conflicting_snapshots "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host" "$common_snapshot"
+        # REV-20261104-186 round 3: a discovery failure is reported as one, never as
+        # "no conflicts" or as a PLAN line.
+        common_snapshot=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host") \
+            && find_conflicting_snapshots "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host" "$common_snapshot" || {
+            log 0 "-n: the snapshots of '$src_dataset' -> '$tgt_dataset' could not be listed -- no plan and no conflict list for this dataset (a failure, not an empty set)."
+            return 1
+        }
         # A machine-readable verdict for callers that must know whether the
         # next real run would be incremental WITHOUT parsing prose
         # (REV-20260730-005 F2). zfs-backup.sh's verify-endpoint used to infer
@@ -1384,7 +1413,12 @@ process_dataset() {
         # same contract: base=null still means full.
         if [[ "$common_snapshot" == "null" || -z "$common_snapshot" ]] && [ $RECURSIVE -ne 1 ]; then
             local _dry_tgt_snaps=() _dry_head="" _dry_bm=""
-            target_exists "$tgt_dataset" && _dry_tgt_snaps=($(get_sorted_snapshots "$tgt_dataset"))
+            if target_exists "$tgt_dataset"; then
+                _dry_tgt_snaps=($(get_sorted_snapshots "$tgt_dataset")) || {
+                    log 0 "-n: the snapshots of '$src_dataset' -> '$tgt_dataset' could not be listed -- no plan and no conflict list for this dataset (a failure, not an empty set)."
+                    return 1
+                }
+            fi
             [ ${#_dry_tgt_snaps[@]} -gt 0 ] && _dry_head=$(get_snapshot_guid "$tgt_dataset" "${_dry_tgt_snaps[-1]}")
             [ -n "$_dry_head" ] && _dry_bm=$(find_bookmark_base "$src_dataset" "$_dry_head" "$remote_user" "$remote_host")
             [ -n "$_dry_bm" ] && common_snapshot="$_dry_bm"
@@ -3031,7 +3065,7 @@ for src_path in "${DATASETS[@]}"; do
     log 1 "Processing: ${REMOTE_HOST:-local}:$src_path => $dataset"
 
     if [ $DRY_RUN -eq 1 ]; then
-        process_dataset "$src_path" "$dataset" "$REMOTE_USER" "$REMOTE_HOST"
+        process_dataset "$src_path" "$dataset" "$REMOTE_USER" "$REMOTE_HOST" || FAILED_DATASETS+=("$dataset")
     else
         stats_start=$(date +%s)
         if process_dataset "$src_path" "$dataset" "$REMOTE_USER" "$REMOTE_HOST"; then
@@ -3050,7 +3084,14 @@ for src_path in "${DATASETS[@]}"; do
 done
 
 if [ $DRY_RUN -eq 1 ]; then
-    if [ ${#CONFLICT_SNAPSHOTS[@]} -gt 0 ]; then
+    # REV-20261104-186 round 3: a dataset whose scan failed makes the report incomplete.
+    # Exit 2 (not 1, which means "here is the conflict list"); stdout keeps only what was
+    # found, the failed datasets go to stderr.
+    if [ ${#FAILED_DATASETS[@]} -gt 0 ]; then
+        [ ${#CONFLICT_SNAPSHOTS[@]} -gt 0 ] && printf "%s\n" "${CONFLICT_SNAPSHOTS[@]}" | sort -u
+        printf 'INCOMPLETE: %s\n' "${FAILED_DATASETS[@]}" >&2
+        exit 2
+    elif [ ${#CONFLICT_SNAPSHOTS[@]} -gt 0 ]; then
         printf "%s\n" "${CONFLICT_SNAPSHOTS[@]}" | sort -u
         exit 1
     else
