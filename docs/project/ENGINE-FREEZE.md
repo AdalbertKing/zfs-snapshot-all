@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 7bfe3a139e06521c0fced24b32758327ea3bd369 -->
-<!-- frozen: snapget.sh 100755 2c5cf8855f80f694d705596e799887dcdd7dcf49 -->
+<!-- frozen: snapsend.sh 100755 5f703c49e2c197ece3794a20a62a8c7b44037614 -->
+<!-- frozen: snapget.sh 100755 8a368e027c7023b03a16dcadbcd060d3a16896ba -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 5a0ea69903070daeb4b438728de258c90156916a -->
-<!-- frozen: lib-zfs-snap.sh 100644 54dc026d1cfb81a360f13812ae5a593ab8f26cbe -->
+<!-- frozen: lib-zfs-snap.sh 100644 e580e9e25d3acefc72a77fef4dc47571f6202926 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -1268,6 +1268,19 @@ Owner-authorized refreezes:
     ("could not be compared -- NO transfer"); before, its empty answer reached the send as
     `-I <src>@`. The reconcile (-F) branch treats it as an incomplete collision scan (no upgrade).
   twin: snapsend.sh <-> snapget.sh changed symmetrically, both bookmark-base branches included.
+- 2026-11-05 (lib-zfs-snap.sh, snapsend.sh, snapget.sh): **REV-20261104-186 round 4 -- F5 in
+  the GUID fallback.** Same owner route as the two entries above; the Reviewer's verification
+  of a3cb5309 asks for exactly this change.
+  - `get_snapshot_guids` (lib): the listing (local `zfs list`, or the remote one over ssh) and
+    the awk filter each have their status checked, as in `get_sorted_snapshots`; every line
+    must be `snapshot<TAB>guid`. A failure is logged and is rc 1 (255 named as a connection
+    failure). Before, the pipe into awk returned awk's 0 with no rows. An empty list with
+    rc 0 still means no snapshots.
+  - `find_common_snapshot`, both GUID-list calls in each engine: the list is assigned apart
+    from `local` and checked; a failure returns 1 (the callers of round 3 then refuse the
+    dataset, or end `-n` with rc 2 and INCOMPLETE). Before, the failure was an empty list
+    and the fallback answered "null".
+  twin: snapsend.sh <-> snapget.sh changed symmetrically; the helper lives in lib-zfs-snap.sh.
 - 2026-11-04 (check-snap-age.sh): **U164 -- an -R root with a foreign snapshot is a container.**
   Owner direction ("Proszę przejść do implementacji", the U161-U164 batch, 2026-11-04), found
   on Dąbrowska pve0 the same day: the archive relation read "czeka" for hours because its -R

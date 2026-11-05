@@ -1853,6 +1853,101 @@ for eng in send get; do
           "2|1|0|auto_1 extra_1" \
           "$RC|$(printf '%s\n' "$OUT" | grep -c "^INCOMPLETE: ")|$(printf '%s\n' "$OUT" | grep -c "^$T")|$(snaps_of "$T")"
 done
+
+# F5, round 4 (REV-186 verification of a3cb5309): the GUID fallback of find_common_snapshot.
+# get_snapshot_guids used to pipe `zfs list -o name,guid` (local or over ssh) into awk and
+# return awk's status, so a failed listing was an EMPTY list and the fallback answered
+# "null" (no common base). (1) The helper lifted from the lib, remote through the fake ssh of
+# F5 above: a failed remote listing (rc 1 and 77), a dead transport (255) and a failed
+# filter are rc 1 with no rows; a dataset with no snapshots and a healthy one are rc 0.
+# (2) Through the real engines: the target's copy of the common snapshot is RENAMED, so the
+# name scan finds nothing and only the GUID fallback finds the base. The GUID listing of the
+# target, then of the source, then the GUID filter fails: -n ends rc 2, INCOMPLETE, the
+# diagnostic, no PLAN=, no destroy; the real run sends nothing. Controls: the healthy -n
+# plans INCREMENTAL from the GUID-found base, and the healthy real run sends it.
+mkdir -p "$R186D/f5gbin"
+cat > "$R186D/f5gbin/zfs" <<'SHIM'
+#!/bin/bash
+if [ -n "${F5G_DS:-}" ] && [ "$1" = list ] && [ "${!#}" = "$F5G_DS" ] && [[ " $* " == *" -o name,guid "* ]]; then
+    echo "cannot iterate '$F5G_DS': simulated I/O error" >&2; exit "${F5G_RC:-1}"
+fi
+if [ "$1" = destroy ]; then echo "destroy $*" >> "$R186_LOG"; fi
+if [ "$1" = send ] && [ -n "${F5G_SENDLOG:-}" ]; then echo "send $*" >> "$F5G_SENDLOG"; fi
+exec "$R186_REAL" "$@"
+SHIM
+cat > "$R186D/f5gbin/awk" <<'SHIM'
+#!/bin/bash
+# The helper calls `awk -F'\t' '<program>'`: -F and its value are ONE word, the program the second.
+if [ -n "${F5G_AWK:-}" ] && [ "$2" = '{split($1,a,"@"); print a[2]"\t"$2}' ]; then exit 2; fi
+exec "$R186_AWK" "$@"
+SHIM
+chmod +x "$R186D/f5gbin/zfs" "$R186D/f5gbin/awk"
+cp "$R186D/f5gbin/awk" "$R186D/f5bin/awk"
+r186_fn "$REPO/lib-zfs-snap.sh" get_snapshot_guids > "$R186D/fn-guids.sh"
+[ -s "$R186D/fn-guids.sh" ] || { echo "cannot lift get_snapshot_guids" >&2; exit 1; }
+zfs create -p "$POOL/f5gempty" || exit 1
+f5g() {   # <dataset> <bad-dataset-or-empty> -> "rc|rows" (remote, through the fake ssh)
+    local o r
+    o=$( . "$R186D/fn-guids.sh"
+         log() { echo "LOG $*" >&2; }
+         SSH_OPTS=(); RECURSIVE=0
+         export F5_BAD="$2" PATH="$R186D/f5bin:$PATH"
+         get_snapshot_guids "$1" someuser somehost 2>/dev/null )
+    r=$?
+    printf '%s|%s' "$r" "$(printf '%s' "$o" | cut -f1 | tr '\n' ' ' | sed 's/ $//')"
+}
+check "F5g lib: remote GUID listing fails on an EXISTING dataset -> rc 1, no rows" "1|" "$(f5g "$POOL/f5bad" "$POOL/f5bad")"
+check "F5g lib: remote GUID listing exits 77 -> rc 1, no rows" "1|" "$(F5_RC=77 f5g "$POOL/f5bad" "$POOL/f5bad")"
+check "F5g lib: ssh transport failure (255) -> rc 1, no rows" "1|" "$(F5_SSH255=1 f5g "$POOL/f5ok" "")"
+check "F5g lib: the GUID filter fails -> rc 1, no rows" "1|" "$(F5G_AWK=1 f5g "$POOL/f5ok" "")"
+check "F5g lib: control -- a dataset with no snapshots -> rc 0, no rows" "0|" "$(f5g "$POOL/f5gempty" "")"
+check "F5g lib: control -- two snapshots -> rc 0, oldest first" "0|auto_1 auto_2" "$(f5g "$POOL/f5ok" "")"
+f5g_run() {   # <send|get> <name> [engine args] -> RC, OUT through the f5g shims
+    local p0="$PATH"; PATH="$R186D/f5gbin:$PATH"; r186_run "$@"; PATH="$p0"
+}
+for eng in send get; do
+    S="$(r186_src $eng f5g$eng)"; T="$(r186_tgt $eng f5g$eng)"
+    zfs create -p "$S" || exit 1; zfs snapshot "$S@auto_1"
+    r186_run $eng f5g$eng -e -m "auto_"
+    zfs rename "$T@auto_1" "$T@moved_1"
+    tick; zfs snapshot "$S@auto_2"
+    check "F5g $eng: setup -- the target's copy of the base is renamed" "0|moved_1" "$RC|$(snaps_of "$T")"
+    f5g_run $eng f5g$eng -n -m "auto_"
+    # Measured: the name-based conflict scan lists the renamed moved_1 (rc 1) -- unchanged
+    # behaviour; the base itself comes from the GUID fallback.
+    check "F5g $eng: control -- -n finds the base by GUID: PLAN=INCREMENTAL base=auto_1, rc 1 with moved_1 listed" "1|1|1" \
+          "$RC|$(printf '%s\n' "$OUT" | grep -c '^PLAN=INCREMENTAL base=auto_1 ')|$(printf '%s\n' "$OUT" | grep -c "^$T@moved_1\$")"
+    for f5g in "target GUID listing|F5G_DS=$T|Could not list the snapshot GUIDs of '$T'" \
+               "source GUID listing|F5G_DS=$S|Could not list the snapshot GUIDs of '$S'" \
+               "GUID filter|F5G_AWK=1|Could not filter the snapshot GUID list"; do
+        what="${f5g%%|*}"; rest="${f5g#*|}"; envs="${rest%%|*}"; diag="${rest#*|}"
+        d0=$(cat "$R186_LOG" 2>/dev/null | wc -l)
+        # shellcheck disable=SC2086
+        eval "export $envs"; f5g_run $eng f5g$eng -n -m "auto_"; unset F5G_DS F5G_AWK
+        d1=$(cat "$R186_LOG" 2>/dev/null | wc -l)
+        check "F5g $eng -n: $what fails -> rc 2, INCOMPLETE, the diagnostic, no PLAN=, no destroy, target as before" \
+              "2|1|1|0|0|moved_1" \
+              "$RC|$(printf '%s\n' "$OUT" | grep -c "^INCOMPLETE: ")|$([ "$(r186_said "$diag")" -gt 0 ] && echo 1 || echo 0)|$(printf '%s\n' "$OUT" | grep -c '^PLAN=')|$((d1 - d0))|$(snaps_of "$T")"
+        : > "$R186D/f5g.sends"
+        eval "export $envs"; export F5G_SENDLOG="$R186D/f5g.sends"
+        f5g_run $eng f5g$eng -e -m "auto_"; unset F5G_DS F5G_AWK F5G_SENDLOG
+        check "F5g $eng real run: $what fails -> rc != 0, the diagnostic, no zfs send, target as before" \
+              "1|1|0|moved_1" \
+              "$([ "$RC" -ne 0 ] && echo 1 || echo 0)|$([ "$(r186_said "$diag")" -gt 0 ] && echo 1 || echo 0)|$(wc -l < "$R186D/f5g.sends")|$(snaps_of "$T")"
+    done
+    # The reconcile path (-r -F), the target's GUID listing broken: the collision scan is
+    # incomplete (never an upgrade to a full resend), the dataset is refused, no destroy, no send.
+    # On main the failure was "null", a non-empty base for the collision scan.
+    : > "$R186D/f5g.sends"; d0=$(cat "$R186_LOG" 2>/dev/null | wc -l)
+    export F5G_DS="$T" F5G_SENDLOG="$R186D/f5g.sends"
+    f5g_run $eng f5g$eng -r -F -v 3 -e -m "auto_"; unset F5G_DS F5G_SENDLOG
+    d1=$(cat "$R186_LOG" 2>/dev/null | wc -l)
+    check "F5g $eng -r -F: target GUID listing fails -> rc != 0, NOT upgrading, no full resend, no destroy, no zfs send, target as before" \
+          "1|1|0|0|0|moved_1" \
+          "$([ "$RC" -ne 0 ] && echo 1 || echo 0)|$([ "$(r186_said 'could not complete -- NOT upgrading')" -gt 0 ] && echo 1 || echo 0)|$(r186_said 'Upgrading this run to a full')|$((d1 - d0))|$(wc -l < "$R186D/f5g.sends")|$(snaps_of "$T")"
+    f5g_run $eng f5g$eng -e -m "auto_"
+    check "F5g $eng: control -- the healthy real run sends auto_2 on the GUID-found base" "0|moved_1 auto_2" "$RC|$(snaps_of "$T")"
+done
 rm -rf "$R186D"
 unset R186_LOG R186_REAL
 

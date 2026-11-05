@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 2962d69e32702caa -->
+<!-- status-covers-digest: 037a7dbfe52f9e60 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -241,7 +241,9 @@
   F5: zdalna lista migawek bez `awk` po drugiej stronie, a od rundy 3 (REV-186, 2026-11-05,
   niewydane) także nieudany filtr lokalny i nieudana lista w skanie konfliktów `-n` to błąd:
   `-n` kończy się kodem 2 i `INCOMPLETE: <dataset>` na stderr, bez linii PLAN= (na `main`
-  te same awarie dawały rc 0 z PLAN=INCREMENTAL albo fałszywy konflikt); F6: `-m` jako dosłowny prefiks; F2: nieczytelny
+  te same awarie dawały rc 0 z PLAN=INCREMENTAL albo fałszywy konflikt); runda 4 (niewydane):
+  zapasowe szukanie wspólnej bazy po GUID (`get_snapshot_guids`) przy nieudanym `zfs list`, ssh albo
+  filtrze zwraca błąd, a nie pustą listę (na `main` zwracało `null`, czyli brak wspólnej bazy); F6: `-m` jako dosłowny prefiks; F2: nieczytelny
   czas utworzenia w `delsnaps` = bieg nieudany; F3: `-R` w `delsnaps` najpierw wylicza drzewo i nic nie
   kasuje przy niepełnej liście. pve9: `test/snapsend` 329/0 (runda 3: PASS=351 FAIL=0; na silnikach z `main` pada 14 nowych przypadków), `test/delsnaps` 94/0, `test/remote` 145/0;
   kontrole negatywne na silnikach z `main` padają (34 i 11 przypadków). Kampania `test/remote` z konta delegowanego

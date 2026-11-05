@@ -701,14 +701,41 @@ get_snapshot_guids() {
     local depth_option="-d 1"
     [ "${RECURSIVE:-0}" -eq 1 ] && depth_option=""
 
+    # REV-20261104-186 round 4: the list and the filter each have their status checked, as in
+    # get_sorted_snapshots. A pipe into awk used to return awk's 0 with no rows when `zfs
+    # list` or ssh failed, and find_common_snapshot read that as "no shared GUID" -> null.
+    # rc 1 = could not list (logged here); an empty list with rc 0 still means no snapshots.
+    local _out _rc
     if [ -n "$remote_host" ]; then
-        ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-            "zfs list -H -o name,guid -t snapshot -s creation $depth_option '$dataset' 2>/dev/null" \
-            | awk -F'\t' '{split($1,a,"@"); print a[2]"\t"$2}'
+        _out=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            "zfs list -H -o name,guid -t snapshot -s creation $depth_option '$dataset' 2>/dev/null")
+        _rc=$?
+        if [ $_rc -eq 255 ]; then
+            log 0 "Cannot reach $remote_user@$remote_host over ssh (exit 255) while listing the snapshot GUIDs of '$dataset' -- a CONNECTION-level failure (authentication, host key, network or DNS), NOT an empty dataset."
+            return 1
+        elif [ $_rc -ne 0 ]; then
+            log 0 "Could not list the snapshot GUIDs of '$dataset' on $remote_user@$remote_host (exit $_rc) -- treating this as a failure, not as an empty dataset."
+            return 1
+        fi
     else
-        zfs list -H -o name,guid -t snapshot -s creation $depth_option "$dataset" 2>/dev/null \
-            | awk -F'\t' '{split($1,a,"@"); print a[2]"\t"$2}'
+        _out=$(zfs list -H -o name,guid -t snapshot -s creation $depth_option "$dataset" 2>/dev/null) || {
+            log 0 "Could not list the snapshot GUIDs of '$dataset' (exit $?) -- treating this as a failure, not as an empty dataset."
+            return 1
+        }
     fi
+    [ -n "$_out" ] || return 0
+    local _l
+    while IFS= read -r _l; do
+        [ -z "$_l" ] && continue
+        case "$_l" in
+            *@*$'\t'?*) ;;
+            *) log 0 "The snapshot GUID list of '$dataset' contains a line that is not 'snapshot<TAB>guid' ('$_l') -- treating this as a failure, not as a list."; return 1 ;;
+        esac
+    done <<< "$_out"
+    awk -F'\t' '{split($1,a,"@"); print a[2]"\t"$2}' <<< "$_out" || {
+        log 0 "Could not filter the snapshot GUID list of '$dataset' (exit $?) -- treating this as a failure, not as a list."
+        return 1
+    }
 }
 
 ###############################################################################
