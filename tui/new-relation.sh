@@ -1384,7 +1384,7 @@ check_pruners() {
     return 1
 }
 
-step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = do szablonu
+step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = do szablonu, 4 = nie wyszło, nic nie zmieniono (z powrotem na podsumowanie)
     local rc
     while :; do
         geom
@@ -1492,7 +1492,9 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
                 local _st; _st=$(relation_state "$RNAME")
                 if [ -z "$_st" ]; then
                     result_box "$(T 'Nowa relacja: NIE UDAŁO SIĘ')" "$RC_RUN" "$TMPD/run.log" "" "$(Tv 'Relacja '\''$RNAME'\'' nie została założona.' '$RNAME' "$RNAME")"
-                    return 0
+                    # Nic nie zmieniono, więc odpowiedzi zostają: z powrotem na podsumowanie,
+                    # nie wyjście z kreatora i wszystko od nowa (test od zera 2026-11-05, T8).
+                    return 4
                 fi
                 result_box "$(T 'Nowa relacja: NIE UDAŁO SIĘ')" "$RC_RUN" "$TMPD/run.log" "" "$(Tv 'Relacja '\''$RNAME'\'' założona do połowy (stan: $ST).' '$RNAME' "$RNAME" '$ST' "$_st")"
                 cmd_oneline >"$HOME/new-relation-$RNAME.cmd" 2>/dev/null; echo >>"$HOME/new-relation-$RNAME.cmd"

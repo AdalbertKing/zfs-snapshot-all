@@ -4530,6 +4530,11 @@ NROUT=$(nr_run "0${T}backup
 ${NRT}0${T}wycofaj
 " NR_HALF=nomark NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); NRRC=$?
 H_CW="$(cat "$NR/wt.log")"
+# T8 (install test 2026-11-05): a failure that changed nothing returns to the summary
+# card with the answers kept, instead of ending the wizard (all answers from the start).
+t8=$(printf '%s\n' "$H_CW" | awk '/nie została założona/ && !f {f = NR} f && NR > f && /Nowa relacja -- podsumowanie/ {print "back"; exit}')
+[ "$t8" = back ] && ok "T8: a failure with nothing changed goes back to the summary card (answers kept)" \
+    || bad "T8: failure ends the wizard" "$(printf '%s\n' "$H_CW" | grep -n 'nie została\|podsumowanie' | cut -c1-120)"
 if [ "$H_A" -eq 1 ] && [ "$H_AD" -eq 1 ] && [ "$H_AC" -eq 0 ] && has "$H_AW" "założona do połowy (stan: pending_enroll)" && has "$H_AW" "stan pośredni"    && ! has "$H_AW" "nie została założona"    && [ "$H_B" -eq 2 ] && [ "$H_BD" -eq 0 ]    && has "$H_CW" "nie została założona" && ! has "$H_CW" "stan pośredni"; then
     ok "new-relation: skucha 11 -- porazka z rekordem: okno 'zalozona do polowy' + Wycofaj (delete-relation --yes) albo Ponow (ta sama komenda drugi raz); bez rekordu -- stare okno, bez menu"
 else
