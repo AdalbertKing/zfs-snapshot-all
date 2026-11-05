@@ -1577,7 +1577,7 @@ fi
 # F7 = URUCHOM TERAZ (wlasciciel 2026-10-17, jednolicie z F2/F6): bez potwierdzenia,
 # run-relation NAZWA, okno wyjscia.
 A="$(act down,F7)"
-if grep -q "run-relation lab-ct201$" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ] && ! has "$A" 'POTWIERDZENIE' && has "$A" 'WYJŚCIE: Relacja lab-ct201 -- kopia teraz'; then
+if grep -q "run-relation lab-ct201$" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ] && ! has "$A" 'POTWIERDZENIE' && has "$A" 'WYJŚCIE: Relacja lab-ct201 -- bieg teraz'; then
     ok "akcje: F7 na relacji = Uruchom teraz -- run-relation NAZWA od razu, bez potwierdzenia, okno wyjscia"
 else
     bad "akcje: F7 Uruchom teraz" "$(cat "$XL")" "$A"

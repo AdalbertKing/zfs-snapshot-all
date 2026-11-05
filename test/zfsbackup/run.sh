@@ -13764,13 +13764,13 @@ fi
 rm -rf "$PS/real-old" "$PS/real-empty" "$PS/real-file"
 # An old copy WITH an executable zfs-backup.sh but no .git (install test,
 # 2026-11-05): not a package -- the directory is busy. The same files with a
-# .git are the package.
+# .git are the package (and then nothing is reported as blocking: zfs-backup.sh, json).
 mkdir -p "$PS/real-oldpkg" "$PS/real-git/.git"
 printf '#!/bin/bash\n' > "$PS/real-oldpkg/zfs-backup.sh"; cp "$PS/real-oldpkg/zfs-backup.sh" "$PS/real-git/"
 chmod +x "$PS/real-oldpkg/zfs-backup.sh" "$PS/real-git/zfs-backup.sh"
 real_pkg() { SOURCE_REPO_DIR="$1" ps_run check-source real --json | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["package"]["ok"], repr(d["repo_dir_blocked"]))' 2>/dev/null; }
 r_op=$(real_pkg "$PS/real-oldpkg"); r_g=$(real_pkg "$PS/real-git")
-if [ "$r_op" = "False 'notempty'" ] && [ "$r_g" = "True 'notempty'" ]; then
+if [ "$r_op" = "False 'notempty'" ] && [ "$r_g" = "True ''" ]; then
     ok "preparesource: the real probe -- old scripts with zfs-backup.sh but no .git are NOT the package (busy dir); with .git they are"
 else
     bad "preparesource: real probe, old copy with zfs-backup.sh" "oldpkg=$r_op git=$r_g" "$(cat "$PS/err")"
