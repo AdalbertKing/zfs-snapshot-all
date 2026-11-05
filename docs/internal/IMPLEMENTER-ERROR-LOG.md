@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83, E85, E94, E109, E110.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83, E85, E94, E109, E110, E117 (an idle rerun read as the state the cron minute sees).*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75, E84 (2026-10-15, the E39 shape a third time), E90, E99 (2026-10-22, the E39 shape again, after `--refreeze`), E104 (2026-10-25, commit and PR behind a printed rc=1), E105 (2026-10-28, merged the Reviewer's #975 by a guessed PR number), E117 (2026-11-05, a CI wait on a PR that could not merge).*
+*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75, E84 (2026-10-15, the E39 shape a third time), E90, E99 (2026-10-22, the E39 shape again, after `--refreeze`), E104 (2026-10-25, commit and PR behind a printed rc=1), E105 (2026-10-28, merged the Reviewer's #975 by a guessed PR number), E118 (2026-11-05, a CI wait on a PR that could not merge).*
 
 ### R5 — Do not modify state something else is reading
 
@@ -108,7 +108,15 @@ wrote instead of what comes out of it.** A component with a thorough suite,
 wired into a caller with none, is an untested feature with a reassuring number
 attached.
 
-*Evidence: E13, E22, E57, E67, E72, E78, E79, E80, E97.*
+A shape that is easy to leave out: **size and concurrency.** A check over a
+command's output, tested on a three-line stub by one idle process, has said
+nothing about the full listing under twelve monitors started in the same cron
+second. And an alarm that vanished on a manual rerun is not "cause unknown,
+watch it": the rerun left out the condition the alarm ran under. Reproduce it
+under that condition (the same minute, every job of that minute at once) before
+it is parked.
+
+*Evidence: E13, E22, E57, E67, E72, E78, E79, E80, E97, E117.*
 
 ### R13 — Stage files by name, never by directory
 
@@ -2023,7 +2031,7 @@ install"), never the customer or the lab host. Nothing in the tree runs the scru
 a diff; before the push, grep `git diff` for the pattern that `release/publish.sh` applies to
 the exported copy.
 
-### E117 — waited for CI on a PR with a merge conflict (2026-11-05, R4)
+### E118 — waited for CI on a PR with a merge conflict (2026-11-05, R4)
 **2026-11-05, PR #1073.**
 
 *Genesis.* I pushed the response commit and started `wait-merge.sh` on the new head. Meanwhile
@@ -2037,6 +2045,51 @@ waiting, and nothing in the script reads it.
 *Rule.* R4: before starting a CI wait, read `pulls/<n>` and require `mergeable_state` other
 than `dirty`. On a conflict, merge `main` first; the generated views are regenerated, not
 merged by hand.
+
+### E117 — `printf | grep -q` under pipefail: a found root read as missing, passed tests and review (2026-11-05, R12, R2)
+**2026-11-05, U149, `check-snap-age.sh:615`, `delsnaps.sh:985` (numbering of `origin/main` before the fix).**
+
+*Genesis.* The -R walk checks were added on 2026-10-17 (`6bfb041f`, REV-20261017-152
+F4.2, monitor; that review is CLOSED) and 2026-11-04 (`1d45f870`, REV-186 F3, delsnaps; that review is
+still open) as
+`printf '%s\n' "$out" | grep -qxF -- "$ds"` (delsnaps: `$all_datasets`, `$base_ds`), in scripts that set `set -o pipefail`.
+`grep -q` exits at the first match, the root's own line; if `printf` still has lines
+to write, it takes SIGPIPE (141) and pipefail returns 141 for the whole pipeline: a
+root that IS there reads as missing. On pve0 (Dąbrowska) that made 39 false UNKNOWN
+("monitor BROKEN") from 11-04 11:30 to 11-05 08:00 on `hdd/lxc`, `rpool/data` and
+`hdd/backups/pve1/rpool/data`;
+on metropolis pve2 the same in delsnaps (`-R hdd/vm-disks`, 11-05 04:30 rc=1,
+nothing pruned). On 11-04, after two occurrences, U149 was parked as "observation,
+cause unknown" because a manual rerun gave 15/15 good.
+
+*Measurement.* pve0, account zfsbackup: one `zfs list -r` at a time, every 0.2 s over
+the 08:15 cron run: 0 misses. All twelve monitor commands of the account at once, 30
+rounds: 13 UNKNOWN out of 360. An instrumented copy logged each miss: rc 0, the full
+listing, the root on line 1. A bare loop `printf | grep -qxF` over a four-line
+`rpool/data` listing, six in parallel: `PIPESTATUS=141 0`; the same check through a
+here-string: 0 misses in 80 000. So printf was still writing after grep had left even on four
+lines; why bash splits that write was not established -- the measurement is the evidence.
+
+*Cause.* (1) Both suites fed the check stub listings of two to four lines from one
+idle process; the race needs the reader to leave while the writer still writes, so
+the tests could not fail. The negative shapes (empty, rootless, out of tree) were
+tested; the positive shape was tested only small. (2) Neither the implementation nor
+the two reviews asked how `grep -q` behaves on the right of a pipe in a pipefail
+script -- a known bash pitfall, in no checklist here. (3) The first two field
+occurrences were rerun by hand, alone, at idle: the condition the alarm ran under
+(twelve monitors in one second) was dropped, and the defect was parked.
+
+*Fix.* Both checks read the listing from a here-string (no pipe, no SIGPIPE). The
+discriminator: a complete walk over 64 KiB (more than a pipe buffer), where the race
+fires every time. Against `origin/main` (pve9): monitor 120/2, delsnaps 94/1, the new
+cases red; with the fix 122/0 and 95/0.
+
+*Rule.* R12, widened: size and concurrency are shapes, and an alarm that vanished on
+an idle rerun is reproduced under its own condition before it is parked. R2: an idle
+rerun is the other side of a boundary from the cron minute. The same shape (a pipeline
+ending in an early-exit reader: `grep -q`, `grep -m`, `head`, ...) stands in 72 places in files
+where pipefail is in effect (repo-greper inventory, 2026-11-05); they are not proven broken one
+by one, and they are a separate sweep with a static check.
 
 ### E116 — the digest again not refreshed after the last commit; the round-0 SHA had no CI run (2026-11-05, R6, repeat of E112/E114)
 **2026-11-05, PR #1072 and #1073, REV-20261104-187.**

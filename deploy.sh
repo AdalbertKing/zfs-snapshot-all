@@ -4789,7 +4789,10 @@ do_leave() {
         if rmdir "$gdir" 2>/dev/null; then
             log "leave: removed the pair-gate state directory $gdir"
         else
-            warn "leave: $gdir is not empty, so it was left in place -- it still holds state for '$label' (a disable marker, most likely). Look at it and remove it manually: ls -la $gdir"
+            # Named by what is there, not guessed (lab 2026-11-05): the same directory is
+            # also the state of a local relationship of that name, whose pause marker is
+            # `paused` -- the old "a disable marker, most likely" called that a disable.
+            warn "leave: $gdir is not empty, so it was left in place -- it holds: $(ls -A "$gdir" 2>/dev/null | tr '\n' ' ')('disabled' = this pair's gate disable; 'paused' = the pause of this host's own relationship '$label', which uses the same directory). Look before removing anything: ls -la $gdir"
         fi
     fi
     log "leave: '$label' fully torn down on this host. Nothing done on the collector -- see --unpair there."

@@ -161,7 +161,7 @@ set -o pipefail
 #   ./delsnaps.sh -n -G -R "hdd/backups" "" -H24 -D7 -W4 -M12 -Y3
 # (drop -n to actually delete once the dry-run output looks right)
 
-VERSION='v1.30'
+VERSION='v1.31'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -982,7 +982,9 @@ process_datasets_recursively() {
     all_datasets="${all_datasets//$'\r'/}"
     if [ "$walk_rc" -ne 0 ]; then
         walk_bad="the listing failed (rc=$walk_rc)"
-    elif ! printf '%s\n' "$all_datasets" | grep -qxF -- "$base_ds"; then
+    # A here-string, not `printf | grep -q`: under pipefail the SIGPIPE printf
+    # takes when grep -q leaves early made a found root read as missing (U149).
+    elif ! grep -qxF -- "$base_ds" <<< "$all_datasets"; then
         walk_bad="the listing does not contain the root itself, so it is not a complete walk"
     else
         while IFS= read -r child; do

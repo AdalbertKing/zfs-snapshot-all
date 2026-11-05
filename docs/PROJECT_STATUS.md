@@ -20,6 +20,15 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Fałszywy brak korzenia listy -R: UNKNOWN monitora i błąd czyszczenia (2026-11-05, U149, gałąź
+  `fix/u149-pipefail-sigpipe`; NIEWYDANE).** Monitor (`check-snap-age.sh -R`) i czyszczenie
+  (`delsnaps.sh -R`) sprawdzały korzeń listy przez `printf | grep -qxF` pod `set -o pipefail`; `grep -q`
+  kończy na linii korzenia, `printf` dostaje SIGPIPE, pipefail daje 141 i znaleziony korzeń wychodzi jako
+  brak. Skutek na produkcji: pve0 (Dąbrowska) 39 alarmów „monitor BROKEN” 11-04..05 na `hdd/lxc`,
+  `rpool/data`, `hdd/backups/pve1/rpool/data`; pve2 (metropolis) zadanie `prune (bookmarks)` 11-05 04:30 rc=1,
+  `hdd/vm-disks` niewyczyszczone. Teraz here-string; test: kompletna lista > 64 KiB (monitor F12, delsnaps
+  F3), przeciw `main` na pve9 czerwony (120/2, 94/1), z poprawką 122/0 i 95/0. Ten sam kształt (potok kończony
+  `grep -q`/`grep -m`/`head`) stoi w 72 miejscach plików z pipefail (inwentarz 2026-11-05) -- osobny przegląd. Wnioski: E117.
 - **Pierwsza instalacja, test na labie (2026-11-05, `23ae35ca..4e1fb203`; NIEWYDANE).** Trzecią paczkę
   sprawdzono na pve9, pve10 i pve11 z prawdziwym 404 (podstawione lokalne repo security z wersjami bez
   plików .deb). Potwierdzone na żywo: git w `prepare-source`, sudo przed pierwszą zmianą `--grant-quiesce`
@@ -43,8 +52,9 @@
   labu (pve10:pve11, pve9:pve11, pve11:pve10, migawki-a, migawki-b), hosty wróciły na wydanie `b48ae26c`
   bez hold. Lustrzana strona: `--leave` na pve11 usunął pusty `relationships/pve10`, czyli katalog klienta
   pve10 na tym kolektorze. Skutków nie ma: pauza odtwarza katalog (sprawdzone: pause, resume, 2 done). Jeśli
-  jednak klient jest wstrzymany, `--leave` zostawi ten katalog z ostrzeżeniem, które nazywa jego zawartość
-  „disable marker”, a to jest znacznik pauzy. Tego nie poprawiono.
+  jednak klient jest wstrzymany, `--leave` zostawia ten katalog. Ostrzeżenie nazywało wtedy znacznik pauzy
+  „disable marker”. Od `54c550a0` wypisuje zawartość katalogu i mówi, co znaczy `disabled`, a co `paused`
+  (test/restoregrant, czerwony na deploy.sh z main).
 
 - **Pierwsza instalacja, trzecia paczka (2026-11-05, `e31a6e80`, `49089baf`, `--uninstall`; NIEWYDANE).**
   (A) apt i 404: na Debianie 11 listy pakietów wskazywały pakiety .deb z bullseye-security (git deb11u5, sudo
@@ -202,7 +212,7 @@
   - Testy (pve9, `74e8f1c0`): `test/monitor` 120/0, `test/tui` 477/0, `test/localbackup` (tester) 184/0,
     `test/zfsbackup` 1067/6 (te same 6 środowiskowych co na main: mirrorguard x2, rev175 x4). Kontrole
     negatywne przeciw `main`: S10 (U164), „delrel U154” i „U161” padają na main.
-  - Z tej listy zostały: obserwacja U149 i decyzja właściciela U148. Maile (U157-U160) i drzewo celu
+  - Z tej listy zostały: U149 (przyczyna znana 2026-11-05, wpis na górze) i decyzja właściciela U148. Maile (U157-U160) i drzewo celu
     (U147/U155/U156) weszły później tego dnia i są w 1.0.10.
 
 - **Skucha 11 A-TASSA (2026-11-05, gałąź `fix/wizard-half-state`, niewydane): kreator po porażce

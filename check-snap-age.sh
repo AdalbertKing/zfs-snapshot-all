@@ -114,7 +114,7 @@ set -o pipefail
 #   ./check-snap-age.sh "rpool/data/vm-106-disk-0" "automated_hourly" 90m 3h
 #   ./check-snap-age.sh -R "hdd/backups/pve1" "automated_daily" 30h 48h
 
-VERSION='v2.9'
+VERSION='v2.10'
 
 EXIT_OK=0
 EXIT_WARNING=1
@@ -612,7 +612,10 @@ for entry in "${DATASETS[@]}"; do
         # and the root was just found to exist. An rc-0 answer without it (empty,
         # or children only) is not a walk this script can trust -- it used to
         # check no child and say nothing (F4.2). UNKNOWN, and nothing under it.
-        if ! printf '%s\n' "$out" | grep -qxF -- "$ds"; then
+        # A here-string, not `printf | grep -q`: grep -q leaves at the root's
+        # line, printf takes SIGPIPE on the rest, and pipefail turned a found
+        # root into 141 -- a false UNKNOWN under load (U149, pve0 2026-11-05).
+        if ! grep -qxF -- "$ds" <<< "$out"; then
             echo "UNKNOWN dataset=${rh:+$ru@$rh:}$ds -- the descendant list does not contain the root itself, so it is not a complete walk; none of the descendants was checked" >&2
             SAW_UNKNOWN=1
             continue
