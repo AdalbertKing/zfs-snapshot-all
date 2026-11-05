@@ -19,7 +19,7 @@
 # Czego czasownik odmawia, odmawia tu tak samo, tymi samymi słowami.
 #
 # HARMONOGRAM I RETENCJA (REV-20261104-187): tabela startuje z configu relacji
-# (show-tiers) i zapisuje jednym set-tiers -- każdy rodzaj relacji, migawki zdalne też.
+# (show-tiers) i zapisuje przez set-tiers -- każdy rodzaj relacji, migawki zdalne też.
 # Szablon czyta tylko "Użyj szablonu" (edit-relation --profile=).
 #
 # Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka.
@@ -43,15 +43,7 @@ case "${EDIT_DO:-}" in config|zapisz) FORCE_ACTION="$EDIT_DO"; DIRECT=1 ;; esac
 TMPD="$(mktemp -d)" || exit 1
 HNAME="relacja-$NAME"     # ukryty szablon tej relacji
 DONE=0
-# U136: szablon fastprune tej relacji zmieniany PRZED planem (plan go czyta) -- bez zapisu
-# zmian wraca, jak był: kopia sprzed zmiany albo (nowy) usunięty.
-FPNAME="relacja-$NAME-fastprune"; FP_DIRTY=0; FP_BAK=""; FP_FILE=""
-restore_fastprune() {
-    [ "$FP_DIRTY" -eq 1 ] && [ "$DONE" -ne 1 ] || return 0
-    if [ -n "$FP_BAK" ] && [ -n "$FP_FILE" ]; then cp -p "$FP_BAK" "$FP_FILE" 2>/dev/null
-    else "$ZB" delete-profile "$FPNAME" --yes >/dev/null 2>&1; fi
-}
-trap 'restore_fastprune; rm -rf "$TMPD"' EXIT
+trap 'rm -rf "$TMPD"' EXIT
 
 # st.tsv: stan, profil, profil źródła, peer, datasety, lustro, cel; prof.tsv: nazwa <TAB> opis (bez
 # ukrytych i pochodnych -src-); prof.json.tiers: szczeble do okna retencji źródła;
@@ -123,9 +115,9 @@ SRCHOST="$(host_name "$PEER" "$NAME")"; LDS_ARGS=("$PEER"); HOST="$SRCHOST"
 SRCNAME="$PEER"
 if [ "$PEER" = - ]; then SRCHOST="$(T 'tego hosta') ($(hostname -s 2>/dev/null || hostname))"; LDS_ARGS=(); HOST="$SRCHOST"; SRCNAME="$(hostname -s 2>/dev/null || hostname)"; fi
 [ "$CUR_P" = - ] && CUR_P=""; [ "$CUR_S" = - ] && CUR_S=""
-# U136: fastprune relacji -- raz, z zainstalowanego szablonu (plik bywa przepisany pod plan).
-FP_CUR_N=""; FP_CUR_BASE=""; P_FP=""
-if [ "${RMODE:-}" = snaponly ]; then _fp="$(fp_of "$CUR_P")"; [ -n "$_fp" ] && { FP_CUR_N="${_fp%% *}"; FP_CUR_BASE="${_fp#* }"; }; fi
+# U136 / REV-20261104-187 runda 3: krótka retencja źródła z CONFIGU relacji (fp_cfg, fastprune-lib).
+FP_CUR_N=""; P_FP=""
+if [ "${RMODE:-}" = snaponly ] && "$ZB" show-tiers "$NAME" --json >"$TMPD/fp.json" 2>/dev/null; then FP_CUR_N="$(fp_cfg "$TMPD/fp.json")"; fi
 fp_words() { if [ -n "$1" ] && [ "$1" != off ]; then Tv '$FASTPRUNE godz. -- wszystkie szczeble' '$FASTPRUNE' "$1"; else T 'nie'; fi; }
 # ADRES HOSTA (właściciel 2026-10-17): kolektor wyniesiony za VPN, źródło widać pod
 # innym IP. Jedno pole, jedno WYKONAJ, potem zwykłe `activate --host=NOWY
@@ -203,7 +195,6 @@ fi
 RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=0
 title() { T 'Zmień relację %s -- %s' "$NAME" "$2"; }
 cur_words() {   # słowa o obecnym szablonie celu
-    if [ -n "${FP_CUR_N:-}" ]; then echo "$FP_CUR_BASE -- $(Tv 'krótka retencja $FASTPRUNE h' '$FASTPRUNE' "$FP_CUR_N")"; return; fi
     if [ "$CUR_P" = "$HNAME" ]; then echo "$(T 'własne ustawienia relacji (tabela szczebli)')"; else echo "${CUR_P:-$(T '<nie zapisany>')}"; fi
 }
 
@@ -424,7 +415,7 @@ harm_flow() {
         P_TIERS=(${RARGS[@]+"${RARGS[@]}"} ${SARGS[@]+"${SARGS[@]}"}); cp "$TMPD/plan2.txt" "$TMPD/p_tiers.txt"
         P_RARGS=(${RARGS[@]+"${RARGS[@]}"})   # tabela celu otwarta drugi raz startuje od nich
         P_SARGS=(${SARGS[@]+"${SARGS[@]}"})
-        P_EDIT=()
+        P_EDIT=(); P_FP=""
         PROFILE="$SAVE_P"; CUR_S="$SAVE_S"
         return 0
     done
@@ -725,7 +716,7 @@ save_all() {
             echo
         fi
         if [ "${#P_EDIT[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(T '%s. Szablon: %s -> %s' "$k" "$(cur_words)" "$P_EDIT_WORDS")"; sed -n '3,$p' "$TMPD/p_edit.txt" | grep -v '^Komenda:' | plan_words | sed 's/^/   /'; echo; fi
-        if [ "${#P_TIERS[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(T '%s. Harmonogram i retencja (tabela):' "$k")"; sed -n '3,$p' "$TMPD/p_tiers.txt" | grep -v '^Komenda:' | plan_words | sed 's/^/   /'; echo; fi
+        if [ "${#P_TIERS[@]}" -gt 0 ]; then k=$((k + 1)); if [ -n "$P_FP" ]; then echo "$(T '%s. Krótka retencja źródła:' "$k")"; else echo "$(T '%s. Harmonogram i retencja (tabela):' "$k")"; fi; sed -n '3,$p' "$TMPD/p_tiers.txt" | grep -v '^Komenda:' | plan_words | sed 's/^/   /'; echo; fi
         if [ "${#P_TRANSFER[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(Tv '$k. Ustawienia silnika:' '$k' "$k")"; grep "^Relation '" "$TMPD/p_transfer.txt" | sed 's/^/   /'; echo; fi
         echo "$(T 'Komendy:')"
         [ -n "$P_HOST" ] && echo "  $(shq "$ZB") activate $NAME --host=$P_HOST --skip-final-catchup --yes"
@@ -813,7 +804,6 @@ while :; do
     _sz="$(cur_words)"
     _pw="$(awk -F'\t' -v n="$CUR_P" '$1==n{print $2; exit}' "$TMPD/prof.tsv" 2>/dev/null | sed -e "s/^$CUR_P  *//" -e 's/  */ /g')"
     [ -n "$_pw" ] && _sz="$_sz -- $_pw"
-    [ -n "$FP_CUR_N" ] && _sz="$(cur_words)"      # opis szablonu bazy, nie słowa ukrytej kopii
     [ "${#P_EDIT[@]}" -gt 0 ] && [ -z "$P_FP" ] && _sz="$(cur_words) -> $P_EDIT_WORDS $_zm"
     [ "${#P_RARGS[@]}" -gt 0 ] && _sz="$_sz, $(T tabela) $_zm"
     # U65 (uwaga 3: "Silnik: jak w configu -- nie wiadomo co"): wartości słowami, nie "jak w configu".
@@ -838,7 +828,7 @@ while :; do
         er_row srcret "$(T 'Retencja źródła')" "$_sr" "$([ "${#P_SARGS[@]}" -gt 0 ] && echo 1 || echo 0)" ;; esac
     # U136: fastprune migawek zdalnych -- N i szablon bazowy ze znacznika w opisie szablonu relacji.
     if [ "$SNAPONLY" -eq 1 ]; then
-        _fpv="$(fp_words "$FP_CUR_N")"; [ -n "$FP_CUR_BASE" ] && _fpv="$_fpv ($FP_CUR_BASE)"
+        _fpv="$(fp_words "$FP_CUR_N")"
         [ -n "$P_FP" ] && _fpv="$(fp_words "$FP_CUR_N") -> $(fp_words "$P_FP") $_zm"
         er_row fastprune "$(T 'Krótka retencja źródła')" "$_fpv" "$([ -n "$P_FP" ] && echo 1 || echo 0)"
     fi
@@ -988,42 +978,37 @@ while :; do
         PROFILE="$WT_OUT"; step=2; continue
     fi
     if [ "$step" -eq 1 ] && [ "$ACTION" = fastprune ]; then
-        # U136: N od nowa z szablonu BAZOWEGO (nie z obecnej kopii -- progi monitora zdjęte przy
-        # starym N wracają, gdy nowe N je obejmuje); puste = powrót do bazy, bez fastprune.
-        fp_ask "$FP_CUR_N" || continue 2
-        if [ -z "$FP_ANS" ]; then
-            if [ -z "$FP_CUR_BASE" ]; then              # nie było i nie ma -- cofnij czekającą zmianę
-                if [ -n "$P_FP" ]; then
-                    P_EDIT=(); P_FP=""
-                    [ "$FP_DIRTY" -eq 1 ] && [ -z "$FP_BAK" ] && "$ZB" delete-profile "$FPNAME" --yes >/dev/null 2>&1 && FP_DIRTY=0 && load_lists
-                fi
-                continue 2
-            fi
-            PROFILE="$FP_CUR_BASE"; step=2; continue
-        fi
-        if [ "$FP_ANS" = "$FP_CUR_N" ]; then             # z powrotem to, co zainstalowane
-            if [ -n "$P_FP" ]; then
-                P_EDIT=(); P_FP=""
-                [ "$FP_DIRTY" -eq 1 ] && [ -n "$FP_BAK" ] && cp -p "$FP_BAK" "$FP_FILE" && FP_DIRTY=0 && load_lists
+        # REV-20261104-187 runda 3: N zmienia CONFIG relacji przez set-tiers (retencja, czyszczenie
+        # i progi monitora tylko szczebli z migawkami); żaden szablon nie jest czytany ani pisany.
+        fp_ask "$FP_CUR_N" edit || continue 2
+        if [ -z "$FP_ANS" ] || [ "$FP_ANS" = "$FP_CUR_N" ]; then
+            if [ -n "$P_FP" ]; then P_TIERS=(); P_FP=""; fi     # cofnij czekającą zmianę N
+            if [ -z "$FP_ANS" ] && [ -n "$FP_CUR_N" ]; then
+                wt --title "$(T 'Krótka retencja źródła')" --msgbox "$(T 'Puste pole nie zmienia retencji. Inną retencję źródła ustawisz w Harmonogram -> Ręcznie (liczby szczebli) albo wybierając szablon.')" 10 "$W"
             fi
             continue 2
         fi
-        _base="${FP_CUR_BASE:-${CUR_P:-default}}"
-        if [ "$FP_DIRTY" -eq 0 ] && [ "$CUR_P" = "$FPNAME" ]; then
-            FP_FILE="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); print(next((p.get("file") or "" for p in d.get("profiles",[]) if p.get("name")==sys.argv[2]),""))' "$TMPD/prof.json" "$FPNAME" 2>/dev/null | tr -d '\r')"
-            [ -n "$FP_FILE" ] && [ -f "$FP_FILE" ] && cp -p "$FP_FILE" "$TMPD/fastprune.bak" && FP_BAK="$TMPD/fastprune.bak"
-            # Bez kopii przerwana zmiana nie miałaby czego przywrócić -- a usunięcie zabrałoby
-            # relacji jej szablon. Nic nie zmieniamy.
-            if [ -z "$FP_BAK" ]; then
-                wt --title "$(T 'Krótka retencja: szablonu nie zapisano')" --msgbox "$(Tv 'Nie mogę zrobić kopii obecnego szablonu $PROFILE -- nic nie zmieniono.' '$PROFILE' "$FPNAME")" 8 "$W"
-                continue 2
-            fi
+        "$ZB" show-tiers "$NAME" --json >"$TMPD/fp.json" 2>"$TMPD/fp.err" || {
+            wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(tail -3 "$TMPD/fp.err")" 10 "$W"; continue 2; }
+        mapfile -t RARGS < <(fp_ops "$TMPD/fp.json" "$FP_ANS")
+        if [ "${#RARGS[@]}" -eq 0 ]; then
+            wt --title "$(T 'Krótka retencja źródła')" --msgbox "$(T 'Relacja nie ma szczebla z migawkami -- nic do zmiany.')" 8 "$W"; continue 2
         fi
-        info "$(T 'Krótka retencja źródła')" "$(T 'Zapisuję ustawienia relacji...')"
-        fp_save "$_base" "$FP_ANS" "$FPNAME" "$NAME" || continue 2
-        FP_DIRTY=1
-        load_lists
-        PROFILE="$FPNAME"; step=2; continue
+        ARGV=("$ZB" set-tiers "$NAME" "${RARGS[@]}")
+        info "$T_CHG" "$(T 'Liczę plan (cały config przez generator)...')"
+        if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
+            wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)))" 12 "$W"
+            continue 2
+        fi
+        { echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione:')"; echo
+          sed -n '/^Relation .* -- tiers:/,/^plan only/p' "$TMPD/plan.txt" | grep -v '^plan only'
+          echo
+          grep -E '^ +[-+][0-9*]' "$TMPD/plan.txt" | grep -v 'check-snap-age' | head -40
+          echo
+          echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; } >"$TMPD/p_tiers.txt"
+        # Zmiana czeka na liście jak tabela szczebli ("Zapisz zmiany" wykona set-tiers); obowiązuje ostatnia.
+        P_TIERS=("${RARGS[@]}"); P_RARGS=(); P_SARGS=(); P_EDIT=(); P_FP="$FP_ANS"
+        continue 2
     fi
     if [ "$step" -eq 2 ] && [ "$SNAPONLY" -eq 1 ]; then
         # Bez okna "w źródle kopii": szablon relacji snaponly sam jest retencją źródła.
@@ -1136,7 +1121,7 @@ PYEOF
     : >"$TMPD/hand.txt"
     # U136: szablon fastprune przepisany pod ten plan -- porównanie z nim pokazałoby naszą własną
     # zmianę jako "ręczną"; ręczne zmiany configu sprawdza wtedy zwykła zmiana szablonu.
-    if [ "$FP_DIRTY" -eq 0 ] && "$ZB" edit-relation "$NAME" "--profile=$CUR_P" "--source-profile=${CUR_S#-}" --plan >"$TMPD/base.txt" 2>&1; then
+    if "$ZB" edit-relation "$NAME" "--profile=$CUR_P" "--source-profile=${CUR_S#-}" --plan >"$TMPD/base.txt" 2>&1; then
         "$PY" "$HERE/tui/hand-edits.py" "$TMPD/base.txt" "$NAME" >"$TMPD/hand.txt" 2>/dev/null || : >"$TMPD/hand.txt"
     fi
     if [ -s "$TMPD/hand.txt" ]; then
@@ -1148,9 +1133,7 @@ PYEOF
     # Szablon i tabela szczebli to dwie drogi do tego samego (sekcje od nowa) -- obowiązuje ostatnia.
     P_EDIT=("${ARGV[@]:3}"); cp "$TMPD/plan2.txt" "$TMPD/p_edit.txt"; P_TIERS=(); P_RARGS=(); P_SARGS=()
     P_EDIT_WORDS="$PROFILE"; [ "$PROFILE" = "$HNAME" ] && P_EDIT_WORDS="$(T 'własne ustawienia (tabela)')"
-    [ "$ACTION" = fastprune ] && P_EDIT_WORDS="${FP_CUR_BASE:-$PROFILE} -- $(fp_words "${FP_ANS:-off}")"
-    # U136: zmiana z wiersza Fastprune pokazuje się na nim (inaczej -- zwykły szablon -- nie)
-    P_FP=""; [ "$ACTION" = fastprune ] && P_FP="${FP_ANS:-off}"
+    P_FP=""
     continue 2
 done
 done

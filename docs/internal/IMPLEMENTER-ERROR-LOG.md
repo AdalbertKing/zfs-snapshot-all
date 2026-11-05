@@ -116,7 +116,7 @@ watch it": the rerun left out the condition the alarm ran under. Reproduce it
 under that condition (the same minute, every job of that minute at once) before
 it is parked.
 
-*Evidence: E13, E22, E57, E67, E72, E78, E79, E80, E97, E117.*
+*Evidence: E13, E22, E57, E67, E72, E78, E79, E80, E97, E117, E119.*
 
 ### R13 — Stage files by name, never by directory
 
@@ -2030,6 +2030,44 @@ not when writing a comment in the tree. The night's notes all used the customer'
 install"), never the customer or the lab host. Nothing in the tree runs the scrub pattern on
 a diff; before the push, grep `git diff` for the pattern that `release/publish.sh` applies to
 the exported copy.
+
+### E120 — the full battery three times inside one REV round (2026-11-05, CLAUDE.md "Batches, not rounds")
+**2026-11-05, REV-20261104-186 round 3, PR #1077.**
+
+*Genesis.* The night went on one REV. After each newly found hole (the partial `-r` conflict
+list, then the real run sending `-I <src>@`) I ran the whole circle again:
+- `test/snapsend` on pve9 three times, with two negative controls each;
+- `test/remote` as both accounts;
+- the twins bless and the refreeze;
+- a merge of `main`;
+- exact-head CI.
+Each circle took about an hour, and the next finding voided it. In the morning the Owner said
+the night was lost and ordered one full circle after all fixes, not after each.
+
+*Cause.* The 2026-11-03 rule "batches, not rounds" was applied to PRs, not to the fixes inside
+one REV. The holes were found by the text checker and by CI, late, because neither ran before
+the first circle.
+
+*Rule.* Collect first: run the text check on the response and read the diff as an enemy before
+the first circle. While collecting, check each fix only with `bash -n` and the new case cut out.
+Then run ONE full circle at the end of the batch. A hole found inside the circle goes on the
+list; unless it blocks, it rides the next batch.
+
+### E119 — an adjacent action left as "residual work" instead of fixed (2026-11-05, R12)
+**2026-11-05, REV-20261104-187 round 1 (response of 83602af7), carried through round 2 (5bc82496).**
+
+*Genesis.* Round 1 made the snaponly tier table config-only. Its own Remaining risk named
+"Krótka retencja źródła" as residual work: that action still wrote `relacja-<NAME>-fastprune`
+with `save-profile` and applied it with `edit-relation --profile`. The Reviewer's F1
+(`REV-20261104-187.md:215`) rejected that action.
+
+*Cause.* The fix covered the path the finding named (Harmonogram) and did not enumerate the
+other retention actions of the same window. The Owner's rule has one exception, a deliberate
+**Use template**, and I widened it to "a separate explicit action".
+
+*Rule.* R12, no new rule: the pass covered the one path the finding named. Applied to a
+config-authority fix, the response lists every action of the window that changes the same
+policy, with the CLI each one calls and whether it reads or writes a profile.
 
 ### E118 — waited for CI on a PR with a merge conflict (2026-11-05, R4)
 **2026-11-05, PR #1073.**
