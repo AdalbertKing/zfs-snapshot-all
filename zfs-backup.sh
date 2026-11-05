@@ -8677,9 +8677,18 @@ cmd_list_replicas() {
             *)          die "list-replicas: takes no positional arguments" ;;
         esac
     done
-    local resolver_user; resolver_user="$(cron_target_user)"
+    local resolver_user given="$config"; resolver_user="$(cron_target_user)"
     cron_context_resolve adopt "$config" "$resolver_user" "" ""
     config="$CRON_CTX_FILE"
+    # T11 (test od zera, 2026-11-05): a host whose only relation runs on a delegated
+    # account has no root config at all. That is "no replicas", as `status` says "no
+    # relations" with no clients directory -- not a FATAL the GUI counted as a reader
+    # that did not answer ("! no response: 1" on a fresh host). A --config= that names a
+    # missing file is still refused: that is a typo, not an empty host.
+    if [ ! -r "$config" ] && [ -z "$given" ] && [ ! -e "$config" ]; then
+        if [ "$as_json" -eq 1 ]; then printf '{"replicas":[]}\n'; else echo "no config at $config -- no replicas"; fi
+        return 0
+    fi
     [ -r "$config" ] || die "list-replicas: no readable config at $config"
 
     # Parsed with awk rather than sourced: a config is data, never a program.

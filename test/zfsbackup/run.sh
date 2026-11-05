@@ -14564,6 +14564,19 @@ if printf '%s' "$lr" | grep -q '"name":"pv"[^}]*"prefix":"-"'; then
 else
     bad "addreplica: list-replicas passive" "$lr"
 fi
+# T11 (test od zera, 2026-11-05): the only relation runs on a delegated account, so
+# root's default config does not exist. The GUI's reader got a FATAL and the header
+# said "! no response: 1" on a fresh host. No config is no replicas; a --config=
+# naming a missing file is still refused.
+lr=$( ( source "$ZFSBACKUP"; cron_context_resolve() { CRON_CTX_FILE="$PV/absent.conf"; }
+        cmd_list_replicas --json ) 2>&1 ); rc=$?
+lr2=$( ( source "$ZFSBACKUP"; cron_context_resolve() { CRON_CTX_FILE="$2"; }
+         cmd_list_replicas --json --config="$PV/absent.conf" ) 2>&1 ); rc2=$?
+if [ "$rc" -eq 0 ] && [ "$lr" = '{"replicas":[]}' ] && [ "$rc2" -ne 0 ] && printf '%s' "$lr2" | grep -q 'no readable config'; then
+    ok "T11: list-replicas with no default config is an empty list; a named missing --config= is still refused"
+else
+    bad "T11: list-replicas without a config" "default: rc=$rc $lr" "named: rc=$rc2 $lr2"
+fi
 rm -rf "$PV"
 # add-replica --exclude-child (owner note 13, 2026-10-09): the replica wizard uses
 # the relationship basket, exceptions included. They are -X in the section's flags,

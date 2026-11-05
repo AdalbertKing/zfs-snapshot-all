@@ -47,6 +47,14 @@ Wszystko w bashu, zadania chodzą z crona, a do codziennej pracy jest tekstowe G
 
    Do hosta źródłowego kolektor potrzebuje wstępu SSH jako root; pakiet na źródle kreator zainstaluje sam.
 
+   GUI startuje po angielsku. Po polsku: **F10** (ustawienia hosta), pozycja `language` = `pl`, albo
+
+   ```bash
+   zfs-backup settings set gui.language=pl --yes
+   ```
+
+   Komunikaty poleceń zostają po angielsku.
+
 3. Sprawdź po godzinie: **F2 Przebiegi** (co biegło i co pobiegnie, z błędami).
 
 ## Na co dzień
