@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 87d77645565a06d9 -->
+<!-- status-covers-digest: be57b313b377ffe5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -210,12 +210,14 @@
   zapisuje komendę w `~/new-relation-NAZWA.cmd` i daje: Wycofaj (`delete-relation NAZWA --yes`, tu i na
   źródle), Ponów (ta sama komenda, wznawia) albo Zostaw. Bez rekordu -- jak dotąd „nie została założona”.
   F3 przy `pending_enroll` radzi `seed NAZWA` (wcześniej `activate`, które odmawia); migawki zdalne -- `activate`.
-- **REV-20261104-187 (2026-11-05, #1072 + runda 1 w #1073, niewydane): retencja migawek
+- **REV-20261104-187 (2026-11-05, #1072 + runda 1 w #1073 + runda 2, niewydane): retencja migawek
   zdalnych z configu.** „Harmonogram i retencja” -> „Ręcznie...” relacji snaponly czyta szczeble z jej sekcji
   `[template:snaponly(_src)__NAZWA__*]` (`show-tiers`) i zapisuje jednym `set-tiers`: liczby, harmonogramy
   i zamrażanie (jedno pole na operację), a od rundy 1 także sposób liczenia (`--method`: wielkość litery
   w `retain` + `gfs`) oraz dodanie i usunięcie szczebla (`--add-tier`/`--drop-tier`: obie sekcje i wpisy
-  `use_template`; nowa rodzina nazwana jak sąsiednie). Usunięty szczebel zostawia swoje migawki na źródle.
+  `use_template`; nowa rodzina nazwana jak sąsiednie). Od rundy 2 lista `use_template` każdego
+  datasetu jest zmieniana na miejscu: dataset, który świadomie pomija szczebel, pomija go dalej, a usunięcie
+  jedynego szczebla datasetu jest odrzucane. Usunięty szczebel zostawia swoje migawki na źródle.
   Ukryty `relacja-<NAZWA>` nie wpływa na zmianę retencji istniejącej relacji. „Krótka retencja źródła”
   (U136) nadal ma własny szablon.
 - **REV-20261104-186 (2026-11-04, #1055, wydane w 1.0.10): błędy, które udawały

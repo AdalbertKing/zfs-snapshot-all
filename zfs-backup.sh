@@ -7517,15 +7517,47 @@ snaponly_section_remove() {   # <config> <exact header>: the section leaves the 
         { while (nb > 0) { print ""; nb-- } print }
         END { while (nb > 0) { print ""; nb-- } }' "$1" > "$tmp" && mv "$tmp" "$1"
 }
-# use_template of every [snaponly:]/[prune:] section of the relationship: <id> added (in
-# cadence order of the tiers given) or removed.
-snaponly_use_template_set() {   # <config> <name> <kind snaponly|prune> <tiers in order...>
-    local wf="$1" name="$2" kind="$3" h id ids=""; shift 3
+# use_template of each [snaponly:]/[prune:] section of the relationship, edited IN PLACE
+# (REV-20261104-187 round 2): membership is per dataset -- a section that deliberately
+# leaves a tier out keeps it out, the order and any other entry stay as they are.
+#   add:  T goes into every section that lacks it, before the first entry of this
+#         relationship with a coarser cadence (appended if there is none);
+#   drop: T leaves every section that has it. A section whose only tier is T is refused
+#         (rc 2, header in SNAPONLY_UT_LAST): it would be left taking or pruning nothing.
+snaponly_use_template_edit() {   # <config> <name> <kind snaponly|prune> <add|drop> <tier>
+    local wf="$1" name="$2" kind="$3" op="$4" t="$5" h cur e out rk ek done_
     local pre="snaponly__${name}__"; [ "$kind" = prune ] && pre="snaponly_src__${name}__"
-    for id in "$@"; do ids="${ids:+$ids,}$pre$id"; done
+    rk=$(tiers_cadence_rank "$t")
+    SNAPONLY_UT_LAST=""
     while IFS= read -r h; do
         [ -n "$h" ] || continue
-        set_or_remove_section_field "$wf" "$h" use_template "$ids" || return 1
+        cur=$(tiers_sec_field "$wf" "$h" use_template)
+        local -a list=(); IFS=',' read -r -a list <<< "$cur"
+        out=""; done_=0
+        case "$op" in
+            drop)
+                local hit=0
+                for e in "${list[@]}"; do
+                    e="${e#"${e%%[![:space:]]*}"}"; e="${e%"${e##*[![:space:]]}"}"
+                    [ -n "$e" ] || continue
+                    if [ "$e" = "$pre$t" ]; then hit=1; else out="${out:+$out,}$e"; fi
+                done
+                [ "$hit" -eq 1 ] || continue
+                [ -n "$out" ] || { SNAPONLY_UT_LAST="$h"; return 2; } ;;
+            add)
+                case ",$(printf '%s' "$cur" | tr -d ' \t')," in *",$pre$t,"*) continue ;; esac
+                for e in "${list[@]}"; do
+                    e="${e#"${e%%[![:space:]]*}"}"; e="${e%"${e##*[![:space:]]}"}"
+                    [ -n "$e" ] || continue
+                    if [ "$done_" -eq 0 ] && [ "${e#"$pre"}" != "$e" ]; then
+                        ek=$(tiers_cadence_rank "${e#"$pre"}")
+                        [ "$ek" -gt "$rk" ] && { out="${out:+$out,}$pre$t"; done_=1; }
+                    fi
+                    out="${out:+$out,}$e"
+                done
+                [ "$done_" -eq 1 ] || out="${out:+$out,}$pre$t" ;;
+        esac
+        set_or_remove_section_field "$wf" "$h" use_template "$out" || return 1
     done < <(snaponly_scope_sections "$wf" "$name" "$kind")
 }
 snaponly_show_tiers_json() {   # <config> <name> -> the "target":[...],"source":[] part of show-tiers --json
@@ -7606,8 +7638,12 @@ snaponly_tiers_apply_ops() {   # <config working copy> <name> <ops...> -> TIERS_
                 local -a kt=(); for t in "${tiers[@]}"; do [ "$t" = "$v" ] || kt+=("$t"); done; tiers=("${kt[@]}")
                 snaponly_section_remove "$wf" "[template:snaponly__${name}__$v]" || fail "could not remove the $v section"
                 snaponly_section_remove "$wf" "[template:snaponly_src__${name}__$v]" || fail "could not remove the $v source section"
-                snaponly_use_template_set "$wf" "$name" snaponly "${tiers[@]}" || fail "could not update use_template"
-                snaponly_use_template_set "$wf" "$name" prune "${tiers[@]}" || fail "could not update use_template"
+                local _k _r
+                for _k in snaponly prune; do
+                    snaponly_use_template_edit "$wf" "$name" "$_k" drop "$v"; _r=$?
+                    [ $_r -eq 2 ] && fail "$SNAPONLY_UT_LAST takes only the '$v' tier -- dropping it would leave that dataset with none. Give it another tier first, or remove the dataset from the relationship"
+                    [ $_r -eq 0 ] || fail "could not update use_template"
+                done
                 TIERS_CHANGES+=("$v: dropped (its snapshots stay on the source, no longer taken nor pruned)"); key="" ;;
             --add-tier=*|--add-src-tier=*)
                 case " ${tiers[*]} " in *" $v "*) fail "it already has the tier '$v'" ;; esac
@@ -7651,8 +7687,8 @@ snaponly_tiers_apply_ops() {   # <config working copy> <name> <ops...> -> TIERS_
                     case "$sg" in yes|true|1) echo "	gfs            = yes" ;; esac
                 } >> "$wf"
                 mapfile -t tiers < <(snaponly_cfg_tiers "$wf" "$name")
-                snaponly_use_template_set "$wf" "$name" snaponly "${tiers[@]}" || fail "could not update use_template"
-                snaponly_use_template_set "$wf" "$name" prune "${tiers[@]}" || fail "could not update use_template"
+                snaponly_use_template_edit "$wf" "$name" snaponly add "$v" || fail "could not update use_template"
+                snaponly_use_template_edit "$wf" "$name" prune add "$v" || fail "could not update use_template"
                 TIERS_CHANGES+=("$v: added (keeps $keepn, family $fam)")
                 key="$v"; hs="[template:snaponly__${name}__$v]"; hp="[template:snaponly_src__${name}__$v]" ;;
             *) fail "unknown change '$op'" ;;

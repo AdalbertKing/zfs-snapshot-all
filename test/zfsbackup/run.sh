@@ -15695,7 +15695,7 @@ mkdir -p "$ED/stale-profiles"
 printf '[template:keep_yearly]\n\tsend_schedule = 5 5 1 1 *\n\tprefix = automated_yearly_\n\tretain = -Y99\n' > "$ED/stale-profiles/relacja-rr.conf"
 so_case() {   # <profile root> <ops...> -> the result in $ED/vt.conf, its cron in $ED/vt.cron; rc of the verb
     local pr="$1"; shift
-    cp "$RR/edited.conf" "$ED/vt.conf"
+    cp "${SO_BASE:-$RR/edited.conf}" "$ED/vt.conf"
     SO_PR="$pr" so_st_run "$@" --yes > "$ED/vt.out" 2>&1 || return 1
     bash "$REPO/gen-cron.sh" -c "$ED/vt.conf" > "$ED/vt.cron" 2>&1
 }
@@ -15735,6 +15735,63 @@ if [ -z "$so_r" ]; then
     ok "REV-187 r1 set-tiers on snaponly: --method gfs/age, --drop-tier, --add-tier work from the config, render through gen-cron, keep the hand edits; a stale relacja-rr template changes nothing"
 else
     bad "REV-187 r1 set-tiers method/add/drop on snaponly" "$so_r"
+fi
+# REV-20261104-187 round 2: tier membership is PER DATASET. hdd/so/b leaves daily out of both
+# its use_template lists (an installed, deliberate choice); adding yearly and dropping weekly
+# must edit each list in place -- b stays without daily, a keeps it -- and the cron follows.
+# Round 1 rewrote every list from the relation's tiers, giving daily back to b.
+so_narrow() {   # <in> <out> <tier...>: hdd/so/b leaves these tiers out of both its lists
+    local i="$1" o="$2"; shift 2
+    awk -v drop=" $* " '
+        /^\[/ { inb = (index($0, "[snaponly:") == 1 || index($0, "[prune:") == 1) && $0 ~ /hdd\/so\/b\]$/ }
+        inb && /^[ \t]*use_template[ \t]*=/ {
+            n = split(substr($0, index($0, "=") + 1), a, ","); o = ""
+            for (k = 1; k <= n; k++) { g = a[k]; gsub(/[ \t]/, "", g); t = g; sub(/.*__/, "", t)
+                if (index(drop, " " t " ") == 0) o = o (o == "" ? "" : ",") g }
+            sub(/=.*/, "= " o) }
+        { print }' "$i" > "$o"
+}
+f_ut() { tiers_sec_field "$ED/vt.conf" "$(grep -E "^\[$1:.*$2\]\$" "$ED/vt.conf" | head -1)" use_template; }
+so_narrow "$RR/edited.conf" "$ED/narrow.conf" daily
+so_m=""
+grep -E '^\[(snaponly|prune):.*hdd/so/b\]$' "$ED/narrow.conf" | wc -l | grep -qx 2 || so_m="$so_m [fixture: no two hdd/so/b sections]"
+[ "$(tiers_sec_field "$ED/narrow.conf" "$(grep -E '^\[snaponly:.*hdd/so/b\]$' "$ED/narrow.conf")" use_template)" = "snaponly__rr__hourly,snaponly__rr__weekly,snaponly__rr__monthly" ] \
+    || so_m="$so_m [fixture: b's snaponly list is $(tiers_sec_field "$ED/narrow.conf" "$(grep -E '^\[snaponly:.*hdd/so/b\]$' "$ED/narrow.conf")" use_template)]"
+so_b_daily() { grep 'automated_daily_' "$ED/vt.cron" | grep -c 'hdd/so/b'; }
+so_a_daily() { grep 'automated_daily_' "$ED/vt.cron" | grep -c 'hdd/so/a'; }
+if SO_BASE="$ED/narrow.conf" so_case "$ED/no-profiles" --add-tier=yearly --tier=yearly --keep=3; then
+    [ "$(f_ut snaponly hdd/so/b)" = "snaponly__rr__hourly,snaponly__rr__weekly,snaponly__rr__monthly,snaponly__rr__yearly" ] || so_m="$so_m [add: b snaponly=$(f_ut snaponly hdd/so/b)]"
+    [ "$(f_ut prune hdd/so/b)" = "snaponly_src__rr__hourly,snaponly_src__rr__weekly,snaponly_src__rr__monthly,snaponly_src__rr__yearly" ] || so_m="$so_m [add: b prune=$(f_ut prune hdd/so/b)]"
+    [ "$(f_ut snaponly hdd/so/a)" = "snaponly__rr__hourly,snaponly__rr__daily,snaponly__rr__weekly,snaponly__rr__monthly,snaponly__rr__yearly" ] || so_m="$so_m [add: a snaponly=$(f_ut snaponly hdd/so/a)]"
+    [ "$(so_b_daily)/$(so_a_daily)" = "0/$(grep 'automated_daily_' "$ED/vt.cron" | grep -c .)" ] && [ "$(so_a_daily)" -ge 1 ] || so_m="$so_m [add: daily cron b/a = $(so_b_daily)/$(so_a_daily)]"
+    grep 'automated_yearly_' "$ED/vt.cron" | grep -q 'hdd/so/b' || so_m="$so_m [add: no yearly cron for b]"
+    grep -q 'automated_hourly_" -H240$' "$ED/vt.cron" && grep -q '^43 4 \* \* \* .*snapget.sh -s -m "automated_daily_"' "$ED/vt.cron" || so_m="$so_m [add: hand edits]"
+else so_m="$so_m [add refused: $(tail -2 "$ED/vt.out")]"; fi
+cp "$ED/vt.conf" "$ED/vt.nostale"
+if SO_BASE="$ED/narrow.conf" so_case "$ED/stale-profiles" --add-tier=yearly --tier=yearly --keep=3; then
+    diff <(grep -v monitor_since "$ED/vt.conf") <(grep -v monitor_since "$ED/vt.nostale") >/dev/null || so_m="$so_m [add: a stale template changed the result]"
+else so_m="$so_m [add+stale refused]"; fi
+if SO_BASE="$ED/narrow.conf" so_case "$ED/no-profiles" --drop-tier=weekly; then
+    [ "$(f_ut snaponly hdd/so/b)" = "snaponly__rr__hourly,snaponly__rr__monthly" ] || so_m="$so_m [drop: b snaponly=$(f_ut snaponly hdd/so/b)]"
+    [ "$(f_ut prune hdd/so/b)" = "snaponly_src__rr__hourly,snaponly_src__rr__monthly" ] || so_m="$so_m [drop: b prune=$(f_ut prune hdd/so/b)]"
+    [ "$(f_ut snaponly hdd/so/a)" = "snaponly__rr__hourly,snaponly__rr__daily,snaponly__rr__monthly" ] || so_m="$so_m [drop: a snaponly=$(f_ut snaponly hdd/so/a)]"
+    [ "$(so_b_daily)" = 0 ] && [ "$(so_a_daily)" -ge 1 ] && ! grep -q 'automated_weekly_' "$ED/vt.cron" || so_m="$so_m [drop: cron daily b/a $(so_b_daily)/$(so_a_daily), weekly $(grep -c 'automated_weekly_' "$ED/vt.cron")]"
+else so_m="$so_m [drop refused: $(tail -2 "$ED/vt.out")]"; fi
+cp "$ED/vt.conf" "$ED/vt.nostale"
+if SO_BASE="$ED/narrow.conf" so_case "$ED/stale-profiles" --drop-tier=weekly; then
+    cmp -s "$ED/vt.conf" "$ED/vt.nostale" || so_m="$so_m [drop: a stale template changed the result]"
+else so_m="$so_m [drop+stale refused]"; fi
+# A dataset whose ONLY tier is dropped is refused; the installed config stays byte for byte.
+so_narrow "$RR/edited.conf" "$ED/only.conf" daily weekly monthly
+if SO_BASE="$ED/only.conf" so_case "$ED/no-profiles" --drop-tier=hourly; then
+    so_m="$so_m [only-tier drop was accepted]"
+else
+    grep -q "takes only the 'hourly' tier" "$ED/vt.out" && cmp -s "$ED/vt.conf" "$ED/only.conf" || so_m="$so_m [only-tier: $(tail -1 "$ED/vt.out")]"
+fi
+if [ -z "$so_m" ]; then
+    ok "REV-187 r2 set-tiers on snaponly: --add-tier/--drop-tier edit each dataset's use_template in place -- hdd/so/b keeps daily out (config and cron), hdd/so/a keeps it, hand edits stay, a stale template changes nothing, dropping a dataset's only tier is refused"
+else
+    bad "REV-187 r2 per-dataset tier membership" "$so_m"
 fi
 # EXPORT / IMPORT (owner campaign 2026-10-18: export refused "not supported yet").
 # The replay is add-client --snaponly with the host and the source datasets, then
