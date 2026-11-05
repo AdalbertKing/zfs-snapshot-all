@@ -1781,6 +1781,7 @@ if [ -n "${F5C_EX:-}" ] && { [ "$*" = "list -H -o name -- $F5C_EX" ] || [ "$*" =
     echo "cannot open '$F5C_EX': permission denied" >&2; exit 1
 fi
 if [ "$1" = destroy ]; then echo "destroy $*" >> "$R186_LOG"; fi
+if [ "$1" = send ] && [ -n "${F5C_SENDLOG:-}" ]; then echo "send $*" >> "$F5C_SENDLOG"; fi
 exec "$R186_REAL" "$@"
 SHIM
 cat > "$R186D/f5cbin/awk" <<'SHIM'
@@ -1827,6 +1828,16 @@ for eng in send get; do
               "2|1|1|0|0|$want_calls|0|auto_1" \
               "$RC|$(printf '%s\n' "$OUT" | grep -c "^INCOMPLETE: ")|$([ "$(r186_said "$diag")" -gt 0 ] && echo 1 || echo 0)|$(f5c_plans)|$(printf '%s\n' "$OUT" | grep -c "^$T@")|$calls|$((d1 - d0))|$(snaps_of "$T")"
     done
+
+    # The REAL run, the same unanswerable target: no base and no first copy -- no zfs send at
+    # all, the diagnostic, rc != 0 (round 3 before this fix sent `-I <src>@` with an empty base).
+    zfs snapshot "$S@auto_2"; : > "$R186D/f5c.sends"
+    export F5C_EX="$T" F5C_SENDLOG="$R186D/f5c.sends"; p0="$PATH"; PATH="$R186D/f5cbin:$PATH"
+    r186_run $eng f5c$eng -e -m "auto_"; PATH="$p0"; unset F5C_EX F5C_SENDLOG
+    check "F5c $eng: real run, target existence check (permission denied) -> rc != 0, the diagnostic, no zfs send, target as before" \
+          "1|1|0|auto_1" \
+          "$([ "$RC" -ne 0 ] && echo 1 || echo 0)|$([ "$(r186_said "could not be compared")" -gt 0 ] && echo 1 || echo 0)|$(wc -l < "$R186D/f5c.sends")|$(snaps_of "$T")"
+    zfs destroy "$S@auto_2"
 
     # -r: the parent's real conflict is found, then the child's listing fails. The failed
     # dataset prints NO conflict line (round 3 printed the parent's half of the list).

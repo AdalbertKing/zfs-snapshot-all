@@ -1548,9 +1548,10 @@ process_dataset() {
     # any target with different retention.
     if [ $RECONCILE -eq 1 ] && [ $RECURSIVE -eq 1 ] && [ $FORCE_FULL_SEND -ne 1 ]; then
         local reconcile_common
-        reconcile_common=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host")
+        reconcile_common=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host") || reconcile_common=""
         NAME_COLLISIONS=()
-        if ! find_recursive_name_collisions "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host" "$reconcile_common"; then
+        # An unanswered common-snapshot question leaves the scan incomplete, as below.
+        if [ -z "$reconcile_common" ] || ! find_recursive_name_collisions "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host" "$reconcile_common"; then
             # REV-20261104-186 F4: an incomplete scan proves nothing -- never upgrade on it.
             log 1 "Reconciling (-F): the collision scan of '$tgt_dataset' could not complete -- NOT upgrading to a full re-pull; the incremental path stays"
             NAME_COLLISIONS=()
@@ -1802,7 +1803,11 @@ process_dataset() {
             fi
         else
             local common_snapshot
-            common_snapshot=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host")
+            # REV-186 round 3: a target that cannot be asked is no base and no first copy.
+            common_snapshot=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host") || {
+                log 0 "The snapshots of '$src_dataset' and '$tgt_dataset' could not be compared -- NO transfer for this dataset (a failure, not a first copy)."
+                return 1
+            }
         fi
     fi
 
