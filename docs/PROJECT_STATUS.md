@@ -20,7 +20,7 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **T8, T10, T11 naprawione i sprawdzone na labie (2026-11-05, gałąź `fix/t10-t11`; NIEWYDANE).** Sprawdzone na pve11
+- **T8, T10, T11 naprawione i sprawdzone na labie (2026-11-05, gałąź `fix/t10-t11`; wydane w 1.0.11).** Sprawdzone na pve11
   (kolektor) i pve9b (migawki zdalne):
   (T10) dataset dodany do relacji migawek zdalnych, bez migawek, miał w wierszu „aktualne” -- zakres
   `konto@host:dataset` nie pasował do linii monitora; teraz „czeka na pierwszy termin”. Szczebel całej
@@ -47,7 +47,7 @@
   O9 -- panel F3: szczebel powtórzony przez dwie grupy monitorów ma podpis grupy (np. `hourly data+2`).
   Zostaje: w oknach `--scrolltext` Enter nie zamyka (fokus na tekście, Tab+Enter) -- zachowanie whiptaila,
   nie zmienione; T12 odłożone (wpis niżej).
-- **Paczka po teście od zera i U149 (2026-11-05, gałąź `fix/batch-zero-test`; NIEWYDANE).** Poprawione
+- **Paczka po teście od zera i U149 (2026-11-05, gałąź `fix/batch-zero-test`; wydane w 1.0.11).** Poprawione
   wady T1-T9 z testu pierwszej instalacji na labie:
   (T1) `check-source` uznaje katalog za pakiet tylko z `.git`; stary katalog bez `.git` daje okno
   „Katalog pakietu zajęty”;
@@ -74,7 +74,7 @@
   `[-]`) -- token `--recursive=no` w linii crona zmieniłby tożsamość każdej linii nierekurencyjnej i
   `hostscripts/capacity-guard.sh` by go odrzucił; T10, T11 -- wpis wyżej.
 - **Fałszywy brak korzenia listy -R: UNKNOWN monitora i błąd czyszczenia (2026-11-05, U149, gałąź
-  `fix/u149-pipefail-sigpipe`; NIEWYDANE).** Monitor (`check-snap-age.sh -R`) i czyszczenie
+  `fix/u149-pipefail-sigpipe`; wydane w 1.0.11).** Monitor (`check-snap-age.sh -R`) i czyszczenie
   (`delsnaps.sh -R`) sprawdzały korzeń listy przez `printf | grep -qxF` pod `set -o pipefail`; `grep -q`
   kończy na linii korzenia, `printf` dostaje SIGPIPE, pipefail daje 141 i znaleziony korzeń wychodzi jako
   brak. Skutek na produkcji: pve0 (Dąbrowska) 39 alarmów „monitor BROKEN” 11-04..05 na `hdd/lxc`,
@@ -82,7 +82,7 @@
   `hdd/vm-disks` niewyczyszczone. Teraz here-string; test: kompletna lista > 64 KiB (monitor F12, delsnaps
   F3), przeciw `main` na pve9 czerwony (120/2, 94/1), z poprawką 122/0 i 95/0. Ten sam kształt (potok kończony
   `grep -q`/`grep -m`/`head`) stoi w 72 miejscach plików z pipefail (inwentarz 2026-11-05) -- przegląd zrobiony w paczce `fix/batch-zero-test` (wpis wyżej, U149-b). Wnioski: E117.
-- **Pierwsza instalacja, test na labie (2026-11-05, `23ae35ca..4e1fb203`; NIEWYDANE).** Trzecią paczkę
+- **Pierwsza instalacja, test na labie (2026-11-05, `23ae35ca..4e1fb203`; wydane w 1.0.11).** Trzecią paczkę
   sprawdzono na pve9, pve10 i pve11 z prawdziwym 404 (podstawione lokalne repo security z wersjami bez
   plików .deb). Potwierdzone na żywo: git w `prepare-source`, sudo przed pierwszą zmianą `--grant-quiesce`
   i pigz w `check_dep` doszły do wersji z głównego archiwum; `--uninstall --yes` usunął wszystko z planu,
@@ -109,7 +109,7 @@
   „disable marker”. Od `54c550a0` wypisuje zawartość katalogu i mówi, co znaczy `disabled`, a co `paused`
   (test/restoregrant, czerwony na deploy.sh z main).
 
-- **Pierwsza instalacja, trzecia paczka (2026-11-05, `e31a6e80`, `49089baf`, `--uninstall`; NIEWYDANE).**
+- **Pierwsza instalacja, trzecia paczka (2026-11-05, `e31a6e80`, `49089baf`, `--uninstall`; wydane w 1.0.11).**
   (A) apt i 404: na Debianie 11 listy pakietów wskazywały pakiety .deb z bullseye-security (git deb11u5, sudo
   deb11u4), których security.debian.org już nie podawał, więc każda próba apt kończyła się błędem.
   Ten sam pakiet z głównego archiwum instalował się bez problemu. `apt_install_with_fallback` w `deploy.sh` i zdalna instalacja
@@ -133,7 +133,7 @@
   `--uninstall` na pve11 (odmowa z listą relacji, crontab bez zmian); `deploy.sh --check-only` z drzewa gałęzi na
   pve10 i pve11 (oba z kontem delegowanym): `[ok] sudo`, jedyny problem to bramka par różna od checkoutu (hosty na 1.0.10). NIE na żywo: `--uninstall --yes`
   na prawdziwym hoście i instalacja apt przy prawdziwym 404.
-- **Pierwsza instalacja, druga paczka (2026-11-04, `41a7ce62` + `77e758be`, NIEWYDANE).** Też z pierwszej
+- **Pierwsza instalacja, druga paczka (2026-11-04, `41a7ce62` + `77e758be`, wydane w 1.0.11).** Też z pierwszej
   instalacji pary PVE 7.4. (A) `--grant-quiesce` na źródle bez sudo (domyślny Proxmox go nie ma):
   `deploy.sh` instalował sudo dopiero w `--commit-scope`, po joinie i grancie replikacji, apt tam
   zawiódł i para została wpół zapisana. Teraz, przy `--grant-quiesce`, wczesna bramka
@@ -167,7 +167,7 @@
   Zostają do decyzji właściciela (pozycje #10, #11, #13, #14 listy z tego wdrożenia): retencja poza
   configiem, transakcja kreatora, deinstalacja pakietu.
 
-- **Pierwsza instalacja: git i stary katalog (2026-11-04, `269dbe0d` + `203260d7`, NIEWYDANE).** Wyszło przy
+- **Pierwsza instalacja: git i stary katalog (2026-11-04, `269dbe0d` + `203260d7`, wydane w 1.0.11).** Wyszło przy
   wdrożeniu A-TASSA (PVE 7.4). (1) Źródło bez gita: `prepare-source` odmawiał, choć miał kanał root.
   Teraz sonda zgłasza też `apt-get`, plan pokazuje `apt-get install -y git`, a `--yes` instaluje go
   przed klonem; gdy pierwsza próba zawiedzie, `apt-get update` i druga próba. Gdy apt zawiedzie,
@@ -187,7 +187,7 @@
   labu nie jest bez gita). Polecenie apt w kształcie wysyłanym przez czasownik dało rc 0 na pve11, gdzie
   git już był. Niepotwierdzone i poza tą zmianą: 404 dla `git` deb11u5 z bullseye-security na A-TASSA.
 
-- **`off: command not found` przy świeżej instalacji (2026-11-04, `e0b6c64d`, NIEWYDANE).** Heredok
+- **`off: command not found` przy świeżej instalacji (2026-11-04, `e0b6c64d`, wydane w 1.0.11).** Heredok
   `/etc/zfs-alert.conf` w `deploy.sh` jest niecytowany celowo (rozwija `${ALERT_MODE}` i resztę), a
   komentarz miał `off` w backtickach: bash wykonywał `off`, a zapisany plik tracił to słowo (zmierzone
   na pve1 A-TASSA, 1.0.10). Backticki zacytowane. Dotyczy tylko nowych instalacji; istniejący
@@ -268,12 +268,12 @@
   - Z tej listy zostały: U149 (przyczyna znana 2026-11-05, wpis na górze) i decyzja właściciela U148. Maile (U157-U160) i drzewo celu
     (U147/U155/U156) weszły później tego dnia i są w 1.0.10.
 
-- **Skucha 11 A-TASSA (2026-11-05, gałąź `fix/wizard-half-state`, niewydane): kreator po porażce
+- **Skucha 11 A-TASSA (2026-11-05, gałąź `fix/wizard-half-state`, wydane w 1.0.11): kreator po porażce
   z rekordem.** Gdy instalacja padnie po zapisie rekordu relacji, okno mówi „założona do połowy (stan: X)”,
   zapisuje komendę w `~/new-relation-NAZWA.cmd` i daje: Wycofaj (`delete-relation NAZWA --yes`, tu i na
   źródle), Ponów (ta sama komenda, wznawia) albo Zostaw. Bez rekordu -- jak dotąd „nie została założona”.
   F3 przy `pending_enroll` radzi `seed NAZWA` (wcześniej `activate`, które odmawia); migawki zdalne -- `activate`.
-- **REV-20261104-187 (2026-11-05, #1072 + runda 1 w #1073 + runda 2 w #1079 + runda 3, niewydane): retencja migawek
+- **REV-20261104-187 (2026-11-05, #1072 + runda 1 w #1073 + runda 2 w #1079 + runda 3, wydane w 1.0.11): retencja migawek
   zdalnych z configu.** „Harmonogram i retencja” -> „Ręcznie...” relacji snaponly czyta szczeble z jej sekcji
   `[template:snaponly(_src)__NAZWA__*]` (`show-tiers`) i zapisuje jednym `set-tiers`: liczby, harmonogramy
   i zamrażanie (jedno pole na operację), a od rundy 1 także sposób liczenia (`--method`: wielkość litery
@@ -292,31 +292,33 @@
   kopią jest warunkiem „fail-closed” (`list_protected_snaps`); F4 (P1): skan kolizji `-F` mapuje
   potomków po pełnej ścieżce (`collision_scan_pairs`), niepełny skan nie podnosi do pełnej kopii;
   F5: zdalna lista migawek bez `awk` po drugiej stronie, a od rundy 3 (REV-186, 2026-11-05,
-  niewydane) także nieudany filtr lokalny i nieudana lista w skanie konfliktów `-n` to błąd:
+  wydane w 1.0.11) także nieudany filtr lokalny i nieudana lista w skanie konfliktów `-n` to błąd:
   `-n` kończy się kodem 2 i `INCOMPLETE: <dataset>` na stderr, bez linii PLAN= (na `main`
-  te same awarie dawały rc 0 z PLAN=INCREMENTAL albo fałszywy konflikt); runda 4 (niewydane):
+  te same awarie dawały rc 0 z PLAN=INCREMENTAL albo fałszywy konflikt); runda 4 (wydane w 1.0.11):
   zapasowe szukanie wspólnej bazy po GUID (`get_snapshot_guids`) przy nieudanym `zfs list`, ssh albo
   filtrze zwraca błąd, a nie pustą listę (na `main` zwracało `null`, czyli brak wspólnej bazy); runda 5: to samo z listą GUID po stronie zdalnej (cel push, źródło pull) przez atrapę ssh, test/snapsend PASS=397 FAIL=0, na silnikach sprzed rundy 4 pada 32; F6: `-m` jako dosłowny prefiks; F2: nieczytelny
   czas utworzenia w `delsnaps` = bieg nieudany; F3: `-R` w `delsnaps` najpierw wylicza drzewo i nic nie
   kasuje przy niepełnej liście. pve9: `test/snapsend` 329/0 (runda 3: PASS=351 FAIL=0; na silnikach z `main` pada 14 nowych przypadków), `test/delsnaps` 94/0, `test/remote` 145/0;
   kontrole negatywne na silnikach z `main` padają (34 i 11 przypadków). Kampania `test/remote` z konta delegowanego
   `zfsbackup` (pve9 -> pve9b): 145/0, jeden SKIP (G3, środowisko).
-- **Wydanie bieżące: v1.0.10 (zfsbackup `b48ae26`, tag `v1.0.10`, dev `4b716aa8`), na wszystkich ośmiu hostach
-  od 2026-11-04 ~22:25 CET (root i klony kont `zfsbackup`, sprawdzone `--version` i `git log` na każdym).**
+- **Wydanie bieżące: v1.0.11 (zfsbackup `3e3bc5d`, tag `v1.0.11`, dev `17b45083`), na wszystkich ośmiu hostach
+  od 2026-11-05 ~22:25 CET (root i checkouty kont, sprawdzone `--version` i `git log` na każdym).**
   Kolejność: wstrzymanie aktualizacji na produkcji (pve2/pve1 Metropolis, pve0/pve1 Dąbrowska), lab (pve9, pve9b,
-  pve10, pve11) na dev `main` `99904b40` z wstrzymaniem i `deploy.sh`, krótki test (monitor v2.9 wszędzie, GUI
-  rysuje pięć ekranów na pve10), publikacja, lab z powrotem na wydanie (`lab-dev.sh off`, `--resume-updates`,
-  `deploy.sh` rc 0, godzinna aktualizacja „already at”), wznowienie produkcji (aktualizacja od razu, apply bez
-  FATAL, nowe `alert-digest.sh` i `alert-env.sh` u roota i kont). W 1.0.10: #1051, #1053, #1055 (REV-186),
-  #1060, #1061, #1062, #1063, #1065 (CHANGELOG). Pierwszy prawdziwy mail dzienny w nowym układzie spodziewany 05.11 o 07:00 (jeszcze nie widziany).
-  Nie sprawdzone na żywo: przeglądanie kopii i odzysk w układzie F2, U161 na kolektorze z pvesr.
+  pve10, pve11) na dev `main` `17b45083` z wstrzymaniem i `deploy.sh` (rc 0), krótki test (monitor v2.10
+  wszędzie, GUI rusza na pve9, pve10, pve11; na pve9b brak tmux), publikacja, lab z powrotem na wydanie
+  (`lab-dev.sh off`, `--resume-updates`, `deploy.sh` rc 0), wznowienie produkcji (aktualizacja od razu, apply bez
+  FATAL, `check-snap-age.sh` v2.10 u wszystkich). Przy powrocie labu: pve9 miał pełny `/` (stare pliki testów w
+  `/tmp`, usunięte, 68%), a pve9b i pve11 po teście od zera stały na repo dev -- przepięte na repo wydań.
+  W 1.0.11: zmiany scalone na dev od `4b716aa8` do `17b45083` (m.in. U149, U165, REV-20261104-187, REV-20261105-188, pierwsza instalacja,
+  test od zera nr 2, O9; #1099 CHANGELOG). Do sprawdzenia po wydaniu: brak nowych „descendant list” na pve0,
+  czy czyszczenie zakładek na pve2 o 04:30 kończy się rc=0.
 - **Dąbrowska 2026-11-04 (1.0.9):** archiwum `archiwum-pve1` (kopia pasywna pve0 `rpool/data` ->
   `hdd/backups/pve1`, szablon `full`, root) zainstalowane; pierwsza kopia przyrostowa od 1 listopada 13:01
   rc=0. Relacja `pve1` (migawki zdalne, konto `zfsbackup`) założona od nowa ze zwykłą rodziną
   `automated_*` (`--own-snapshots`, quiesce=no, H24 D7 W4 M12 Y1); pierwsza migawka 10:19. Zostaje:
   sprzątanie `pve0_automated_*` i znacznika po dobie. Przy wznowieniu wyszła wada: ponowienie tej samej
   komendy z tą samą odpowiedzią (`--own-snapshots`) było odrzucane -- poprawione na `main`
-  (`rux_record_family_answer`), niewydane.
+  (`rux_record_family_answer`), wydane w 1.0.10.
 - **Próba kopii lokalnej a archiwum z dłuższą historią (2026-11-04, Dąbrowska).** Silnik `snapget.sh -n`
   z założenia kończy się rc=1, gdy w celu są migawki, których źródło już nie ma; instalator kopii lokalnej
   brał to za porażkę i kopia pasywna do archiwum pve0 `hdd/backups/pve1` (historia dobowa i tygodniowa z
@@ -333,7 +335,7 @@
   hoście albo ostrzega, że jej nie ma. Na żywo pve11 -> pve9b: założenie z N=48, porzucenie zmiany
   (plik wrócił), powrót do zainstalowanego N, zmiana na 24 (rc=0, `retain = -h24`). Poza paczką
   (do dyskusji): punkt 4 (strażnik crona po tożsamości), U144 p. 2.
-- **Punkt c: wstrzymanie aktualizacji obejmuje też konta (2026-11-04, gałąź `feat/prod-hold`, niewydane).**
+- **Punkt c: wstrzymanie aktualizacji obejmuje też konta (2026-11-04, gałąź `feat/prod-hold`, wydane najpóźniej w 1.0.10).**
   Dotąd blokada roota (`update-hold` w katalogu stanu roota) nie zatrzymywała godzinnego `git pull`
   konta delegowanego, bo konto nie widzi `/root` -- root stał, konto się aktualizowało. Teraz
   `update-control.sh` (i jego kopia startowa w `deploy.sh`) pisze kopię blokady
@@ -345,7 +347,7 @@
   `--resume-updates` tworzy i usuwa oba pliki. Testy na pve9: `selfupdate` 74/0, `cleanclone` 112/0
   (jako `tester`). Działa od wydania, które tę zmianę zawiera: hosty muszą ją najpierw pobrać.
   `deploy.sh` utrzymuje jedno konto na host -- produkcja ma po jednym (`zfsbackup`), lab pve9 ma trzy.
-- **U136 fastprune w kreatorze (2026-11-04, PR #1046, niewydane).** Migawki zdalne,
+- **U136 fastprune w kreatorze (2026-11-04, PR #1046, wydane najpóźniej w 1.0.10).** Migawki zdalne,
   Zaawansowane -> Fastprune: jedna liczba godzin N (najmniej 4, ostrzeżenie poniżej 24) dla wszystkich
   szczebli wybranego szablonu, które robią migawki. Kreator zapisuje ukryty szablon
   `relacja-<nazwa>-fastprune`: w każdym takim szczeblu `retain = -h<N>` bez `keep` i czyszczenie co godzinę; progi monitora zdejmuje szczeblom,
@@ -354,7 +356,7 @@
   samej minucie przeszło równolegle z rc=0; ta sama linia z progiem 4 h usunęła migawkę sprzed 7 h.
   Nie zrobione: zmiana N w oknie zmiany relacji i sprawdzenie, czy na kolektorze jest kopia pasywna
   (plan mówi o ryzyku jednym zdaniem). Testy: `test/tui` na pve9 473/0.
-- **Paczka U po 1.0.7 (2026-11-03, gałąź `feat/u-batch`, niewydane).** Kreator: kopia pasywna także dla
+- **Paczka U po 1.0.7 (2026-11-03, gałąź `feat/u-batch`, wydane najpóźniej w 1.0.10).** Kreator: kopia pasywna także dla
   backupu i lustra, gdy na źródle nie ma migawek rodziny (Zaawansowane -> Pasywnie; U138), szablon
   `passive-flat` widoczny z [pasywny] (U139). Uwagi z kampanii GUI: W2 (relacja, w której jeden szczebel
   jest aktualny, a reszta czeka, jest „aktualna”), W6 (plan kopii pasywnej bez „zamraża”), W15 (migawki zdalne
