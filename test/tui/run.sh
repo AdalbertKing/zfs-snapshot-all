@@ -5565,7 +5565,7 @@ case "$1" in
                     echo ">>> atrapa: $1 $2 $3" ;;
     show-config)    echo '{"sections":[{"kind":"dataset","name":"hdd/backups/192.168.28.99/hdd/data","fields":{"pair_label":"r1","compression":"none"'"${ER_RAW:+,\"raw\":\"yes\"}"'}}]}' ;;
     set-transfer)   case " $* " in *" --yes "*) echo ">>> atrapa: set-transfer" ;; *) echo "Relation 'r1': history=newest (sections: 1)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
-    show-tiers)     echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"'"${ER_SRC_KEEP:-24}"'","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}' ;;
+    show-tiers)     if [ "${ER_MODE:-}" = snaponly ]; then echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"'"${ER_SRC_KEEP:-24}"'","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}' | sed 's/"source":\[.*\]}$/"source":[]}/'; else echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"'"${ER_SRC_KEEP:-24}"'","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}'; fi ;;
     set-tiers)      case " $* " in *" --yes "*) echo ">>> atrapa: set-tiers" ;; *) echo "Relation 'r1' -- tiers:"; echo "  hourly: keep=12 (source)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
     *)            echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
@@ -6080,6 +6080,22 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'show-tiers r1 --json' "$ER/zb.log" \
 else
     bad "edit-relation: REV-187 snaponly harmonogram" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(tail -3 "$ER/err")"
 fi
+# REV-20261104-187 runda 1: w tej samej tabeli migawek zdalnych zmiana SPOSOBU, dodanie i usuniecie
+# szczebla ida tym samym jednym set-tiers (config), nie do szablonu. Na rundzie 0 CLI ich odmawialo.
+for so_case in "method|right,space,enter|--method=" "add|down,down,down,space,enter|--add-tier=weekly" "drop|down,space,enter|--drop-tier=hourly"; do
+    so_k="${so_case#*|}"; so_want="${so_k#*|}"; so_k="${so_k%%|*}"
+    EROUT=$(ER_MODE=snaponly er_run "0${T}harmon
+0${T}__manual__
+0${T}wykonaj
+0${T}
+" "$so_k"); ERRC=$?
+    if [ "$ERRC" -eq 0 ] && grep -q "^set-tiers r1 .*$so_want.* --yes$" "$ER/zb.log" \
+       && ! grep -qE '^(save-profile|delete-profile|edit-relation)' "$ER/zb.log"; then
+        ok "edit-relation: REV-187 r1 -- migawki zdalne, ${so_case%%|*}: $so_want w jednym set-tiers, bez szablonu"
+    else
+        bad "edit-relation: REV-187 r1 snaponly ${so_case%%|*}" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(tail -3 "$ER/err")"
+    fi
+done
 # X15 (wlasciciel 2026-10-13): szczebel DODANY w tabeli celu (harmon -> __manual__) jest w oknie
 # zrodla (srcret, z liczba jak w celu) -- okno zrodla widzi szczeble po zmianach w celu.
 # set-tiers dostaje dodanie i liczbe zrodla tego szczebla, bez drugiego dodawania.

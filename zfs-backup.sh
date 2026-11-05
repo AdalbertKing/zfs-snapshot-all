@@ -7476,12 +7476,41 @@ relblock_mech() {   # <tier> <side> -> gfs|age|flat|""
 # reads them and set-tiers rewrites them in place: the profile -- the hidden
 # relacja-<name> one included -- is not read again after creation. Only an explicit
 # "use template" (edit-relation --profile=) renders the sections anew.
-snaponly_cfg_tiers() {   # <config> <name> -> its tiers, in file order
+snaponly_cfg_tiers() {   # <config> <name> -> its tiers, finest first (file order within a cadence)
+    local t
     awk -v h="[template:snaponly__$2__" -v mk="# managed-by: zfs-backup.sh client=$2" '
         /^\[/ { if (t != "" && mine) print t; t = ""; mine = 0
                 if (index($0, h) == 1) { t = substr($0, length(h) + 1); sub(/\][ \t]*$/, "", t) } next }
         { l = $0; sub(/^[ \t]+/, "", l); if (t != "" && l == mk) mine = 1 }
-        END { if (t != "" && mine) print t }' "$1"
+        END { if (t != "" && mine) print t }' "$1" \
+        | while IFS= read -r t; do printf '%s\t%s\n' "$(tiers_cadence_rank "$t")" "$t"; done | sort -s -n -k1,1 | cut -f2
+}
+# The [snaponly:*] / [prune:*] sections of one snaponly relationship (its marker inside).
+snaponly_scope_sections() {   # <config> <name> <snaponly|prune>
+    awk -v k="[$3:" -v mk="# managed-by: zfs-backup.sh client=$2" '
+        /^\[/ { if (h != "" && mine) print h; h = ""; mine = 0; if (index($0, k) == 1) { h = $0; sub(/[ \t]+$/, "", h) } next }
+        { l = $0; sub(/^[ \t]+/, "", l); if (h != "" && l == mk) mine = 1 }
+        END { if (h != "" && mine) print h }' "$1"
+}
+snaponly_section_remove() {   # <config> <exact header>: the section leaves the file; the gap before it stays
+    local tmp="$1.sec.$$"
+    awk -v h="$2" '
+        /^\[/ { skip = ($0 == h) }
+        skip { next }
+        /^[ \t]*$/ { nb++; next }
+        { while (nb > 0) { print ""; nb-- } print }
+        END { while (nb > 0) { print ""; nb-- } }' "$1" > "$tmp" && mv "$tmp" "$1"
+}
+# use_template of every [snaponly:]/[prune:] section of the relationship: <id> added (in
+# cadence order of the tiers given) or removed.
+snaponly_use_template_set() {   # <config> <name> <kind snaponly|prune> <tiers in order...>
+    local wf="$1" name="$2" kind="$3" h id ids=""; shift 3
+    local pre="snaponly__${name}__"; [ "$kind" = prune ] && pre="snaponly_src__${name}__"
+    for id in "$@"; do ids="${ids:+$ids,}$pre$id"; done
+    while IFS= read -r h; do
+        [ -n "$h" ] || continue
+        set_or_remove_section_field "$wf" "$h" use_template "$ids" || return 1
+    done < <(snaponly_scope_sections "$wf" "$name" "$kind")
 }
 snaponly_show_tiers_json() {   # <config> <name> -> the "target":[...],"source":[] part of show-tiers --json
     local cfg="$1" name="$2" t arr="" tf=1 hs hp r g mech keep retain
@@ -7501,15 +7530,17 @@ snaponly_show_tiers_json() {   # <config> <name> -> the "target":[...],"source":
 }
 # set-tiers on a snaponly relationship: the ops applied to its sections in the working copy.
 # A tier's retention is the source's (there is no copy), so --tier and --src-tier name the
-# same tier. Changing the SET of tiers or the counting method re-shapes the families on the
-# source -- that stays the explicit template action. Dies (working copy removed) on a refusal.
+# same tier. --method, --add-tier and --drop-tier work as on a copy relationship, in these
+# sections (REV-20261104-187 round 1): the config is the policy, no template is read.
+# Dies (working copy removed) on a refusal.
 snaponly_tiers_apply_ops() {   # <config working copy> <name> <ops...> -> TIERS_CHANGES
     local wf="$1" name="$2"; shift 2
     fail() { rm -f "$wf"; die "set-tiers: $* -- nothing was changed"; }
+    local marker="# managed-by: zfs-backup.sh client=$name"
     local -a tiers=(); mapfile -t tiers < <(snaponly_cfg_tiers "$wf" "$name")
     [ "${#tiers[@]}" -gt 0 ] || fail "'$name' has no snaponly tier section in its config"
     TIERS_CHANGES=()
-    local op v key="" hs hp r field sec
+    local op v key="" hs hp r field sec t
     for op in "$@"; do
         v="${op#*=}"
         case "$op" in
@@ -7539,8 +7570,76 @@ snaponly_tiers_apply_ops() {   # <config working copy> <name> <ops...> -> TIERS_
                     set_or_remove_section_field "$wf" "$sec" "$field" "$v" || fail "could not write $field in $sec"
                     TIERS_CHANGES+=("$key: $field=${v:-(none)}")
                 fi ;;
-            --add-tier=*|--add-src-tier=*|--drop-tier=*|--drop-src-tier=*|--method=*)
-                fail "'$op' on a snaponly relationship changes which snapshot families exist on the source -- use the template action (edit-relation $name --profile=P), which previews the whole re-render" ;;
+            --method=*)
+                case "$v" in gfs|flat|age) ;; *) fail "--method='$v' -- gfs, flat or age" ;; esac
+                # as on a copy relationship: the number stays, the letter's case says count or age
+                for t in "${tiers[@]}"; do
+                    hp="[template:snaponly_src__${name}__$t]"
+                    r=$(tiers_sec_field "$wf" "$hp" retain)
+                    if [ -n "$r" ]; then
+                        case "$v" in age) r="-$(printf '%s' "${r:1:1}" | tr 'A-Z' 'a-z')${r:2}" ;; *) r="-$(printf '%s' "${r:1:1}" | tr 'a-z' 'A-Z')${r:2}" ;; esac
+                        set_or_remove_section_field "$wf" "$hp" retain "$r" || fail "could not write retain in $hp"
+                    fi
+                    if [ "$v" = gfs ]; then set_or_remove_section_field "$wf" "$hp" gfs yes || fail "could not write gfs in $hp"
+                    else set_or_remove_section_field "$wf" "$hp" gfs "" || fail "could not clear gfs in $hp"; fi
+                done
+                TIERS_CHANGES+=("method: $v"); key="" ;;
+            --drop-tier=*|--drop-src-tier=*)
+                case " ${tiers[*]} " in *" $v "*) ;; *) fail "no tier '$v' to drop" ;; esac
+                [ "${#tiers[@]}" -gt 1 ] || fail "'$v' is the last tier -- delete the relationship instead"
+                local -a kt=(); for t in "${tiers[@]}"; do [ "$t" = "$v" ] || kt+=("$t"); done; tiers=("${kt[@]}")
+                snaponly_section_remove "$wf" "[template:snaponly__${name}__$v]" || fail "could not remove the $v section"
+                snaponly_section_remove "$wf" "[template:snaponly_src__${name}__$v]" || fail "could not remove the $v source section"
+                snaponly_use_template_set "$wf" "$name" snaponly "${tiers[@]}" || fail "could not update use_template"
+                snaponly_use_template_set "$wf" "$name" prune "${tiers[@]}" || fail "could not update use_template"
+                TIERS_CHANGES+=("$v: dropped (its snapshots stay on the source, no longer taken nor pruned)"); key="" ;;
+            --add-tier=*|--add-src-tier=*)
+                case " ${tiers[*]} " in *" $v "*) fail "it already has the tier '$v'" ;; esac
+                local L; L=$(tiers_letter "$v"); [ -n "$L" ] || fail "'$v' is not a tier -- hourly daily weekly monthly yearly"
+                local sib="${tiers[0]}" send prune keepn warn crit q
+                case "$v" in
+                    hourly)  send="1 * * * *";  prune="21 * * * *"; keepn=24; warn=90m;  crit=150m; q="" ;;
+                    daily)   send="11 1 * * *"; prune="31 1 * * *"; keepn=7;  warn=30h;  crit=48h;  q=auto,degrade ;;
+                    weekly)  send="21 2 * * 0"; prune="41 2 * * 0"; keepn=4;  warn=8d;   crit=10d;  q=auto,degrade ;;
+                    monthly) send="31 3 1 * *"; prune="51 3 1 * *"; keepn=12; warn=35d;  crit=40d;  q=auto,degrade ;;
+                    yearly)  send="31 3 1 1 *"; prune="51 3 1 1 *"; keepn=5;  warn=400d; crit=430d; q=auto,degrade ;;
+                esac
+                # the family name of a sibling with its tier word replaced: tag and prefix stay
+                local sfam; sfam=$(tiers_sec_field "$wf" "[template:snaponly__${name}__$sib]" prefix)
+                case "$sfam" in *"$sib"*) ;; *) fail "the family '$sfam' of tier '$sib' does not name its tier -- the new family cannot be derived; use the template action" ;; esac
+                local fam="${sfam%"$sib"*}$v${sfam##*"$sib"}"
+                local base; base="$(schedule_pick_minute "$name")"
+                send="$(snaponly_retime "$send" "$base")" && prune="$(snaponly_retime "$prune" $(( base + 20 )))" || fail "could not time the tier '$v'"
+                local sr; sr=$(tiers_sec_field "$wf" "[template:snaponly_src__${name}__$sib]" retain)
+                local sg; sg=$(tiers_sec_field "$wf" "[template:snaponly_src__${name}__$sib]" gfs)
+                local lc="$L"; case "$sr" in -[hdwmy]*) case "$sg" in yes|true|1) ;; *) lc=$(printf '%s' "$L" | tr 'A-Z' 'a-z') ;; esac ;; esac
+                {
+                    echo
+                    echo "[template:snaponly__${name}__$v]"
+                    echo "	$marker"
+                    echo "	send_schedule = $send"
+                    echo "	prefix        = $fam"
+                    echo "	pattern       = $fam"
+                    echo "	tier_label    = $v"
+                    echo "	notify_word   = snapshot"
+                    [ -n "$q" ] && echo "	quiesce       = $q"
+                    echo "	monitor_warn  = $warn"
+                    echo "	monitor_crit  = $crit"
+                    echo "	monitor_since = $(date +%s)"
+                    echo
+                    echo "[template:snaponly_src__${name}__$v]"
+                    echo "	$marker"
+                    echo "	prune_schedule = $prune"
+                    echo "	pattern        = $fam"
+                    echo "	retain         = -$lc$keepn"
+                    case "$sg" in yes|true|1) echo "	gfs            = yes" ;; esac
+                } >> "$wf"
+                mapfile -t tiers < <(snaponly_cfg_tiers "$wf" "$name")
+                snaponly_use_template_set "$wf" "$name" snaponly "${tiers[@]}" || fail "could not update use_template"
+                snaponly_use_template_set "$wf" "$name" prune "${tiers[@]}" || fail "could not update use_template"
+                TIERS_CHANGES+=("$v: added (keeps $keepn, family $fam)")
+                key="$v"; hs="[template:snaponly__${name}__$v]"; hp="[template:snaponly_src__${name}__$v]" ;;
+            *) fail "unknown change '$op'" ;;
         esac
     done
     [ "${#TIERS_CHANGES[@]}" -gt 0 ] || TIERS_CHANGES=("(no change -- the config already says this)")
