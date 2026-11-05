@@ -6325,9 +6325,23 @@ pair_mode_after_inheritance() {   # <requested mode> <requested datasets> <saved
     printf '%s' "$saved_mode"
 }
 
+# peer_manifest_is_join <path> -> 0 when <path> is a JOIN-side manifest
+#
+# Pairing manifests are keyed by the peer's label (its address or name), join
+# manifests by the collector's label -- one directory. A peer NAMED like a
+# collector this host joined ("pve10") gives --pair/--unpair the join manifest's
+# path: --unpair deleted it and --leave then had nothing to read, while
+# --uninstall pointed at --leave (install test, 2026-11-05).
+peer_manifest_is_join() {
+    [ -r "$1" ] && grep -q '^PEER_JOIN_ROLE=' "$1" && ! grep -q '^PEER_SAVED_ROLE=' "$1"
+}
+
 do_pair() {
     local label; label=$(peer_label "$PEER_HOST")
     local mpath; mpath=$(peer_manifest_path "$label")
+    if peer_manifest_is_join "$mpath"; then
+        die "$mpath is the JOIN manifest of collector '$label' (this host joined it), not a pairing with '$PEER_HOST' -- that one is ended by deploy.sh --leave=$label. Name the peer by its address instead (--pair=<IP>). Nothing was changed."
+    fi
     mkdir -p "$PEER_STATE_DIR" "$PEER_KEY_DIR"
     chmod 700 "$PEER_KEY_DIR"
 

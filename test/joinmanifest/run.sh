@@ -952,6 +952,28 @@ else
 fi
 rm -rf "$PG"
 
+# ============================================================================
+# T4 (install test, 2026-11-05): a peer NAMED like a collector this host joined.
+# peers/pve10.conf was the join manifest; --pair=pve10 --unpair deleted it and
+# --leave=pve10 had nothing to read. The shipped peer_manifest_is_join tells a
+# join manifest from a pairing one, and do_pair asks it before ANY branch --
+# --unpair included -- that reads or writes the path.
+# ============================================================================
+PJ="$(mktemp -d)"
+pjfn=$(sed -n '/^peer_manifest_is_join() {/,/^}$/p' "$REPO/deploy.sh")
+printf '# peer pairing manifest (join side)\nPEER_JOIN_ROLE="pull"\nPEER_JOIN_ACCOUNT="zfsbackup-pve10"\n' > "$PJ/join.conf"
+printf '# peer pairing manifest (initiator side)\nPEER_SAVED_ROLE=pull\nPEER_SAVED_ACCOUNT=zfsbackup-pve11\n' > "$PJ/pair.conf"
+pj() { bash -c "$pjfn
+peer_manifest_is_join '$1'" && echo join || echo not; }
+pj_order=$(awk '/^do_pair\(\) \{/{f=1} f&&/peer_manifest_is_join "\$mpath"/&&!g{g=NR} f&&/do_unpair "\$label" "\$mpath"/{u=NR; exit} END{print (g&&u&&g<u)?"guard-first":"g=" g " u=" u}' "$REPO/deploy.sh")
+if [ -n "$pjfn" ] && [ "$(pj "$PJ/join.conf")" = join ] && [ "$(pj "$PJ/pair.conf")" = not ] && [ "$(pj "$PJ/none.conf")" = not ] \
+        && [ "$pj_order" = guard-first ]; then
+    ok "T4: a join manifest is told from a pairing one (and a missing file is neither); do_pair refuses it before the --unpair branch"
+else
+    bad "T4: join manifest guard" "fn=${pjfn:+found} join=$(pj "$PJ/join.conf") pair=$(pj "$PJ/pair.conf") none=$(pj "$PJ/none.conf") order=$pj_order"
+fi
+rm -rf "$PJ"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
