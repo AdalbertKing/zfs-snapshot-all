@@ -3073,7 +3073,13 @@ for src_path in "${DATASETS[@]}"; do
     log 1 "Processing: ${REMOTE_HOST:-local}:$src_path => $dataset"
 
     if [ $DRY_RUN -eq 1 ]; then
-        process_dataset "$src_path" "$dataset" "$REMOTE_USER" "$REMOTE_HOST" || FAILED_DATASETS+=("$dataset")
+        # A failed -n dataset contributes no conflict lines: a -r scan that failed half-way
+        # leaves only part of its list behind, and a partial list is not an answer (REV-186 r3).
+        _nconf=${#CONFLICT_SNAPSHOTS[@]}
+        process_dataset "$src_path" "$dataset" "$REMOTE_USER" "$REMOTE_HOST" || {
+            CONFLICT_SNAPSHOTS=("${CONFLICT_SNAPSHOTS[@]:0:_nconf}")
+            FAILED_DATASETS+=("$dataset")
+        }
     else
         stats_start=$(date +%s)
         if process_dataset "$src_path" "$dataset" "$REMOTE_USER" "$REMOTE_HOST"; then

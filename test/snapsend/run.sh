@@ -1791,9 +1791,9 @@ fi
 exec "$R186_AWK" "$@"
 SHIM
 chmod +x "$R186D/f5cbin/zfs" "$R186D/f5cbin/awk"
-f5c_run() {   # <send|get> <name> -> RC, OUT of `-n -m auto_` through the f5c shims
+f5c_run() {   # <send|get> <name> [engine args] -> RC, OUT of `-n -m auto_` through the f5c shims
     local p0="$PATH"; PATH="$R186D/f5cbin:$PATH"; rm -f "$R186D_C"
-    r186_run "$1" "$2" -n -m "auto_"; PATH="$p0"
+    r186_run "$1" "$2" "${@:3}" -n -m "auto_"; PATH="$p0"
 }
 f5c_plans() { printf '%s\n' "$OUT" | grep -c '^PLAN='; }
 for eng in send get; do
@@ -1827,6 +1827,20 @@ for eng in send get; do
               "2|1|1|0|0|$want_calls|0|auto_1" \
               "$RC|$(printf '%s\n' "$OUT" | grep -c "^INCOMPLETE: ")|$([ "$(r186_said "$diag")" -gt 0 ] && echo 1 || echo 0)|$(f5c_plans)|$(printf '%s\n' "$OUT" | grep -c "^$T@")|$calls|$((d1 - d0))|$(snaps_of "$T")"
     done
+
+    # -r: the parent's real conflict is found, then the child's listing fails. The failed
+    # dataset prints NO conflict line (round 3 printed the parent's half of the list).
+    S="$(r186_src $eng f5r$eng)"; T="$(r186_tgt $eng f5r$eng)"
+    zfs create -p "$S/c" || exit 1; zfs snapshot -r "$S@auto_1"
+    r186_run $eng f5r$eng -r -e -m "auto_"
+    zfs snapshot "$T@extra_1"
+    f5c_run $eng f5r$eng -r
+    check "F5c $eng: control -r -- the parent's conflict is listed, rc 1" "1|1" \
+          "$RC|$(printf '%s\n' "$OUT" | grep -c "^$T@extra_1\$")"
+    export F5C_DS="$S/c" F5C_SKIP=0; f5c_run $eng f5r$eng -r; unset F5C_DS F5C_SKIP
+    check "F5c $eng: -r, the child's listing fails after the parent's conflict -> rc 2, INCOMPLETE, no conflict line" \
+          "2|1|0|auto_1 extra_1" \
+          "$RC|$(printf '%s\n' "$OUT" | grep -c "^INCOMPLETE: ")|$(printf '%s\n' "$OUT" | grep -c "^$T")|$(snaps_of "$T")"
 done
 rm -rf "$R186D"
 unset R186_LOG R186_REAL
