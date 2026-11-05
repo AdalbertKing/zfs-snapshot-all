@@ -1877,7 +1877,8 @@ exec "$R186_REAL" "$@"
 SHIM
 cat > "$R186D/f5gbin/awk" <<'SHIM'
 #!/bin/bash
-if [ -n "${F5G_AWK:-}" ] && [ "$1" = -F ] && [ "$3" = '{split($1,a,"@"); print a[2]"\t"$2}' ]; then exit 2; fi
+# The helper calls `awk -F'\t' '<program>'`: -F and its value are ONE word, the program the second.
+if [ -n "${F5G_AWK:-}" ] && [ "$2" = '{split($1,a,"@"); print a[2]"\t"$2}' ]; then exit 2; fi
 exec "$R186_AWK" "$@"
 SHIM
 chmod +x "$R186D/f5gbin/zfs" "$R186D/f5gbin/awk"
@@ -1912,8 +1913,10 @@ for eng in send get; do
     tick; zfs snapshot "$S@auto_2"
     check "F5g $eng: setup -- the target's copy of the base is renamed" "0|moved_1" "$RC|$(snaps_of "$T")"
     f5g_run $eng f5g$eng -n -m "auto_"
-    check "F5g $eng: control -- -n finds the base by GUID: rc 0, PLAN=INCREMENTAL base=auto_1" "0|1" \
-          "$RC|$(printf '%s\n' "$OUT" | grep -c '^PLAN=INCREMENTAL base=auto_1 ')"
+    # Measured: the name-based conflict scan lists the renamed moved_1 (rc 1) -- unchanged
+    # behaviour; the base itself comes from the GUID fallback.
+    check "F5g $eng: control -- -n finds the base by GUID: PLAN=INCREMENTAL base=auto_1, rc 1 with moved_1 listed" "1|1|1" \
+          "$RC|$(printf '%s\n' "$OUT" | grep -c '^PLAN=INCREMENTAL base=auto_1 ')|$(printf '%s\n' "$OUT" | grep -c "^$T@moved_1\$")"
     for f5g in "target GUID listing|F5G_DS=$T|Could not list the snapshot GUIDs of '$T'" \
                "source GUID listing|F5G_DS=$S|Could not list the snapshot GUIDs of '$S'" \
                "GUID filter|F5G_AWK=1|Could not filter the snapshot GUID list"; do
