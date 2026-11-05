@@ -921,5 +921,8 @@
 "Relacja $RNAME: wycofuję": "Relation $RNAME: undoing",
 "Wycofanie relacji": "Undoing the relation",
 "Relacja '$RNAME' wycofana (rc=0).": "Relation '$RNAME' undone (rc=0).",
-"Relacja '$RNAME' NIE wycofana do końca -- co zostało, mówi dziennik.": "Relation '$RNAME' NOT fully undone -- the log says what is left."
+"Relacja '$RNAME' NIE wycofana do końca -- co zostało, mówi dziennik.": "Relation '$RNAME' NOT fully undone -- the log says what is left.",
+"%s. Krótka retencja źródła:": "%s. Short source retention:",
+"Puste pole nie zmienia retencji. Inną retencję źródła ustawisz w Harmonogram -> Ręcznie (liczby szczebli) albo wybierając szablon.": "An empty field does not change the retention. Set a different source retention in Schedule -> Manual (the tier numbers) or by choosing a template.",
+"Relacja nie ma szczebla z migawkami -- nic do zmiany.": "The relationship has no tier that takes snapshots -- nothing to change."
 }

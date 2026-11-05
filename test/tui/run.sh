@@ -5565,8 +5565,9 @@ case "$1" in
                     echo ">>> atrapa: $1 $2 $3" ;;
     show-config)    echo '{"sections":[{"kind":"dataset","name":"hdd/backups/192.168.28.99/hdd/data","fields":{"pair_label":"r1","compression":"none"'"${ER_RAW:+,\"raw\":\"yes\"}"'}}]}' ;;
     set-transfer)   case " $* " in *" --yes "*) echo ">>> atrapa: set-transfer" ;; *) echo "Relation 'r1': history=newest (sections: 1)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
-    show-tiers)     if [ "${ER_MODE:-}" = snaponly ]; then echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"'"${ER_SRC_KEEP:-24}"'","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}' | sed 's/"source":\[.*\]}$/"source":[]}/'; else echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"'"${ER_SRC_KEEP:-24}"'","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}'; fi ;;
-    set-tiers)      case " $* " in *" --yes "*) echo ">>> atrapa: set-tiers" ;; *) echo "Relation 'r1' -- tiers:"; echo "  hourly: keep=12 (source)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
+    show-tiers)     if [ -n "${ER_ST_JSON:-}" ]; then cat "$ER_ST_JSON"; elif [ "${ER_MODE:-}" = snaponly ]; then echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"'"${ER_SRC_KEEP:-24}"'","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}' | sed 's/"source":\[.*\]}$/"source":[]}/'; else echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"'"${ER_SRC_KEEP:-24}"'","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}'; fi ;;
+    set-tiers)      [ -n "${ER_ST_FAIL:-}" ] && [[ " $* " != *" --yes "* ]] && { echo "FATAL: set-tiers: gen-cron.sh refused the working copy (atrapa)"; exit 1; }
+                    case " $* " in *" --yes "*) echo ">>> atrapa: set-tiers" ;; *) echo "Relation 'r1' -- tiers:"; echo "  hourly: keep=12 (source)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
     *)            echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
 EOF
@@ -5914,11 +5915,14 @@ if hasE "$ERLST" '--menu ~ [^~]* ~ [0-9]+ ~ [0-9]+ ~ [0-9]+ ~ __manual__ ~'; the
 else
     bad "edit-relation: karta, lista szablonow bez __manual__ na gorze" "rc=$ERRC" "$(printf '%s' "$ERLST" | cut -c1-500)"
 fi
-# U136 (wlasciciel 2026-11-04): fastprune w oknie zmiany migawek zdalnych. Relacja r1 na ukrytym
-# szablonie relacja-r1-fastprune (znacznik "[fastprune 48 base=d7h24]"). (A) N 48 -> 24: szablon
-# od nowa z BAZY d7h24 (dobowy traci monitor przy 24), edit-relation --profile=relacja-r1-fastprune;
-# (B) puste = powrot do d7h24, bez save-profile; (C) przerwane po zmianie N: plik szablonu wraca
-# z kopii; kontrola (D): relacja backup -- wiersza Fastprune nie ma.
+# U136 + REV-20261104-187 runda 3: krotka retencja zrodla migawek zdalnych zmienia CONFIG relacji
+# (show-tiers -> set-tiers), bez ukrytego szablonu. Config r1: hourly i daily trzymaja -h48 (czyszczenie
+# minuta 7), hourly ma recznie zmieniony prog monitora 100m. Ukryty relacja-r1-fastprune jest
+# NIEAKTUALNY (inne liczby) albo go nie ma -- nic go nie czyta i nic go nie pisze.
+# (A) 48 -> 24: jeden set-tiers, daily traci progi (odstep 24 >= 24), hourly je zachowuje, minuta 7
+# zostaje; brak save-profile/delete-profile/edit-relation. (A2) to samo bez ukrytego szablonu.
+# (B) puste = bez zmiany. (C) przerwane po zmianie: brak --yes. (E) generator odmawia planu:
+# odmowa w oknie, brak --yes. (D) relacja backup -- wiersza nie ma.
 ERFP="$(mktemp -d)"; echo "oryginal" > "$ERFP/fp.conf"
 "$PY" - "$P10/list-profiles.json" "$ERFP" <<'PYEOF'
 import sys, json, copy
@@ -5926,36 +5930,56 @@ d = json.load(open(sys.argv[1], encoding="utf-8"))
 b = [p for p in d["profiles"] if p["name"] == "d7h24"][0]
 f = copy.deepcopy(b)
 f.update(name="relacja-r1-fastprune", hidden="yes", file=sys.argv[2] + "/fp.conf",
-         description="Fastprune 48 h z d7h24 (relacja r1) [fastprune 48 base=d7h24]")
+         description="Fastprune 96 h z d7h24 (relacja r1) [fastprune 96 base=d7h24]")
 d["profiles"].append(f)
 json.dump(d, open(sys.argv[2] + "/profiles.json", "w", encoding="utf-8"))
+t = lambda n, ss, w, c: {"name": n, "mechanism": "age", "pattern": "automated_" + n, "prefix": "automated_" + n + "_",
+    "keep": "", "retain": "-h48", "gfs": "", "quiesce": "", "send_schedule": ss, "prune_schedule": "7 * * * *",
+    "monitor_warn": w, "monitor_crit": c}
+json.dump({"name": "r1", "mode": "remote", "config": "/x.conf", "source": [],
+           "target": [t("hourly", "1 * * * *", "100m", "3h"), t("daily", "11 1 * * *", "26h", "50h")]},
+          open(sys.argv[2] + "/st.json", "w", encoding="utf-8"))
 PYEOF
-ERFPA=$(ER_MODE=snaponly ER_PROFILE=relacja-r1-fastprune ER_PROFILES="$ERFP/profiles.json" er_run "0${T}fastprune
+ERFPW='set-tiers r1 --tier=hourly --retain=-h24 --prune-schedule=7 * * * * --tier=daily --retain=-h24 --prune-schedule=7 * * * * --monitor-warn= --monitor-crit='
+erfp() { ER_MODE=snaponly ER_ST_JSON="$ERFP/st.json" ER_FPFILE="$ERFP/fp.conf" er_run "$@"; }
+ERFPA=$(ER_PROFILE=relacja-r1-fastprune ER_PROFILES="$ERFP/profiles.json" erfp "0${T}fastprune
 0${T}24
 0${T}wykonaj
 0${T}
 "); ERFPAW="$(cat "$ER/wt.log")"; ERFPAZ="$(cat "$ER/zb.log")"
-ERFPB=$(ER_MODE=snaponly ER_PROFILE=relacja-r1-fastprune ER_PROFILES="$ERFP/profiles.json" er_run "0${T}fastprune
-0${T}
+ERFPA2=$(erfp "0${T}fastprune
+0${T}24
 0${T}wykonaj
 0${T}
+"); ERFPA2Z="$(cat "$ER/zb.log")"
+ERFPB=$(ER_PROFILE=relacja-r1-fastprune ER_PROFILES="$ERFP/profiles.json" erfp "0${T}fastprune
+0${T}
+0${T}
+1${T}
 "); ERFPBZ="$(cat "$ER/zb.log")"
-ERFPC=$(ER_MODE=snaponly ER_PROFILE=relacja-r1-fastprune ER_PROFILES="$ERFP/profiles.json" ER_FPFILE="$ERFP/fp.conf" er_run "0${T}fastprune
+ERFPC=$(ER_PROFILE=relacja-r1-fastprune ER_PROFILES="$ERFP/profiles.json" erfp "0${T}fastprune
 0${T}24
 1${T}
 0${T}
-"); ERFPCF="$(cat "$ERFP/fp.conf")"
+"); ERFPCZ="$(cat "$ER/zb.log")"
+ERFPE=$(ER_ST_FAIL=1 erfp "0${T}fastprune
+0${T}24
+0${T}
+1${T}
+"); ERFPEW="$(cat "$ER/wt.log")"; ERFPEZ="$(cat "$ER/zb.log")"
 ERFPD=$(er_run "1${T}
 "); ERFPDW="$(cat "$ER/wt.log")"
-if has "$ERFPAW" '48 godz. -- wszystkie szczeble (d7h24)' \
-   && has "$ERFPAZ" 'save-profile --from=d7h24 --as=relacja-r1-fastprune --hidden --force' && has "$ERFPAZ" '[fastprune 24 base=d7h24]' \
-   && has "$ERFPAZ" '--tier=daily --retain=-h24 --keep= --prune_schedule=21 * * * * --monitor_warn= --monitor_crit=' \
-   && grep -q '^edit-relation r1 --profile=relacja-r1-fastprune .*--yes' <<<"$ERFPAZ" \
-   && ! grep -q '^save-profile' <<<"$ERFPBZ" && grep -q '^edit-relation r1 --profile=d7h24 .*--yes' <<<"$ERFPBZ" \
-   && [ "$ERFPCF" = oryginal ] && ! has "$ERFPDW" 'Krótka retencja źródła'; then
-    ok "edit-relation U136: fastprune -- N od nowa z bazy (monitor dobowego zdjety przy 24), puste = powrot do bazy, przerwanie przywraca szablon; relacja backup bez wiersza"
+erfp_nofp() { ! grep -qE '^(save-profile|delete-profile|edit-relation)' <<<"$1"; }
+if has "$ERFPAW" '48 godz. -- wszystkie szczeble' \
+   && grep -qxF -- "$ERFPW --plan" <<<"$ERFPAZ" && grep -qxF -- "$ERFPW --yes" <<<"$ERFPAZ" && erfp_nofp "$ERFPAZ" \
+   && grep -qxF -- "$ERFPW --yes" <<<"$ERFPA2Z" && erfp_nofp "$ERFPA2Z" \
+   && ! grep -q '^set-tiers' <<<"$ERFPBZ" && erfp_nofp "$ERFPBZ" \
+   && ! grep -q -- '--yes' <<<"$ERFPCZ" && erfp_nofp "$ERFPCZ" \
+   && grep -qxF -- "$ERFPW --plan" <<<"$ERFPEZ" && ! grep -q -- '--yes' <<<"$ERFPEZ" && has "$ERFPEW" 'gen-cron.sh refused' \
+   && [ "$(cat "$ERFP/fp.conf")" = oryginal ] && ! has "$ERFPDW" 'Krótka retencja źródła'; then
+    ok "edit-relation U136/REV-187 r3: krotka retencja z CONFIGU (show-tiers) i jednym set-tiers -- reczny prog hourly zostaje, daily traci progi, minuta czyszczenia zostaje; szablon nieaktualny albo brak bez znaczenia; puste/przerwane/odmowa generatora = brak --yes; relacja backup bez wiersza"
 else
-    bad "edit-relation U136 fastprune" "A: $(grep -E '^(save-profile|edit-relation)' <<<"$ERFPAZ" | cut -c1-300)" "B: $(grep -E '^(save-profile|edit-relation)' <<<"$ERFPBZ")" "C plik: $ERFPCF" "D: $(printf '%s' "$ERFPDW" | grep -c 'Krótka retencja źródła')"
+    bad "edit-relation U136/REV-187 r3 fastprune z configu" "A: $(grep -E '^(set-tiers|save-profile|delete-profile|edit-relation)' <<<"$ERFPAZ" | cut -c1-300)" "A2: $(grep -E '^(set-tiers|save-profile|edit-relation)' <<<"$ERFPA2Z" | cut -c1-200)" "B: $(grep -E '^(set-tiers|save-profile)' <<<"$ERFPBZ")" "C: $(grep -E -- '--yes' <<<"$ERFPCZ")" "E: $(grep -E '^set-tiers' <<<"$ERFPEZ") / $(printf '%s' "$ERFPEW" | grep -c 'gen-cron.sh refused')" "plik: $(cat "$ERFP/fp.conf")" "D: $(printf '%s' "$ERFPDW" | grep -c 'Krótka retencja źródła')"
 fi
 rm -rf "$ERFP"
 # U65: 'c' w oknie relacji (EDIT_DO=config) = od razu edit-config, bez karty zmian.
