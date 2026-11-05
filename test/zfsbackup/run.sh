@@ -13762,6 +13762,21 @@ else
     bad "preparesource: real probe" "old=$r_old empty=$r_empty file=$r_file none=$r_none rc=$r_rc" "$(ls -A "$PS/real-old")" "$(cat "$PS/err")"
 fi
 rm -rf "$PS/real-old" "$PS/real-empty" "$PS/real-file"
+# An old copy WITH an executable zfs-backup.sh but no .git (install test,
+# 2026-11-05): not a package -- the directory is busy. The same files with a
+# .git are the package.
+mkdir -p "$PS/real-oldpkg" "$PS/real-git/.git"
+printf '#!/bin/bash
+' > "$PS/real-oldpkg/zfs-backup.sh"; cp "$PS/real-oldpkg/zfs-backup.sh" "$PS/real-git/"
+chmod +x "$PS/real-oldpkg/zfs-backup.sh" "$PS/real-git/zfs-backup.sh"
+real_pkg() { SOURCE_REPO_DIR="$1" ps_run check-source real --json | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["package"]["ok"], repr(d["repo_dir_blocked"]))' 2>/dev/null; }
+r_op=$(real_pkg "$PS/real-oldpkg"); r_g=$(real_pkg "$PS/real-git")
+if [ "$r_op" = "False 'notempty'" ] && [ "$r_g" = "True 'notempty'" ]; then
+    ok "preparesource: the real probe -- old scripts with zfs-backup.sh but no .git are NOT the package (busy dir); with .git they are"
+else
+    bad "preparesource: real probe, old copy with zfs-backup.sh" "oldpkg=$r_op git=$r_g" "$(cat "$PS/err")"
+fi
+rm -rf "$PS/real-oldpkg" "$PS/real-git"
 # apt 404 from the security archive (first install on Debian 11, 2026-11-04):
 # the lists named bullseye-security debs security.debian.org no longer served;
 # the same package from the main archive installed. Stub apt-get fails every

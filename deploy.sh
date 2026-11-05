@@ -2415,6 +2415,45 @@ ensure_update_state_dir() {
 #
 # $2 is the account for the delegated checkout, empty for root's -- the reads
 # have to happen as whoever owns the repo, or git refuses on dubious ownership.
+# pregit_checkout <dir> <url> <backup dir> [account]
+#
+# Turns a non-empty directory of plain scripts (an earlier manual copy, no
+# .git) into the checkout of <url>'s main. The fetch comes first, so the move
+# is computed, not guessed: every top-level entry of the checkout that already
+# exists in <dir> goes to <backup dir>, everything else (configs, logs) stays
+# where it is. The old code moved three named scripts and the checkout died on
+# any other collision ("untracked working tree files would be overwritten"),
+# half-way through a join (install test, 2026-11-05). A failed init or fetch
+# removes only the .git it created: <dir> is left as it was. With [account]
+# the git commands run as that account.
+pregit_checkout() {
+    local dir="$1" url="$2" bk="$3" acct="${4:-}" tops name moved=0
+    _pg() { if [ -n "$acct" ]; then su "$acct" -c "$1"; else bash -c "$1"; fi; }
+    if ! _pg "cd '$dir' && git init -q && git remote add origin '$url' && git fetch -q origin"; then
+        rm -rf "$dir/.git"
+        die "git init/fetch failed in $dir -- nothing was moved; its files are as they were"
+    fi
+    tops=$(_pg "git -C '$dir' ls-tree --name-only origin/main") \
+        || { rm -rf "$dir/.git"; die "could not list origin/main in $dir -- nothing was moved"; }
+    mkdir -p "$bk"
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        if [ -e "$dir/$name" ] || [ -L "$dir/$name" ]; then
+            mv "$dir/$name" "$bk/" || die "could not move $dir/$name to $bk"
+            log "  moved $name -> $bk/ (the checkout has its own)"
+            moved=$((moved + 1))
+        fi
+    done <<< "$tops"
+    [ "$moved" -gt 0 ] || rmdir "$bk" 2>/dev/null
+    [ -z "$acct" ] || [ ! -d "$bk" ] || chown -R "$acct:$acct" "$bk"
+    _pg "git -C '$dir' checkout -q -b main --track origin/main" \
+        || die "git checkout failed in $dir -- the entries moved aside are in $bk"
+    [ ! -d "$bk" ] || {
+        log "Diff against the moved entries (differences are the old copy's own edits):"
+        diff -rq "$bk" "$dir" 2>&1 | grep -v "^Only in $dir" || true
+    }
+}
+
 explain_pull_failure() {   # <repo dir> [account]
     local dir="$1" as="${2:-}" g dirty ahead
     if [ -n "$as" ]; then g="su $as -c"; else g="bash -c"; fi
@@ -5212,25 +5251,8 @@ if [ -d "$REPO_DIR/.git" ]; then
 
 elif [ -d "$REPO_DIR" ] && [ -n "$(ls -A "$REPO_DIR" 2>/dev/null)" ]; then
     log "$REPO_DIR exists with files but is not a git repo (plain scripts from an earlier manual copy?)"
-    log "Backing up any of the 3 tracked scripts that would collide with the checkout..."
     BACKUP_DIR="${REPO_DIR}.bak-preGit-$(date +%Y%m%d%H%M%S)"
-    mkdir -p "$BACKUP_DIR"
-    for f in snapsend.sh snapget.sh delsnaps.sh; do
-        if [ -e "$REPO_DIR/$f" ]; then
-            mv "$REPO_DIR/$f" "$BACKUP_DIR/"
-            log "  moved $f -> $BACKUP_DIR/"
-        fi
-    done
-
-    ( cd "$REPO_DIR" \
-      && git init \
-      && git remote add origin "$REPO_URL" \
-      && git fetch origin \
-      && git checkout -b main --track origin/main ) \
-      || die "git init/checkout failed"
-
-    log "Diff against backup (should be empty besides new .git/.gitignore/.gitattributes):"
-    diff -rq "$BACKUP_DIR" "$REPO_DIR" 2>&1 | grep -v "^Only in $REPO_DIR:" || true
+    pregit_checkout "$REPO_DIR" "$REPO_URL" "$BACKUP_DIR"
 
 else
     log "$REPO_DIR does not exist or is empty -- plain clone"
@@ -8089,21 +8111,8 @@ else
 
     elif [ -d "$ACCOUNT_REPO_DIR" ] && [ -n "$(ls -A "$ACCOUNT_REPO_DIR" 2>/dev/null)" ]; then
         log "$ACCOUNT_REPO_DIR exists with files but is not a git repo (plain scripts from an earlier manual copy?)"
-        BACKUP_DIR="${REPO_DIR}.bak-preGit-$(date +%Y%m%d%H%M%S)"
-        mkdir -p "$BACKUP_DIR"
-        for f in snapsend.sh snapget.sh delsnaps.sh gen-cron.sh; do
-            if [ -e "$ACCOUNT_REPO_DIR/$f" ]; then
-                mv "$ACCOUNT_REPO_DIR/$f" "$BACKUP_DIR/"
-                log "  moved $f -> $BACKUP_DIR/"
-            fi
-        done
-        chown -R "$USERNAME:$USERNAME" "$BACKUP_DIR"
-
-        su "$USERNAME" -c "cd '$ACCOUNT_REPO_DIR' && git init && git remote add origin '$REPO_URL' && git fetch origin && git checkout -b main --track origin/main" \
-            || die "git init/checkout failed"
-
-        log "Diff against backup (should be empty besides new .git/.gitignore/.gitattributes):"
-        diff -rq "$BACKUP_DIR" "$ACCOUNT_REPO_DIR" 2>&1 | grep -v "^Only in $ACCOUNT_REPO_DIR:" || true
+        BACKUP_DIR="${ACCOUNT_REPO_DIR}.bak-preGit-$(date +%Y%m%d%H%M%S)"
+        pregit_checkout "$ACCOUNT_REPO_DIR" "$REPO_URL" "$BACKUP_DIR" "$USERNAME"
 
     else
         log "$ACCOUNT_REPO_DIR does not exist or is empty -- plain clone"
