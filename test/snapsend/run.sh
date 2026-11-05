@@ -1762,8 +1762,9 @@ done
 # A pair with a common snapshot; one discovery step is broken at a time: the local filter
 # (an awk that fails only on get_sorted_snapshots' program), the target listing in
 # find_common_snapshot (1st call) or in the conflict scan (2nd call), the source listing in
-# the conflict scan, the target's existence check ("permission denied" is not "absent"). Each must end rc 2 with INCOMPLETE on stderr, the diagnostic, no PLAN=
-# line, no conflict list, no destroy, the target untouched. Old engines answered rc 0/1 with
+# the conflict scan, the target's existence check ("permission denied" is not "absent").
+# Each must end rc 2 with INCOMPLETE on stderr, the diagnostic, no PLAN= line, no conflict
+# list, no destroy, the target untouched. Old engines answered rc 0/1 with
 # an empty or partial picture. Controls: the healthy pair (rc 0, PLAN=INCREMENTAL) and a
 # real conflict (rc 1, the extra snapshot listed).
 mkdir -p "$R186D/f5cbin"
@@ -1813,7 +1814,8 @@ for eng in send get; do
     for f5c in "filter|F5C_AWK=1|Could not filter the snapshot list" \
                "target listing in find_common_snapshot|F5C_DS=$T F5C_SKIP=0|Could not list the snapshots of '$T'" \
                "target listing in the conflict scan|F5C_DS=$T F5C_SKIP=1|Could not list the snapshots of '$T'" \
-               "source listing in the conflict scan|F5C_DS=$S F5C_SKIP=1|Could not list the snapshots of '$S'"                "target existence check (permission denied)|F5C_EX=$T|Could not establish whether '$T'"; do
+               "source listing in the conflict scan|F5C_DS=$S F5C_SKIP=1|Could not list the snapshots of '$S'" \
+               "target existence check (permission denied)|F5C_EX=$T|Could not establish whether '$T'"; do
         what="${f5c%%|*}"; rest="${f5c#*|}"; envs="${rest%%|*}"; diag="${rest#*|}"
         d0=$(cat "$R186_LOG" 2>/dev/null | wc -l)
         # shellcheck disable=SC2086

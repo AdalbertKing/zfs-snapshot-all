@@ -1254,6 +1254,9 @@ Owner-authorized refreezes:
     failure), so an unanswerable source child fails the scan instead of being skipped
     (snapget.sh) or read as gone (snapsend.sh's plain `zfs list`);
     `find_common_snapshot` and the recursion propagate their status.
+  - `find_common_snapshot`: the target is asked with `dataset_presence` as well, so a check that
+    fails (locally any `zfs list` error, over ssh a remote rc 1) is no longer "absent", "null"
+    and a first copy -- in the real run as in -n.
   - `process_dataset -n`: a failed `find_common_snapshot`, conflict scan or bookmark-base
     target listing returns 1 with a diagnostic and prints no PLAN= line; the -n run exits 2
     with `INCOMPLETE: <dataset>` on stderr (1 still means "conflict list on stdout"). Every

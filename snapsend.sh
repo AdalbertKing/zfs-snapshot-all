@@ -1071,8 +1071,10 @@ find_common_snapshot() {
     # target_exists is three-valued: 2 means the host could not be reached, and
     # collapsing that into "null" here would announce a first send (full stream,
     # no common base) purely because ssh was broken.
+    # REV-186 round 3: asked with dataset_presence -- over ssh a remote `zfs list` rc 1
+    # and locally any failure used to be "absent" too; now only zfs's own words are.
     local tgt_snaps
-    target_exists "$tgt_dataset" "$remote_user" "$remote_host"
+    dataset_presence "$tgt_dataset" "$remote_user" "$remote_host"
     case $? in
         1) echo -n "null"; return 0 ;;
         2) return 1 ;;

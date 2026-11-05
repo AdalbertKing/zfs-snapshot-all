@@ -986,11 +986,14 @@ find_common_snapshot() {
     # base -- "null", not an error. This is reachable under -w, where the leaf
     # is created by recv rather than pre-created, so the first pull legitimately
     # runs against a target that is not there yet.
+    # REV-186 round 3: "not there" only on zfs's own words (dataset_presence); a check
+    # that fails ("permission denied", a pool error) is no common base AND no first copy.
     local tgt_snaps
-    if ! target_exists "$tgt_dataset"; then
-        echo -n "null"
-        return 0
-    fi
+    dataset_presence "$tgt_dataset"
+    case $? in
+        1) echo -n "null"; return 0 ;;
+        2) return 1 ;;
+    esac
     tgt_snaps=($(get_sorted_snapshots "$tgt_dataset")) || return 1
 
     for ((i=${#src_snaps[@]}-1; i>=0; i--)); do
