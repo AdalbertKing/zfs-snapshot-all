@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: cccc05df1008ed50 -->
+<!-- status-covers-digest: 1b9343c08ca82f71 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -35,6 +35,9 @@
   robi -- teraz „przy najbliższym biegu z crona”.
   REV-20261105-188 (recenzent, U149-c): `zfs list`, które padło przy sprawdzaniu listy quiesce, dawało
   pustą odpowiedź („brak luk”); teraz linia `? <dataset> <powód>` i ostrzeżenie instalacji „UNKNOWN”.
+  U165 (CI, rodzina U149): `cron_block_source` czytał blok przez `grep -m1`, który kończy po pierwszym
+  `# Source:`; `sed` pisał dalej do zamkniętego potoku: kod 141 przy domyślnym SIGPIPE, kod 4 przy zignorowanym
+  (wtedy komunikat `Broken pipe` trafił do JSON-a `list-jobs`). Teraz `awk` czyta do końca.
   Zostaje: w oknach `--scrolltext` Enter nie zamyka (fokus na tekście, Tab+Enter) -- zachowanie whiptaila,
   nie zmienione; T12 odłożone (wpis niżej).
 - **Paczka po teście od zera i U149 (2026-11-05, gałąź `fix/batch-zero-test`; NIEWYDANE).** Poprawione
