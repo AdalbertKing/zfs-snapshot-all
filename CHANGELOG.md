@@ -6,7 +6,7 @@ when they change how the tool is used.
 
 ## [1.0.12] — 2026-11-05
 
-- **apt 404 on a dependency** (first install on Debian 11, A-TASSA pve0): the 404 fallback of
+- **apt 404 on a dependency** (first install on a Debian 11 source host): the 404 fallback of
   1.0.11 pinned only the package it installed, so `git` from the main archive still pulled
   `git-man` from the security archive and the wizard's source preparation failed. Every apt
   install the tool does (`deploy.sh`'s dependencies, git and sudo on the source) now also pins

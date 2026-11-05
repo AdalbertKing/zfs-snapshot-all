@@ -3464,7 +3464,7 @@ apt_install_with_fallback() {
     # security.debian.org no longer served, and the same package from the main
     # archive installed. Retries with the newest non-security version of the
     # package AND of every dependency apt names in a 404 (git alone left git-man
-    # on the security archive, A-TASSA pve0 2026-11-05), said out loud.
+    # on the security archive, a Debian 11 source 2026-11-05), said out loud.
     for try in 1 2 3; do
         printf '%s' "$out" | grep_q '404' || break
         new=$(apt_main_archive_pins "$pkg" "$out" "$pins")
@@ -3483,7 +3483,7 @@ apt_install_with_fallback() {
 #
 # The pins so far, plus <package> and every package apt's output shows a 404
 # for, each at its newest version outside the security archive. Pinning the
-# named package alone is not enough: on A-TASSA pve0 (2026-11-05) git from the
+# named package alone is not enough: on a Debian 11 source (2026-11-05) git from the
 # main archive still pulled git-man from the security archive -- a 404 again.
 # A name with no such version stays out, and so does anything that is not a
 # Debian package name or version: apt's output is data, and the pins go

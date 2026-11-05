@@ -15470,7 +15470,7 @@ remote_apt_install_cmd() {
 #
 # The pins so far, plus <package> and every package apt's output shows a 404
 # for, each at its newest version outside the security archive. Pinning the
-# named package alone is not enough: on A-TASSA pve0 (2026-11-05) git from the
+# named package alone is not enough: on a Debian 11 source (2026-11-05) git from the
 # main archive still pulled git-man from the security archive -- a 404 again.
 # A name with no such version stays out, and so does anything that is not a
 # Debian package name or version: apt's output is data, and the pins go
