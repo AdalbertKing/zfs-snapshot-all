@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 e347d3af5a451107600ff545dbdca35ff16522e0 -->
-<!-- frozen: snapget.sh 100755 0913b107607e6b01e48d9b218589bb860b8cfd64 -->
+<!-- frozen: snapsend.sh 100755 7bfe3a139e06521c0fced24b32758327ea3bd369 -->
+<!-- frozen: snapget.sh 100755 2c5cf8855f80f694d705596e799887dcdd7dcf49 -->
 <!-- frozen: delsnaps.sh 100755 d02e8d449e56913b8a8794d0483758a77ee0e505 -->
 <!-- frozen: check-snap-age.sh 100755 821030d457b18a73a3ba1cbb755d533434027add -->
 <!-- frozen: lib-zfs-snap.sh 100644 54dc026d1cfb81a360f13812ae5a593ab8f26cbe -->
@@ -1264,6 +1264,9 @@ Owner-authorized refreezes:
   - the -n main loop: a failed dataset's conflicts are cut from `CONFLICT_SNAPSHOTS` (back to
     the length before it), so a -r scan that failed in a child no longer prints the parent's
     half of the list.
+  - `process_dataset`, the real run: a failed `find_common_snapshot` refuses the dataset
+    ("could not be compared -- NO transfer"); before, its empty answer reached the send as
+    `-I <src>@`. The reconcile (-F) branch treats it as an incomplete collision scan (no upgrade).
   twin: snapsend.sh <-> snapget.sh changed symmetrically, both bookmark-base branches included.
 - 2026-11-04 (check-snap-age.sh): **U164 -- an -R root with a foreign snapshot is a container.**
   Owner direction ("Proszę przejść do implementacji", the U161-U164 batch, 2026-11-04), found
