@@ -44,7 +44,7 @@
   `<cel>/<landing>`; teraz `--landing` idzie do `deploy.sh --pair`. GUI: lista migawek na źródle pomija
   wykluczone (D4), „nazwa”/„okno” w angielskim GUI tłumaczone (D5, D11), wiersz Datasety w zmianie
   relacji pokazuje nową listę (D12). WDROZENIE-PROXMOX: klon do `/root/scripts/zfs-snapshot-all` (D2).
-  Zostaje: O9 (szczebel dwa razy w panelu F3 przy dwóch grupach monitorów, bez podpisu).
+  Zostaje (O9 z notatki tego testu): szczebel dwa razy w panelu F3 przy dwóch grupach monitorów, bez podpisu.
   Zostaje: w oknach `--scrolltext` Enter nie zamyka (fokus na tekście, Tab+Enter) -- zachowanie whiptaila,
   nie zmienione; T12 odłożone (wpis niżej).
 - **Paczka po teście od zera i U149 (2026-11-05, gałąź `fix/batch-zero-test`; NIEWYDANE).** Poprawione
