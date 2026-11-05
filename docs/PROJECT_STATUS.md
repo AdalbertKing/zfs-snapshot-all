@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 9cd0c242a5dd9cae -->
+<!-- status-covers-digest: cccc05df1008ed50 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,23 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **T8, T10, T11 naprawione i sprawdzone na labie (2026-11-05, gałąź `fix/t10-t11`; NIEWYDANE).** Sprawdzone na pve11
+  (kolektor) i pve9b (migawki zdalne):
+  (T10) dataset dodany do relacji migawek zdalnych, bez migawek, miał w wierszu „aktualne” -- zakres
+  `konto@host:dataset` nie pasował do linii monitora; teraz „czeka na pierwszy termin”. Szczebel całej
+  relacji nie „czeka” już przez jeden taki dataset, gdy pozostałe mają migawki;
+  (T11) nagłówek „! bez odpowiedzi: 1” na hoście, którego jedyna relacja chodzi na koncie delegowanym:
+  `list-replicas` padał bez configu roota; teraz brak configu to pusta lista (jawne `--config=` do
+  nieistniejącego pliku nadal FATAL). GUI startuje po angielsku z założenia (`gui.language` = en);
+  ESENCJA i ESSENTIALS mówią, jak przełączyć (F10 `language` albo `settings set gui.language=pl --yes`);
+  (T8, drugi przypadek tej samej wady) plan odrzucony przez czasownik (np. dataset w innej relacji) pokazywał tę samą odmowę bez końca;
+  teraz wraca do podsumowania z odpowiedziami;
+  plan zmiany relacji obiecywał „pierwsza migawka/kopia od razu”, a `set-datasets` niczego od razu nie
+  robi -- teraz „przy najbliższym biegu z crona”.
+  REV-20261105-188 (recenzent, U149-c): `zfs list`, które padło przy sprawdzaniu listy quiesce, dawało
+  pustą odpowiedź („brak luk”); teraz linia `? <dataset> <powód>` i ostrzeżenie instalacji „UNKNOWN”.
+  Zostaje: w oknach `--scrolltext` Enter nie zamyka (fokus na tekście, Tab+Enter) -- zachowanie whiptaila,
+  nie zmienione; T12 odłożone (wpis niżej).
 - **Paczka po teście od zera i U149 (2026-11-05, gałąź `fix/batch-zero-test`; NIEWYDANE).** Poprawione
   wady T1-T9 z testu pierwszej instalacji na labie:
   (T1) `check-source` uznaje katalog za pakiet tylko z `.git`; stary katalog bez `.git` daje okno
@@ -45,7 +62,7 @@
   U148 zrobione: CT 105 wyłączony z `migawki-hdd-lxc` na pve0, kopia stanu sprzed zmiany w
   `/root/u148-przed-20261105`. Odłożone: T12 (fałszywe WARNING silnika „neither -r nor -R” dla rodzica
   `[-]`) -- token `--recursive=no` w linii crona zmieniłby tożsamość każdej linii nierekurencyjnej i
-  `hostscripts/capacity-guard.sh` by go odrzucił; T10, T11 niezbadane.
+  `hostscripts/capacity-guard.sh` by go odrzucił; T10, T11 -- wpis wyżej.
 - **Fałszywy brak korzenia listy -R: UNKNOWN monitora i błąd czyszczenia (2026-11-05, U149, gałąź
   `fix/u149-pipefail-sigpipe`; NIEWYDANE).** Monitor (`check-snap-age.sh -R`) i czyszczenie
   (`delsnaps.sh -R`) sprawdzały korzeń listy przez `printf | grep -qxF` pod `set -o pipefail`; `grep -q`

@@ -1425,7 +1425,10 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
           grep -v -- '--grant-remotely is noted' "$TMPD/plan.txt" | plan_only_this "$RNAME"; } >"$TMPD/plan2.txt"
         if [ "$rc" -ne 0 ]; then
             wt --title "$(title 10 "$(T 'Plan ODRZUCONY przez czasownik')")" --scrolltext --msgbox "$(cat "$TMPD/plan2.txt")" "$H" "$W"
-            continue
+            # T8 (lab 2026-11-05): `continue` pytał czasownik o TEN SAM plan i pokazywał tę samą
+            # odmowę bez końca -- OK i Esc wracały do niej. Z powrotem na podsumowanie: odpowiedzi
+            # zostają, a poprawia się tam, gdzie odmowa wskazuje (np. nazwa, datasety).
+            return 4
         fi
         local planf="$TMPD/plan2.txt"
         if [ -n "${ZFS_TUI_LOG:-}" ]; then planf="${ZFS_TUI_LOG%.log}-plan.txt"; cp -f "$TMPD/plan2.txt" "$planf" 2>/dev/null || planf="$TMPD/plan2.txt"; fi

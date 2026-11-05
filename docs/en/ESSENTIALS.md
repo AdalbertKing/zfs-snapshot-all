@@ -48,6 +48,14 @@ server console.
 
    The collector needs SSH access to the source host as root; the wizard installs the package on the source by itself.
 
+   The GUI starts in English. For Polish: **F10** (host settings), item `language` = `pl`, or
+
+   ```bash
+   zfs-backup settings set gui.language=pl --yes
+   ```
+
+   Command output stays in English.
+
 3. Check after an hour: **F2 Przebiegi (runs)** (what ran and what runs next, with errors).
 
 ## Day to day

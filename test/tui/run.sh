@@ -425,6 +425,38 @@ else
     bad "odswiezanie: szablony i config po powrocie" "got=$RFOUT (chce: 1 2 False)"
 fi
 
+# T10 (test od zera, 2026-11-05, pve11 -> pve9b): migawki zdalne, hdd/fz0c dodany do chodzacej
+# relacji, bez migawek. Monitor (ksztalt z zywego `monitor --json`): fz0a/fz0b OK (bez linii),
+# fz0c WAITING. Bylo: wiersz fz0c "aktualne" (zakres "konto@host:ds" nie pasowal do linii), a
+# szczebel hourly calej relacji "czeka" przez jeden dataset. Kontrola: monitor, w ktorym czeka
+# KAZDY dataset, dalej CZEKA; relacja lokalna z -R i czekajacym dzieckiem tez.
+T10OUT="$("$PY" - "$TUI" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+H = "zfsbackup-pve11@192.168.28.98:"
+def mon(reason, dss):
+    return {"label": "pve9b", "pattern": "automated_hourly_", "verdict": "OK", "recursive": True,
+            "datasets": [H + d for d in dss], "reason": reason}
+W = "WAITING dataset=%s%s pattern=automated_hourly_ -- no snapshot of this family since the relationship's start age=7m (warn=90m crit=150m)"
+one = mon(W % (H, "hdd/fz0c"), ["hdd/fz0a", "hdd/fz0b", "hdd/fz0c"])
+allw = mon("\n".join(W % (H, d) for d in ("hdd/fz0a", "hdd/fz0b", "hdd/fz0c")), ["hdd/fz0a", "hdd/fz0b", "hdd/fz0c"])
+loc = {"label": "l", "pattern": "automated_hourly", "verdict": "OK", "recursive": True,
+       "datasets": ["hdd/lxc"], "reason": "WAITING dataset=hdd/lxc/subvol-1-disk-0 pattern=automated_hourly -- x"}
+m.mark_waiting({"monitors": [one, allw, loc]})
+job = lambda d: {"scope": H + d, "direction": "snaponly", "prefix": "automated_hourly_", "label": "pve9b"}
+r = [one["verdict"], allw["verdict"], loc["verdict"],
+     m.verdict_for_job(job("hdd/fz0c"), [one])[0], m.verdict_for_job(job("hdd/fz0a"), [one])[0]]
+print(" ".join(r))
+PYEOF
+)"
+if [ "$T10OUT" = "OK CZEKA CZEKA CZEKA OK" ]; then
+    ok "T10: migawki zdalne -- dataset bez migawek 'czeka', jego sasiedzi 'aktualne', szczebel chodzi; monitor, w ktorym czeka kazdy dataset (i -R z czekajacym dzieckiem), dalej 'czeka'"
+else
+    bad "T10: werdykt datasetu migawek zdalnych" "got=$T10OUT (chce: OK CZEKA CZEKA CZEKA OK)"
+fi
+
 # KOLUMNA NASTEPNY i wszystkie daty GUI: jeden zapis "RRRR.MM.DD HH:MM" (wlasciciel 2026-10-29:
 # "preferuję jednak wszędzie w pakiecie YYYY.MM.DD"). Zastepuje R3-4 (dzis/jutro/dzien tygodnia/
 # DD.MM): dzis, jutro, za kilka dni i za dwa tygodnie -- zawsze z rokiem. Oczekiwane napisy
@@ -3146,7 +3178,9 @@ case "$1" in
                     elif [ -n "${NR_FLAT:-}" ]; then sed 's/"profile": *"default"/"profile":"d30h24"/g' "$NR_FIX/status.json"     # konto root "plaskie"
                     else cat "$NR_FIX/status.json"; fi ;;
     --source=*)     case "$1" in --source=*:*) ;; *)   # kopia lokalna: bez hosta, bez praw
-                        case " $* " in *" --install "*) echo ">>> atrapa: lokalna zainstalowana"; exit 0 ;; *) echo "Plan lokalnego backupu (atrapa)"; exit 0 ;; esac ;; esac
+                        # NR_PLAN_FATAL (T8, lab 2026-11-05): plan odrzucony przez czasownik, nic nie zmienione.
+                        case " $* " in *" --install "*) echo ">>> atrapa: lokalna zainstalowana"; exit 0 ;;
+                            *) [ -n "${NR_PLAN_FATAL:-}" ] && { echo "FATAL: $NR_PLAN_FATAL"; exit 1; }; echo "Plan lokalnego backupu (atrapa)"; exit 0 ;; esac ;; esac
                     case " $* " in
                         *" --install "*) case " $* " in
                                 *" --grant-remotely "*)
@@ -4015,6 +4049,26 @@ if grep -qF 'Cel nakłada się na źródło' "$NR/wt.log" && grep -q -- '--targe
     ok "new-relation: kopia lokalna -- cel wewnatrz zrodla odrzucony od razu w kroku Dokad, drugi cel przechodzi"
 else
     bad "new-relation: cel wewnatrz zrodla" "rc=$NRRC" "$(cat "$NR/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | tr '\n' ';')"
+fi
+# T8 (lab pve11 2026-11-05): plan ODRZUCONY przez czasownik (dataset w innej relacji) wracal
+# `continue` do pytania o TEN SAM plan -- ta sama odmowa bez konca, OK i Esc wracaly do niej.
+# Teraz: odmowa -> podsumowanie z odpowiedziami, jedno pytanie o plan; Esc na karcie i Przerwij.
+NROUT=$(nr_run "0${T}local
+0${T}kopie
+0${T}default
+0${T}t8-plan
+0${T}root
+0${T}create
+0${T}
+1${T}
+0${T}
+" NR_PLAN_FATAL="atrapa: these sources already belong to another relationship" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter|goto:hdd,ins'); NRRC=$?
+t8p=$(awk '/ODRZUCONY/ && !f {f = NR} f && NR > f && /Nowa relacja -- podsumowanie/ {print "back"; exit}' "$NR/wt.log")
+t8n=$(grep -c -- '^--source=hdd/backups/192.168.28.99/hdd/lab ' "$NR/zb.log")
+if [ "$t8p" = back ] && [ "$t8n" -eq 1 ] && [ "$NRRC" -eq 1 ]; then
+    ok "T8: plan odrzucony przez czasownik -- z powrotem na podsumowanie (odpowiedzi zostaja), jedno pytanie o plan, Przerwij konczy"
+else
+    bad "T8: plan odrzucony w kolko" "rc=$NRRC back=$t8p plany=$t8n" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | tr '\n' ';' | cut -c1-600)"
 fi
 # 3h. KOPIA LOKALNA (wlasciciel 2026-10-09): trzecia pozycja w kroku 1. Bez hosta i
 #     diagnozy, koszyk z datasetow TEGO hosta (list-datasets bez adresu), bez "Sposobu"
@@ -5611,7 +5665,7 @@ EROUT=$(ER_TREE='goto:hdd/iso,space,goto:hdd/data,space,space,enter' er_run "0${
 "); ERRC=$?
 ERB="$(cat "$ER/tree.log" 2>/dev/null)"
 if [ "$ERRC" -eq 0 ] && grep -qx 'set-datasets r1 --dataset=hdd/iso:flat --yes' "$ER/zb.log" && ! grep -qE '^(add|remove)-source' "$ER/zb.log" \
-   && grep -qF 'DOJDĄ' "$ER/wt.log" && grep -qF 'ODPADNĄ' "$ER/wt.log" && has "$ERB" 'Co kopiować z' && has "$ERB" '[ ] data' && has "$ERB" '[x] iso' \
+   && grep -qF 'DOJDĄ' "$ER/wt.log" && ! grep -qF 'od razu' "$ER/wt.log" && grep -qF 'ODPADNĄ' "$ER/wt.log" && has "$ERB" 'Co kopiować z' && has "$ERB" '[ ] data' && has "$ERB" '[x] iso' \
    && ! has "$ERB" 'Wyjątki' && ! has "$ERB" 'Sposób'; then
     ok "edit-relation: Datasety -- koszyk z configu (relation-sources), kilka zmian, jeden plan DOJDA/ODPADNA, JEDNO set-datasets --yes ze stanem docelowym; bez Sposob"
 else
