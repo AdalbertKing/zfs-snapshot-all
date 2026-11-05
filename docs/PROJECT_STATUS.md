@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 278fa6b7bc0517c5 -->
+<!-- status-covers-digest: bf7d53d83148fcc5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,15 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **A-TASSA, wdrożenie 1.0.11 (2026-11-05 wieczór; poprawka w gałęzi `fix/apt-404-deps`, niewydane).**
+  Kolektor pve1 (192.168.0.10): `deploy.sh --backup-user=zfsbackup` przeszedł, sudo doinstalowane obejściem
+  404 z 1.0.11; jedyna uwaga audytu to poczta (7 maili w kolejce, brak relayhosta -- decyzja właściciela).
+  Kreator (migawki zdalne, źródło pve0 192.168.0.11) padł na instalacji gita na źródle: obejście 404
+  przypinało tylko `git`, a jego zależność `git-man` szła dalej z archiwum security (404). Poprawka:
+  `apt_main_archive_pins` w `deploy.sh` i `zfs-backup.sh` przypina też każdy pakiet z linii 404 apt, który ma wersję spoza archiwum security (do trzech prób);
+  test na atrapie odwzorowującej apt z pve1 przechodzi, na `main` pada. Instrukcja wdrożenia podaje
+  ręczne przypięcie `git` + `git-man` dla pierwszego gita na Debianie 11. Obie pule pve0 DEGRADED (bez
+  zmian od 11-04).
 - **T8, T10, T11 naprawione i sprawdzone na labie (2026-11-05, gałąź `fix/t10-t11`; wydane w 1.0.11).** Sprawdzone na pve11
   (kolektor) i pve9b (migawki zdalne):
   (T10) dataset dodany do relacji migawek zdalnych, bez migawek, miał w wierszu „aktualne” -- zakres

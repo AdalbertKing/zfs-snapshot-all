@@ -4,6 +4,17 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [1.0.12] — 2026-11-05
+
+- **apt 404 on a dependency** (first install on Debian 11, A-TASSA pve0): the 404 fallback of
+  1.0.11 pinned only the package it installed, so `git` from the main archive still pulled
+  `git-man` from the security archive and the wizard's source preparation failed. Every apt
+  install the tool does (`deploy.sh`'s dependencies, git and sudo on the source) now also pins
+  each package named in apt's 404 lines to its newest version outside the security archive, up
+  to three tries.
+- **Deployment guide:** the first `git` on Debian 11, before the package exists, names the same
+  pinning by hand (`git` and `git-man`).
+
 ## [1.0.11] — 2026-11-05
 
 - **No false "monitor BROKEN" and no failed bookmark prune from a pipe** (U149, U165). Under
