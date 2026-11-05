@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: be57b313b377ffe5 -->
+<!-- status-covers-digest: 9dc3b863aad29fb7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -43,8 +43,9 @@
   labu (pve10:pve11, pve9:pve11, pve11:pve10, migawki-a, migawki-b), hosty wróciły na wydanie `b48ae26c`
   bez hold. Lustrzana strona: `--leave` na pve11 usunął pusty `relationships/pve10`, czyli katalog klienta
   pve10 na tym kolektorze. Skutków nie ma: pauza odtwarza katalog (sprawdzone: pause, resume, 2 done). Jeśli
-  jednak klient jest wstrzymany, `--leave` zostawi ten katalog z ostrzeżeniem, które nazywa jego zawartość
-  „disable marker”, a to jest znacznik pauzy. Tego nie poprawiono.
+  jednak klient jest wstrzymany, `--leave` zostawia ten katalog. Ostrzeżenie nazywało wtedy znacznik pauzy
+  „disable marker”. Od `54c550a0` wypisuje zawartość katalogu i mówi, co znaczy `disabled`, a co `paused`
+  (test/restoregrant, czerwony na deploy.sh z main).
 
 - **Pierwsza instalacja, trzecia paczka (2026-11-05, `e31a6e80`, `49089baf`, `--uninstall`; NIEWYDANE).**
   (A) apt i 404: na Debianie 11 listy pakietów wskazywały pakiety .deb z bullseye-security (git deb11u5, sudo
