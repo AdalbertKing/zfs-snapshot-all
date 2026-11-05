@@ -3736,6 +3736,46 @@ pull_check() {   # <local dataset> <src value>  -> 0 valid, 1 invalid
 # Every semantic check a config must pass before ANY consumer trusts it.
 # Called before the --reconcile branch as well as before emission, so the audit
 # and the generator accept exactly the same inputs.
+# lint_tier_minutes: two tiers of ONE dataset that start in the same minute.
+# The engines take one lock per dataset, so the second waits for the first or
+# gives up (snapget exit 75) -- on pve2 (2026-10-26 .. 11-05) the daily copy
+# lost to the hourly one every night after a config edit put all tiers on :40.
+# A warning, not a refusal: the data is safe, only that run is lost. Decided
+# from the first two cron fields; a literal minute shared by two tiers whose
+# hours can meet ('*' or the same literal) is the case found live. Days are not
+# compared: an hourly tier meets every day, and two tiers that meet on some day
+# still lose that day's run.
+lint_tier_minutes() {
+    local e ds tier schedule rest key m h
+    declare -A _tm=()
+    for e in "${SEND_ENTITIES[@]+"${SEND_ENTITIES[@]}"}" "${SNAPONLY_ENTITIES[@]+"${SNAPONLY_ENTITIES[@]}"}"; do
+        IFS="$SEP" read -r ds tier schedule rest <<< "$e"
+        [ -n "$schedule" ] || continue
+        read -r m h _ <<< "$schedule"
+        case "$m" in ''|*[!0-9]*) continue ;; esac
+        key="$ds${SEP}$m"
+        _tm[$key]+="${tier}=${h}${LSEP}"
+    done
+    local k list a b ta tb ha hb
+    for k in "${!_tm[@]}"; do
+        list="${_tm[$k]}"
+        local -a its=()
+        IFS="$LSEP" read -ra its <<< "${list%${LSEP}}"
+        [ "${#its[@]}" -gt 1 ] || continue
+        for a in "${!its[@]}"; do
+            for b in "${!its[@]}"; do
+                [ "$a" -lt "$b" ] || continue
+                ta="${its[$a]%%=*}"; ha="${its[$a]#*=}"
+                tb="${its[$b]%%=*}"; hb="${its[$b]#*=}"
+                [ "$ta" != "$tb" ] || continue
+                if [ "$ha" = '*' ] || [ "$hb" = '*' ] || [ "$ha" = "$hb" ]; then
+                    warn "[dataset:${k%%${SEP}*}]: tiers $ta and $tb both start at minute ${k##*${SEP}} (hours '$ha' and '$hb' meet) -- one lock per dataset, so the later run waits or gives up (exit 75). Give each tier its own minute."
+                fi
+            done
+        done
+    done
+}
+
 validate_transfer_semantics() {
     local key list ds tier schedule dst prefix flags notify label direction
     for key in "${SEND_GROUP_ORDER[@]+"${SEND_GROUP_ORDER[@]}"}"; do
@@ -5537,6 +5577,7 @@ group_monitor
 validate_retain_patterns
 validate_media_anchor_prune
 validate_transfer_semantics
+lint_tier_minutes
 
 if [ "${RECONCILE:-0}" -eq 1 ]; then
     do_reconcile

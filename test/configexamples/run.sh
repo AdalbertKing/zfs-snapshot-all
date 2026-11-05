@@ -180,6 +180,21 @@ else
     echo "FAIL coverage/negctl-stale (a stale registry entry was NOT flagged -- guard is inert)"; fail=$((fail+1))
 fi
 
+# U149-a (pve2, 2026-10-26 .. 11-05): two tiers of one dataset starting in the
+# same minute lose a run to the per-dataset lock. The example as shipped is
+# silent; the same example with daily moved onto hourly's minute warns, naming
+# the dataset, both tiers and the minute.
+r="$(render "$EXAMPLES/independent-tiers.conf")"
+if printf '%s\n' "$r" | grep -q 'both start at minute'; then
+    echo "FAIL tier-minutes/silent (the shipped example warns about a collision it does not have)"; fail=$((fail+1))
+else
+    echo "PASS tier-minutes/silent"; pass=$((pass+1))
+fi
+_tmc="$(mktemp)"
+sed 's/^\(\s*send_schedule  = \)10 0 \* \* \*/\15 0 * * */' "$EXAMPLES/independent-tiers.conf" > "$_tmc"
+r="$(render "$_tmc")"; rm -f "$_tmc"
+assert_has "$r" "warning: \[dataset:tank/vm-100-disk-0\]: tiers hourly and daily both start at minute 5 " "tier-minutes/collision"
+
 echo "----------------------------------------"
 echo "pass=$pass fail=$fail"
 [ "$fail" -eq 0 ]
