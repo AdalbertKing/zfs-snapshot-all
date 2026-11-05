@@ -66,6 +66,12 @@ apt-get install -y git      # świeży Proxmox nie ma gita
 git clone https://github.com/AdalbertKing/zfsbackup.git /root/scripts/zfs-snapshot-all
 ```
 
+> **Debian 11 (Proxmox 7):** `security.debian.org` nie ma już pakietów bullseye, które wskazują
+> listy apt, więc `apt-get install -y git` kończy się `404 Not Found`. Wtedy weź `git` i `git-man`
+> z archiwum głównego, w tej samej wersji (pokazuje ją `apt-cache madison git git-man`, wiersz bez
+> `security`), np. `apt-get install -y git=1:2.30.2-1+deb11u2 git-man=1:2.30.2-1+deb11u2`.
+> Dalsze pakiety (sudo, git na źródle) narzędzie instaluje samo i wersje przypina automatycznie.
+
 > **Nigdy nie kopiuj skryptów przez `scp`/`pscp` na hosty.** Aktualizacje
 > chodzą przez `git pull --ff-only` co godzinę. Plik podmieniony ręcznie
 > zabrudzi drzewo i **trwale zablokuje automatyczne aktualizacje** na tym

@@ -13845,6 +13845,7 @@ EOF
 chmod +x "$AP/apt-get" "$AP/apt-cache"
 if grep -q '^remote_apt_install_cmd() {' "$ZFSBACKUP"; then
     eval "$(product_fn "$ZFSBACKUP" remote_apt_install_cmd)"
+    eval "$(product_fn "$ZFSBACKUP" apt_main_archive_pins)"
     : > "$AP/log"; r404_rc=0; r404=$(PATH="$AP:$PATH" APT_LOG="$AP/log" APT404=1 bash -c "$(remote_apt_install_cmd git)" 2>&1) || r404_rc=$?
     r404_log=$(cat "$AP/log")
     : > "$AP/log"; rno_rc=0; rno=$(PATH="$AP:$PATH" APT_LOG="$AP/log" APT404=0 bash -c "$(remote_apt_install_cmd git)" 2>&1) || rno_rc=$?
@@ -13863,6 +13864,7 @@ fi
 (
     warn() { echo "!!! $*" >&2; }
     eval "$(product_fn "$REPO/deploy.sh" apt_install_with_fallback)"
+    eval "$(product_fn "$REPO/deploy.sh" apt_main_archive_pins)"
     export PATH="$AP:$PATH" APT_LOG="$AP/log"
     : > "$AP/log"; d404_rc=0; APT404=1 apt_install_with_fallback git > "$AP/d404.out" 2>&1 || d404_rc=$?
     d404_log=$(cat "$AP/log"); d404_fb="$APT_FALLBACK"
@@ -13884,6 +13886,69 @@ case "$(tail -1 "$AP/deploy.res")" in
     *)    bad "apt 404: deploy.sh apt_install_with_fallback" "$(cat "$AP/deploy.res")" ;;
 esac
 rm -rf "$AP"
+# apt 404 on a DEPENDENCY (A-TASSA pve0, 2026-11-05): git from the main archive
+# still pulled git-man from the security archive -- a 404 again, and the
+# wizard's prepare-source failed. The stub is apt as measured on pve1 that
+# night: plain git -> 404 for git-man and git; git=<main> alone -> 404 for
+# git-man; both pinned -> installed. APTFIRST=git shows only git's 404 first,
+# so the dependency surfaces on the second try.
+AD="$PS/aptdep"; mkdir -p "$AD"
+cat > "$AD/apt-get" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "${APT_LOG:?}"
+[ "$1" = update ] && exit 0
+g=0; m=0
+for a in "$@"; do case "$a" in git=1:2.30.2-1+deb11u2) g=1 ;; git-man=1:2.30.2-1+deb11u2) m=1 ;; esac; done
+[ $g -eq 1 ] && [ $m -eq 1 ] && exit 0
+f404() { echo "E: Failed to fetch http://security.debian.org/pool/updates/main/g/git/$1_2.30.2-1%2bdeb11u5_$2.deb  404  Not Found [IP: 199.232.18.132 80]"; }
+[ $g -eq 1 ] || [ "${APTFIRST:-both}" = git ] || f404 git-man all
+[ $g -eq 1 ] || f404 git amd64
+[ $g -eq 1 ] && f404 git-man all
+echo "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?"
+exit 100
+EOF
+cat > "$AD/apt-cache" <<'EOF'
+#!/bin/bash
+echo "       $2 | 1:2.30.2-1+deb11u5 | http://security.debian.org bullseye-security/main amd64 Packages"
+echo "       $2 | 1:2.30.2-1+deb11u2 | http://ftp.pl.debian.org/debian bullseye/main amd64 Packages"
+EOF
+chmod +x "$AD/apt-get" "$AD/apt-cache"
+dep_pins="git=1:2.30.2-1+deb11u2 git-man=1:2.30.2-1+deb11u2"
+dep_res=""
+eval "$(product_fn "$ZFSBACKUP" remote_apt_install_cmd)"
+eval "$(product_fn "$ZFSBACKUP" apt_main_archive_pins)"
+for first in both git; do
+    : > "$AD/log"; rc=0; out=$(PATH="$AD:$PATH" APT_LOG="$AD/log" APTFIRST=$first bash -c "$(remote_apt_install_cmd git)" 2>&1) || rc=$?
+    [ "$rc" -eq 0 ] && [ "$(tail -1 "$AD/log")" = "install -y $dep_pins" ] \
+        && printf '%s' "$out" | grep -q "^apt: 404 for git .*trying $dep_pins from the main archive" \
+        || dep_res="$dep_res remote/$first: rc=$rc $(tr '\n' ' ' < "$AD/log") | $out;"
+done
+(
+    warn() { echo "!!! $*" >&2; }
+    eval "$(product_fn "$REPO/deploy.sh" apt_install_with_fallback)"
+    eval "$(product_fn "$REPO/deploy.sh" apt_main_archive_pins)"
+    export PATH="$AD:$PATH" APT_LOG="$AD/log"
+    for first in both git; do
+        : > "$AD/log"; rc=0; APTFIRST=$first apt_install_with_fallback git > "$AD/d.out" 2>&1 || rc=$?
+        [ "$rc" -eq 0 ] && [ "$APT_FALLBACK" = "$dep_pins" ] \
+            && [ "$(tail -1 "$AD/log")" = "install -y --no-install-recommends $dep_pins" ] \
+            || echo "deploy/$first: rc=$rc fb='$APT_FALLBACK' $(tr '\n' ' ' < "$AD/log")"
+    done
+) > "$AD/deploy.res" 2>&1
+dep_res="$dep_res$(cat "$AD/deploy.res")"
+# apt's output is data: a 404 line whose file name is not a Debian package
+# name adds no pin (the pins go unquoted into apt-get)
+odd=$(PATH="$AD:$PATH" apt_main_archive_pins git 'E: Failed to fetch http://x/pool/main/g/g$(id)*_1_all.deb  404  Not Found [IP: 1.2.3.4 80]')
+[ "$odd" = "git=1:2.30.2-1+deb11u2" ] || dep_res="$dep_res odd name: '$odd';"
+# the two copies of apt_main_archive_pins are one function
+[ "$(product_fn "$ZFSBACKUP" apt_main_archive_pins)" = "$(product_fn "$REPO/deploy.sh" apt_main_archive_pins)" ] \
+    || dep_res="$dep_res apt_main_archive_pins differs between zfs-backup.sh and deploy.sh;"
+if [ -z "$dep_res" ]; then
+    ok "apt 404 on a dependency: both installers pin git AND git-man to the main archive (one try, or a second when the dependency's 404 shows later); the two copies match"
+else
+    bad "apt 404 on a dependency" "$dep_res"
+fi
+rm -rf "$AD"
 rm -f "$PS/ssh.argv"
 if ! ps_run prepare-source dead --yes >"$PS/out" && grep -q 'no root SSH channel to dead' "$PS/err" && grep -q 'ssh-copy-id root@dead' "$PS/err" && ! grep -q 'git clone' "$PS/ssh.argv"; then
     ok "preparesource: no ssh channel = refusal naming ssh-copy-id as the operator's step; nothing attempted"
