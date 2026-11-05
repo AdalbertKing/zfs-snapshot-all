@@ -243,7 +243,7 @@
   `-n` kończy się kodem 2 i `INCOMPLETE: <dataset>` na stderr, bez linii PLAN= (na `main`
   te same awarie dawały rc 0 z PLAN=INCREMENTAL albo fałszywy konflikt); runda 4 (niewydane):
   zapasowe szukanie wspólnej bazy po GUID (`get_snapshot_guids`) przy nieudanym `zfs list`, ssh albo
-  filtrze zwraca błąd, a nie pustą listę (na `main` zwracało `null`, czyli brak wspólnej bazy); F6: `-m` jako dosłowny prefiks; F2: nieczytelny
+  filtrze zwraca błąd, a nie pustą listę (na `main` zwracało `null`, czyli brak wspólnej bazy); runda 5: to samo z listą GUID po stronie zdalnej (cel push, źródło pull) przez atrapę ssh, test/snapsend PASS=397 FAIL=0, na silnikach sprzed rundy 4 pada 32; F6: `-m` jako dosłowny prefiks; F2: nieczytelny
   czas utworzenia w `delsnaps` = bieg nieudany; F3: `-R` w `delsnaps` najpierw wylicza drzewo i nic nie
   kasuje przy niepełnej liście. pve9: `test/snapsend` 329/0 (runda 3: PASS=351 FAIL=0; na silnikach z `main` pada 14 nowych przypadków), `test/delsnaps` 94/0, `test/remote` 145/0;
   kontrole negatywne na silnikach z `main` padają (34 i 11 przypadków). Kampania `test/remote` z konta delegowanego
