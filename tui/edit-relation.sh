@@ -115,52 +115,7 @@ SRCHOST="$(host_name "$PEER" "$NAME")"; LDS_ARGS=("$PEER"); HOST="$SRCHOST"
 SRCNAME="$PEER"
 if [ "$PEER" = - ]; then SRCHOST="$(T 'tego hosta') ($(hostname -s 2>/dev/null || hostname))"; LDS_ARGS=(); HOST="$SRCHOST"; SRCNAME="$(hostname -s 2>/dev/null || hostname)"; fi
 [ "$CUR_P" = - ] && CUR_P=""; [ "$CUR_S" = - ] && CUR_S=""
-# U136 / REV-20261104-187 runda 3: krótka retencja źródła czytana z CONFIGU relacji (show-tiers),
-# nie z ukrytego szablonu: N, gdy każdy szczebel z migawkami trzyma `retain = -h<N>` (to samo N)
-# i czyści co godzinę. fp_cfg <plik show-tiers.json> -> N albo nic.
-fp_cfg() {
-    "$PY" - "$1" <<'PYEOF' 2>/dev/null | tr -d '\r'
-import sys, json, re
-try:
-    t = [x for x in json.load(open(sys.argv[1], encoding="utf-8")).get("target", []) if x.get("send_schedule")]
-except Exception:
-    sys.exit(0)
-ns = set()
-for x in t:
-    m = re.match(r"^-h([0-9]+)$", x.get("retain") or "")
-    if not m or not re.match(r"^\S+ \* \* \* \*$", x.get("prune_schedule") or ""):
-        sys.exit(0)
-    ns.add(m.group(1))
-if len(ns) == 1:
-    print(ns.pop())
-PYEOF
-}
-# fp_ops <plik show-tiers.json> <N> -> słowa set-tiers, jedno w linii: każdy szczebel z migawkami
-# trzyma N godzin i czyści co godzinę (minuta czyszczenia zostaje z configu); szczebel, którego
-# odstęp jest co najmniej N, traci progi monitora (U136). Reszta configu zostaje, jak jest.
-fp_ops() {
-    "$PY" - "$1" "$2" <<'PYEOF' 2>/dev/null | tr -d '\r'
-import sys, json
-n = int(sys.argv[2])
-def every(c):
-    f = (c or "").split()
-    if len(f) < 5: return 0
-    mi, h, dom, mon, dow = f[:5]
-    if h == "*": return 1
-    if h.startswith("*/"): return int(h[2:]) if h[2:].isdigit() else 1
-    if dow != "*": return 168
-    if dom != "*" and mon == "*": return 744
-    if dom == "*" and mon == "*": return 24
-    return 8760
-for x in json.load(open(sys.argv[1], encoding="utf-8")).get("target", []):
-    if not x.get("send_schedule"): continue
-    print("--tier=" + x["name"]); print("--retain=-h%d" % n)
-    m = ((x.get("prune_schedule") or "").split() or ["21"])[0]
-    print("--prune-schedule=%s * * * *" % m)
-    if every(x["send_schedule"]) >= n and (x.get("monitor_warn") or x.get("monitor_crit")):
-        print("--monitor-warn="); print("--monitor-crit=")
-PYEOF
-}
+# U136 / REV-20261104-187 runda 3: krótka retencja źródła z CONFIGU relacji (fp_cfg, fastprune-lib).
 FP_CUR_N=""; P_FP=""
 if [ "${RMODE:-}" = snaponly ] && "$ZB" show-tiers "$NAME" --json >"$TMPD/fp.json" 2>/dev/null; then FP_CUR_N="$(fp_cfg "$TMPD/fp.json")"; fi
 fp_words() { if [ -n "$1" ] && [ "$1" != off ]; then Tv '$FASTPRUNE godz. -- wszystkie szczeble' '$FASTPRUNE' "$1"; else T 'nie'; fi; }
