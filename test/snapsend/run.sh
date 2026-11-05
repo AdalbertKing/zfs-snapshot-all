@@ -1935,6 +1935,16 @@ for eng in send get; do
               "1|1|0|moved_1" \
               "$([ "$RC" -ne 0 ] && echo 1 || echo 0)|$([ "$(r186_said "$diag")" -gt 0 ] && echo 1 || echo 0)|$(wc -l < "$R186D/f5g.sends")|$(snaps_of "$T")"
     done
+    # The reconcile path (-r -F), the target's GUID listing broken: the collision scan is
+    # incomplete (never an upgrade to a full resend), the dataset is refused, no destroy, no send.
+    # On main the failure was "null", a non-empty base for the collision scan.
+    : > "$R186D/f5g.sends"; d0=$(cat "$R186_LOG" 2>/dev/null | wc -l)
+    export F5G_DS="$T" F5G_SENDLOG="$R186D/f5g.sends"
+    f5g_run $eng f5g$eng -r -F -v 3 -e -m "auto_"; unset F5G_DS F5G_SENDLOG
+    d1=$(cat "$R186_LOG" 2>/dev/null | wc -l)
+    check "F5g $eng -r -F: target GUID listing fails -> rc != 0, NOT upgrading, no full resend, no destroy, no zfs send, target as before" \
+          "1|1|0|0|0|moved_1" \
+          "$([ "$RC" -ne 0 ] && echo 1 || echo 0)|$([ "$(r186_said 'could not complete -- NOT upgrading')" -gt 0 ] && echo 1 || echo 0)|$(r186_said 'Upgrading this run to a full')|$((d1 - d0))|$(wc -l < "$R186D/f5g.sends")|$(snaps_of "$T")"
     f5g_run $eng f5g$eng -e -m "auto_"
     check "F5g $eng: control -- the healthy real run sends auto_2 on the GUID-found base" "0|moved_1 auto_2" "$RC|$(snaps_of "$T")"
 done
