@@ -210,12 +210,14 @@
   zapisuje komendę w `~/new-relation-NAZWA.cmd` i daje: Wycofaj (`delete-relation NAZWA --yes`, tu i na
   źródle), Ponów (ta sama komenda, wznawia) albo Zostaw. Bez rekordu -- jak dotąd „nie została założona”.
   F3 przy `pending_enroll` radzi `seed NAZWA` (wcześniej `activate`, które odmawia); migawki zdalne -- `activate`.
-- **REV-20261104-187 (2026-11-05, #1072 + runda 1 w #1073, niewydane): retencja migawek
+- **REV-20261104-187 (2026-11-05, #1072 + runda 1 w #1073 + runda 2, niewydane): retencja migawek
   zdalnych z configu.** „Harmonogram i retencja” -> „Ręcznie...” relacji snaponly czyta szczeble z jej sekcji
   `[template:snaponly(_src)__NAZWA__*]` (`show-tiers`) i zapisuje jednym `set-tiers`: liczby, harmonogramy
   i zamrażanie (jedno pole na operację), a od rundy 1 także sposób liczenia (`--method`: wielkość litery
   w `retain` + `gfs`) oraz dodanie i usunięcie szczebla (`--add-tier`/`--drop-tier`: obie sekcje i wpisy
-  `use_template`; nowa rodzina nazwana jak sąsiednie). Usunięty szczebel zostawia swoje migawki na źródle.
+  `use_template`; nowa rodzina nazwana jak sąsiednie). Od rundy 2 lista `use_template` każdego
+  datasetu jest zmieniana na miejscu: dataset, który świadomie pomija szczebel, pomija go dalej, a usunięcie
+  jedynego szczebla datasetu jest odrzucane. Usunięty szczebel zostawia swoje migawki na źródle.
   Ukryty `relacja-<NAZWA>` nie wpływa na zmianę retencji istniejącej relacji. „Krótka retencja źródła”
   (U136) nadal ma własny szablon.
 - **REV-20261104-186 (2026-11-04, #1055, wydane w 1.0.10): błędy, które udawały
@@ -227,7 +229,7 @@
   `-n` kończy się kodem 2 i `INCOMPLETE: <dataset>` na stderr, bez linii PLAN= (na `main`
   te same awarie dawały rc 0 z PLAN=INCREMENTAL albo fałszywy konflikt); F6: `-m` jako dosłowny prefiks; F2: nieczytelny
   czas utworzenia w `delsnaps` = bieg nieudany; F3: `-R` w `delsnaps` najpierw wylicza drzewo i nic nie
-  kasuje przy niepełnej liście. pve9: `test/snapsend` 329/0 (runda 3: 344/0; na silnikach z `main` pada 8 nowych przypadków), `test/delsnaps` 94/0, `test/remote` 145/0;
+  kasuje przy niepełnej liście. pve9: `test/snapsend` 329/0 (runda 3: 346/0; na silnikach z `main` pada 10 nowych przypadków), `test/delsnaps` 94/0, `test/remote` 145/0;
   kontrole negatywne na silnikach z `main` padają (34 i 11 przypadków). Kampania `test/remote` z konta delegowanego
   `zfsbackup` (pve9 -> pve9b): 145/0, jeden SKIP (G3, środowisko).
 - **Wydanie bieżące: v1.0.10 (zfsbackup `b48ae26`, tag `v1.0.10`, dev `4b716aa8`), na wszystkich ośmiu hostach
