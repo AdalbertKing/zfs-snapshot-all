@@ -4,6 +4,51 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [1.0.11] — 2026-11-05
+
+- **No false "monitor BROKEN" and no failed bookmark prune from a pipe** (U149, U165). Under
+  `pipefail` a reader that stops early (`grep -q`, `grep -m1`) made the writer die of SIGPIPE, and
+  a root the list did contain read as missing: `check-snap-age.sh -R` paged "descendant list does
+  not contain the root itself", `delsnaps.sh -R` failed the bookmark prune. The monitor and the prune
+  use here-strings; 57 `| grep -q` readers in the other `pipefail` files became `grep_q` (reads to the
+  end); the rest are counted with a reason by a ratchet in `test/evalfree`. `cron_block_source` reads
+  the block with `awk`, so `list-jobs --json` no longer carries a `sed: ... Broken pipe` line.
+- **gen-cron** warns when two tiers of one dataset share a minute and their hours meet (the shape
+  that lost the lock with rc=75).
+- **Quiesce whitelist preflight:** installing a `-q` line warns about a guest outside
+  `/etc/zfs-quiesce-allow/<account>`; a `zfs list` that fails during that check says UNKNOWN with
+  the dataset and the reason instead of reporting no gap.
+- **New relation with an excluded child** (e.g. `photos` under `[-] hdd/data`): the first copy no
+  longer fails with "-X needs -R" -- `-X` is written only to a section that rides `-R`.
+  Pairing creates the pull root as `<target>/<landing>` (`deploy.sh --pair --landing=`), no extra
+  empty `<target>/<peer address>`.
+- **`deploy.sh --uninstall [--yes]`**: the inverse of a plain deploy -- the tool's cron blocks,
+  accounts it created (with their delegations and quiesce grants), links, host scripts, its
+  directories and the `zfsalert` group; datasets, snapshots, packages, logs and the checkout stay.
+  It refuses while the host still takes part in a relationship and names the verb for each.
+- **apt 404 on Debian 11:** one more try with the newest version outside the security archive, said
+  in the log; `check_dep` keeps apt's last `E:` line; `--join` installs sudo before its first
+  change (`--check-only` then reports `[missing] sudo` on a host without it).
+- **Pairing:** `delete-relation` on one side of a two-way pair named after the hosts no longer
+  removes `relationships/<name>` while the pair gate still uses it (the reverse relation stopped
+  with PAIR_UNKNOWN).
+- **First install** (from-zero tests on the lab): `check-source` takes a directory as the package
+  only with `.git`; the first `git` in an old directory fetches before moving anything aside; the
+  failure window starts with the FATAL line; `--unpair` on a join manifest points to `--leave`;
+  zero delegation names the pools and `--grant-datasets=`; `delete-relation` without a peer prints
+  no empty name; the deployment guide clones into `/root/scripts/zfs-snapshot-all`.
+- **GUI language:** ESSENTIALS/ESENCJA say how to switch the GUI, which starts in English
+  (`gui.language` = en): F10 `language` or `settings set gui.language=pl --yes`. `list-replicas` without a root config is an empty
+  list, so a host whose only relation runs on a delegated account shows no "no answer" header.
+- **GUI:** a failure or a rejected plan returns to the wizard summary with the answers kept; Esc in
+  the name window is Back; remote-snapshot texts do not speak of copying; a dataset added to a
+  remote-snapshot relation without snapshots waits for its first run instead of showing "up to
+  date", and does not hold the whole tier waiting while the others have snapshots; the edit plan says the
+  first snapshot/copy comes "at the next cron run"; the "already on the source" list skips excluded
+  datasets; the Datasets row of a change shows the new list; a tier repeated by two monitor groups
+  names its group on F3; two Polish words in the English GUI (the plan's `(^name$ ...)` hint, the
+  frame's "Enter window") are translated.
+
 ## [1.0.10] — 2026-11-04
 
 - **The daily mail is a table of relations.** Subject (Polish, like the mail): "OK, N relacji" or
