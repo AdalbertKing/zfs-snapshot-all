@@ -954,7 +954,7 @@ step_name() {
         # droga Wstecz się nie zmieniają)
         wt --title "$(title 7 "$(T 'Nazwa relacji')")" --msgbox "$(Tv 'Relacja nazywa się jak host po drugiej stronie: $n.
 
-Relacja to para hostów -- jedna nazwa na F3, w cronie i w mailach.' '$n' "$n")" 10 "$W"
+Relacja to para hostów -- jedna nazwa na F3, w cronie i w mailach.' '$n' "$n")" 10 "$W" || return 1   # Esc = Wstecz, nie Dalej (test od zera 2026-11-05)
         return 0
     fi
     if [ -z "$RNAME" ] && [ "$MODE" = local ]; then

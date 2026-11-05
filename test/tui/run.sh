@@ -6778,6 +6778,11 @@ else
 fi
 u67_left="$(grep -n "grep -E '^FATAL'" "$REPO"/tui/*.sh | head -3)"
 [ -z "$u67_left" ] && ok "U67: no refusal window greps the FATAL line alone any more" || bad "U67: leftover FATAL-only refusal" "$u67_left"
+# T9 (install test 2026-11-05): Esc on the "named like the host" window of step 7 went on
+# like OK. The msgbox's status now decides: Esc returns to the previous step.
+t9=$(awk '/^step_name\(\) \{/{f=1} f&&/--msgbox/{m=1} m{print} m&&/"\$W"/{exit}' "$REPO/tui/new-relation.sh")
+case "$t9" in *'|| return 1'*) ok "T9: step 7's host-name window -- Esc goes back (its status is checked)" ;;
+    *) bad "T9: step 7 msgbox ignores Esc" "$t9" ;; esac
 # pool_roots_to_children: the shipped function from tui/replica.sh on a fake tree.
 # the function speaks through T/Tv (GUI language): take them from wt-lib.sh the same way
 eval "$(sed -n '/^T() {/,/^}/p; /^Tv() {/,/^}/p' "$REPO/tui/wt-lib.sh")"; declare -A TCAT=()
