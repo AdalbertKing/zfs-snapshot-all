@@ -161,7 +161,7 @@ set -o pipefail
 #   ./delsnaps.sh -n -G -R "hdd/backups" "" -H24 -D7 -W4 -M12 -Y3
 # (drop -n to actually delete once the dry-run output looks right)
 
-VERSION='v1.30'
+VERSION='v1.31'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false

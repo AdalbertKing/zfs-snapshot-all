@@ -114,7 +114,7 @@ set -o pipefail
 #   ./check-snap-age.sh "rpool/data/vm-106-disk-0" "automated_hourly" 90m 3h
 #   ./check-snap-age.sh -R "hdd/backups/pve1" "automated_daily" 30h 48h
 
-VERSION='v2.9'
+VERSION='v2.10'
 
 EXIT_OK=0
 EXIT_WARNING=1
