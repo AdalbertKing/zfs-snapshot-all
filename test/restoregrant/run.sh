@@ -1156,6 +1156,17 @@ if [ "$rc" -eq 0 ] && ! has "restore grant" "$out" && has "fully torn down" "$ou
 else
     bad "leave: control without a grant" "rc=$rc" "$out"
 fi
+# A non-empty gate dir is named by its content (lab 2026-11-05): `paused` there is the
+# pause of this host's own relationship of the same name, not a gate disable.
+printf 'PEER_JOIN_ROLE="pull"\nPEER_JOIN_AS="root"\nPEER_JOIN_ACCOUNT="zfsbackup-pve9"\nPEER_JOIN_GRANTED_DATASETS="hdd/a"\n' > "$PEERS/lab2.conf"
+mkdir -p "$REL/lab2"; : > "$REL/lab2/paused"
+out="$(dr --leave=lab2)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -f "$REL/lab2/paused" ] && has "it holds: paused (" "$out" \
+   && has "'paused' = the pause of this host's own relationship 'lab2'" "$out" && ! has "disable marker, most likely" "$out"; then
+    ok "leave: a gate dir holding a pause marker is kept and the warning names what it holds"
+else
+    bad "leave: non-empty gate dir named by content" "rc=$rc" "$out" "$(ls -A "$REL/lab2" 2>&1)"
+fi
 rm -rf "$REL/lab2" "$PEERS/lab2.conf"
 
 
