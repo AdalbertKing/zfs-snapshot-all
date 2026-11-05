@@ -41,7 +41,7 @@ case "$1" in
     list)
         case " $* " in
             # `-o name,guid` prints both columns, as zfs does (REV-186 round 4 checks the shape).
-            *" -t snapshot "*" -o name,guid "*|*" -o name,guid "*" -t snapshot "*)
+            *" -o name,guid "*)
                 awk -v d="$last" 'index($1, d "@")==1 {print $1 "\t" $2}' "$SNAPDB"; exit 0 ;;
             *" -t snapshot "*)
                 awk -v d="$last" 'index($1, d "@")==1 {print $1}' "$SNAPDB"; exit 0 ;;
