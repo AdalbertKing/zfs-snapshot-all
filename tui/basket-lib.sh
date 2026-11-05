@@ -63,8 +63,8 @@ describe() {    # <indeks> -> jedno zdanie o pozycji koszyka
     local r="${B_ROOT[$1]}" e="${B_EXCL[$1]}" k short x
     k="$(kids_count "$r")"; short=""
     while IFS= read -r x; do [ -n "$x" ] && short="$short${short:+, }${x#"$r"/}"; done <<<"$e"
-    if [ "$k" -eq 0 ]; then T 'dziś nic pod nim; nowe skopiują się same'; echo
-    elif [ -z "$short" ]; then Tv 'dziś $k pod nim; nowe skopiują się same' '$k' "$k"; echo
+    if [ "$k" -eq 0 ]; then T 'dziś nic pod nim; nowe wejdą same'; echo
+    elif [ -z "$short" ]; then Tv 'dziś $k pod nim; nowe wejdą same' '$k' "$k"; echo
     else Tv 'dziś $k pod nim; BEZ: $short' '$k' "$k" '$short' "$short"; echo; fi
 }
 mode_words() { [ "$RECURSION" = atomic ] && T 'cała gałąź atomowo (-r)' || T 'każdy dataset osobno (-R)'; echo; }
