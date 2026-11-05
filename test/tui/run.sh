@@ -203,6 +203,26 @@ else
     bad "U137 C3: stan czeka / F2" "$(printf '%s' "$S4W" | grep -E 'Kopie|hourly|daily' | head -6)" "$(printf '%s' "$F2W" | grep -E 'migawk|lsrc|transfer' | head -4)"
 fi
 rm -rf "$C3D"
+# O9 (test od zera 2, 2026-11-05): dwie grupy monitorow jednej relacji -- szczebel byl dwa razy
+# bez slowa, ktora grupa. Powtorzony szczebel dostaje grupe; pojedynczy (S4) zostaje golym slowem.
+O9D="$(mktemp -d)"
+"$PY" - "$P10/monitor.json" - "$O9D" <<'PYEOF'
+import json, sys, copy
+mon = json.load(open(sys.argv[1], encoding="utf-8"))
+h = [m for m in mon["monitors"] if m.get("label") == "lab-vm101"][0]
+d = copy.deepcopy(h)
+d.update(datasets=["hdd/backups/192.168.28.99/hdd/lab/fz0a", "hdd/backups/192.168.28.99/hdd/lab/fz0b"],
+         reason=(h.get("reason") or "").replace("hdd/lab/vm-101", "hdd/lab/fz0a"))
+mon["monitors"].append(d)
+json.dump(mon, open(sys.argv[3] + "/monitor.json", "w", encoding="utf-8"))
+PYEOF
+S4O9="$(screen relacje down,down,down,down --width 260 --height 40 --monitors "$O9D/monitor.json")"
+if hasE "$S4O9" 'hourly vm-101 +aktualne' && hasE "$S4O9" 'hourly fz0a\+1 ' && hasE "$S4" 'hourly +aktualne' && ! hasE "$S4" 'hourly vm-101'; then
+    ok "O9: szczebel z dwiema grupami monitorow podpisany grupa (vm-101 / fz0a+1); jedna grupa -- gole slowo"
+else
+    bad "O9: podpis grupy przy powtorzonym szczeblu" "$(printf '%s' "$S4O9" | grep -E 'hourly' | head -4)"
+fi
+rm -rf "$O9D"
 if hasE "$S4Z" 'lokalny prune +automated_hourly +co godzinę \(:44\) +24 godz\.' && hasE "$S4Z" 'zdalny prune +automated_hourly +co godzinę \(:03\) +24 godz\.' \
    && ! has "$S4Z" 'Porządki' && ! has "$S4Z" 'U źródła'; then
     ok "relacje: zakladka Zadania -- lokalny i zdalny prune w OSOBNYCH wierszach: harmonogram slowami, retencja z jednostka (U21)"
