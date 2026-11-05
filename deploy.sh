@@ -8276,7 +8276,11 @@ EOF
     # a real workflow: grant now, create the dataset later). All of them
     # missing is not a partial success, it is the request not happening.
     if [ "${#DATASETS[@]}" -gt 0 ] && [ "$GRANTED_COUNT" -eq 0 ]; then
-        die "none of the ${#DATASETS[@]} requested dataset(s) exist on this host, so '$USERNAME' was granted NOTHING. The account exists but cannot touch a single dataset -- that is this run failing, not succeeding. Check the names (zfs list -H -o name) and re-run."
+        # Name the switch and what there is: on a host without the Proxmox
+        # default datasets the bare first step of the install ended here with
+        # no hint which option takes the right ones (install test, 2026-11-05).
+        _pools=$(zpool list -H -o name 2>/dev/null | tr '\n' ' ')
+        die "none of the ${#DATASETS[@]} requested dataset(s) (${DATASETS[*]}) exist on this host, so '$USERNAME' was granted NOTHING. The account exists but cannot touch a single dataset -- that is this run failing, not succeeding. Name the datasets to delegate and re-run, e.g. bash $0 --grant-datasets=${_pools%% *}${_pools:+  (pools here: ${_pools% })}; the names: zfs list -H -o name"
     fi
 
     # RECORDED, so the next automatic self-update can pass this SAME list back
