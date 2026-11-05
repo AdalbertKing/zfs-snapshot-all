@@ -13965,13 +13965,23 @@ for _m in before after; do
     printf '%s\n' "$_o" | grep -q '^105 ' && r188_bad="$r188_bad job-$_m-gap-from-partial"
     _o=$(qgf zfsbackup "$QG/blk1" "hdd/lxc/subvol-102-disk-0:$_m")
     printf '%s\n' "$_o" | grep -q '^? hdd/lxc/subvol-102-disk-0 zfs list rc=77: cannot ' || r188_bad="$r188_bad allow-$_m=[$_o]"
-    _w=$(qgw zfsbackup "$QG/blk1" "hdd/lxc:$_m")
+    _w=$(qgw zfsbackup "$QG/blk1" "hdd/lxc:$_m"); _wrc=$?
     case "$_w" in *"is UNKNOWN -- hdd/lxc: zfs list rc=77: cannot "*) ;; *) r188_bad="$r188_bad warn-$_m=[$_w]" ;; esac
     case "$_w" in *"does not cover:"*) r188_bad="$r188_bad warn-$_m-claims-gaps" ;; esac
+    [ "$_wrc" -eq 0 ] || r188_bad="$r188_bad warn-$_m-rc=$_wrc"
+    # whitelist side through the caller: UNKNOWN names the root, and the gap list that
+    # follows is qualified (a covered guest can look uncovered when its root failed)
+    _w=$(qgw zfsbackup "$QG/blk1" "hdd/lxc/subvol-102-disk-0:$_m"); _wrc=$?
+    case "$_w" in *"is UNKNOWN -- hdd/lxc/subvol-102-disk-0: zfs list rc=77: cannot "*"may be incomplete"*) ;; *) r188_bad="$r188_bad warn-allow-$_m=[$_w]" ;; esac
+    [ "$_wrc" -eq 0 ] || r188_bad="$r188_bad warn-allow-$_m-rc=$_wrc"
 done
-_ctl=$(qgf zfsbackup "$QG/blk1" "hdd/other:before"); _wctl=$(qgw zfsbackup "$QG/blk1" "")
+# Control with a real failure: the second whitelist root fails, the first still covers
+# CT 102 -- the answer is its '?' line AND the known gap 105, nothing else.
+_ctl=$(qgf zfsbackup "$QG/blk1" "hdd/lxc/subvol-102-disk-1:before" | LC_ALL=C sort)
+_wctl=$(qgw zfsbackup "$QG/blk1" "")
 _wroot=$(qgw root "$QG/blk1" "hdd/lxc:before")
-if [ -z "$r188_bad" ] && [ "$_ctl" = "105 hdd/lxc/subvol-105-disk-0" ] && [ -z "$_wroot" ] \
+if [ -z "$r188_bad" ] && [ "$(printf '%s\n' "$_ctl" | sed -n 2p)" = "? hdd/lxc/subvol-102-disk-1 zfs list rc=77: cannot open 'hdd/lxc/subvol-102-disk-1': stub failure" ] \
+        && [ "$(printf '%s\n' "$_ctl" | sed -n 1p)" = "105 hdd/lxc/subvol-105-disk-0" ] && [ "$(printf '%s\n' "$_ctl" | wc -l)" = 2 ] && [ -z "$_wroot" ] \
         && case "$_wctl" in *"does not cover: 105 (hdd/lxc/subvol-105-disk-0)"*) ! printf '%s' "$_wctl" | grep -q UNKNOWN ;; *) false ;; esac; then
     ok "REV-188: a failed zfs list (job or whitelist side, before or after rows) is '? <ds> <reason>' and the install warning says UNKNOWN with it; no gap from partial rows; healthy answer, root and the known gap unchanged"
 else
