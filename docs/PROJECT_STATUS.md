@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 297f6f62c79f60b6 -->
+<!-- status-covers-digest: 278fa6b7bc0517c5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -44,7 +44,7 @@
   `<cel>/<landing>`; teraz `--landing` idzie do `deploy.sh --pair`. GUI: lista migawek na źródle pomija
   wykluczone (D4), „nazwa”/„okno” w angielskim GUI tłumaczone (D5, D11), wiersz Datasety w zmianie
   relacji pokazuje nową listę (D12). WDROZENIE-PROXMOX: klon do `/root/scripts/zfs-snapshot-all` (D2).
-  Zostaje (O9 z notatki tego testu): szczebel dwa razy w panelu F3 przy dwóch grupach monitorów, bez podpisu.
+  O9 -- panel F3: szczebel powtórzony przez dwie grupy monitorów ma podpis grupy (np. `hourly data+2`).
   Zostaje: w oknach `--scrolltext` Enter nie zamyka (fokus na tekście, Tab+Enter) -- zachowanie whiptaila,
   nie zmienione; T12 odłożone (wpis niżej).
 - **Paczka po teście od zera i U149 (2026-11-05, gałąź `fix/batch-zero-test`; NIEWYDANE).** Poprawione
