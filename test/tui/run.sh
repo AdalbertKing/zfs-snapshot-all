@@ -3178,7 +3178,9 @@ case "$1" in
                     elif [ -n "${NR_FLAT:-}" ]; then sed 's/"profile": *"default"/"profile":"d30h24"/g' "$NR_FIX/status.json"     # konto root "plaskie"
                     else cat "$NR_FIX/status.json"; fi ;;
     --source=*)     case "$1" in --source=*:*) ;; *)   # kopia lokalna: bez hosta, bez praw
-                        case " $* " in *" --install "*) echo ">>> atrapa: lokalna zainstalowana"; exit 0 ;; *) echo "Plan lokalnego backupu (atrapa)"; exit 0 ;; esac ;; esac
+                        # NR_PLAN_FATAL (T8, lab 2026-11-05): plan odrzucony przez czasownik, nic nie zmienione.
+                        case " $* " in *" --install "*) echo ">>> atrapa: lokalna zainstalowana"; exit 0 ;;
+                            *) [ -n "${NR_PLAN_FATAL:-}" ] && { echo "FATAL: $NR_PLAN_FATAL"; exit 1; }; echo "Plan lokalnego backupu (atrapa)"; exit 0 ;; esac ;; esac
                     case " $* " in
                         *" --install "*) case " $* " in
                                 *" --grant-remotely "*)
@@ -4047,6 +4049,26 @@ if grep -qF 'Cel nakłada się na źródło' "$NR/wt.log" && grep -q -- '--targe
     ok "new-relation: kopia lokalna -- cel wewnatrz zrodla odrzucony od razu w kroku Dokad, drugi cel przechodzi"
 else
     bad "new-relation: cel wewnatrz zrodla" "rc=$NRRC" "$(cat "$NR/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | tr '\n' ';')"
+fi
+# T8 (lab pve11 2026-11-05): plan ODRZUCONY przez czasownik (dataset w innej relacji) wracal
+# `continue` do pytania o TEN SAM plan -- ta sama odmowa bez konca, OK i Esc wracaly do niej.
+# Teraz: odmowa -> podsumowanie z odpowiedziami, jedno pytanie o plan; Esc na karcie i Przerwij.
+NROUT=$(nr_run "0${T}local
+0${T}kopie
+0${T}default
+0${T}t8-plan
+0${T}root
+0${T}create
+0${T}
+1${T}
+0${T}
+" NR_PLAN_FATAL="atrapa: these sources already belong to another relationship" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter|goto:hdd,ins'); NRRC=$?
+t8p=$(awk '/ODRZUCONY/ && !f {f = NR} f && NR > f && /Nowa relacja -- podsumowanie/ {print "back"; exit}' "$NR/wt.log")
+t8n=$(grep -c -- '^--source=hdd/backups/192.168.28.99/hdd/lab ' "$NR/zb.log")
+if [ "$t8p" = back ] && [ "$t8n" -eq 1 ] && [ "$NRRC" -eq 1 ]; then
+    ok "T8: plan odrzucony przez czasownik -- z powrotem na podsumowanie (odpowiedzi zostaja), jedno pytanie o plan, Przerwij konczy"
+else
+    bad "T8: plan odrzucony w kolko" "rc=$NRRC back=$t8p plany=$t8n" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | tr '\n' ';' | cut -c1-600)"
 fi
 # 3h. KOPIA LOKALNA (wlasciciel 2026-10-09): trzecia pozycja w kroku 1. Bez hosta i
 #     diagnozy, koszyk z datasetow TEGO hosta (list-datasets bez adresu), bez "Sposobu"
