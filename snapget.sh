@@ -1013,17 +1013,23 @@ find_common_snapshot() {
     # incremental off the stream's embedded fromguid, not off matching
     # names, so a source-side name is all `-i` needs. Scan every pair,
     # newest-target-first, for a source snapshot still carrying that GUID.
-    local tgt_names=() tgt_guids=()
+    # REV-20261104-186 round 4: a GUID list that could not be read is a failure (rc 1),
+    # not an empty list -- an empty one would end in "null" and a full send.
+    local tgt_names=() tgt_guids=() _tgt_gl
+    _tgt_gl=$(get_snapshot_guids "$tgt_dataset") || return 1
     while IFS=$'\t' read -r _n _g; do
         [ -z "$_n" ] && continue
         tgt_names+=("$_n"); tgt_guids+=("$_g")
-    done <<< "$(get_snapshot_guids "$tgt_dataset")"
+    done <<< "$_tgt_gl"
 
-    local src_names=() src_guids=()
+    # REV-20261104-186 round 4: a GUID list that could not be read is a failure (rc 1),
+    # not an empty list -- an empty one would end in "null" and a full send.
+    local src_names=() src_guids=() _src_gl
+    _src_gl=$(get_snapshot_guids "$src_dataset" "$remote_user" "$remote_host") || return 1
     while IFS=$'\t' read -r _n _g; do
         [ -z "$_n" ] && continue
         src_names+=("$_n"); src_guids+=("$_g")
-    done <<< "$(get_snapshot_guids "$src_dataset" "$remote_user" "$remote_host")"
+    done <<< "$_src_gl"
 
     for ((j=${#tgt_guids[@]}-1; j>=0; j--)); do
         [ -z "${tgt_guids[$j]}" ] && continue
