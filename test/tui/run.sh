@@ -6764,6 +6764,18 @@ if [ "$(printf '%s\n' "$u67_rem" | head -1)" = "[on 192.168.0.11] could not inst
 else
     bad "refusal window: remote reason" "$u67_rem"
 fi
+# T3 (install test 2026-11-05): no [on HOST] lines, a local mail warning earlier in the
+# log -- the FATAL leads the reason, the earlier lines follow.
+printf '%s\n' "!!!   mail transport present (exim4) but 2 message(s) are STUCK IN THE QUEUE" \
+    "!!!     look: mailq   and   tail -20 /var/log/mail.log" \
+    "FATAL: --join-remotely: deploy.sh --join FAILED on 192.168.28.98 (see above)" > "$U67/local.txt"
+u67_loc="$(bash -c '. "$1/tui/wt-lib.sh" 2>/dev/null; verb_refusal "$2"' x "$REPO" "$U67/local.txt")"
+if [ "$(printf '%s\n' "$u67_loc" | head -1)" = "--join-remotely: deploy.sh --join FAILED on 192.168.28.98 (see above)" ] \
+        && [ "$(printf '%s\n' "$u67_loc" | wc -l)" -eq 3 ]; then
+    ok "refusal window: without [on HOST] lines the FATAL leads the reason, an earlier mail warning follows it"
+else
+    bad "refusal window: FATAL first" "$u67_loc"
+fi
 u67_left="$(grep -n "grep -E '^FATAL'" "$REPO"/tui/*.sh | head -3)"
 [ -z "$u67_left" ] && ok "U67: no refusal window greps the FATAL line alone any more" || bad "U67: leftover FATAL-only refusal" "$u67_left"
 # pool_roots_to_children: the shipped function from tui/replica.sh on a fake tree.
