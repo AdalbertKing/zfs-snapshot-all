@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 1b9343c08ca82f71 -->
+<!-- status-covers-digest: 278fa6b7bc0517c5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -38,6 +38,13 @@
   U165 (CI, rodzina U149): `cron_block_source` czytał blok przez `grep -m1`, który kończy po pierwszym
   `# Source:`; `sed` pisał dalej do zamkniętego potoku: kod 141 przy domyślnym SIGPIPE, kod 4 przy zignorowanym
   (wtedy komunikat `Broken pipe` trafił do JSON-a `list-jobs`). Teraz `awk` czyta do końca.
+  Test od zera nr 2 (pve11 <- pve9b, 2026-11-05): D6 -- wykluczenie dziecka (np. `photos` pod `[-] hdd/data`)
+  wpisywało `-X` do sekcji bez `-R`, więc pierwsza kopia tych datasetów padała („-X needs -R”); teraz `-X`
+  tylko w sekcji z `-R`. D10 -- parowanie tworzyło pusty `<cel>/<adres peera>` z delegacją obok
+  `<cel>/<landing>`; teraz `--landing` idzie do `deploy.sh --pair`. GUI: lista migawek na źródle pomija
+  wykluczone (D4), „nazwa”/„okno” w angielskim GUI tłumaczone (D5, D11), wiersz Datasety w zmianie
+  relacji pokazuje nową listę (D12). WDROZENIE-PROXMOX: klon do `/root/scripts/zfs-snapshot-all` (D2).
+  O9 -- panel F3: szczebel powtórzony przez dwie grupy monitorów ma podpis grupy (np. `hourly data+2`).
   Zostaje: w oknach `--scrolltext` Enter nie zamyka (fokus na tekście, Tab+Enter) -- zachowanie whiptaila,
   nie zmienione; T12 odłożone (wpis niżej).
 - **Paczka po teście od zera i U149 (2026-11-05, gałąź `fix/batch-zero-test`; NIEWYDANE).** Poprawione

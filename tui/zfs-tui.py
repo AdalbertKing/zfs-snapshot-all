@@ -2229,7 +2229,7 @@ def render_tabbed(data, width, height, now, ch, screen, title, heads, cells, cur
             cbody.append("")
         many = len(child["tabs"]) > 1
         snaps = any(it.get("relname") and it.get("pair") is not None for it in child.get("items") or [])
-        cfoot = (child.get("foot") or ((_(u"m migawki   ") if snaps else u"") + u"Enter okno   " + (_(u"←→ zakładki   ") if many else u"")
+        cfoot = (child.get("foot") or ((_(u"m migawki   ") if snaps else u"") + _(u"Enter okno   ") + (_(u"←→ zakładki   ") if many else u"")
                  + _(u"Esc wraca   Tab do linii poleceń"))) if in_child else ""
         bottom = box(ch, tab_title(child.get("name"), child["tabs"], child.get("ti", 0)), cbody, width, footer=cfoot)
         if pcur is not None:
@@ -2939,8 +2939,20 @@ def rel_panel_pairs(row, data, now, ch):
     # U144 (wlasciciel 2026-11-01): KAZDY szczebel osobno -- jego stan, wiek albo pierwszy
     # termin, i jego prog. Dawniej wiek pierwszego powodu stal obok progu pierwszego monitora
     # ("najnowsza sprzed 49092h, alarm po 150m": roczny wiek, godzinowy prog).
-    for m in tier_monitors(row["monitors"]):
-        pairs.append(("  " + tier_word(m), tier_line(m, rel, data, now)))
+    # Test od zera 2 (2026-11-05, O9): relacja z dwiema grupami monitorow (np. data,docs,mail
+    # bez -R i fz0a z -R) miala kazdy szczebel dwa razy bez slowa, ktory jest ktory.
+    # Szczebel powtorzony dostaje grupe: pierwszy dataset (ostatni czlon) i "+N".
+    _mons = tier_monitors(row["monitors"])
+    _per_tier = {}
+    for m in _mons:
+        _per_tier[tier_word(m)] = _per_tier.get(tier_word(m), 0) + 1
+    for m in _mons:
+        _w = tier_word(m)
+        if _per_tier[_w] > 1:
+            _dss = [ds_bare(d) for d in m.get("datasets") or []]
+            if _dss:
+                _w += u" " + _dss[0].rsplit(u"/", 1)[-1] + (u"+%d" % (len(_dss) - 1) if len(_dss) > 1 else u"")
+        pairs.append(("  " + _w, tier_line(m, rel, data, now)))
     last = row["last"]
     # U61: "Ostatni bieg OK" (historia transferow) stal obok "błąd biegu" (job-stats).
     # Nieudany ostatni bieg ktoregos zadania wygrywa i panel mowi, KTORY dataset i dlaczego.

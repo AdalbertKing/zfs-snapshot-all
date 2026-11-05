@@ -772,12 +772,21 @@ chain_ans() {   # -> chain | own | "" (brak odpowiedzi dla obecnego koszyka)
     [ -n "$CHAIN_ANS" ] && [ "$CHAIN_FOR" = "${B_ROOT[*]}" ] && echo "$CHAIN_ANS"
 }
 chain_facts() {   # -> wiersze "  dataset: N migawek automated_*, najnowsza ... (... temu)"
-    local r n c f e now ago
+    local r n c f e now ago i x skip
     now=$(date +%s)
-    for r in ${B_ROOT[@]+"${B_ROOT[@]}"}; do
+    for i in ${B_ROOT[@]+"${!B_ROOT[@]}"}; do
+        r=${B_ROOT[$i]}
         while IFS=$'\t' read -r n c f e; do
             if [ "$MODE" = sync ]; then [ "$n" = "$r" ] || continue
             else case "$n" in "$r"|"$r"/*) ;; *) continue ;; esac; fi
+            # wykluczony przez admina (i jego dzieci): relacja go nie weźmie, więc ani
+            # „bierzemy”, ani „zestarzeją się” go nie dotyczy (test od zera 2, D4)
+            skip=""
+            while IFS= read -r x; do
+                [ -n "$x" ] || continue
+                case "$n" in "$x"|"$x"/*) skip=1; break ;; esac
+            done <<<"${B_EXCL[$i]}"
+            [ -z "$skip" ] || continue
             case "$f" in ''|*[!0-9]*) f=0 ;; esac
             [ "$f" -gt 0 ] || continue
             case "$e" in ''|*[!0-9]*) e=0 ;; esac
@@ -1340,7 +1349,7 @@ summary_text() {
         echo
         echo "$(T 'Komenda (to samo wpisałbyś z palca):')"
         cmd_oneline; echo
-        case " ${ARGV[*]} " in *" --exclude-child="*) echo "(^nazwa${D:-\$} $(T '= dokładnie ten dataset, nie łapie np. ...disk-01)')" ;; esac
+        case " ${ARGV[*]} " in *" --exclude-child="*) echo "(^$(T nazwa)\$ $(T '= dokładnie ten dataset, nie łapie np. ...disk-01)')" ;; esac
         return 0
     fi
     if [ "$FREEZE" -eq 1 ]; then
@@ -1352,7 +1361,7 @@ summary_text() {
     echo
     echo "$(T 'Komenda (to samo wpisałbyś z palca):')"
     cmd_oneline; echo
-    case " ${ARGV[*]} " in *" --exclude-child="*) echo "(^nazwa${D:-\$} $(T '= dokładnie ten dataset, nie łapie np. ...disk-01)')" ;; esac
+    case " ${ARGV[*]} " in *" --exclude-child="*) echo "(^$(T nazwa)\$ $(T '= dokładnie ten dataset, nie łapie np. ...disk-01)')" ;; esac
     return 0
 }
 # INNY KOLEKTOR JUŻ PRZYCINA TE DATASETY (uwaga 4, 2026-10-08). Aktywacja odmawia,

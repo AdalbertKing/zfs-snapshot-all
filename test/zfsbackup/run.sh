@@ -178,6 +178,26 @@ if [ "$rc" -eq 0 ] \
 else
     bad "simple flow: add-client --host defaults to backup and writes pending relationship" "rc=$rc out=$out pair=$(cat "$SF/pair.log" 2>/dev/null) record=$(cat "$SF/clients/pve2.conf" 2>/dev/null)"
 fi
+# Test from zero 2 (2026-11-05, D10): --landing reaches --pair, so the pull root deploy.sh
+# creates and delegates is <target>/<landing>, not <target>/<peer address> beside it.
+# deploy.sh itself refuses a bad name.
+: > "$SF/pair.log"
+out="$( (
+    profile_validate_file() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
+    mkdir -p "$SF/d10/clients" "$SF/d10/relationships"   # own record dir: the lifecycle cases below count *.conf in $SF/clients
+    CLIENTS_DIR="$SF/d10/clients"; RELATIONSHIPS_DIR="$SF/d10/relationships"; PVE_NODES_DIR="$SF/pve-nodes"
+    DEPLOY="$SF_DEPLOY"
+    cmd_add_client pve3 --host=192.168.28.9:22 --target=hdd/backups --landing=pve3x
+) 2>&1)"; rc=$?
+d10_err=$(bash "$REPO/deploy.sh" --landing='a/b' 2>&1 >/dev/null | tail -1)
+if [ "$rc" -eq 0 ] && grep -q -- '--landing=pve3x' "$SF/pair.log" \
+        && case "$d10_err" in *"--landing='a/b' -- one directory name"*) true ;; *) false ;; esac \
+        && grep -qF 'local dest_root="$PEER_TARGET/${PEER_LANDING:-$label}"' "$REPO/deploy.sh"; then
+    ok "pairing (D10): add-client --landing passes --landing to deploy.sh --pair, whose pull root is <target>/<landing>; a bad name is refused"
+else
+    bad "pairing (D10): --landing through --pair" "rc=$rc pair=$(cat "$SF/pair.log" 2>/dev/null)" "deploy=[$d10_err]" "out=$(printf '%s' "$out" | tail -3)"
+fi
 
 # A NAME MUST BE REUSABLE AFTER THE RELATIONSHIP IS REMOVED.
 #
@@ -4420,6 +4440,24 @@ if [ "$out" = "0" ]; then
     ok "exclude-child: a non-recursive dataset gets no -R and no -X"
 else
     bad "exclude-child: a non-recursive dataset gets no -R and no -X" "count=$out"
+fi
+
+# Test from zero 2 (2026-11-05, D6): the SECTION flags. A hand-narrowed root (hdd/data with
+# photos excluded) is enumerated into per-dataset sections with recursive=no/flat-less, and
+# client_exclude_flags still wrote -X into them -- the engines refuse -X without -R, so the
+# wizard's first copy of hdd/data, docs and mail failed. With a dataset the helper is gated
+# on is_recursive_root; without one (legacy callers) it is unchanged.
+out=$( (
+    is_recursive_root() { [ "$1" = tank/vms ]; }
+    EXCLUDE_CHILD_1='^tank/vms/vm3$'
+    printf '[%s][%s][%s]' "$(client_exclude_flags tank/vms)" "$(client_exclude_flags tank/vms/vm1)" "$(client_exclude_flags)"
+) )
+xflag_lines=$(grep -c 'flags        = $LOAD_FLAGS$(client_exclude_flags "$ds")' "$ZFSBACKUP")
+if [ "$out" = '[ -X ^tank/vms/vm3$][][ -X ^tank/vms/vm3$]' ] && [ "$xflag_lines" -eq 2 ] \
+        && grep -qF '_pick="$(client_exclude_flags "$ds")"' "$ZFSBACKUP"; then
+    ok "exclude-child (D6): -X only on a section that rides -R; a hand-narrowed member gets none; both section writers and the re-activation refresh pass the dataset"
+else
+    bad "exclude-child (D6): -X gated on recursion" "out=$out" "section writers passing \$ds: $xflag_lines/2"
 fi
 
 # --- 47b. probe_snapget_endpoint() passes those same exclusions to the real

@@ -801,6 +801,12 @@ while :; do
     _ep="${_ep:-$SRCHOST}"
     _dsp=""; [ -n "$P_ENT" ] && [ -z "$P_ADDED$P_REMOVED" ] && _dsp="  $_zm ~[x]/[-]"
     [ -n "$P_ADDED$P_REMOVED" ] && _dsp="  $_zm$(for n in $P_ADDED; do printf ' +%s' "$n"; done)$(for n in $P_REMOVED; do printf ' -%s' "$n"; done)"
+    # Test od zera 2 (D12): zmieniona lista to NOWA lista -- stara z dopiskiem "[zmiana]" na końcu
+    # (uciętym za kartą) nie mówiła, co zostanie. Zmiana idzie z przodu, potem nowy stan.
+    if [ -n "$P_ENT" ]; then
+        _ds="$(printf '%s\n' "$P_ENT" | cut -f1 | grep -c .): $(printf '%s\n' "$P_ENT" | cut -f1 | grep . | paste -sd, | sed 's/,/, /g')"
+        _ds="${_dsp#  }  ->  $_ds"; _dsp="  "
+    fi
     _sz="$(cur_words)"
     _pw="$(awk -F'\t' -v n="$CUR_P" '$1==n{print $2; exit}' "$TMPD/prof.tsv" 2>/dev/null | sed -e "s/^$CUR_P  *//" -e 's/  */ /g')"
     [ -n "$_pw" ] && _sz="$_sz -- $_pw"

@@ -57,11 +57,13 @@ On **both** hosts:
 The required packages (`zfs`, `mbuffer`, `zstd`) are **installed by `deploy.sh`
 itself** — you do not have to do it manually.
 
-Clone the repository onto both hosts, to the same location:
+Clone the repository onto both hosts, to the same location. The path `/root/scripts/zfs-snapshot-all`
+is the one `deploy.sh` uses: it installs and updates the package there (the `zfs-backup` link, cron), so
+a clone anywhere else would stay beside it unused.
 
 ```bash
 apt-get install -y git      # a fresh Proxmox has no git
-git clone https://github.com/AdalbertKing/zfsbackup.git /root/zfs-snapshot-all
+git clone https://github.com/AdalbertKing/zfsbackup.git /root/scripts/zfs-snapshot-all
 ```
 
 > **Never copy scripts to the hosts with `scp`/`pscp`.** Updates arrive through
@@ -79,7 +81,7 @@ mandatory.
 ### Step 1 — prepare the collector `pve-backup`
 
 ```bash
-cd /root/zfs-snapshot-all
+cd /root/scripts/zfs-snapshot-all
 ./deploy.sh --backup-user=zfsbackup
 ```
 
@@ -123,7 +125,7 @@ something manually.
 ### Step 4 — accept the pairing on the source `pve-prod`
 
 ```bash
-cd /root/zfs-snapshot-all
+cd /root/scripts/zfs-snapshot-all
 ./deploy.sh --join=/root/prod01-package.tgz
 ```
 
@@ -621,7 +623,7 @@ vi /etc/zfs-snapshot-all/peers/pve-backup.scope      # selection + exclusions
 | `verify-endpoint` refuses | address/port; the message distinguishes "cannot connect" from a data problem |
 | no cron entries | the client did not reach `endpoint_verified` — check `status` |
 | a new VM is not being copied | that is point 7.1, not a failure |
-| updates stopped arriving | `git -C /root/zfs-snapshot-all status` — a dirty tree blocks `--ff-only` |
+| updates stopped arriving | `git -C /root/scripts/zfs-snapshot-all status` — a dirty tree blocks `--ff-only` |
 | backup works, but there are no alerts | `./deploy.sh --check-only` gives a verdict on mail; then `mailq`. On non-Proxmox there is usually no MTA (chapter 5) |
 | `mailq` shows `alias database unavailable` | `/etc/aliases.db` is missing — `newaliases` rebuilds it |
 

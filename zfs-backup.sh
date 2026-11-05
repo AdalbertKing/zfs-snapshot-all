@@ -4901,7 +4901,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         # must survive its profile being renamed or removed).
         # The recorded -X stays in front of either pickup, as it was before.
         local _pick
-        _pick="$(client_exclude_flags)"
+        _pick="$(client_exclude_flags "$ds")"
         if sync_ds_is_passive "$ds"; then
             if [ -n "$(section_field "$workfile" "[dataset:$localpath]" prefix)" ]; then
                 _pick="$_pick -e"
@@ -5102,12 +5102,12 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 # family including the excluded ones.
                 echo "	monitor_exclude = $(client_family_excludes)"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
-                echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)$(client_passive_flags)$(sync_mirror_flag "$ds")"
+                echo "	flags        = $LOAD_FLAGS$(client_exclude_flags "$ds")$(client_passive_flags)$(sync_mirror_flag "$ds")"
             else
                 [ -n "$stagger_send_expr" ] && echo "	send_schedule = $stagger_send_expr"
                 [ -n "$_tier_sched" ] && printf '%s' "$_tier_sched"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
-                echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)$(sync_mirror_flag "$ds")"
+                echo "	flags        = $LOAD_FLAGS$(client_exclude_flags "$ds")$(sync_mirror_flag "$ds")"
             fi
             # The LINK cap, as its own field rather than a -b hidden in the
             # string above: gen-cron.sh renders the identical token, and a
@@ -10717,6 +10717,10 @@ cmd_add_client() {
         pair_args+=(--peer-datasets="$datasets")
     fi
     [ -n "$target" ] && pair_args+=(--target="$target")
+    # The landing names the per-relationship root under --target; without it --pair made
+    # <target>/<peer address> and delegated it, beside the <target>/<landing> the jobs use
+    # (test from zero 2, 2026-11-05, D10: an empty hdd/backups/t2kopie/192.168.28.98).
+    [ -n "$target" ] && [ -n "$landing" ] && pair_args+=(--landing="$landing")
     [ "$lan_port" != "22" ] && pair_args+=(--port="$lan_port")
     # The cap travels to the PAIRING, because the link does. Passed through
     # rather than stored here, so there is one home for it and not two that can
@@ -11101,7 +11105,13 @@ client_recursive_args() {   # <dataset> -> REC_ARGS
     done
 }
 
-client_exclude_flags() {   # -> " -X <re>" for each recorded exclusion
+client_exclude_flags() {   # [dataset] -> " -X <re>" for each recorded exclusion
+    # With a dataset: nothing unless that dataset rides -R (is_recursive_root). -X filters
+    # an -R expansion and the engines refuse it anywhere else ("-X needs -R"); a
+    # hand-narrowed root is enumerated into per-dataset sections that already leave the
+    # excluded ones out. Test from zero 2 (2026-11-05, D6): the wizard's first copy of
+    # hdd/data, docs and mail failed on exactly that line. The seeds gate it the same way.
+    [ -n "${1:-}" ] && ! is_recursive_root "$1" && return 0
     local i=1 n v out=""
     while :; do
         n="EXCLUDE_CHILD_$i"; v="${!n:-}"

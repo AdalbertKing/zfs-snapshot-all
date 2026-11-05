@@ -398,6 +398,7 @@ PEER_DATASETS=""
 # printed next step being "run --commit-scope on the source".
 PEER_REQUESTED=""
 PEER_TARGET=""
+PEER_LANDING=""
 # Empty means "no cap on this link", which is also what every pairing made
 # before this field existed says by saying nothing.
 PEER_BANDWIDTH=""
@@ -533,6 +534,8 @@ while [ "$#" -gt 0 ]; do
         --mode=*)       PEER_MODE="${1#*=}"; shift ;;
         --mode)         PEER_MODE="${2:-}"; shift 2 ;;
         --target=*)     PEER_TARGET="${1#*=}"; shift ;;
+        --landing=*)    PEER_LANDING="${1#*=}"; shift
+                        case "$PEER_LANDING" in ""|.|..|*[!A-Za-z0-9._-]*) die "--landing='$PEER_LANDING' -- one directory name (letters, digits, . _ -)" ;; esac ;;
         --target)       PEER_TARGET="${2:-}"; shift 2 ;;
         # The LINK cap, and it belongs to the PAIR of hosts rather than to any
         # one relationship: two relationships to the same peer over the same
@@ -608,6 +611,8 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                             choose and grant what it actually has.
     --target=DATASET        where snapshots land -- local dataset for pull,
                             remote dataset (on the peer) for push
+    --landing=NAME          pull: the per-relationship root under --target
+                            (default: the peer address as a label)
     --as=root|delegated     delegated (default): isolated per-peer account on
                             the peer. root: parity with today's clustered
                             hosts -- no isolation, use only when the hosts
@@ -6531,7 +6536,7 @@ do_pair() {
     # backup-mode target already is -- there is nothing meaningful to
     # pre-create or delegate here for it.
     if [ "$PEER_ROLE" = "pull" ] && [ "$PEER_ROTATE" -eq 0 ] && [ -n "$PEER_TARGET" ]; then
-        local dest_root="$PEER_TARGET/$label"
+        local dest_root="$PEER_TARGET/${PEER_LANDING:-$label}"
         if zfs list -H -o name "$dest_root" >/dev/null 2>&1; then
             log "target dataset $dest_root already exists"
         else
