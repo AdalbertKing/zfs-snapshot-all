@@ -1577,7 +1577,7 @@ fi
 # F7 = URUCHOM TERAZ (wlasciciel 2026-10-17, jednolicie z F2/F6): bez potwierdzenia,
 # run-relation NAZWA, okno wyjscia.
 A="$(act down,F7)"
-if grep -q "run-relation lab-ct201$" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ] && ! has "$A" 'POTWIERDZENIE' && has "$A" 'WYJŚCIE: Relacja lab-ct201 -- kopia teraz'; then
+if grep -q "run-relation lab-ct201$" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ] && ! has "$A" 'POTWIERDZENIE' && has "$A" 'WYJŚCIE: Relacja lab-ct201 -- bieg teraz'; then
     ok "akcje: F7 na relacji = Uruchom teraz -- run-relation NAZWA od razu, bez potwierdzenia, okno wyjscia"
 else
     bad "akcje: F7 Uruchom teraz" "$(cat "$XL")" "$A"
@@ -4530,6 +4530,11 @@ NROUT=$(nr_run "0${T}backup
 ${NRT}0${T}wycofaj
 " NR_HALF=nomark NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); NRRC=$?
 H_CW="$(cat "$NR/wt.log")"
+# T8 (install test 2026-11-05): a failure that changed nothing returns to the summary
+# card with the answers kept, instead of ending the wizard (all answers from the start).
+t8=$(printf '%s\n' "$H_CW" | awk '/nie została założona/ && !f {f = NR} f && NR > f && /Nowa relacja -- podsumowanie/ {print "back"; exit}')
+[ "$t8" = back ] && ok "T8: a failure with nothing changed goes back to the summary card (answers kept)" \
+    || bad "T8: failure ends the wizard" "$(printf '%s\n' "$H_CW" | grep -n 'nie została\|podsumowanie' | cut -c1-120)"
 if [ "$H_A" -eq 1 ] && [ "$H_AD" -eq 1 ] && [ "$H_AC" -eq 0 ] && has "$H_AW" "założona do połowy (stan: pending_enroll)" && has "$H_AW" "stan pośredni"    && ! has "$H_AW" "nie została założona"    && [ "$H_B" -eq 2 ] && [ "$H_BD" -eq 0 ]    && has "$H_CW" "nie została założona" && ! has "$H_CW" "stan pośredni"; then
     ok "new-relation: skucha 11 -- porazka z rekordem: okno 'zalozona do polowy' + Wycofaj (delete-relation --yes) albo Ponow (ta sama komenda drugi raz); bez rekordu -- stare okno, bez menu"
 else
@@ -6764,8 +6769,25 @@ if [ "$(printf '%s\n' "$u67_rem" | head -1)" = "[on 192.168.0.11] could not inst
 else
     bad "refusal window: remote reason" "$u67_rem"
 fi
+# T3 (install test 2026-11-05): no [on HOST] lines, a local mail warning earlier in the
+# log -- the FATAL leads the reason, the earlier lines follow.
+printf '%s\n' "!!!   mail transport present (exim4) but 2 message(s) are STUCK IN THE QUEUE" \
+    "!!!     look: mailq   and   tail -20 /var/log/mail.log" \
+    "FATAL: --join-remotely: deploy.sh --join FAILED on 192.168.28.98 (see above)" > "$U67/local.txt"
+u67_loc="$(bash -c '. "$1/tui/wt-lib.sh" 2>/dev/null; verb_refusal "$2"' x "$REPO" "$U67/local.txt")"
+if [ "$(printf '%s\n' "$u67_loc" | head -1)" = "--join-remotely: deploy.sh --join FAILED on 192.168.28.98 (see above)" ] \
+        && [ "$(printf '%s\n' "$u67_loc" | wc -l)" -eq 3 ]; then
+    ok "refusal window: without [on HOST] lines the FATAL leads the reason, an earlier mail warning follows it"
+else
+    bad "refusal window: FATAL first" "$u67_loc"
+fi
 u67_left="$(grep -n "grep -E '^FATAL'" "$REPO"/tui/*.sh | head -3)"
 [ -z "$u67_left" ] && ok "U67: no refusal window greps the FATAL line alone any more" || bad "U67: leftover FATAL-only refusal" "$u67_left"
+# T9 (install test 2026-11-05): Esc on the "named like the host" window of step 7 went on
+# like OK. The msgbox's status now decides: Esc returns to the previous step.
+t9=$(awk '/^step_name\(\) \{/{f=1} f&&/--msgbox/{m=1} m{print} m&&/"\$W"/{exit}' "$REPO/tui/new-relation.sh")
+case "$t9" in *'|| return 1'*) ok "T9: step 7's host-name window -- Esc goes back (its status is checked)" ;;
+    *) bad "T9: step 7 msgbox ignores Esc" "$t9" ;; esac
 # pool_roots_to_children: the shipped function from tui/replica.sh on a fake tree.
 # the function speaks through T/Tv (GUI language): take them from wt-lib.sh the same way
 eval "$(sed -n '/^T() {/,/^}/p; /^Tv() {/,/^}/p' "$REPO/tui/wt-lib.sh")"; declare -A TCAT=()

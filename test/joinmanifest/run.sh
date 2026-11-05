@@ -915,6 +915,65 @@ else
     bad "--uninstall" "deploy.sh has no do_uninstall"
 fi
 
+# ============================================================================
+# T2 (install test, 2026-11-05): a directory of old scripts without .git. The
+# shipped pregit_checkout, lifted from deploy.sh, against a local origin: every
+# top-level entry the checkout brings and the old copy already has moves aside
+# (a script AND a directory, not only three named scripts), a file the
+# checkout does not have (a config) stays, and the checkout is main. A failed
+# fetch leaves the old directory exactly as it was, with no .git.
+# ============================================================================
+PG="$(mktemp -d)"
+pgfn=$(sed -n '/^pregit_checkout() {/,/^}$/p' "$REPO/deploy.sh")
+[ -n "$pgfn" ] || bad "T2: could not lift pregit_checkout from deploy.sh -- anchors changed"
+git init -q "$PG/origin" && mkdir -p "$PG/origin/tui" \
+    && printf 'new\n' > "$PG/origin/zfs-backup.sh" && printf 'new\n' > "$PG/origin/snapsend.sh" && printf 'new\n' > "$PG/origin/tui/a.sh" \
+    && git -C "$PG/origin" add -A && git -C "$PG/origin" -c user.email=t@t -c user.name=t commit -qm o && git -C "$PG/origin" branch -qM main
+mkdir -p "$PG/old/tui"; printf 'old\n' > "$PG/old/zfs-backup.sh"; printf 'old\n' > "$PG/old/snapsend.sh"
+printf 'old\n' > "$PG/old/tui/a.sh"; printf 'cfg\n' > "$PG/old/jobs.local.conf"
+pg_run() {   # <dir> <url> <backup> -> rc ; output in $PG/out
+    bash -c "log() { echo \">>> \$*\"; }; die() { echo \"FATAL: \$*\" >&2; exit 1; }; $pgfn
+pregit_checkout '$1' '$2' '$3'" >"$PG/out" 2>&1
+}
+pg1=0; pg_run "$PG/old" "$PG/origin" "$PG/bk" || pg1=$?
+pg_ok=0
+[ "$pg1" -eq 0 ] && [ "$(git -C "$PG/old" rev-parse --abbrev-ref HEAD 2>/dev/null)" = main ] \
+    && [ "$(cat "$PG/old/zfs-backup.sh")" = new ] && [ "$(cat "$PG/old/tui/a.sh")" = new ] \
+    && [ "$(cat "$PG/old/jobs.local.conf")" = cfg ] \
+    && [ "$(cat "$PG/bk/zfs-backup.sh")" = old ] && [ "$(cat "$PG/bk/snapsend.sh")" = old ] && [ "$(cat "$PG/bk/tui/a.sh")" = old ] \
+    && [ ! -e "$PG/bk/jobs.local.conf" ] && pg_ok=1
+mkdir -p "$PG/old2"; printf 'old\n' > "$PG/old2/zfs-backup.sh"
+pg2=0; pg_run "$PG/old2" "$PG/nonexistent-origin" "$PG/bk2" || pg2=$?
+if [ "$pg_ok" -eq 1 ] && [ "$pg2" -ne 0 ] && [ ! -e "$PG/old2/.git" ] && [ "$(ls -A "$PG/old2")" = zfs-backup.sh ] \
+        && [ "$(cat "$PG/old2/zfs-backup.sh")" = old ] && [ ! -e "$PG/bk2" ]; then
+    ok "T2: pregit_checkout moves aside exactly what the checkout collides with (a script and a directory), keeps a config, checks out main; a failed fetch leaves the old dir as it was"
+else
+    bad "T2: pregit_checkout" "ok=$pg_ok rc1=$pg1 rc2=$pg2 old2=$(ls -A "$PG/old2" | tr '\n' ' ')" "$(cat "$PG/out")"
+fi
+rm -rf "$PG"
+
+# ============================================================================
+# T4 (install test, 2026-11-05): a peer NAMED like a collector this host joined.
+# peers/pve10.conf was the join manifest; --pair=pve10 --unpair deleted it and
+# --leave=pve10 had nothing to read. The shipped peer_manifest_is_join tells a
+# join manifest from a pairing one, and do_pair asks it before ANY branch --
+# --unpair included -- that reads or writes the path.
+# ============================================================================
+PJ="$(mktemp -d)"
+pjfn=$(sed -n '/^peer_manifest_is_join() {/,/^}$/p' "$REPO/deploy.sh")
+printf '# peer pairing manifest (join side)\nPEER_JOIN_ROLE="pull"\nPEER_JOIN_ACCOUNT="zfsbackup-pve10"\n' > "$PJ/join.conf"
+printf '# peer pairing manifest (initiator side)\nPEER_SAVED_ROLE=pull\nPEER_SAVED_ACCOUNT=zfsbackup-pve11\n' > "$PJ/pair.conf"
+pj() { bash -c "$pjfn
+peer_manifest_is_join '$1'" && echo join || echo not; }
+pj_order=$(awk '/^do_pair\(\) \{/{f=1} f&&/peer_manifest_is_join "\$mpath"/&&!g{g=NR} f&&/do_unpair "\$label" "\$mpath"/{u=NR; exit} END{print (g&&u&&g<u)?"guard-first":"g=" g " u=" u}' "$REPO/deploy.sh")
+if [ -n "$pjfn" ] && [ "$(pj "$PJ/join.conf")" = join ] && [ "$(pj "$PJ/pair.conf")" = not ] && [ "$(pj "$PJ/none.conf")" = not ] \
+        && [ "$pj_order" = guard-first ]; then
+    ok "T4: a join manifest is told from a pairing one (and a missing file is neither); do_pair refuses it before the --unpair branch"
+else
+    bad "T4: join manifest guard" "fn=${pjfn:+found} join=$(pj "$PJ/join.conf") pair=$(pj "$PJ/pair.conf") none=$(pj "$PJ/none.conf") order=$pj_order"
+fi
+rm -rf "$PJ"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

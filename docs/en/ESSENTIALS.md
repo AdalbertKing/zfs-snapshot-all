@@ -33,6 +33,10 @@ server console.
    `mv /root/scripts/zfs-snapshot-all /root/scripts/zfs-snapshot-all.old-YYYYMMDD`. On the source the wizard checks
    the same and refuses before changing anything; it installs git on the source itself.
 
+   Without options `deploy.sh` delegates `rpool/data` and `rpool/ROOT/pve-1` (the Proxmox default datasets) to
+   the account. On a host with other pools name your own: `./deploy.sh --backup-user=zfsbackup --grant-datasets=hdd`
+   (several, comma-separated). `zfs list -H -o name` lists the datasets.
+
 2. Start the GUI and create the first relation: **F3 Relations**, key **Ins**. The wizard asks for the kind
    of relation, the source host, the datasets, the target, the template, how many snapshots stay on the source
    and the name, shows a summary and the plan, and changes anything only after **EXECUTE**. Step by step, for

@@ -154,7 +154,8 @@ the tree nothing stops them. Before the push, grep the diff for that pattern.
 Stated with their measurements in section 2b, because the case for them is the
 cost data rather than an argument:
 
-- **R9** — run locally only a suite you edited; everything else goes to CI.
+- **R9** — no suite runs on the Windows box, not even an edited one (Owner, 2026-11-03): here only
+  `bash -n` and the new cases cut out and run alone; the edited suite runs on pve9 or in CI. *(E120)*
 - **R10** — verify a suite's targeted mode works before paying for the full run.
 - **R11** — never edit a suite that is running, or run one you are still editing. *(E11, E61, E81)*
 
@@ -2052,6 +2053,37 @@ the first circle.
 the first circle. While collecting, check each fix only with `bash -n` and the new case cut out.
 Then run ONE full circle at the end of the batch. A hole found inside the circle goes on the
 list; unless it blocks, it rides the next batch.
+
+### E121 — two shapes the batch's own tests never ran, both red in CI (2026-11-05, R12)
+**2026-11-05, PR #1092 at 749ca91e: `gencron` and `draftscope` red.**
+
+*Genesis.* (1) `lint_tier_minutes` compared minute and hour only, so the golden fixture
+`monitor-cadence-ok` (weekly Sunday 0 3, workday Mon-Fri 0 3) gained a false warning.
+(2) `product_fn` learnt to carry the `grep_q` definition, `product_range` did not, so
+`draftscope` lifted `new_account_drop_inherited_grants` by range and hit
+`grep_q: command not found`.
+
+*Cause.* The lint's tests had one collision and one silent example, both every-day; the
+harness change was checked through the suites that use `product_fn` only.
+
+*Rule.* R12, no new rule: a check on cron fields names which fields it decides from, and
+has a case where the undecided field alone separates the two lines. A change to a shared
+test helper is listed against every helper of the same file that lifts code, not the one
+that broke.
+
+### E120 — an edited suite run whole on the Windows box (2026-11-05, R9)
+**2026-11-05, batch `fix/batch-zero-test` (U149-a).**
+
+*Genesis.* After adding the tier-minute cases to `test/configexamples/run.sh` I ran the
+whole suite here (26/0), instead of cutting the two new cases out and sending the suite
+to pve9.
+
+*Cause.* R9 in this file still said "run locally only a suite you edited", the wording
+before the Owner's 2026-11-03 direction in `CLAUDE.md` ("no suite runs on this Windows box
+at all -- not even an edited one"). I followed the older text of the two.
+
+*Rule.* R9, rewritten to the 11-03 wording; a rule here that is weaker than `CLAUDE.md` is
+itself a defect. The suite was then run on pve9 with the rest of the batch.
 
 ### E119 — an adjacent action left as "residual work" instead of fixed (2026-11-05, R12)
 **2026-11-05, REV-20261104-187 round 1 (response of 83602af7), carried through round 2 (5bc82496).**

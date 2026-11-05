@@ -15,6 +15,11 @@
 ###############################################################################
 # LOGGING
 ###############################################################################
+# grep_q: grep -q that reads ALL of its input (U149, 2026-11-05). Under pipefail
+# `writer | grep -q` is 141 when grep leaves at the first match and the writer
+# is still writing (SIGPIPE) -- a found match reported as a failure. -c reads
+# to the end; its status is grep -q's (0 match, 1 none, 2 error).
+grep_q() { grep -c "$@" >/dev/null; }
 log() {
     local LEVEL=$1
     shift

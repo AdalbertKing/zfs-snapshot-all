@@ -6761,8 +6761,10 @@ fi
 #      reaching their parsers needs a config, a crontab and a peer.
 for fn in cmd_audit_source_retention; do
     body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
-    if printf '%s\n' "$body" | grep -q -- '--config=\*)' \
-       && printf '%s\n' "$body" | grep -q -- '--local-user=\*)'; then
+    # Here-strings, not `printf | grep -q`: the body is ~10 KB and this suite
+    # runs under pipefail -- an early grep is 141 on a match (U149).
+    if grep -q -- '--config=\*)' <<<"$body" \
+       && grep -q -- '--local-user=\*)' <<<"$body"; then
         ok "64g: $fn accepts --config and --local-user"
     else
         bad "64g: $fn accepts --config and --local-user" "not both found in $fn"
@@ -13762,6 +13764,20 @@ else
     bad "preparesource: real probe" "old=$r_old empty=$r_empty file=$r_file none=$r_none rc=$r_rc" "$(ls -A "$PS/real-old")" "$(cat "$PS/err")"
 fi
 rm -rf "$PS/real-old" "$PS/real-empty" "$PS/real-file"
+# An old copy WITH an executable zfs-backup.sh but no .git (install test,
+# 2026-11-05): not a package -- the directory is busy. The same files with a
+# .git are the package (and then nothing is reported as blocking: zfs-backup.sh, json).
+mkdir -p "$PS/real-oldpkg" "$PS/real-git/.git"
+printf '#!/bin/bash\n' > "$PS/real-oldpkg/zfs-backup.sh"; cp "$PS/real-oldpkg/zfs-backup.sh" "$PS/real-git/"
+chmod +x "$PS/real-oldpkg/zfs-backup.sh" "$PS/real-git/zfs-backup.sh"
+real_pkg() { SOURCE_REPO_DIR="$1" ps_run check-source real --json | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["package"]["ok"], repr(d["repo_dir_blocked"]))' 2>/dev/null; }
+r_op=$(real_pkg "$PS/real-oldpkg"); r_g=$(real_pkg "$PS/real-git")
+if [ "$r_op" = "False 'notempty'" ] && [ "$r_g" = "True ''" ]; then
+    ok "preparesource: the real probe -- old scripts with zfs-backup.sh but no .git are NOT the package (busy dir); with .git they are"
+else
+    bad "preparesource: real probe, old copy with zfs-backup.sh" "oldpkg=$r_op git=$r_g" "$(cat "$PS/err")"
+fi
+rm -rf "$PS/real-oldpkg" "$PS/real-git"
 # apt 404 from the security archive (first install on Debian 11, 2026-11-04):
 # the lists named bullseye-security debs security.debian.org no longer served;
 # the same package from the main archive installed. Stub apt-get fails every
@@ -13889,6 +13905,52 @@ if [ "$rc" -eq 0 ] && printf '%s' "$DROUT" | grep -q '1\. collector : remove-cli
 else
     bad "delrel: plan for a shared peer" "rc=$rc" "$DROUT" "$(cat "$DR/err")"
 fi
+# U149-c (pve0, 2026-11-05): the shipped quiesce_whitelist_gaps over a block of
+# real pve0 shape and a stub zfs. The account's whitelist names 102's disks; the
+# -q line on hdd/lxc with -R also reaches CT 105, which it lists; the parent-only
+# -q line (no -R) and the line without -q list nothing; root lists nothing.
+QG="$(mktemp -d)"; mkdir -p "$QG/bin" "$QG/allow"
+qgfn=$(sed -n '/^quiesce_whitelist_gaps() {/,/^}$/p' "$ZFSBACKUP")
+cat > "$QG/bin/zfs" <<'EOF'
+#!/bin/bash
+# zfs list [-r] -H -o name -- <ds>
+r=0; for a in "$@"; do [ "$a" = -r ] && r=1; done; ds="${@: -1}"
+all="hdd/lxc
+hdd/lxc/subvol-102-disk-0
+hdd/lxc/subvol-102-disk-1
+hdd/lxc/subvol-105-disk-0"
+if [ "$r" = 1 ]; then printf '%s\n' "$all" | grep -E "^$ds(/|$)"; else printf '%s\n' "$all" | grep -xF "$ds"; fi
+EOF
+chmod +x "$QG/bin/zfs"
+printf '# managed\nhdd/lxc/subvol-102-disk-0\nhdd/lxc/subvol-102-disk-1\n' > "$QG/allow/zfsbackup"
+J='/h/zfs-job.sh "pve0 rel daily snapshot (x)" --log=/h/cron.log --detail=8 -- /h/zfs-snapshot-all/snapsend.sh -m "automated_daily_"'
+{ printf '27 1 * * * %s -R -E vzdump -q auto,degrade -L rel "hdd/lxc"\n' "$J"
+  printf '27 1 * * * %s -q auto,degrade -L rel "hdd/lxc"\n' "$J"
+  printf '17 * * * * %s -R -E vzdump -L rel "hdd/lxc"\n' "$J"; } > "$QG/blk"
+head -1 "$QG/blk" > "$QG/blk1"; sed -n 2,3p "$QG/blk" > "$QG/blk23"
+qg() { PATH="$QG/bin:$PATH" QUIESCE_ALLOW_DIR="$QG/allow" bash -c "$qgfn
+quiesce_whitelist_gaps '$1' '$2'"; }
+qg_all=$(qg zfsbackup "$QG/blk"); qg_23=$(qg zfsbackup "$QG/blk23"); qg_root=$(qg root "$QG/blk1")
+rm "$QG/allow/zfsbackup"; qg_none=$(qg zfsbackup "$QG/blk1")
+if [ -n "$qgfn" ] && [ "$qg_all" = "105 hdd/lxc/subvol-105-disk-0" ] && [ -z "$qg_23" ] && [ -z "$qg_root" ] \
+        && [ "$(printf '%s\n' "$qg_none" | wc -l)" = 3 ] && grep -q 'quiesce_whitelist_gaps "$(cron_target_user)" "$_blk"' "$ZFSBACKUP"; then
+    ok "U149-c: a -q line of a delegated account names the guest its whitelist misses (CT 105), parent-only and -q-less lines and root name none, no whitelist = every guest; the install path asks it"
+else
+    bad "U149-c: quiesce_whitelist_gaps" "all=[$qg_all] 23=[$qg_23] root=[$qg_root] none=[$qg_none]"
+fi
+rm -rf "$QG"
+# T7 (install test 2026-11-05): two live records with NO peer are not a shared
+# pairing -- the plan names no "other relationships" and no empty peer.
+printf 'CLIENT_NAME=np1\nSTATE=active\n' > "$DR/clients/np1.conf"
+printf 'CLIENT_NAME=np2\nSTATE=active\n' > "$DR/clients/np2.conf"
+DROUT=$(dr_run np1)
+if printf '%s' "$DROUT" | grep -q '2\. source    : skipped -- the record names no peer' \
+   && ! printf '%s' "$DROUT" | grep -q 'other relationships still use'; then
+    ok "delrel: records without a peer do not share one -- no 'other relationships still use :' for an empty peer"
+else
+    bad "delrel: empty peer counted as shared" "$DROUT" "$(cat "$DR/err")"
+fi
+rm -f "$DR/clients/np1.conf" "$DR/clients/np2.conf"
 DROUT=$(dr_run c)
 if printf '%s' "$DROUT" | grep -q "1\. collector : skipped -- the record already says 'removed'" \
    && printf '%s' "$DROUT" | grep -q '2\. source    : on 10.0.0.9 (10.0.0.9:2222), as root over SSH: deploy.sh --leave=' \

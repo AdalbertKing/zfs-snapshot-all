@@ -959,7 +959,7 @@ validate_subtree() {   # <src> <tgt> <snapshot> [ruser] [rhost] -> 0 ok, 1 somet
         # `pool/t/a@s3` and was being accepted as proof that @s3 exists.
         # Review finding, reproduced. -F literal, -x whole line.
         printf '%s
-' "$tgt_have" | grep -Fxq "$tgt/$rel@$snap"             || missing="$missing $tgt/$rel"
+' "$tgt_have" | grep_q -Fx "$tgt/$rel@$snap"             || missing="$missing $tgt/$rel"
     done <<< "$src_have"
 
     [ -z "$missing" ] && return 0
@@ -1336,7 +1336,7 @@ mirror_target() {
         log 0 "Mirror (-M) on '$tgt': no common base with '$src' -- NOTHING deleted"
         return 1
     fi
-    if ! printf '%s\n' "$tgt_list" | grep -qxF -- "$base"; then
+    if ! printf '%s\n' "$tgt_list" | grep_q -xF -- "$base"; then
         log 0 "Mirror (-M) on '$tgt': the common base '$base' is not on the target under that name (matched by GUID) -- order not provable, NOTHING deleted"
         return 1
     fi
@@ -1926,7 +1926,7 @@ process_dataset() {
                 # "0" nor empty and so read as "diverged, refuse" every time.
                 # If the name matches on the target directly, use it as before;
                 # otherwise re-resolve the TARGET's own name for that same GUID.
-                if printf '%s\n' "${tgt_snaps[@]}" | grep -qFx -- "$common_snapshot"; then
+                if printf '%s\n' "${tgt_snaps[@]}" | grep_q -Fx -- "$common_snapshot"; then
                     recv_base="$common_snapshot"
                 else
                     local common_guid

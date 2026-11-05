@@ -266,6 +266,11 @@ ZFS_PERMS="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canm
 # account included -- so an audit can be driven from a loop over 18 hosts
 # instead of being read by eye.
 PROBLEMS=0
+# grep_q: grep -q that reads ALL of its input (U149, 2026-11-05). Under pipefail
+# `writer | grep -q` is 141 when grep leaves at the first match and the writer
+# is still writing (SIGPIPE) -- a found match reported as a failure. -c reads
+# to the end; its status is grep -q's (0 match, 1 none, 2 error).
+grep_q() { grep -c "$@" >/dev/null; }
 log() { echo ">>> $*"; }
 # One problem, one count. A message opening with four spaces continues the warn
 # above it (every such call in this file follows another warn), so it is printed
@@ -1586,7 +1591,7 @@ do_draft_scope() {
             # and naming is wanting (LAB6-F1). The branch heuristic applies only
             # to the estate draft, where the stanzas are proposals, not asks.
             if [ "$from_request" -eq 0 ] \
-               && zfs list -H -o name -r -- "$ds" 2>/dev/null | grep -qv "^${ds}$"; then
+               && zfs list -H -o name -r -- "$ds" 2>/dev/null | grep_q -v "^${ds}$"; then
                 echo "include_parent = no"
             else
                 echo "include_parent = yes"
@@ -2415,6 +2420,45 @@ ensure_update_state_dir() {
 #
 # $2 is the account for the delegated checkout, empty for root's -- the reads
 # have to happen as whoever owns the repo, or git refuses on dubious ownership.
+# pregit_checkout <dir> <url> <backup dir> [account]
+#
+# Turns a non-empty directory of plain scripts (an earlier manual copy, no
+# .git) into the checkout of <url>'s main. The fetch comes first, so the move
+# is computed, not guessed: every top-level entry of the checkout that already
+# exists in <dir> goes to <backup dir>, everything else (configs, logs) stays
+# where it is. The old code moved three named scripts and the checkout died on
+# any other collision ("untracked working tree files would be overwritten"),
+# half-way through a join (install test, 2026-11-05). A failed init or fetch
+# removes only the .git it created: <dir> is left as it was. With [account]
+# the git commands run as that account.
+pregit_checkout() {
+    local dir="$1" url="$2" bk="$3" acct="${4:-}" tops name moved=0
+    _pg() { if [ -n "$acct" ]; then su "$acct" -c "$1"; else bash -c "$1"; fi; }
+    if ! _pg "cd '$dir' && git init -q && git remote add origin '$url' && git fetch -q origin"; then
+        rm -rf "$dir/.git"
+        die "git init/fetch failed in $dir -- nothing was moved; its files are as they were"
+    fi
+    tops=$(_pg "git -C '$dir' ls-tree --name-only origin/main") \
+        || { rm -rf "$dir/.git"; die "could not list origin/main in $dir -- nothing was moved"; }
+    mkdir -p "$bk"
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        if [ -e "$dir/$name" ] || [ -L "$dir/$name" ]; then
+            mv "$dir/$name" "$bk/" || die "could not move $dir/$name to $bk"
+            log "  moved $name -> $bk/ (the checkout has its own)"
+            moved=$((moved + 1))
+        fi
+    done <<< "$tops"
+    [ "$moved" -gt 0 ] || rmdir "$bk" 2>/dev/null
+    [ -z "$acct" ] || [ ! -d "$bk" ] || chown -R "$acct:$acct" "$bk"
+    _pg "git -C '$dir' checkout -q -b main --track origin/main" \
+        || die "git checkout failed in $dir -- the entries moved aside are in $bk"
+    [ ! -d "$bk" ] || {
+        log "Diff against the moved entries (differences are the old copy's own edits):"
+        diff -rq "$bk" "$dir" 2>&1 | grep -v "^Only in $dir" || true
+    }
+}
+
 explain_pull_failure() {   # <repo dir> [account]
     local dir="$1" as="${2:-}" g dirty ahead
     if [ -n "$as" ]; then g="su $as -c"; else g="bash -c"; fi
@@ -3158,7 +3202,7 @@ restore_ns_other_owners() {   # <label being withdrawn> <account> <namespace> ->
         fi
         # Known to be another account, or a scope on another pool: not an owner.
         [ -n "$_a" ] && [ "$_a" != "$acct" ] && continue
-        [ -n "$_ds" ] && ! restore_grant_namespaces "$_ds" | grep -qxF -- "$ns" && continue
+        [ -n "$_ds" ] && ! restore_grant_namespaces "$_ds" | grep_q -xF -- "$ns" && continue
         # Account or scope unknown and it may share this namespace (REV-170 R1, point 4):
         # not silently "not an owner" -- reported with '?', and the caller holds back.
         if [ -z "$_a" ] || [ -z "$_ds" ]; then printf '?%s\n' "$_l"; continue; fi
@@ -3415,7 +3459,7 @@ apt_install_with_fallback() {
     # security.debian.org no longer served, and the same package from the main
     # archive installed. One try with the newest version from a non-security
     # origin, said out loud.
-    if printf '%s' "$out" | grep -q '404'; then
+    if printf '%s' "$out" | grep_q '404'; then
         ver=$(apt-cache madison "$pkg" 2>/dev/null | awk -F'|' '$3 !~ /security/ { gsub(/[[:space:]]/, "", $2); print $2; exit }')
         if [ -n "$ver" ]; then
             warn "apt could not fetch $pkg (404 from the archive its package list names) -- trying $pkg=$ver from the main archive"
@@ -4020,7 +4064,7 @@ do_resume() {
         for f in "$PAUSE_STATE_DIR"/*.saved; do
             [ -e "$f" ] || continue
             user=$(basename "$f" .saved)
-            printf '%s\n' "$seen" | grep -qxF "$user" && continue
+            printf '%s\n' "$seen" | grep_q -xF "$user" && continue
             any=1
             do_resume_one "$user" || rc=1
         done
@@ -4141,7 +4185,7 @@ commit_scope_dataset_held() {   # <dataset>
     while IFS= read -r snap; do
         [ -n "$snap" ] || continue
         h="$(zfs holds -H -- "$snap" 2>/dev/null)" || return 2
-        printf '%s\n' "$h" | awk '{print $2}' | grep -qxF "$COMMIT_SCOPE_HOLD_TAG" && return 0
+        printf '%s\n' "$h" | awk '{print $2}' | grep_q -xF "$COMMIT_SCOPE_HOLD_TAG" && return 0
     done <<< "$snaps"
     return 1
 }
@@ -4594,7 +4638,7 @@ new_account_drop_inherited_grants() {   # <account just created> <its home path>
         if ! acl="$(zfs allow "$ds")"; then
             new_account_abort "$account" "$uid" "could not read the zfs delegations on $ds (zfs allow failed)"
         fi
-        printf '%s\n' "$acl" | grep -qE "^[[:space:]]+user $account " || continue
+        printf '%s\n' "$acl" | grep_q -E "^[[:space:]]+user $account " || continue
         found="$found $ds"
     done <<< "$list"
     [ -n "$found" ] || return 0
@@ -4732,7 +4776,7 @@ do_leave() {
             # `zfs allow` piped into grep read as "no grant left" and opened userdel.
             acl="$(zfs allow "$ds" 2>&1)" \
                 || die "refusing --leave='$label': could not read the zfs delegations on $ds to verify that uid $uid ($account) has none left (zfs allow: ${acl%%$'\n'*}) -- an unreadable ACL is not an empty one. $left_some"
-            printf '%s\n' "$acl" | grep -Eq "(^|[[:space:]])user (${uid}|\(unknown: ${uid}\)|${account})([[:space:],]|$)" \
+            printf '%s\n' "$acl" | grep_q -E "(^|[[:space:]])user (${uid}|\(unknown: ${uid}\)|${account})([[:space:],]|$)" \
                 && residual+=("$ds")
         done
         if [ "${#residual[@]}" -gt 0 ]; then
@@ -4927,7 +4971,7 @@ do_uninstall() {
         while IFS= read -r ds; do
             [ -n "$ds" ] || continue
             acl=$(zfs allow "$ds") || die "--uninstall: could not read the zfs delegations on $ds -- $acct kept"
-            printf '%s\n' "$acl" | grep -qE "^[[:space:]]+user $acct " || continue
+            printf '%s\n' "$acl" | grep_q -E "^[[:space:]]+user $acct " || continue
             zfs unallow -u "$acct" "$ds" || die "--uninstall: zfs unallow -u $acct $ds failed -- $acct kept"
             log "revoked $acct's delegation on $ds"
         done <<< "$list"
@@ -5212,25 +5256,8 @@ if [ -d "$REPO_DIR/.git" ]; then
 
 elif [ -d "$REPO_DIR" ] && [ -n "$(ls -A "$REPO_DIR" 2>/dev/null)" ]; then
     log "$REPO_DIR exists with files but is not a git repo (plain scripts from an earlier manual copy?)"
-    log "Backing up any of the 3 tracked scripts that would collide with the checkout..."
     BACKUP_DIR="${REPO_DIR}.bak-preGit-$(date +%Y%m%d%H%M%S)"
-    mkdir -p "$BACKUP_DIR"
-    for f in snapsend.sh snapget.sh delsnaps.sh; do
-        if [ -e "$REPO_DIR/$f" ]; then
-            mv "$REPO_DIR/$f" "$BACKUP_DIR/"
-            log "  moved $f -> $BACKUP_DIR/"
-        fi
-    done
-
-    ( cd "$REPO_DIR" \
-      && git init \
-      && git remote add origin "$REPO_URL" \
-      && git fetch origin \
-      && git checkout -b main --track origin/main ) \
-      || die "git init/checkout failed"
-
-    log "Diff against backup (should be empty besides new .git/.gitignore/.gitattributes):"
-    diff -rq "$BACKUP_DIR" "$REPO_DIR" 2>&1 | grep -v "^Only in $REPO_DIR:" || true
+    pregit_checkout "$REPO_DIR" "$REPO_URL" "$BACKUP_DIR"
 
 else
     log "$REPO_DIR does not exist or is empty -- plain clone"
@@ -5819,9 +5846,9 @@ host_script_ensure alert-digest.sh "$DIGEST_SCRIPT" 0755 \
 _sched_digest="$(settings_time_to_cron "$(settings_get alerts.digest_time 07:00)" 2>/dev/null)" || _sched_digest="0 7 * * *"
 DIGEST_LINE="${_sched_digest:-0 7 * * *} $DIGEST_SCRIPT 2>>/root/scripts/cron.log"
 if [ "$CHECK_ONLY" -eq 1 ]; then
-    if ! crontab -l 2>/dev/null | grep -qF "$DIGEST_SCRIPT"; then
+    if ! crontab -l 2>/dev/null | grep_q -F "$DIGEST_SCRIPT"; then
         warn "digest cron line MISSING -- findings would queue forever and nobody would ever be told"
-    elif ! crontab -l 2>/dev/null | sed -n "/^# BEGIN $CRON_HOST_BLOCK/,/^# END $CRON_HOST_BLOCK/p" | grep -qF "$DIGEST_SCRIPT"; then
+    elif ! crontab -l 2>/dev/null | sed -n "/^# BEGIN $CRON_HOST_BLOCK/,/^# END $CRON_HOST_BLOCK/p" | grep_q -F "$DIGEST_SCRIPT"; then
         warn "digest cron line is present but LOOSE, outside the '$CRON_HOST_BLOCK' block -- a plain run adopts it into the block, keeping its current schedule"
     else
         log "digest cron line already in the '$CRON_HOST_BLOCK' block"
@@ -5953,7 +5980,7 @@ done
 _in_block=0
 if crontab -l 2>/dev/null \
    | sed -n "/^# BEGIN $CRON_HOST_BLOCK/,/^# END $CRON_HOST_BLOCK/p" \
-   | grep -qxF "$PULL_LINE"; then
+   | grep_q -xF "$PULL_LINE"; then
     _in_block=1
 fi
 
@@ -6060,9 +6087,9 @@ host_script_ensure check-pool-capacity.sh "$CAPACITY_SCRIPT" 0755 \
 _sched_cap="$(settings_time_to_cron "$(settings_get capacity.check_time 08:00)" 2>/dev/null)" || _sched_cap="0 8 * * *"
 CAPACITY_LINE="${_sched_cap:-0 8 * * *} $CAPACITY_SCRIPT 2>>/root/scripts/cron.log"
 if [ "$CHECK_ONLY" -eq 1 ]; then
-    if ! crontab -l 2>/dev/null | grep -qF "$CAPACITY_SCRIPT"; then
+    if ! crontab -l 2>/dev/null | grep_q -F "$CAPACITY_SCRIPT"; then
         warn "capacity-check cron line MISSING -- no early warning before a pool fills up"
-    elif ! crontab -l 2>/dev/null | sed -n "/^# BEGIN $CRON_HOST_BLOCK/,/^# END $CRON_HOST_BLOCK/p" | grep -qF "$CAPACITY_SCRIPT"; then
+    elif ! crontab -l 2>/dev/null | sed -n "/^# BEGIN $CRON_HOST_BLOCK/,/^# END $CRON_HOST_BLOCK/p" | grep_q -F "$CAPACITY_SCRIPT"; then
         warn "capacity-check cron line is present but LOOSE, outside the '$CRON_HOST_BLOCK' block -- a plain run adopts it into the block, keeping its current schedule"
     else
         log "capacity-check cron line already in the '$CRON_HOST_BLOCK' block"
@@ -6093,7 +6120,7 @@ host_script_ensure capacity-guard.sh "$GUARD_SCRIPT" 0755 \
     "cannot prune when a pool fills up, even if turned on in F10"
 GUARD_LINE="*/15 * * * * $GUARD_SCRIPT 2>>/root/scripts/cron.log"
 if [ "$CHECK_ONLY" -eq 1 ]; then
-    crontab -l 2>/dev/null | grep -qF "$GUARD_SCRIPT" \
+    crontab -l 2>/dev/null | grep_q -F "$GUARD_SCRIPT" \
         && log "capacity-guard cron line present" \
         || warn "capacity-guard cron line MISSING -- the guard cannot run even when turned on"
 elif cron_block_adopt_line root "$CRON_HOST_BLOCK" "$GUARD_SCRIPT" "$GUARD_LINE" "$CRON_HOST_TAIL"; then
@@ -6113,7 +6140,7 @@ host_script_ensure growth-guard.sh "$GROWTH_SCRIPT" 0755 \
     "no alarm on a suspicious incompressible increment, even if turned on in F10"
 GROWTH_LINE="23 * * * * $GROWTH_SCRIPT 2>>/root/scripts/cron.log"
 if [ "$CHECK_ONLY" -eq 1 ]; then
-    crontab -l 2>/dev/null | grep -qF "$GROWTH_SCRIPT" \
+    crontab -l 2>/dev/null | grep_q -F "$GROWTH_SCRIPT" \
         && log "growth-guard cron line present" \
         || warn "growth-guard cron line MISSING -- the growth alarm cannot run even when turned on"
 elif cron_block_adopt_line root "$CRON_HOST_BLOCK" "$GROWTH_SCRIPT" "$GROWTH_LINE" "$CRON_HOST_TAIL"; then
@@ -6303,9 +6330,23 @@ pair_mode_after_inheritance() {   # <requested mode> <requested datasets> <saved
     printf '%s' "$saved_mode"
 }
 
+# peer_manifest_is_join <path> -> 0 when <path> is a JOIN-side manifest
+#
+# Pairing manifests are keyed by the peer's label (its address or name), join
+# manifests by the collector's label -- one directory. A peer NAMED like a
+# collector this host joined ("pve10") gives --pair/--unpair the join manifest's
+# path: --unpair deleted it and --leave then had nothing to read, while
+# --uninstall pointed at --leave (install test, 2026-11-05).
+peer_manifest_is_join() {
+    [ -r "$1" ] && grep -q '^PEER_JOIN_ROLE=' "$1" && ! grep -q '^PEER_SAVED_ROLE=' "$1"
+}
+
 do_pair() {
     local label; label=$(peer_label "$PEER_HOST")
     local mpath; mpath=$(peer_manifest_path "$label")
+    if peer_manifest_is_join "$mpath"; then
+        die "$mpath is the JOIN manifest of collector '$label' (this host joined it), not a pairing with '$PEER_HOST' -- that one is ended by deploy.sh --leave=$label. Name the peer by its address instead (--pair=<IP>). Nothing was changed."
+    fi
     mkdir -p "$PEER_STATE_DIR" "$PEER_KEY_DIR"
     chmod 700 "$PEER_KEY_DIR"
 
@@ -8018,7 +8059,7 @@ elif [ "$CHECK_ONLY" -eq 1 ]; then
         [ -r "/home/$BACKUP_USER/alert-env.sh" ] || warn "  /home/$BACKUP_USER/alert-env.sh missing -- that account's notify scripts refuse to start"
         [ -f "/etc/logrotate.d/zfs-snapshot-all-$BACKUP_USER" ] || warn "  no logrotate stanza for $BACKUP_USER"
         # Point c: a pull line from before 2026-11-04 does not see root's update hold.
-        crontab -u "$BACKUP_USER" -l 2>/dev/null | grep -F "/home/$BACKUP_USER/zfs-snapshot-all && git pull" | grep -qF "$UPDATE_HOLD_MARKER"             || warn "  $BACKUP_USER's auto-pull line does not check $UPDATE_HOLD_MARKER -- a held host would still pull this account (re-run without --check-only)"
+        crontab -u "$BACKUP_USER" -l 2>/dev/null | grep -F "/home/$BACKUP_USER/zfs-snapshot-all && git pull" | grep_q -F "$UPDATE_HOLD_MARKER"             || warn "  $BACKUP_USER's auto-pull line does not check $UPDATE_HOLD_MARKER -- a held host would still pull this account (re-run without --check-only)"
     else
         warn "  account $BACKUP_USER does not exist -- re-run without --check-only to create it"
     fi
@@ -8089,21 +8130,8 @@ else
 
     elif [ -d "$ACCOUNT_REPO_DIR" ] && [ -n "$(ls -A "$ACCOUNT_REPO_DIR" 2>/dev/null)" ]; then
         log "$ACCOUNT_REPO_DIR exists with files but is not a git repo (plain scripts from an earlier manual copy?)"
-        BACKUP_DIR="${REPO_DIR}.bak-preGit-$(date +%Y%m%d%H%M%S)"
-        mkdir -p "$BACKUP_DIR"
-        for f in snapsend.sh snapget.sh delsnaps.sh gen-cron.sh; do
-            if [ -e "$ACCOUNT_REPO_DIR/$f" ]; then
-                mv "$ACCOUNT_REPO_DIR/$f" "$BACKUP_DIR/"
-                log "  moved $f -> $BACKUP_DIR/"
-            fi
-        done
-        chown -R "$USERNAME:$USERNAME" "$BACKUP_DIR"
-
-        su "$USERNAME" -c "cd '$ACCOUNT_REPO_DIR' && git init && git remote add origin '$REPO_URL' && git fetch origin && git checkout -b main --track origin/main" \
-            || die "git init/checkout failed"
-
-        log "Diff against backup (should be empty besides new .git/.gitignore/.gitattributes):"
-        diff -rq "$BACKUP_DIR" "$ACCOUNT_REPO_DIR" 2>&1 | grep -v "^Only in $ACCOUNT_REPO_DIR:" || true
+        BACKUP_DIR="${ACCOUNT_REPO_DIR}.bak-preGit-$(date +%Y%m%d%H%M%S)"
+        pregit_checkout "$ACCOUNT_REPO_DIR" "$REPO_URL" "$BACKUP_DIR" "$USERNAME"
 
     else
         log "$ACCOUNT_REPO_DIR does not exist or is empty -- plain clone"
@@ -8253,7 +8281,11 @@ EOF
     # a real workflow: grant now, create the dataset later). All of them
     # missing is not a partial success, it is the request not happening.
     if [ "${#DATASETS[@]}" -gt 0 ] && [ "$GRANTED_COUNT" -eq 0 ]; then
-        die "none of the ${#DATASETS[@]} requested dataset(s) exist on this host, so '$USERNAME' was granted NOTHING. The account exists but cannot touch a single dataset -- that is this run failing, not succeeding. Check the names (zfs list -H -o name) and re-run."
+        # Name the switch and what there is: on a host without the Proxmox
+        # default datasets the bare first step of the install ended here with
+        # no hint which option takes the right ones (install test, 2026-11-05).
+        _pools=$(zpool list -H -o name 2>/dev/null | tr '\n' ' ')
+        die "none of the ${#DATASETS[@]} requested dataset(s) (${DATASETS[*]}) exist on this host, so '$USERNAME' was granted NOTHING. The account exists but cannot touch a single dataset -- that is this run failing, not succeeding. Name the datasets to delegate and re-run, e.g. bash $0 --grant-datasets=${_pools%% *}${_pools:+  (pools here: ${_pools% })}; the names: zfs list -H -o name"
     fi
 
     # RECORDED, so the next automatic self-update can pass this SAME list back

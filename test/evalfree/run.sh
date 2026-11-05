@@ -144,6 +144,37 @@ else
     bad "probe: tune_probe_stream samples through a shell function, not an eval'd command string" "$(printf '%s' "$body" | grep -n 'eval\|H=' | head -3)"
 fi
 
+# U149-b (2026-11-05): under pipefail `writer | grep -q` is 141 when grep leaves at
+# the first match while the writer is still writing -- a found match read as a
+# failure (#1082: the monitor's descendant check, 39 false alarms a day on pve0).
+# The readers now go through grep_q (grep -c >/dev/null: it reads to the end). What
+# is left of `| grep -...q` in the pipefail files is one short value written in one
+# go, or a string run by a remote shell; the counts below are that inventory, and
+# a NEW early reader in these files fails here until it is grep_q or counted with
+# its reason.
+#   deploy.sh 4: one origin URL (x2), one group list (x2)
+#   gen-cron.sh 2: one name, one line
+#   zfs-backup.sh 7: one awk word (x3), one command line (x2), one value (x2)
+#   zfs-restore.sh 1: inside the ssh command string (remote shell, no pipefail)
+#   lib-zfs-snap.sh 2: 400 bytes of stderr, one snapshot name
+U149_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+u149_bad=""
+for _e in check-snap-age.sh:0 clean-relationships.sh:0 delsnaps.sh:0 deploy.sh:4 gen-cron.sh:2 snapget.sh:0 snapsend.sh:0 \
+          update-control.sh:0 zfs-backup.sh:7 zfs-media-gate.sh:0 zfs-restore.sh:1 lib-zfs-snap.sh:2; do
+    _f=${_e%%:*}; _want=${_e#*:}
+    _got=$(grep -nE '\|[[:space:]]*grep -[A-Za-z]*q' "$U149_ROOT/$_f" | grep -cvE '^[0-9]+:[[:space:]]*#')
+    [ "$_got" -le "$_want" ] || u149_bad="$u149_bad $_f:$_got>$_want"
+done
+_gqdef=$(grep -c '^grep_q() { grep -c "\$@" >/dev/null; }$' "$U149_ROOT"/deploy.sh "$U149_ROOT"/zfs-backup.sh "$U149_ROOT"/zfs-restore.sh \
+    "$U149_ROOT"/clean-relationships.sh "$U149_ROOT"/lib-zfs-snap.sh | grep -c ':1$')
+_gq_ok=$( { printf 'a\nb\n'; seq 1 200000; } | ( set -o pipefail; grep_q() { grep -c "$@" >/dev/null; }; grep_q -x b ) && echo 0 || echo $?)
+_gq_no=$( printf 'a\n' | ( set -o pipefail; grep_q() { grep -c "$@" >/dev/null; }; grep_q -x b ) && echo 0 || echo $?)
+if [ -z "$u149_bad" ] && [ "$_gqdef" -eq 5 ] && [ "$_gq_ok" = 0 ] && [ "$_gq_no" = 1 ]; then
+    ok "U149-b: no new early-exit reader under pipefail; grep_q defined once in each of its 5 files; a match under a long writer is 0 with pipefail, no match 1"
+else
+    bad "U149-b: early-exit readers under pipefail" "over:${u149_bad:- none}" "grep_q defs=$_gqdef (want 5)" "match=$_gq_ok (want 0) none=$_gq_no (want 1)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

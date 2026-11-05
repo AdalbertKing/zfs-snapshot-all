@@ -165,7 +165,7 @@ check "U60: ...the incremental is received" bash -c "grep -q '^LZFS recv\|^LZFS 
 # H-4 (live GUI campaign, pve10 2026-10-21): mirror_target on a container dataset with no
 # snapshots on EITHER side has nothing to do -- every run of a whole-pool replica ended rc 1
 # on hdd/backups and its intermediate levels. The SHIPPED function, its reads stubbed.
-MT="$(sed -n '/^mirror_target() {/,/^}/p' "$SNAPGET")"
+MT="$(sed -n '/^mirror_target() {/,/^}/p' "$SNAPGET"; sed -n '/^grep_q() {/p' "$(dirname "$SNAPGET")/lib-zfs-snap.sh")"   # + the shipped grep_q it calls (U149)
 mt_run() {   # <src> <tgt> <src snaps> <tgt snaps> <guest live 0|1> -> "rc|guest asked|log"
     ( eval "$MT"
       log() { echo "LOG$1 ${*:2}"; }

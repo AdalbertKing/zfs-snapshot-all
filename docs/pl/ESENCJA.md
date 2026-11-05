@@ -32,6 +32,10 @@ Wszystko w bashu, zadania chodzą z crona, a do codziennej pracy jest tekstowe G
    `mv /root/scripts/zfs-snapshot-all /root/scripts/zfs-snapshot-all.old-RRRRMMDD`. Na źródle kreator
    sprawdza to samo i odmawia, zanim cokolwiek zmieni; gita na źródle doinstalowuje sam.
 
+   Bez opcji `deploy.sh` nadaje kontu uprawnienia na `rpool/data` i `rpool/ROOT/pve-1` (domyślne datasety
+   Proxmoksa). Na hoście z innymi pulami podaj własne: `./deploy.sh --backup-user=zfsbackup --grant-datasets=hdd`
+   (kilka po przecinku). Listę datasetów pokazuje `zfs list -H -o name`.
+
 2. Uruchom GUI i załóż pierwszą relację: **F3 Relacje**, klawisz **Ins**. Kreator pyta o rodzaj relacji,
    host źródłowy, datasety, cel, szablon, ile migawek zostaje na źródle i nazwę, pokazuje podsumowanie
    i plan, a dopiero po **WYKONAJ** cokolwiek zmienia. Krok po kroku, dla każdego wariantu:
