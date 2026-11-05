@@ -1948,6 +1948,75 @@ for eng in send get; do
     f5g_run $eng f5g$eng -e -m "auto_"
     check "F5g $eng: control -- the healthy real run sends auto_2 on the GUID-found base" "0|moved_1 auto_2" "$RC|$(snaps_of "$T")"
 done
+
+# F5, round 5 (REV-186 verification of a1c6339a): the REAL engines with the GUID list's
+# producer on the REMOTE side -- the push engine's target, the pull engine's source -- through
+# a fake ssh that runs every command on this host. It answers the identity probe of
+# validate_remote_host (machine-id, hostname -f) as another host, so the engines accept the
+# "remote"; with F5H_GUIDRC set it fails only the remote `zfs list -o name,guid` with that
+# status (1, 77, or 255 = ssh's own connection failure). The common base is renamed on the
+# target, so only the GUID fallback can find it. Each failure: -n rc 2, INCOMPLETE, the
+# diagnostic, no PLAN=, no destroy, the target as before; the real run rc != 0, the
+# diagnostic, no zfs send, the target as before; -r -F rc != 0, NOT upgrading, no full resend.
+# Controls through the same fake ssh: the healthy -n plans INCREMENTAL from the GUID-found
+# base (rc 1, the renamed moved_1 listed, as in F5g), the healthy real run sends auto_2.
+mkdir -p "$R186D/f5hbin"
+cp "$R186D/f5gbin/zfs" "$R186D/f5gbin/awk" "$R186D/f5hbin/"
+cat > "$R186D/f5hbin/ssh" <<'SHIM'
+#!/bin/bash
+c="${!#}"
+case "$c" in
+    *machine-id*) echo 00000000000000000000000000f5h001; exit 0 ;;
+    *"hostname -f"*) echo f5h-remote.example; exit 0 ;;
+esac
+if [ -n "${F5H_GUIDRC:-}" ] && [[ "$c" == *"-o name,guid"* ]]; then
+    if [ "$F5H_GUIDRC" = 255 ]; then echo "ssh: connect to host f5hhost port 22: Connection refused" >&2
+    else echo "cannot iterate: simulated I/O error" >&2; fi
+    exit "$F5H_GUIDRC"
+fi
+exec bash -c "$c"
+SHIM
+chmod +x "$R186D/f5hbin/ssh"
+f5h_run() {   # <send|get> <name> [engine args] -> RC, OUT: the remote form of r186_run, through f5hbin
+    local eng="$1" name="$2" p0="$PATH"; shift 2; PATH="$R186D/f5hbin:$PATH"
+    if [ "$eng" = send ]; then run_send_out "$@" "$POOL/$name" "root@f5hhost:$BK"
+    else run_get_out "$@" "root@f5hhost:$SRCBASE/$POOL/$name" "$LOCALPULL"; fi
+    PATH="$p0"
+}
+for eng in send get; do
+    S="$(r186_src $eng f5h$eng)"; T="$(r186_tgt $eng f5h$eng)"
+    if [ "$eng" = send ]; then RDS="$T"; else RDS="$S"; fi   # the dataset whose GUID list comes over ssh
+    zfs create -p "$S" || exit 1; zfs snapshot "$S@auto_1"
+    r186_run $eng f5h$eng -e -m "auto_"
+    zfs rename "$T@auto_1" "$T@moved_1"
+    tick; zfs snapshot "$S@auto_2"
+    check "F5h $eng: setup -- the target's copy of the base is renamed" "0|moved_1" "$RC|$(snaps_of "$T")"
+    f5h_run $eng f5h$eng -n -m "auto_"
+    check "F5h $eng remote: control -- -n finds the base by GUID over ssh: PLAN=INCREMENTAL base=auto_1, rc 1 with moved_1 listed" "1|1|1" \
+          "$RC|$(printf '%s\n' "$OUT" | grep -c '^PLAN=INCREMENTAL base=auto_1 ')|$(printf '%s\n' "$OUT" | grep -c "^$T@moved_1\$")"
+    for f5hrc in 1 77 255; do
+        d0=$(cat "$R186_LOG" 2>/dev/null | wc -l)
+        export F5H_GUIDRC=$f5hrc; f5h_run $eng f5h$eng -n -m "auto_"; unset F5H_GUIDRC
+        d1=$(cat "$R186_LOG" 2>/dev/null | wc -l)
+        check "F5h $eng remote -n: the GUID listing of $RDS over ssh exits $f5hrc -> rc 2, INCOMPLETE, the diagnostic, no PLAN=, no destroy, target as before" \
+              "2|1|1|0|0|moved_1" \
+              "$RC|$(printf '%s\n' "$OUT" | grep -c "^INCOMPLETE: ")|$([ "$(r186_said "snapshot GUIDs of '$RDS'")" -gt 0 ] && echo 1 || echo 0)|$(printf '%s\n' "$OUT" | grep -c '^PLAN=')|$((d1 - d0))|$(snaps_of "$T")"
+        : > "$R186D/f5h.sends"; d0=$(cat "$R186_LOG" 2>/dev/null | wc -l)
+        export F5H_GUIDRC=$f5hrc F5G_SENDLOG="$R186D/f5h.sends"; f5h_run $eng f5h$eng -e -m "auto_"; unset F5H_GUIDRC F5G_SENDLOG
+        d1=$(cat "$R186_LOG" 2>/dev/null | wc -l)
+        check "F5h $eng remote real run: the GUID listing of $RDS over ssh exits $f5hrc -> rc != 0, the diagnostic, no zfs send, no destroy, target as before" \
+              "1|1|0|0|moved_1" \
+              "$([ "$RC" -ne 0 ] && echo 1 || echo 0)|$([ "$(r186_said "snapshot GUIDs of '$RDS'")" -gt 0 ] && echo 1 || echo 0)|$(wc -l < "$R186D/f5h.sends")|$((d1 - d0))|$(snaps_of "$T")"
+    done
+    : > "$R186D/f5h.sends"; d0=$(cat "$R186_LOG" 2>/dev/null | wc -l)
+    export F5H_GUIDRC=1 F5G_SENDLOG="$R186D/f5h.sends"; f5h_run $eng f5h$eng -r -F -v 3 -e -m "auto_"; unset F5H_GUIDRC F5G_SENDLOG
+    d1=$(cat "$R186_LOG" 2>/dev/null | wc -l)
+    check "F5h $eng remote -r -F: the GUID listing of $RDS over ssh fails -> rc != 0, NOT upgrading, no full resend, no destroy, no zfs send, target as before" \
+          "1|1|0|0|0|moved_1" \
+          "$([ "$RC" -ne 0 ] && echo 1 || echo 0)|$([ "$(r186_said 'could not complete -- NOT upgrading')" -gt 0 ] && echo 1 || echo 0)|$(r186_said 'Upgrading this run to a full')|$((d1 - d0))|$(wc -l < "$R186D/f5h.sends")|$(snaps_of "$T")"
+    f5h_run $eng f5h$eng -e -m "auto_"
+    check "F5h $eng remote: control -- the healthy real run over ssh sends auto_2 on the GUID-found base" "0|moved_1 auto_2" "$RC|$(snaps_of "$T")"
+done
 rm -rf "$R186D"
 unset R186_LOG R186_REAL
 
