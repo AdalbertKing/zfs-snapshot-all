@@ -834,6 +834,8 @@
 "Szybkie czyszczenie źródła (fastprune)": "Fast source pruning (fastprune)",
 "Ile godzin żyje na źródle każda migawka (wszystkie szczeble). Puste = wyłączone.\\nCzyszczenie co godzinę; monitor zostaje tylko szczeblom częstszym niż ta liczba --\\nwieku rzadszych pilnuje archiwum (kopia pasywna z repliki na kolektorze).": "How many hours every snapshot lives on the source (all tiers). Empty = off.\\nPruning every hour; only tiers more frequent than this keep their monitor --\\nthe age of the rarer ones is watched by the archive (a passive copy of the replica on the collector).",
 "Liczba godzin: same cyfry, puste = wyłączone.": "Number of hours: digits only, empty = off.",
+"Liczba godzin: same cyfry, puste = bez zmiany.": "Number of hours: digits only, empty = no change.",
+"Ile godzin żyje na źródle każda migawka (wszystkie szczeble). Puste = bez zmiany.\\nCzyszczenie co godzinę; monitor zostaje tylko szczeblom częstszym niż ta liczba --\\nwieku rzadszych pilnuje archiwum (kopia pasywna z repliki na kolektorze).": "How many hours every snapshot lives on the source (all tiers). Empty = no change.\\nPruning every hour; only tiers more frequent than this keep their monitor --\\nthe age of the rarer ones is watched by the archive (a passive copy of the replica on the collector).",
 "Za mało": "Too few",
 "Najmniej 4 godziny: replika pvesr co 2 h musi zdążyć przenieść migawkę dwa razy.": "At least 4 hours: a pvesr replica every 2 h must get to carry the snapshot twice.",
 "Mniej niż doba": "Less than a day",
@@ -921,5 +923,8 @@
 "Relacja $RNAME: wycofuję": "Relation $RNAME: undoing",
 "Wycofanie relacji": "Undoing the relation",
 "Relacja '$RNAME' wycofana (rc=0).": "Relation '$RNAME' undone (rc=0).",
-"Relacja '$RNAME' NIE wycofana do końca -- co zostało, mówi dziennik.": "Relation '$RNAME' NOT fully undone -- the log says what is left."
+"Relacja '$RNAME' NIE wycofana do końca -- co zostało, mówi dziennik.": "Relation '$RNAME' NOT fully undone -- the log says what is left.",
+"%s. Krótka retencja źródła:": "%s. Short source retention:",
+"Puste pole nie zmienia retencji. Inną retencję źródła ustawisz w Harmonogram -> Ręcznie (liczby szczebli) albo wybierając szablon.": "An empty field does not change the retention. Set a different source retention in Schedule -> Manual (the tier numbers) or by choosing a template.",
+"Relacja nie ma szczebla z migawkami -- nic do zmiany.": "The relationship has no tier that takes snapshots -- nothing to change."
 }

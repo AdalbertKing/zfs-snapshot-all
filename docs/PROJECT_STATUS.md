@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 102e81204ec74745 -->
+<!-- status-covers-digest: 2962d69e32702caa -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -220,7 +220,7 @@
   zapisuje komendę w `~/new-relation-NAZWA.cmd` i daje: Wycofaj (`delete-relation NAZWA --yes`, tu i na
   źródle), Ponów (ta sama komenda, wznawia) albo Zostaw. Bez rekordu -- jak dotąd „nie została założona”.
   F3 przy `pending_enroll` radzi `seed NAZWA` (wcześniej `activate`, które odmawia); migawki zdalne -- `activate`.
-- **REV-20261104-187 (2026-11-05, #1072 + runda 1 w #1073 + runda 2, niewydane): retencja migawek
+- **REV-20261104-187 (2026-11-05, #1072 + runda 1 w #1073 + runda 2 w #1079 + runda 3, niewydane): retencja migawek
   zdalnych z configu.** „Harmonogram i retencja” -> „Ręcznie...” relacji snaponly czyta szczeble z jej sekcji
   `[template:snaponly(_src)__NAZWA__*]` (`show-tiers`) i zapisuje jednym `set-tiers`: liczby, harmonogramy
   i zamrażanie (jedno pole na operację), a od rundy 1 także sposób liczenia (`--method`: wielkość litery
@@ -228,8 +228,12 @@
   `use_template`; nowa rodzina nazwana jak sąsiednie). Od rundy 2 lista `use_template` każdego
   datasetu jest zmieniana na miejscu: dataset, który świadomie pomija szczebel, pomija go dalej, a usunięcie
   jedynego szczebla datasetu jest odrzucane. Usunięty szczebel zostawia swoje migawki na źródle.
-  Ukryty `relacja-<NAZWA>` nie wpływa na zmianę retencji istniejącej relacji. „Krótka retencja źródła”
-  (U136) nadal ma własny szablon.
+  Ukryty `relacja-<NAZWA>` nie wpływa na zmianę retencji istniejącej relacji. Od rundy 3 także
+  „Krótka retencja źródła” (U136) zmienia config: `show-tiers` -> `fp_ops` (`tui/fastprune-lib.sh`) ->
+  jeden `set-tiers` (`retain = -h<N>`, czyszczenie co godzinę o minucie z configu, progi monitora
+  zdjęte szczeblom o odstępie co najmniej N przez nowe `--monitor-warn=`/`--monitor-crit=`). Ukryty
+  `relacja-<NAZWA>-fastprune` nie jest już ani czytany, ani pisany przy zmianie; kreator zakłada
+  z niego relację raz, przy tworzeniu. Puste pole nic nie zmienia (wcześniej: powrót do szablonu bazy).
 - **REV-20261104-186 (2026-11-04, #1055, wydane w 1.0.10): błędy, które udawały
   sukces w silnikach.** F1 (P1): lista migawek zarezerwowanych przez Proxmox VE przed niszczącą pełną
   kopią jest warunkiem „fail-closed” (`list_protected_snaps`); F4 (P1): skan kolizji `-F` mapuje
@@ -269,8 +273,8 @@
   zaszyte w sekcji `[dataset:]` (te same, które F2 pokazuje jako „lokalny prune”). W17: zdanie
   podsumowania łamane ręcznie pod 80 kolumn jest w oknie planu jednym akapitem. W18: zmiana, która tylko
   dodaje zadania, mówi „Nowe zadania tej relacji (dotychczasowe zostają bez zmian)” zamiast „zastępują 0”.
-  U136: fastprune w oknie zmiany relacji (wiersz Fastprune: inne N budowane od nowa z szablonu bazowego,
-  puste = powrót do bazy; przerwanie przywraca plik szablonu); plan kreatora nazywa kopię pasywną na tym
+  U136: fastprune w oknie zmiany relacji (od REV-187 rundy 3 zmienia config przez `set-tiers`, bez
+  szablonu -- patrz REV-20261104-187 wyżej); plan kreatora nazywa kopię pasywną na tym
   hoście albo ostrzega, że jej nie ma. Na żywo pve11 -> pve9b: założenie z N=48, porzucenie zmiany
   (plik wrócił), powrót do zainstalowanego N, zmiana na 24 (rc=0, `retain = -h24`). Poza paczką
   (do dyskusji): punkt 4 (strażnik crona po tożsamości), U144 p. 2.

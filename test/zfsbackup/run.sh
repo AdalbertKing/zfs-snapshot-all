@@ -15793,6 +15793,56 @@ if [ -z "$so_m" ]; then
 else
     bad "REV-187 r2 per-dataset tier membership" "$so_m"
 fi
+# REV-20261104-187 round 3: "Krótka retencja źródła" in the relation GUI. The chain the GUI
+# runs: the installed config -> show-tiers --json -> the GUI's own fp_ops (tui/fastprune-lib.sh)
+# -> set-tiers -> gen-cron. Every tier that takes snapshots keeps N hours and cleans every hour at
+# its own minute; a tier whose interval is at least N loses its monitor thresholds; the hand edits
+# (-H240 is replaced by the choice, daily 43 4 and the hourly 100m threshold stay). A STALE hidden
+# relacja-rr-fastprune and no such profile give the same bytes; a failing generator changes
+# nothing; the display reads N back from the result (fp_cfg). Before round 3 the GUI wrote that
+# profile with save-profile and applied it with edit-relation --profile.
+so_show() {   # -> show-tiers --json of rr on $ED/vt.conf
+    ( CLIENTS_DIR="$ED/clients"; PROFILE_USER_ROOT="${SO_PR:-$ED/no-profiles}"
+      cron_context_resolve() { CRON_CTX_FILE="$ED/vt.conf"; }
+      assert_cron_config_matches_installed() { :; }
+      cmd_show_tiers rr --json ) 2>/dev/null
+}
+fp_lib() { PY="$PY_OR_PYTHON" bash -c '. "$1/tui/fastprune-lib.sh" && "$2" "$3" ${4:+"$4"}' _ "$REPO" "$@"; }
+fp_r=""
+cp "$RR/edited.conf" "$ED/vt.conf"
+so_show > "$ED/fp.json" && [ -s "$ED/fp.json" ] || fp_r="$fp_r [show-tiers failed]"
+declare -A fp_min=()
+for t in hourly daily weekly monthly; do fp_min[$t]="$(f_src "$t" prune_schedule | cut -d' ' -f1)"; done
+mapfile -t fp_a < <(fp_lib fp_ops "$ED/fp.json" 24)
+[ "${#fp_a[@]}" -gt 0 ] || fp_r="$fp_r [fp_ops gave no ops]"
+printf '[template:keep_hourly]\n\tsend_schedule = 1 * * * *\n\tprefix = automated_hourly_\n\tretain = -h96\n' > "$ED/stale-profiles/relacja-rr-fastprune.conf"
+if so_case "$ED/no-profiles" "${fp_a[@]}"; then
+    for t in hourly daily weekly monthly; do
+        [ "$(f_src "$t" retain)" = "-h24" ] || fp_r="$fp_r [$t retain=$(f_src "$t" retain)]"
+        [ "$(f_src "$t" prune_schedule)" = "${fp_min[$t]} * * * *" ] || fp_r="$fp_r [$t prune=$(f_src "$t" prune_schedule)]"
+    done
+    [ "$(f_snp hourly monitor_warn)" = "100m" ] || fp_r="$fp_r [hourly warn=$(f_snp hourly monitor_warn)]"
+    for t in daily weekly monthly; do
+        [ -z "$(f_snp "$t" monitor_warn)$(f_snp "$t" monitor_crit)" ] || fp_r="$fp_r [$t still watched: $(f_snp "$t" monitor_warn)/$(f_snp "$t" monitor_crit)]"
+    done
+    [ "$(f_snp daily send_schedule)" = "43 4 * * *" ] || fp_r="$fp_r [daily send=$(f_snp daily send_schedule)]"
+    grep -q 'automated_hourly_" -h24$' "$ED/vt.cron" && grep -q 'automated_monthly_" -h24$' "$ED/vt.cron" \
+        && grep -q '^43 4 \* \* \* .*snapget.sh -s -m "automated_daily_"' "$ED/vt.cron" || fp_r="$fp_r [cron: $(grep -E 'automated_(hourly|monthly)_" -' "$ED/vt.cron" | head -2)]"
+    [ "$(so_show > "$ED/fp2.json" && fp_lib fp_cfg "$ED/fp2.json")" = 24 ] || fp_r="$fp_r [fp_cfg reads back '$(fp_lib fp_cfg "$ED/fp2.json")']"
+else fp_r="$fp_r [set-tiers refused: $(tail -2 "$ED/vt.out")]"; fi
+cp "$ED/vt.conf" "$ED/vt.nostale"
+if so_case "$ED/stale-profiles" "${fp_a[@]}"; then
+    diff <(grep -v monitor_since "$ED/vt.conf") <(grep -v monitor_since "$ED/vt.nostale") >/dev/null || fp_r="$fp_r [a stale relacja-rr-fastprune changed the result]"
+else fp_r="$fp_r [stale: refused]"; fi
+cp "$RR/edited.conf" "$ED/vt.conf"
+ST_GEN_FAILS=1 so_st_run "${fp_a[@]}" --yes > "$ED/vt.out" 2>&1 && fp_r="$fp_r [a failing generator was accepted]"
+cmp -s "$RR/edited.conf" "$ED/vt.conf" || fp_r="$fp_r [a failing generator changed the config]"
+if so_st_run --tier=daily --monitor-warn=soon --yes > "$ED/vt.out" 2>&1; then fp_r="$fp_r [--monitor-warn=soon accepted]"; fi
+if [ -z "$fp_r" ]; then
+    ok "REV-187 r3 short source retention: config -> show-tiers -> the GUI's fp_ops -> set-tiers -- every tier -h24 hourly at its own minute, daily+ lose thresholds, hand edits stay, cron follows, N reads back; a stale or missing fastprune profile changes nothing; a failing generator changes nothing"
+else
+    bad "REV-187 r3 short source retention from the config" "$fp_r"
+fi
 # EXPORT / IMPORT (owner campaign 2026-10-18: export refused "not supported yet").
 # The replay is add-client --snaponly with the host and the source datasets, then
 # activate -- never --mode=snaponly (add-client refuses it beside --snaponly), never

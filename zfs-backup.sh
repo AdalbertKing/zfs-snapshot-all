@@ -458,7 +458,8 @@ front end never edits the config file:
   zfs-backup.sh show-tiers NAME [--json]
                                     The tiers of one relationship, read from its CONFIG.
   zfs-backup.sh set-tiers NAME [--tier=T|--src-tier=T --keep=N|--retain=-XN|--quiesce=V|
-                                --send-schedule=..|--prune-schedule=..] [--drop-tier=T]
+                                --send-schedule=..|--prune-schedule=..|--monitor-warn=AGE|
+                                --monitor-crit=AGE (snaponly)] [--drop-tier=T]
                                 [--add-tier=T] [--method=gfs|flat|age] [--plan|--yes]
                                     Change them IN the config, in one atomic replace.
                                     Move the config's relationships, once, from template
@@ -7596,7 +7597,7 @@ snaponly_tiers_apply_ops() {   # <config working copy> <name> <ops...> -> TIERS_
                 key="$v"
                 case " ${tiers[*]} " in *" $key "*) ;; *) fail "no tier '$key' (tiers: ${tiers[*]})" ;; esac
                 hs="[template:snaponly__${name}__$key]"; hp="[template:snaponly_src__${name}__$key]" ;;
-            --keep=*|--retain=*|--quiesce=*|--send-schedule=*|--prune-schedule=*)
+            --keep=*|--retain=*|--quiesce=*|--send-schedule=*|--prune-schedule=*|--monitor-warn=*|--monitor-crit=*)
                 [ -n "$key" ] || fail "'$op' names no tier -- put --tier=T before it"
                 case "$op" in
                     --keep=*)
@@ -7613,6 +7614,11 @@ snaponly_tiers_apply_ops() {   # <config working copy> <name> <ops...> -> TIERS_
                                         sec="$hs"; field=send_schedule ;;
                     --prune-schedule=*) [ -n "$v" ] || fail "--prune-schedule='' -- a snaponly tier needs its source cleanup"
                                         sec="$hp"; field=prune_schedule ;;
+                    # The monitor's age thresholds of the tier; empty takes the threshold away
+                    # (a tier without both thresholds is not watched).
+                    --monitor-warn=*|--monitor-crit=*)
+                        [[ -z "$v" || "$v" =~ ^[1-9][0-9]*[mhd]$ ]] || fail "${op%%=*}='$v' -- an age like 26h, 100m or 9d, or empty"
+                        sec="$hs"; field="${op%%=*}"; field="${field#--}"; field="${field//-/_}" ;;
                 esac
                 if [ "$(tiers_sec_field "$wf" "$sec" "$field")" != "$v" ]; then
                     set_or_remove_section_field "$wf" "$sec" "$field" "$v" || fail "could not write $field in $sec"
@@ -7754,6 +7760,7 @@ cmd_show_tiers() {
 # set-tiers NAME [ops...] [--plan|--yes]
 #   --tier=T | --src-tier=T            the tier the next fields change (target / source)
 #   --keep=N  --retain=-XN  --quiesce=V (empty = none)  --send-schedule='m h d M w'  --prune-schedule='...'
+#   --monitor-warn=AGE --monitor-crit=AGE   snaponly: the tier's monitor thresholds (empty = none)
 #   --drop-tier=T   the tier leaves the relationship (never the last)
 #   --add-tier=T    a tier it does not have, shaped like its others
 #   --drop-src-tier=T / --add-src-tier=T   the tier stops / starts running on the source side
@@ -7871,6 +7878,7 @@ tiers_apply_ops() {   # <config working copy> <name> <ops...> -> TIERS_CHANGES; 
                     [ "$v" = gfs ] && rb_set "$t" "" gfs yes
                 done
                 TIERS_CHANGES+=("method: $v") ;;
+            --monitor-warn=*|--monitor-crit=*) fail "${op%%=*} is a snaponly change; a copy relationship takes its monitor thresholds from its tiers' template" ;;
             *) fail "unknown change '$op'" ;;
         esac
     done
@@ -7897,7 +7905,7 @@ cmd_set_tiers() {
         case "$a" in
             --yes|-y) yes=1 ;;
             --plan)   plan=1 ;;
-            --tier=*|--src-tier=*|--keep=*|--retain=*|--quiesce=*|--send-schedule=*|--prune-schedule=*|--drop-tier=*|--drop-src-tier=*|--add-tier=*|--add-src-tier=*|--method=*) ops+=("$a") ;;
+            --tier=*|--src-tier=*|--keep=*|--retain=*|--quiesce=*|--send-schedule=*|--prune-schedule=*|--drop-tier=*|--drop-src-tier=*|--add-tier=*|--add-src-tier=*|--method=*|--monitor-warn=*|--monitor-crit=*) ops+=("$a") ;;
             --as=*|--from=*|--force|--hidden|--description=*) ;;   # profile words the table may still carry
             -*) die "set-tiers: unknown option '$a'" ;;
             *)  [ -z "$name" ] || die "set-tiers: takes exactly one NAME"; name="$a" ;;
