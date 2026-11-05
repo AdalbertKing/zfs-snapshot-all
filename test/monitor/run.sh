@@ -352,7 +352,8 @@ for where in "root@srcA:tank/root" "tank/root"; do
     check "F12 control: valid walk, stale child ($where) -> CRITICAL" "2" "$(rc_of -R "$where" zsalab_ 2h 4h)"
     # U149: a complete walk longer than a pipe buffer (64 KiB). `printf | grep
     # -q` took SIGPIPE after the root's line and pipefail made it UNKNOWN; on
-    # pve0 the same race fired on four lines under load. Large = every time.
+    # pve0 the same race fired on a four-line listing
+    # under load. Large = every time.
     reset_world; add_ds tank/root 0
     pad=$(printf 'c%.0s' $(seq 1 200))
     for n in $(seq 1 340); do add_ds "tank/root/$pad$n" 0; done
