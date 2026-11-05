@@ -1762,7 +1762,7 @@ done
 # A pair with a common snapshot; one discovery step is broken at a time: the local filter
 # (an awk that fails only on get_sorted_snapshots' program), the target listing in
 # find_common_snapshot (1st call) or in the conflict scan (2nd call), the source listing in
-# the conflict scan. Each must end rc 2 with INCOMPLETE on stderr, the diagnostic, no PLAN=
+# the conflict scan, the target's existence check ("permission denied" is not "absent"). Each must end rc 2 with INCOMPLETE on stderr, the diagnostic, no PLAN=
 # line, no conflict list, no destroy, the target untouched. Old engines answered rc 0/1 with
 # an empty or partial picture. Controls: the healthy pair (rc 0, PLAN=INCREMENTAL) and a
 # real conflict (rc 1, the extra snapshot listed).
@@ -1774,6 +1774,10 @@ if [ -n "${F5C_DS:-}" ] && [ "$1" = list ] && [ "${!#}" = "$F5C_DS" ] \
    && [[ " $* " == *" -t snapshot "* ]] && [[ " $* " == *" -s creation "* ]]; then
     n=$(( $(cat "$R186D_C" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$R186D_C"
     if [ "$n" -gt "${F5C_SKIP:-0}" ]; then echo "cannot iterate '$F5C_DS': simulated I/O error" >&2; exit 1; fi
+fi
+# F5C_EX: the existence check of one dataset says "permission denied", not "does not exist".
+if [ -n "${F5C_EX:-}" ] && { [ "$*" = "list -H -o name -- $F5C_EX" ] || [ "$*" = "list -H $F5C_EX" ]; }; then
+    echo "cannot open '$F5C_EX': permission denied" >&2; exit 1
 fi
 if [ "$1" = destroy ]; then echo "destroy $*" >> "$R186_LOG"; fi
 exec "$R186_REAL" "$@"
@@ -1809,11 +1813,11 @@ for eng in send get; do
     for f5c in "filter|F5C_AWK=1|Could not filter the snapshot list" \
                "target listing in find_common_snapshot|F5C_DS=$T F5C_SKIP=0|Could not list the snapshots of '$T'" \
                "target listing in the conflict scan|F5C_DS=$T F5C_SKIP=1|Could not list the snapshots of '$T'" \
-               "source listing in the conflict scan|F5C_DS=$S F5C_SKIP=1|Could not list the snapshots of '$S'"; do
+               "source listing in the conflict scan|F5C_DS=$S F5C_SKIP=1|Could not list the snapshots of '$S'"                "target existence check (permission denied)|F5C_EX=$T|Could not establish whether '$T'"; do
         what="${f5c%%|*}"; rest="${f5c#*|}"; envs="${rest%%|*}"; diag="${rest#*|}"
         d0=$(cat "$R186_LOG" 2>/dev/null | wc -l)
         # shellcheck disable=SC2086
-        eval "export $envs"; f5c_run $eng f5c$eng; unset F5C_AWK F5C_DS F5C_SKIP
+        eval "export $envs"; f5c_run $eng f5c$eng; unset F5C_AWK F5C_DS F5C_SKIP F5C_EX
         d1=$(cat "$R186_LOG" 2>/dev/null | wc -l)
         calls=$(cat "$R186D_C" 2>/dev/null || echo 0)
         want_calls=0; case "$envs" in *SKIP=0*) want_calls=1 ;; *SKIP=1*) want_calls=2 ;; esac

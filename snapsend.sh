@@ -818,9 +818,10 @@ find_conflicting_snapshots() {
     # REV-20261104-186 round 3: every list this scan decides from is checked. `local a=($(f))`
     # returns local's status, not f's, so a failed discovery used to become an empty conflict
     # set. Status 1 = the scan is incomplete (already logged); the caller must not report it.
+    # Existence is asked with dataset_presence: "absent" only on zfs's own words.
     local src_snaps tgt_snaps=() _tp
     src_snaps=($(get_sorted_snapshots "$src_dataset")) || return 1
-    target_exists "$tgt_dataset" "$remote_user" "$remote_host"; _tp=$?
+    dataset_presence "$tgt_dataset" "$remote_user" "$remote_host"; _tp=$?
     case $_tp in
         0) tgt_snaps=($(get_sorted_snapshots "$tgt_dataset" "$remote_user" "$remote_host")) || return 1 ;;
         1) ;;   # no target yet (first copy): nothing on it can conflict
@@ -857,14 +858,20 @@ find_conflicting_snapshots() {
             local child_name="${tgt_child##*/}"
             local src_child="${src_dataset}/${child_name}"
             
-            if ! zfs list -H "$src_child" &>/dev/null; then
-                local tgt_child_snaps
-                tgt_child_snaps=($(get_sorted_snapshots "$tgt_child" "$remote_user" "$remote_host")) || return 1
-                for snap in "${tgt_child_snaps[@]}"; do
-                    CONFLICT_SNAPSHOTS+=("${tgt_child}@${snap}")
-                done
-                continue
-            fi
+            # REV-186 round 3: "the source child is gone" only on zfs's own words; an
+            # unanswerable check fails the scan (twin of snapget.sh).
+            dataset_presence "$src_child"
+            case $? in
+                1)
+                    local tgt_child_snaps
+                    tgt_child_snaps=($(get_sorted_snapshots "$tgt_child" "$remote_user" "$remote_host")) || return 1
+                    for snap in "${tgt_child_snaps[@]}"; do
+                        CONFLICT_SNAPSHOTS+=("${tgt_child}@${snap}")
+                    done
+                    continue
+                    ;;
+                2) return 1 ;;
+            esac
 
             local child_common
             child_common=$(find_common_snapshot "$src_child" "$tgt_child" "$remote_user" "$remote_host") || return 1
@@ -1307,7 +1314,7 @@ process_dataset() {
         # GUID), same contract: base=null still means full. Twin of snapget.sh's fix.
         if [[ "$common_snapshot" == "null" || -z "$common_snapshot" ]] && [ $RECURSIVE -ne 1 ]; then
             local _dry_tgt_snaps=() _dry_head="" _dry_bm=""
-            target_exists "$tgt_dataset" "$remote_user" "$remote_host"
+            dataset_presence "$tgt_dataset" "$remote_user" "$remote_host"
             case $? in
                 0) _dry_tgt_snaps=($(get_sorted_snapshots "$tgt_dataset" "$remote_user" "$remote_host")) || {
                        log 0 "-n: the snapshots of '$src_dataset' -> '$tgt_dataset' could not be listed -- no plan and no conflict list for this dataset (a failure, not an empty set)."

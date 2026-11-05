@@ -757,9 +757,10 @@ find_conflicting_snapshots() {
     # REV-20261104-186 round 3: every list this scan decides from is checked. `local a=($(f))`
     # returns local's status, not f's, so a failed discovery used to become an empty conflict
     # set. Status 1 = the scan is incomplete (already logged); the caller must not report it.
+    # Existence is asked with dataset_presence: "absent" only on zfs's own words.
     local src_snaps tgt_snaps=() _tp
     src_snaps=($(get_sorted_snapshots "$src_dataset" "$remote_user" "$remote_host")) || return 1
-    target_exists "$tgt_dataset"; _tp=$?
+    dataset_presence "$tgt_dataset"; _tp=$?
     case $_tp in
         0) tgt_snaps=($(get_sorted_snapshots "$tgt_dataset")) || return 1 ;;
         1) ;;   # no target yet (first copy): nothing on it can conflict
@@ -791,7 +792,7 @@ find_conflicting_snapshots() {
             # they reach for -f. Nor may it skip the child and go on: the scan
             # would then end as a complete list with a hole in it (REV-186
             # round 3). Case 2 fails the scan, having already logged why.
-            probe_dataset "$src_child" "$remote_user" "$remote_host" "source child dataset"
+            dataset_presence "$src_child" "$remote_user" "$remote_host"
             case $? in
                 1)
                     local tgt_child_snaps
@@ -1413,12 +1414,16 @@ process_dataset() {
         # same contract: base=null still means full.
         if [[ "$common_snapshot" == "null" || -z "$common_snapshot" ]] && [ $RECURSIVE -ne 1 ]; then
             local _dry_tgt_snaps=() _dry_head="" _dry_bm=""
-            if target_exists "$tgt_dataset"; then
-                _dry_tgt_snaps=($(get_sorted_snapshots "$tgt_dataset")) || {
-                    log 0 "-n: the snapshots of '$src_dataset' -> '$tgt_dataset' could not be listed -- no plan and no conflict list for this dataset (a failure, not an empty set)."
-                    return 1
-                }
-            fi
+            dataset_presence "$tgt_dataset"
+            case $? in
+                0) _dry_tgt_snaps=($(get_sorted_snapshots "$tgt_dataset")) || {
+                       log 0 "-n: the snapshots of '$src_dataset' -> '$tgt_dataset' could not be listed -- no plan and no conflict list for this dataset (a failure, not an empty set)."
+                       return 1
+                   } ;;
+                1) ;;   # no target: no head, no bookmark base
+                *) log 0 "-n: could not tell whether target '$tgt_dataset' exists -- no plan for this dataset (a failure, not a full copy)."
+                   return 1 ;;
+            esac
             [ ${#_dry_tgt_snaps[@]} -gt 0 ] && _dry_head=$(get_snapshot_guid "$tgt_dataset" "${_dry_tgt_snaps[-1]}")
             [ -n "$_dry_head" ] && _dry_bm=$(find_bookmark_base "$src_dataset" "$_dry_head" "$remote_user" "$remote_host")
             [ -n "$_dry_bm" ] && common_snapshot="$_dry_bm"

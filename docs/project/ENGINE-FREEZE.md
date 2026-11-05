@@ -1249,15 +1249,16 @@ Owner-authorized refreezes:
   - `get_sorted_snapshots`: the local filter's status is checked (a failed awk was an empty
     list behind a successful `echo`); a failed LOCAL listing is logged, as the remote one was.
   - `find_conflicting_snapshots`: every list it decides from is assigned apart from `local`
-    and checked; the target is asked with `target_exists` (absent = nothing can conflict,
-    unknown = failure); an unanswerable source child fails the scan instead of being skipped;
+    and checked; the target and each source child are asked with `dataset_presence` (absent
+    only on zfs's own "does not exist"; absent target = nothing can conflict; unknown =
+    failure), so an unanswerable source child fails the scan instead of being skipped
+    (snapget.sh) or read as gone (snapsend.sh's plain `zfs list`);
     `find_common_snapshot` and the recursion propagate their status.
   - `process_dataset -n`: a failed `find_common_snapshot`, conflict scan or bookmark-base
     target listing returns 1 with a diagnostic and prints no PLAN= line; the -n run exits 2
     with `INCOMPLETE: <dataset>` on stderr (1 still means "conflict list on stdout"). Every
     caller in zfs-backup.sh treats a nonzero rc other than history-only conflicts as failure.
-  twin: snapsend.sh <-> snapget.sh changed symmetrically; snapsend.sh's bookmark-base branch
-  additionally handles `target_exists` = 2, which snapget.sh's local target cannot return.
+  twin: snapsend.sh <-> snapget.sh changed symmetrically, both bookmark-base branches included.
 - 2026-11-04 (check-snap-age.sh): **U164 -- an -R root with a foreign snapshot is a container.**
   Owner direction ("Proszę przejść do implementacji", the U161-U164 batch, 2026-11-04), found
   on Dąbrowska pve0 the same day: the archive relation read "czeka" for hours because its -R
