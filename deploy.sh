@@ -3448,7 +3448,7 @@ apply_recorded_grant_datasets
 APT_LAST_ERR=""
 APT_FALLBACK=""
 apt_install_with_fallback() {
-    local pkg="$1" out ver
+    local pkg="$1" out pins="" new try
     APT_LAST_ERR=""; APT_FALLBACK=""
     apt-get install -y "$pkg" 2>/dev/null && return 0
     warn "plain install of $pkg failed, running apt-get update first (pve-enterprise 401 is expected/harmless here)"
@@ -3462,18 +3462,39 @@ apt_install_with_fallback() {
     # A 404 for the package itself (first install on Debian 11, 2026-11-04):
     # the lists named bullseye-security debs (git deb11u5, sudo deb11u4) that
     # security.debian.org no longer served, and the same package from the main
-    # archive installed. One try with the newest version from a non-security
-    # origin, said out loud.
-    if printf '%s' "$out" | grep_q '404'; then
-        ver=$(apt-cache madison "$pkg" 2>/dev/null | awk -F'|' '$3 !~ /security/ { gsub(/[[:space:]]/, "", $2); print $2; exit }')
-        if [ -n "$ver" ]; then
-            warn "apt could not fetch $pkg (404 from the archive its package list names) -- trying $pkg=$ver from the main archive"
-            out=$(apt-get install -y --no-install-recommends "$pkg=$ver" 2>&1) && { APT_FALLBACK="$pkg=$ver"; return 0; }
-            printf '%s\n' "$out"
-        fi
-    fi
+    # archive installed. Retries with the newest non-security version of the
+    # package AND of every dependency apt names in a 404 (git alone left git-man
+    # on the security archive, A-TASSA pve0 2026-11-05), said out loud.
+    for try in 1 2 3; do
+        printf '%s' "$out" | grep_q '404' || break
+        new=$(apt_main_archive_pins "$pkg" "$out" "$pins")
+        [ "$new" != "$pins" ] || break
+        pins="$new"
+        warn "apt could not fetch $pkg (404 from the archive its package list names) -- trying $pins from the main archive"
+        # $pins unquoted on purpose: one word per name=version
+        out=$(apt-get install -y --no-install-recommends $pins 2>&1) && { APT_FALLBACK="$pins"; return 0; }
+        printf '%s\n' "$out"
+    done
     APT_LAST_ERR=$(printf '%s\n' "$out" | grep -E '^E: ' | tail -1)
     return 1
+}
+
+# apt_main_archive_pins <package> <apt output> [<pins so far>] -> "name=version ..."
+#
+# The pins so far, plus <package> and every package apt's output shows a 404
+# for, each at its newest version outside the security archive. Pinning the
+# named package alone is not enough: on A-TASSA pve0 (2026-11-05) git from the
+# main archive still pulled git-man from the security archive -- a 404 again.
+# A name with no such version stays out. zfs-backup.sh carries the same function
+# (a test compares the two).
+apt_main_archive_pins() {
+    local p="$1" o="$2" pins="${3:-}" q v
+    for q in "$p" $(printf '%s\n' "$o" | sed -n 's#^E: Failed to fetch .*/\([^/_]*\)_[^/]*[[:space:]]404[[:space:]].*#\1#p' | sort -u); do
+        case " $pins " in *" $q="*) continue ;; esac
+        v=$(apt-cache madison "$q" 2>/dev/null | awk -F'|' '$3 !~ /security/ { gsub(/[[:space:]]/, "", $2); print $2; exit }')
+        [ -n "$v" ] && pins="${pins:+$pins }$q=$v"
+    done
+    printf '%s' "$pins"
 }
 
 # ---- can this host actually DELIVER an alert? ------------------------------
