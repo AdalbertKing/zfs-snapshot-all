@@ -6,8 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: f085bf4086f62355 -->
-<!-- status-covers-digest: 0e4d078b7398eac8 -->
+<!-- status-covers-digest: 0000000000000000 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +19,32 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Pierwsza instalacja, test na labie (2026-11-05, `23ae35ca..4e1fb203`; NIEWYDANE).** Trzecią paczkę
+  sprawdzono na pve9, pve10 i pve11 z prawdziwym 404 (podstawione lokalne repo security z wersjami bez
+  plików .deb). Potwierdzone na żywo: git w `prepare-source`, sudo przed pierwszą zmianą `--grant-quiesce`
+  i pigz w `check_dep` doszły do wersji z głównego archiwum; `--uninstall --yes` usunął wszystko z planu,
+  datasety zostały (1313 przed i po), obca linia crona została, drugie uruchomienie nic nie zmienia.
+  Test znalazł pięć wad, wszystkie poprawione:
+  (1) `--uninstall` nie rozpoznawał konta kolektora tworzonego przez `add-client --local-user`
+  (GECOS „zfs-snapshot-all collector account”). Na pve9 i pve9b zostawały `otheracct` i `bkp`.
+  (2) `--uninstall` zostawiał katalog `scripts/pairing`, pamięć `link-tune` (`/var/lib/zfs-snap`) i grupę
+  `zfsalert`, gdy miała członków. Grupa jest teraz usuwana zawsze, a log podaje jej dawnych członków.
+  (3) Ponowne `--uninstall` padało, bo pierwsze usunęło katalog blokad crona. Teraz jest odtwarzany przed
+  pętlą po cronach.
+  (4) Wersja zastępcza po 404 instalowała się bez słowa. Linia sukcesu w `check_dep`, `prepare-source`
+  i `--grant-quiesce` mówi teraz, którą wersję wzięto z głównego archiwum.
+  (5) Wada sprzed tej paczki, odtworzona dwa razy: przy dwukierunkowej parze nazwanej po hostach
+  (pve10 ↔ pve11) `delete-relation pve11` na pve10 usuwał `relationships/pve11`. To jest też stan bramki
+  par dla zaciągania pve11 z pve10, więc ta relacja od razu dawała „0 done, 2 not done” (PAIR_UNKNOWN,
+  rc 92). Trzy miejsca `rmdir` przechodzą teraz przez `relationship_dir_rmdir`, które zostawia katalog,
+  dopóki `peers/<nazwa>.conf` ma `PEER_JOIN_`. Na żywo po poprawce: katalog został
+  („kept … pair gate's state”), relacja odwrotna dała 2 done. Na koniec przeszło wszystkie 5 relacji
+  labu (pve10:pve11, pve9:pve11, pve11:pve10, migawki-a, migawki-b), hosty wróciły na wydanie `b48ae26c`
+  bez hold. Lustrzana strona: `--leave` na pve11 usunął pusty `relationships/pve10`, czyli katalog klienta
+  pve10 na tym kolektorze. Skutków nie ma: pauza odtwarza katalog (sprawdzone: pause, resume, 2 done). Jeśli
+  jednak klient jest wstrzymany, `--leave` zostawi ten katalog z ostrzeżeniem, które nazywa jego zawartość
+  „disable marker”, a to jest znacznik pauzy. Tego nie poprawiono.
 
 - **Pierwsza instalacja, trzecia paczka (2026-11-05, `e31a6e80`, `49089baf`, `--uninstall`; NIEWYDANE).**
   (A) apt i 404: na Debianie 11 listy pakietów wskazywały pakiety .deb z bullseye-security (git deb11u5, sudo
