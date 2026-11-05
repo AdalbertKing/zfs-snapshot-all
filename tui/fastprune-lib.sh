@@ -12,16 +12,25 @@
 # zakładaniu. Okno zmiany relacji czyta i zmienia CONFIG (fp_cfg, fp_ops -> set-tiers) i żadnego
 # szablonu nie czyta (REV-20261104-187 runda 3).
 
-fp_ask() {   # <obecne N albo ""> -> FP_ANS (N albo "" = wyłączone); rc 1 = Wstecz
-    local v="$1"
+# fp_ask <obecne N albo ""> [edit] -> FP_ANS (N albo ""); rc 1 = Wstecz. Kreator: puste = bez
+# krótkiej retencji. "edit" (okno zmiany relacji): puste = bez zmiany -- to okno jej nie wyłącza.
+fp_ask() {
+    local v="$1" ask bad
+    if [ "${2:-}" = edit ]; then
+        ask="$(T 'Ile godzin żyje na źródle każda migawka (wszystkie szczeble). Puste = bez zmiany.\nCzyszczenie co godzinę; monitor zostaje tylko szczeblom częstszym niż ta liczba --\nwieku rzadszych pilnuje archiwum (kopia pasywna z repliki na kolektorze).')"
+        bad="$(T 'Liczba godzin: same cyfry, puste = bez zmiany.')"
+    else
+        ask="$(T 'Ile godzin żyje na źródle każda migawka (wszystkie szczeble). Puste = wyłączone.\nCzyszczenie co godzinę; monitor zostaje tylko szczeblom częstszym niż ta liczba --\nwieku rzadszych pilnuje archiwum (kopia pasywna z repliki na kolektorze).')"
+        bad="$(T 'Liczba godzin: same cyfry, puste = wyłączone.')"
+    fi
     while :; do
         geom
         wt --title "$(T 'Krótka retencja źródła')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
-           --inputbox "$(T 'Ile godzin żyje na źródle każda migawka (wszystkie szczeble). Puste = wyłączone.\nCzyszczenie co godzinę; monitor zostaje tylko szczeblom częstszym niż ta liczba --\nwieku rzadszych pilnuje archiwum (kopia pasywna z repliki na kolektorze).')" 12 "$W" "$v" || return 1
+           --inputbox "$ask" 12 "$W" "$v" || return 1
         v="${WT_OUT// /}"
         case "$v" in
             ''|0) FP_ANS=""; return 0 ;;
-            *[!0-9]*) wt --title "$(T 'Zła liczba')" --msgbox "$(T 'Liczba godzin: same cyfry, puste = wyłączone.')" 8 "$W"; continue ;;
+            *[!0-9]*) wt --title "$(T 'Zła liczba')" --msgbox "$bad" 8 "$W"; continue ;;
         esac
         v=$((10#$v))
         if [ "$v" -lt 4 ]; then
@@ -104,7 +113,7 @@ if len(ns) == 1:
 PYEOF
 }
 # fp_ops <plik show-tiers.json> <N> -> słowa set-tiers, jedno w linii: każdy szczebel z migawkami
-# trzyma N godzin i czyści co godzinę (minuta czyszczenia zostaje z configu); szczebel, którego
+# trzyma N godzin i czyści co godzinę (minuta czyszczenia zostaje z configu, bez niej 21); szczebel, którego
 # odstęp jest co najmniej N, traci progi monitora (U136). Reszta configu zostaje, jak jest.
 fp_ops() {
     "$PY" - "$1" "$2" <<'PYEOF' 2>/dev/null | tr -d '\r'

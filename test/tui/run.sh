@@ -5921,7 +5921,7 @@ fi
 # NIEAKTUALNY (inne liczby) albo go nie ma -- nic go nie czyta i nic go nie pisze.
 # (A) 48 -> 24: jeden set-tiers, daily traci progi (odstep 24 >= 24), hourly je zachowuje, minuta 7
 # zostaje; brak save-profile/delete-profile/edit-relation. (A2) to samo bez ukrytego szablonu.
-# (B) puste = bez zmiany. (C) przerwane po zmianie: brak --yes. (E) generator odmawia planu:
+# (B) puste = bez zmiany (i okno tak mowi). (C) przerwane po zmianie: brak --yes. (E) generator odmawia planu:
 # odmowa w oknie, brak --yes. (D) relacja backup -- wiersza nie ma.
 ERFP="$(mktemp -d)"; echo "oryginal" > "$ERFP/fp.conf"
 "$PY" - "$P10/list-profiles.json" "$ERFP" <<'PYEOF'
@@ -5970,7 +5970,7 @@ ERFPE=$(ER_ST_FAIL=1 erfp "0${T}fastprune
 ERFPD=$(er_run "1${T}
 "); ERFPDW="$(cat "$ER/wt.log")"
 erfp_nofp() { ! grep -qE '^(save-profile|delete-profile|edit-relation)' <<<"$1"; }
-if has "$ERFPAW" '48 godz. -- wszystkie szczeble' \
+if has "$ERFPAW" '48 godz. -- wszystkie szczeble' && has "$ERFPAW" 'Puste = bez zmiany' \
    && grep -qxF -- "$ERFPW --plan" <<<"$ERFPAZ" && grep -qxF -- "$ERFPW --yes" <<<"$ERFPAZ" && erfp_nofp "$ERFPAZ" \
    && grep -qxF -- "$ERFPW --yes" <<<"$ERFPA2Z" && erfp_nofp "$ERFPA2Z" \
    && ! grep -q '^set-tiers' <<<"$ERFPBZ" && erfp_nofp "$ERFPBZ" \

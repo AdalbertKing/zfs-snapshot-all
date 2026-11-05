@@ -19,7 +19,7 @@
 # Czego czasownik odmawia, odmawia tu tak samo, tymi samymi słowami.
 #
 # HARMONOGRAM I RETENCJA (REV-20261104-187): tabela startuje z configu relacji
-# (show-tiers) i zapisuje jednym set-tiers -- każdy rodzaj relacji, migawki zdalne też.
+# (show-tiers) i zapisuje przez set-tiers -- każdy rodzaj relacji, migawki zdalne też.
 # Szablon czyta tylko "Użyj szablonu" (edit-relation --profile=).
 #
 # Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka.
@@ -980,7 +980,7 @@ while :; do
     if [ "$step" -eq 1 ] && [ "$ACTION" = fastprune ]; then
         # REV-20261104-187 runda 3: N zmienia CONFIG relacji przez set-tiers (retencja, czyszczenie
         # i progi monitora tylko szczebli z migawkami); żaden szablon nie jest czytany ani pisany.
-        fp_ask "$FP_CUR_N" || continue 2
+        fp_ask "$FP_CUR_N" edit || continue 2
         if [ -z "$FP_ANS" ] || [ "$FP_ANS" = "$FP_CUR_N" ]; then
             if [ -n "$P_FP" ]; then P_TIERS=(); P_FP=""; fi     # cofnij czekającą zmianę N
             if [ -z "$FP_ANS" ] && [ -n "$FP_CUR_N" ]; then

@@ -834,6 +834,8 @@
 "Szybkie czyszczenie źródła (fastprune)": "Fast source pruning (fastprune)",
 "Ile godzin żyje na źródle każda migawka (wszystkie szczeble). Puste = wyłączone.\\nCzyszczenie co godzinę; monitor zostaje tylko szczeblom częstszym niż ta liczba --\\nwieku rzadszych pilnuje archiwum (kopia pasywna z repliki na kolektorze).": "How many hours every snapshot lives on the source (all tiers). Empty = off.\\nPruning every hour; only tiers more frequent than this keep their monitor --\\nthe age of the rarer ones is watched by the archive (a passive copy of the replica on the collector).",
 "Liczba godzin: same cyfry, puste = wyłączone.": "Number of hours: digits only, empty = off.",
+"Liczba godzin: same cyfry, puste = bez zmiany.": "Number of hours: digits only, empty = no change.",
+"Ile godzin żyje na źródle każda migawka (wszystkie szczeble). Puste = bez zmiany.\\nCzyszczenie co godzinę; monitor zostaje tylko szczeblom częstszym niż ta liczba --\\nwieku rzadszych pilnuje archiwum (kopia pasywna z repliki na kolektorze).": "How many hours every snapshot lives on the source (all tiers). Empty = no change.\\nPruning every hour; only tiers more frequent than this keep their monitor --\\nthe age of the rarer ones is watched by the archive (a passive copy of the replica on the collector).",
 "Za mało": "Too few",
 "Najmniej 4 godziny: replika pvesr co 2 h musi zdążyć przenieść migawkę dwa razy.": "At least 4 hours: a pvesr replica every 2 h must get to carry the snapshot twice.",
 "Mniej niż doba": "Less than a day",

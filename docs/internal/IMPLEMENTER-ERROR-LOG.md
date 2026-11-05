@@ -2041,8 +2041,8 @@ list, then the real run sending `-I <src>@`) I ran the whole circle again:
 - the twins bless and the refreeze;
 - a merge of `main`;
 - exact-head CI.
-Each circle took about an hour, and the next finding voided it. The Owner, in the morning:
-"Ugrzęźliśmy. Cała noc minęła." -- "Pełne koło po wszystkich poprawkach, a nie po każdej."
+Each circle took about an hour, and the next finding voided it. In the morning the Owner said
+the night was lost and ordered one full circle after all fixes, not after each.
 
 *Cause.* The 2026-11-03 rule "batches, not rounds" was applied to PRs, not to the fixes inside
 one REV. The holes were found by the text checker and by CI, late, because neither ran before
@@ -2054,20 +2054,20 @@ Then run ONE full circle at the end of the batch. A hole found inside the circle
 list; unless it blocks, it rides the next batch.
 
 ### E119 — an adjacent action left as "residual work" instead of fixed (2026-11-05, R12)
-**2026-11-05, REV-20261104-187 round 2, response at 5bc82496.**
+**2026-11-05, REV-20261104-187 round 1 (response of 83602af7), carried through round 2 (5bc82496).**
 
-*Genesis.* Round 2 made the snaponly tier table config-only. The response itself named
+*Genesis.* Round 1 made the snaponly tier table config-only. Its own Remaining risk named
 "Krótka retencja źródła" as residual work: that action still wrote `relacja-<NAME>-fastprune`
-with `save-profile` and applied it with `edit-relation --profile`. The Reviewer rejected round 3
-on exactly that action.
+with `save-profile` and applied it with `edit-relation --profile`. The Reviewer's F1
+(`REV-20261104-187.md:215`) rejected that action.
 
 *Cause.* The fix covered the path the finding named (Harmonogram) and did not enumerate the
 other retention actions of the same window. The Owner's rule has one exception, a deliberate
 **Use template**, and I widened it to "a separate explicit action".
 
-*Rule.* R12: a config-authority fix names EVERY action of the window that changes the same
-policy, with the CLI each one calls and whether it reads or writes a profile. The response
-carries that table.
+*Rule.* R12, no new rule: the pass covered the one path the finding named. Applied to a
+config-authority fix, the response lists every action of the window that changes the same
+policy, with the CLI each one calls and whether it reads or writes a profile.
 
 ### E118 — waited for CI on a PR with a merge conflict (2026-11-05, R4)
 **2026-11-05, PR #1073.**
