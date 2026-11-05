@@ -425,6 +425,38 @@ else
     bad "odswiezanie: szablony i config po powrocie" "got=$RFOUT (chce: 1 2 False)"
 fi
 
+# T10 (test od zera, 2026-11-05, pve11 -> pve9b): migawki zdalne, hdd/fz0c dodany do chodzacej
+# relacji, bez migawek. Monitor (ksztalt z zywego `monitor --json`): fz0a/fz0b OK (bez linii),
+# fz0c WAITING. Bylo: wiersz fz0c "aktualne" (zakres "konto@host:ds" nie pasowal do linii), a
+# szczebel hourly calej relacji "czeka" przez jeden dataset. Kontrola: monitor, w ktorym czeka
+# KAZDY dataset, dalej CZEKA; relacja lokalna z -R i czekajacym dzieckiem tez.
+T10OUT="$("$PY" - "$TUI" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+H = "zfsbackup-pve11@192.168.28.98:"
+def mon(reason, dss):
+    return {"label": "pve9b", "pattern": "automated_hourly_", "verdict": "OK", "recursive": True,
+            "datasets": [H + d for d in dss], "reason": reason}
+W = "WAITING dataset=%s%s pattern=automated_hourly_ -- no snapshot of this family since the relationship's start age=7m (warn=90m crit=150m)"
+one = mon(W % (H, "hdd/fz0c"), ["hdd/fz0a", "hdd/fz0b", "hdd/fz0c"])
+allw = mon("\n".join(W % (H, d) for d in ("hdd/fz0a", "hdd/fz0b", "hdd/fz0c")), ["hdd/fz0a", "hdd/fz0b", "hdd/fz0c"])
+loc = {"label": "l", "pattern": "automated_hourly", "verdict": "OK", "recursive": True,
+       "datasets": ["hdd/lxc"], "reason": "WAITING dataset=hdd/lxc/subvol-1-disk-0 pattern=automated_hourly -- x"}
+m.mark_waiting({"monitors": [one, allw, loc]})
+job = lambda d: {"scope": H + d, "direction": "snaponly", "prefix": "automated_hourly_", "label": "pve9b"}
+r = [one["verdict"], allw["verdict"], loc["verdict"],
+     m.verdict_for_job(job("hdd/fz0c"), [one])[0], m.verdict_for_job(job("hdd/fz0a"), [one])[0]]
+print(" ".join(r))
+PYEOF
+)"
+if [ "$T10OUT" = "OK CZEKA CZEKA CZEKA OK" ]; then
+    ok "T10: migawki zdalne -- dataset bez migawek 'czeka', jego sasiedzi 'aktualne', szczebel chodzi; monitor, w ktorym czeka kazdy dataset (i -R z czekajacym dzieckiem), dalej 'czeka'"
+else
+    bad "T10: werdykt datasetu migawek zdalnych" "got=$T10OUT (chce: OK CZEKA CZEKA CZEKA OK)"
+fi
+
 # KOLUMNA NASTEPNY i wszystkie daty GUI: jeden zapis "RRRR.MM.DD HH:MM" (wlasciciel 2026-10-29:
 # "preferuję jednak wszędzie w pakiecie YYYY.MM.DD"). Zastepuje R3-4 (dzis/jutro/dzien tygodnia/
 # DD.MM): dzis, jutro, za kilka dni i za dwa tygodnie -- zawsze z rokiem. Oczekiwane napisy

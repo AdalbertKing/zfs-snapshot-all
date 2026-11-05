@@ -132,12 +132,27 @@ VERDICTS = {
 VERDICT_ORDER = ["BLAD", "CRITICAL", "WARNING", "UNKNOWN", "SPRAWDZAM", "BEZ MONITORA", "CZEKA", "OK"]
 
 
+def ds_bare(name):
+    """Dataset bez przedrostka "konto@host:" -- migawki zdalne maja go w zakresie crona,
+    w liscie datasetow monitora i w liniach check-snap-age; porownuje sie same nazwy."""
+    return (name or "").split(":", 1)[-1]
+
+
 def mark_waiting(doc):
     """U137 C3: monitor z rc 0, ktorego wynik ma linie WAITING (szczebel przed pierwszym
-    biegiem), to CZEKA, nie OK. Zmienia doc monitor --json w miejscu."""
+    biegiem), to CZEKA, nie OK. Zmienia doc monitor --json w miejscu.
+    T10 (test od zera, 2026-11-05): dataset dodany do chodzacej relacji ma WAITING, a jego
+    sasiedzi z tego samego monitora maja migawki -- szczebel chodzi, wiec CZEKA tylko wtedy,
+    gdy KAZDY dataset monitora (albo cos pod nim, przy -R) ma linie WAITING."""
     for m in (doc or {}).get("monitors", []) or []:
-        if m.get("verdict") == "OK" and any(ln.strip().startswith("WAITING dataset=")
-                                             for ln in (m.get("reason") or "").splitlines()):
+        if m.get("verdict") != "OK":
+            continue
+        waiting = [ds_bare(mm.group(2)) for mm in (_DS_LINE.match(ln.strip())
+                   for ln in (m.get("reason") or "").splitlines()) if mm and mm.group(1) == "WAITING"]
+        if not waiting:
+            continue
+        dss = [ds_bare(d) for d in m.get("datasets") or []]
+        if all(any(w == d or w.startswith(d + "/") for w in waiting) for d in dss):
             m["verdict"] = "CZEKA"
     return doc
 
@@ -1339,9 +1354,11 @@ def dataset_verdict(m, names):
         if not mm:
             continue
         any_line = True
-        ds = mm.group(2).split(":", 1)[-1]
+        ds = ds_bare(mm.group(2))
         w = "CZEKA" if mm.group(1) == "WAITING" else mm.group(1)
-        if any(n and (ds == n or ds.startswith(n + "/")) for n in names):
+        # T10: zakres migawek zdalnych to "konto@host:dataset" -- bez zdjecia przedrostka
+        # zaden wiersz nie pasowal i kazdy dataset takiej relacji byl "aktualne".
+        if any(n and (ds == ds_bare(n) or ds.startswith(ds_bare(n) + "/")) for n in names):
             if best is None or order.get(w, 99) < order.get(best[0], 99):
                 best = (w, ln.strip())
     if best is None and any_line:
