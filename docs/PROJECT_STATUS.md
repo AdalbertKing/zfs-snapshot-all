@@ -229,7 +229,7 @@
   `-n` kończy się kodem 2 i `INCOMPLETE: <dataset>` na stderr, bez linii PLAN= (na `main`
   te same awarie dawały rc 0 z PLAN=INCREMENTAL albo fałszywy konflikt); F6: `-m` jako dosłowny prefiks; F2: nieczytelny
   czas utworzenia w `delsnaps` = bieg nieudany; F3: `-R` w `delsnaps` najpierw wylicza drzewo i nic nie
-  kasuje przy niepełnej liście. pve9: `test/snapsend` 329/0 (runda 3: 346/0; na silnikach z `main` pada 10 nowych przypadków), `test/delsnaps` 94/0, `test/remote` 145/0;
+  kasuje przy niepełnej liście. pve9: `test/snapsend` 329/0 (runda 3: 350/0; na silnikach z `main` pada 12 nowych przypadków), `test/delsnaps` 94/0, `test/remote` 145/0;
   kontrole negatywne na silnikach z `main` padają (34 i 11 przypadków). Kampania `test/remote` z konta delegowanego
   `zfsbackup` (pve9 -> pve9b): 145/0, jeden SKIP (G3, środowisko).
 - **Wydanie bieżące: v1.0.10 (zfsbackup `b48ae26`, tag `v1.0.10`, dev `4b716aa8`), na wszystkich ośmiu hostach
