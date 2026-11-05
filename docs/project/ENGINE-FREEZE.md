@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 fd00b49d0e1873c3554a4635dd3c630ab17ea1ed -->
-<!-- frozen: snapget.sh 100755 cb6f18dd62e9b62c9e30774bb5cdc570803551dd -->
+<!-- frozen: snapsend.sh 100755 7bfe3a139e06521c0fced24b32758327ea3bd369 -->
+<!-- frozen: snapget.sh 100755 2c5cf8855f80f694d705596e799887dcdd7dcf49 -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 5a0ea69903070daeb4b438728de258c90156916a -->
 <!-- frozen: lib-zfs-snap.sh 100644 54dc026d1cfb81a360f13812ae5a593ab8f26cbe -->
@@ -1242,6 +1242,32 @@ Owner-authorized refreezes:
     name the root and stay under it; otherwise nothing in the tree is pruned, rc 1.
   twin: snapsend.sh <-> snapget.sh changed symmetrically (F1, F4, F5, F6); the shared parts
   live in lib-zfs-snap.sh.
+- 2026-11-05 (snapsend.sh, snapget.sh): **REV-20261104-186 round 3 -- F5 at the filter and the
+  -n callers.** Same owner route as the entry above, continued under the owner's 2026-11-04
+  night direction (repair with the reviewer, autonomously); the Reviewer's verification of
+  92c81fcf asks for exactly this change.
+  - `get_sorted_snapshots`: the local filter's status is checked (a failed awk was an empty
+    list behind a successful `echo`); a failed LOCAL listing is logged, as the remote one was.
+  - `find_conflicting_snapshots`: every list it decides from is assigned apart from `local`
+    and checked; the target and each source child are asked with `dataset_presence` (absent
+    only on zfs's own "does not exist"; absent target = nothing can conflict; unknown =
+    failure), so an unanswerable source child fails the scan instead of being skipped
+    (snapget.sh) or read as gone (snapsend.sh's plain `zfs list`);
+    `find_common_snapshot` and the recursion propagate their status.
+  - `find_common_snapshot`: the target is asked with `dataset_presence` as well, so a check that
+    fails (locally any `zfs list` error, over ssh a remote rc 1) is no longer "absent", "null"
+    and a first copy -- in the real run as in -n.
+  - `process_dataset -n`: a failed `find_common_snapshot`, conflict scan or bookmark-base
+    target listing returns 1 with a diagnostic and prints no PLAN= line; the -n run exits 2
+    with `INCOMPLETE: <dataset>` on stderr (1 still means "conflict list on stdout"). Every
+    caller in zfs-backup.sh treats a nonzero rc other than history-only conflicts as failure.
+  - the -n main loop: a failed dataset's conflicts are cut from `CONFLICT_SNAPSHOTS` (back to
+    the length before it), so a -r scan that failed in a child no longer prints the parent's
+    half of the list.
+  - `process_dataset`, the real run: a failed `find_common_snapshot` refuses the dataset
+    ("could not be compared -- NO transfer"); before, its empty answer reached the send as
+    `-I <src>@`. The reconcile (-F) branch treats it as an incomplete collision scan (no upgrade).
+  twin: snapsend.sh <-> snapget.sh changed symmetrically, both bookmark-base branches included.
 - 2026-11-04 (check-snap-age.sh): **U164 -- an -R root with a foreign snapshot is a container.**
   Owner direction ("Proszę przejść do implementacji", the U161-U164 batch, 2026-11-04), found
   on Dąbrowska pve0 the same day: the archive relation read "czeka" for hours because its -R

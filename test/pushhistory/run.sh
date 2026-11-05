@@ -45,6 +45,7 @@ case "$1" in
             *" -t bookmark "*) exit 0 ;;
         esac
         grep -qxF -- "$last" "$DSDB" && { echo "$last"; exit 0; }
+        echo "cannot open '$last': dataset does not exist" >&2
         exit 1 ;;
     get)
         case " $* " in

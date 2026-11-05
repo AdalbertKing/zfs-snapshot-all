@@ -54,6 +54,12 @@ last="${*: -1}"
 case "$1" in
     list)
         case " $* " in
+            # A snapshot listing: the stub world has no snapshots, so an existing dataset
+            # answers an empty list (REV-186 round 3: the engine checks every line, and the
+            # dataset's own name is not a snapshot).
+            *" -t snapshot "*)
+                grep -qxF -- "$last" "$ZFS_DATASETS" && exit 0
+                echo "cannot open '$last': dataset does not exist" >&2; exit 1 ;;
             *" -r "*)
                 [ "${ZFS_LIST_FAIL:-0}" = 1 ] && { echo "listing failed" >&2; exit 2; }
                 # A failure AFTER partial output: the first line, then rc 2.
@@ -67,6 +73,7 @@ case "$1" in
                 exit 0 ;;
         esac
         grep -qxF -- "$last" "$ZFS_DATASETS" && { echo "$last"; exit 0; }
+        echo "cannot open '$last': dataset does not exist" >&2
         exit 1 ;;
     snapshot)
         if [ -n "${ZFS_SNAP_FAIL:-}" ] && [ "${last%@*}" = "$ZFS_SNAP_FAIL" ]; then

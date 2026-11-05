@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75, E84 (2026-10-15, the E39 shape a third time), E90, E99 (2026-10-22, the E39 shape again, after `--refreeze`), E104 (2026-10-25, commit and PR behind a printed rc=1), E105 (2026-10-28, merged the Reviewer's #975 by a guessed PR number).*
+*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75, E84 (2026-10-15, the E39 shape a third time), E90, E99 (2026-10-22, the E39 shape again, after `--refreeze`), E104 (2026-10-25, commit and PR behind a printed rc=1), E105 (2026-10-28, merged the Reviewer's #975 by a guessed PR number), E118 (2026-11-05, a CI wait on a PR that could not merge).*
 
 ### R5 — Do not modify state something else is reading
 
@@ -2030,6 +2030,21 @@ not when writing a comment in the tree. The night's notes all used the customer'
 install"), never the customer or the lab host. Nothing in the tree runs the scrub pattern on
 a diff; before the push, grep `git diff` for the pattern that `release/publish.sh` applies to
 the exported copy.
+
+### E118 — waited for CI on a PR with a merge conflict (2026-11-05, R4)
+**2026-11-05, PR #1073.**
+
+*Genesis.* I pushed the response commit and started `wait-merge.sh` on the new head. Meanwhile
+`main` had taken the Reviewer's #1076, which changed the generated review views. The PR became
+`mergeable_state: dirty`, so GitHub scheduled no `pull_request` run, and the wait could never
+end. Found about 40 minutes later, only because the run list had no entry for the head.
+
+*Cause.* The wait read "no run yet" as "queued". The PR's mergeability was not read before
+waiting, and nothing in the script reads it.
+
+*Rule.* R4: before starting a CI wait, read `pulls/<n>` and require `mergeable_state` other
+than `dirty`. On a conflict, merge `main` first; the generated views are regenerated, not
+merged by hand.
 
 ### E117 — `printf | grep -q` under pipefail: a found root read as missing, passed tests and review (2026-11-05, R12, R2)
 **2026-11-05, U149, `check-snap-age.sh:615`, `delsnaps.sh:985` (numbering of `origin/main` before the fix).**
