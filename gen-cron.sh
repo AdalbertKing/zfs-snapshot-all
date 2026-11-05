@@ -3742,21 +3742,44 @@ pull_check() {   # <local dataset> <src value>  -> 0 valid, 1 invalid
 # lost to the hourly one every night after a config edit put all tiers on :40.
 # A warning, not a refusal: the data is safe, only that run is lost. Decided
 # from the first two cron fields; a literal minute shared by two tiers whose
-# hours can meet ('*' or the same literal) is the case found live. Days are not
-# compared: an hourly tier meets every day, and two tiers that meet on some day
-# still lose that day's run.
+# hours can meet ('*' or the same literal) is the case found live. Day of week
+# is compared too: weekly on Sunday and workday Mon-Fri at the same 3:00 never
+# meet. A day field this cannot read (names, steps) counts as meeting.
+_lint_dow_set() {   # <cron dow field> -> " 0 1 ... " or empty when unreadable
+    local f="$1" part a b i out=" "
+    [ "$f" = '*' ] && { echo " 0 1 2 3 4 5 6 "; return; }
+    case "$f" in *[!0-9,-]*|'') return ;; esac
+    local -a parts=()
+    IFS=',' read -ra parts <<< "$f"
+    for part in "${parts[@]}"; do
+        case "$part" in
+            *-*) a=${part%-*}; b=${part#*-} ;;
+            *)   a=$part; b=$part ;;
+        esac
+        case "$a$b" in ''|*[!0-9]*) return ;; esac
+        for ((i = a; i <= b; i++)); do out+="$((i % 7)) "; done
+    done
+    echo "$out"
+}
+_lint_dow_meet() {   # <dow a> <dow b> -> 0 when they share a day (or cannot be read)
+    local sa sb d
+    sa=$(_lint_dow_set "$1"); sb=$(_lint_dow_set "$2")
+    [ -n "$sa" ] && [ -n "$sb" ] || return 0
+    for d in $sa; do case "$sb" in *" $d "*) return 0 ;; esac; done
+    return 1
+}
 lint_tier_minutes() {
-    local e ds tier schedule rest key m h
+    local e ds tier schedule rest key m h dw
     declare -A _tm=()
     for e in "${SEND_ENTITIES[@]+"${SEND_ENTITIES[@]}"}" "${SNAPONLY_ENTITIES[@]+"${SNAPONLY_ENTITIES[@]}"}"; do
         IFS="$SEP" read -r ds tier schedule rest <<< "$e"
         [ -n "$schedule" ] || continue
-        read -r m h _ <<< "$schedule"
+        read -r m h _ _ dw _ <<< "$schedule"
         case "$m" in ''|*[!0-9]*) continue ;; esac
         key="$ds${SEP}$m"
-        _tm[$key]+="${tier}=${h}${LSEP}"
+        _tm[$key]+="${tier}=${h}=${dw:-*}${LSEP}"
     done
-    local k list a b ta tb ha hb
+    local k list a b ta tb ha hb da db
     for k in "${!_tm[@]}"; do
         list="${_tm[$k]}"
         local -a its=()
@@ -3765,9 +3788,10 @@ lint_tier_minutes() {
         for a in "${!its[@]}"; do
             for b in "${!its[@]}"; do
                 [ "$a" -lt "$b" ] || continue
-                ta="${its[$a]%%=*}"; ha="${its[$a]#*=}"
-                tb="${its[$b]%%=*}"; hb="${its[$b]#*=}"
+                IFS='=' read -r ta ha da <<< "${its[$a]}"
+                IFS='=' read -r tb hb db <<< "${its[$b]}"
                 [ "$ta" != "$tb" ] || continue
+                _lint_dow_meet "$da" "$db" || continue
                 if [ "$ha" = '*' ] || [ "$hb" = '*' ] || [ "$ha" = "$hb" ]; then
                     warn "[dataset:${k%%${SEP}*}]: tiers $ta and $tb both start at minute ${k##*${SEP}} (hours '$ha' and '$hb' meet) -- one lock per dataset, so the later run waits or gives up (exit 75). Give each tier its own minute."
                 fi

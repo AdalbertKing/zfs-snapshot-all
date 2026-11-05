@@ -78,17 +78,22 @@ product_fn() {   # <file> <name> -> the function's source
         [ "$BASHPID" = "$$" ] || kill -TERM "$$"
         exit 1
     fi
-    # grep_q (U149) is a one-line helper the product defines once per file; a
-    # lifted function that calls it gets the SHIPPED definition with it -- from
-    # the same file, or from lib-zfs-snap.sh for the engines -- instead of a
-    # `command not found` that reads as "no match".
-    case "$body" in *grep_q*)
+    product_helpers "$1" "$body"
+    printf '%s\n' "$body"
+}
+
+# grep_q (U149) is a one-line helper the product defines once per file; lifted
+# code that calls it gets the SHIPPED definition with it -- from the same file,
+# or from lib-zfs-snap.sh for the engines -- instead of a `command not found`
+# that reads as "no match". Used by product_fn and product_range alike.
+product_helpers() {   # <file> <lifted body> -> definitions the body needs
+    case "$2" in *grep_q*)
         local _gq
         _gq=$(sed -n '/^grep_q() {/p' "$1")
         [ -n "$_gq" ] || _gq=$(sed -n '/^grep_q() {/p' "$(dirname "$1")/lib-zfs-snap.sh" 2>/dev/null)
         [ -n "$_gq" ] && printf '%s\n' "$_gq" ;;
     esac
-    printf '%s\n' "$body"
+    return 0
 }
 
 product_range() {   # <file> <start-ERE> <end-ERE> -> the first start..end run, inclusive
@@ -110,5 +115,6 @@ product_range() {   # <file> <start-ERE> <end-ERE> -> the first start..end run, 
         [ "$BASHPID" = "$$" ] || kill -TERM "$$"
         exit 1
     fi
+    product_helpers "$1" "$body"
     printf '%s\n' "$body"
 }

@@ -2054,6 +2054,23 @@ the first circle. While collecting, check each fix only with `bash -n` and the n
 Then run ONE full circle at the end of the batch. A hole found inside the circle goes on the
 list; unless it blocks, it rides the next batch.
 
+### E121 — two shapes the batch's own tests never ran, both red in CI (2026-11-05, R12)
+**2026-11-05, PR #1092 at 749ca91e: `gencron` and `draftscope` red.**
+
+*Genesis.* (1) `lint_tier_minutes` compared minute and hour only, so the golden fixture
+`monitor-cadence-ok` (weekly Sunday 0 3, workday Mon-Fri 0 3) gained a false warning.
+(2) `product_fn` learnt to carry the `grep_q` definition, `product_range` did not, so
+`draftscope` lifted `new_account_drop_inherited_grants` by range and hit
+`grep_q: command not found`.
+
+*Cause.* The lint's tests had one collision and one silent example, both every-day; the
+harness change was checked through the suites that use `product_fn` only.
+
+*Rule.* R12, no new rule: a check on cron fields names which fields it decides from, and
+has a case where the undecided field alone separates the two lines. A change to a shared
+test helper is listed against every helper of the same file that lifts code, not the one
+that broke.
+
 ### E120 — an edited suite run whole on the Windows box (2026-11-05, R9)
 **2026-11-05, batch `fix/batch-zero-test` (U149-a).**
 
