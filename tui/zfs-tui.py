@@ -1447,7 +1447,11 @@ def next_step(rel):
     co operator wpisze. Maszyna stanow z `zfs-backup.sh` (usage):
     pending_enroll -> seeding -> seed_complete -> endpoint_verified -> active."""
     s = rel.get("state", "")
-    return {"pending_enroll": "activate NAME", "seeding": "seed NAME",
+    # pending_enroll: activate odmawia ("not seeded yet. Run: seed"), seed go przyjmuje; tylko
+    # migawki zdalne nie maja seeda -- tam activate (zfs-backup.sh cmd_activate, cmd_seed).
+    if s == "pending_enroll" and rel.get("mode") == "snaponly":
+        return "activate NAME"
+    return {"pending_enroll": "seed NAME", "seeding": "seed NAME",
             "seed_complete": "activate NAME", "endpoint_verified": "activate-client NAME",
             "removed": "--"}.get(s, "")
 

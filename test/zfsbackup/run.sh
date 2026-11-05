@@ -15651,14 +15651,14 @@ else
     bad "REV-187 set-tiers on snaponly" "$out" "diff lines: $st_diff" "$(diff "$RR/edited.conf" "$ED/st.conf")"
 fi
 st_ref=""
-for op in "--tier=hourly --keep=0" "--add-tier=yearly" "--drop-tier=weekly" "--method=gfs" "--tier=nosuch --keep=3" "--keep=3"; do
+for op in "--tier=hourly --keep=0" "--add-tier=daily" "--add-tier=nosuch" "--drop-tier=nosuch" "--method=ladder" "--tier=nosuch --keep=3" "--keep=3"; do
     cp "$RR/edited.conf" "$ED/st2.conf"
     # shellcheck disable=SC2086
     o=$( ( snaponly_tiers_apply_ops "$ED/st2.conf" rr $op; echo PASSED ) 2>&1 )
     if printf '%s' "$o" | grep -q PASSED || ! printf '%s' "$o" | grep -q 'nothing was changed' || [ -e "$ED/st2.conf" ]; then st_ref="$st_ref [$op]"; fi
 done
 if [ -z "$st_ref" ]; then
-    ok "REV-187 set-tiers on snaponly refuses keep=0, a change of the tier set or method (that is the template action), an unknown tier and an op without a tier -- the working copy removed"
+    ok "REV-187 set-tiers on snaponly refuses keep=0, adding a tier it has or no tier word, dropping one it lacks, an unknown method, an unknown tier and an op without a tier -- the working copy removed"
 else
     bad "REV-187 set-tiers on snaponly refusals" "not refused cleanly:$st_ref"
 fi
@@ -15666,7 +15666,7 @@ fi
 # copy, the install step replaced by a copy. The cron rendered from the result carries the new
 # weekly count and the hand-edited hourly -H240; a failing generator leaves the config as it was.
 so_st_run() {   # <args...> -> output; installed config $ED/vt.conf
-    ( CLIENTS_DIR="$ED/clients"; PROFILE_USER_ROOT="$ED/no-profiles"
+    ( CLIENTS_DIR="$ED/clients"; PROFILE_USER_ROOT="${SO_PR:-$ED/no-profiles}"
       cron_context_resolve() { CRON_CTX_FILE="$ED/vt.conf"; }
       assert_cron_config_matches_installed() { :; }
       gencron_as_target() { [ -n "${ST_GEN_FAILS:-}" ] && return 1; bash "$REPO/gen-cron.sh" "$@" >/dev/null 2>&1; }
@@ -15685,6 +15685,56 @@ if [ "$vt_rc" -eq 0 ] && grep -q 'automated_weekly_" -w6$' "$ED/vt.cron" && grep
     ok "REV-187 set-tiers verb on snaponly: the cron from the result has weekly -w6 and the hand-edited hourly -H240; a failing generator changes nothing"
 else
     bad "REV-187 set-tiers verb on snaponly" "rc=$vt_rc $vt_out" "gen-fails rc=$vt_rc2 $vt_out2" "$(grep -E 'weekly|hourly' "$ED/vt.cron" | head -4)"
+fi
+# REV-20261104-187 round 1: the GUI table also changes the METHOD and the SET of tiers. They work
+# from the config like the numbers (no template read): a STALE relacja-rr profile in
+# PROFILE_USER_ROOT (other tiers, other counts) must not change the result -- compared byte for
+# byte with the run that has no profile at all. Each case: gen-cron renders the result, the
+# hand edits of the other fields stay. On round 0 every one of these was refused.
+mkdir -p "$ED/stale-profiles"
+printf '[template:keep_yearly]\n\tsend_schedule = 5 5 1 1 *\n\tprefix = automated_yearly_\n\tretain = -Y99\n' > "$ED/stale-profiles/relacja-rr.conf"
+so_case() {   # <profile root> <ops...> -> the result in $ED/vt.conf, its cron in $ED/vt.cron; rc of the verb
+    local pr="$1"; shift
+    cp "$RR/edited.conf" "$ED/vt.conf"
+    SO_PR="$pr" so_st_run "$@" --yes > "$ED/vt.out" 2>&1 || return 1
+    bash "$REPO/gen-cron.sh" -c "$ED/vt.conf" > "$ED/vt.cron" 2>&1
+}
+f_src() { tiers_sec_field "$ED/vt.conf" "[template:snaponly_src__rr__$1]" "$2"; }
+f_snp() { tiers_sec_field "$ED/vt.conf" "[template:snaponly__rr__$1]" "$2"; }
+so_r=""
+# method gfs: every source tier counts (upper case) and carries gfs = yes; numbers stay
+if so_case "$ED/no-profiles" --method=gfs; then
+    [ "$(f_src hourly retain)/$(f_src daily retain)/$(f_src weekly retain)/$(f_src daily gfs)" = "-H240/-D7/-W4/yes" ] \
+      && [ "$(f_snp daily send_schedule)" = "43 4 * * *" ] && [ "$(f_snp hourly monitor_warn)" = "100m" ] || so_r="$so_r [gfs: $(f_src hourly retain)/$(f_src daily retain)/$(f_src weekly retain)/$(f_src daily gfs)]"
+else so_r="$so_r [gfs refused: $(tail -2 "$ED/vt.out")]"; fi
+# method age: lower case, no gfs
+if so_case "$ED/no-profiles" --method=age; then
+    [ "$(f_src hourly retain)/$(f_src daily retain)/$(f_src monthly gfs)" = "-h240/-d7/" ] || so_r="$so_r [age: $(f_src hourly retain)/$(f_src daily retain)]"
+    grep -q 'automated_hourly_" -h240$' "$ED/vt.cron" || so_r="$so_r [age: cron]"
+else so_r="$so_r [age refused: $(tail -2 "$ED/vt.out")]"; fi
+# drop weekly: both sections and both use_template entries go, the cron has no weekly line, the rest stays
+if so_case "$ED/no-profiles" --drop-tier=weekly; then
+    ! grep -q 'snaponly_src__rr__weekly\|snaponly__rr__weekly' "$ED/vt.conf" && ! grep -q 'automated_weekly_' "$ED/vt.cron" \
+      && grep -q 'automated_hourly_" -H240$' "$ED/vt.cron" && grep -q '^43 4 \* \* \* .*snapget.sh -s -m "automated_daily_"' "$ED/vt.cron" || so_r="$so_r [drop]"
+else so_r="$so_r [drop refused: $(tail -2 "$ED/vt.out")]"; fi
+cp "$ED/vt.conf" "$ED/vt.nostale"
+if so_case "$ED/stale-profiles" --drop-tier=weekly; then cmp -s "$ED/vt.conf" "$ED/vt.nostale" || so_r="$so_r [drop: a stale template changed the result]"
+else so_r="$so_r [drop+stale refused]"; fi
+# add yearly: a family named like its siblings, the source section with a count, in use_template and in the cron
+if so_case "$ED/no-profiles" --add-tier=yearly --tier=yearly --keep=3; then
+    [ "$(f_snp yearly prefix)/$(f_src yearly retain)" = "automated_yearly_/-Y3" ] && grep -q 'snaponly__rr__yearly' "$ED/vt.conf" \
+      && grep -q 'automated_yearly_" -Y3$' "$ED/vt.cron" && grep -q 'automated_hourly_" -H240$' "$ED/vt.cron" || so_r="$so_r [add: $(f_snp yearly prefix)/$(f_src yearly retain)]"
+    [ "$( (CLIENTS_DIR="$ED/clients"; PROFILE_USER_ROOT="$ED/no-profiles"; cmd_show_tiers rr --json) 2>&1 | python -c 'import json,sys; print(" ".join(t["name"] for t in json.load(sys.stdin)["target"]))')" = "hourly daily weekly monthly yearly" ] || so_r="$so_r [add: show-tiers order]"
+else so_r="$so_r [add refused: $(tail -2 "$ED/vt.out")]"; fi
+cp "$ED/vt.conf" "$ED/vt.nostale"
+if so_case "$ED/stale-profiles" --add-tier=yearly --tier=yearly --keep=3; then
+    # monitor_since is the time of the run; everything else byte for byte
+    diff <(grep -v monitor_since "$ED/vt.conf") <(grep -v monitor_since "$ED/vt.nostale") >/dev/null || so_r="$so_r [add: a stale template changed the result]"
+else so_r="$so_r [add+stale refused]"; fi
+if [ -z "$so_r" ]; then
+    ok "REV-187 r1 set-tiers on snaponly: --method gfs/age, --drop-tier, --add-tier work from the config, render through gen-cron, keep the hand edits; a stale relacja-rr template changes nothing"
+else
+    bad "REV-187 r1 set-tiers method/add/drop on snaponly" "$so_r"
 fi
 # EXPORT / IMPORT (owner campaign 2026-10-18: export refused "not supported yet").
 # The replay is add-client --snaponly with the host and the source datasets, then

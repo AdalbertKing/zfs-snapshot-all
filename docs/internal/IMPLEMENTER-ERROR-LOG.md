@@ -70,7 +70,13 @@ sourcing, and for a branch a running job has checked out.
 Count the assertions you expect by name and compare against the output. A total
 that only goes up cannot tell you an assertion never ran.
 
-*Evidence: E3, E9, E15, E24, E25, E28, E52, E92.*
+The same holds for the delivery: a green run is evidence for the SHA it ran on. The
+status digest (`impact.sh --refresh-status`) is the last commit before the push, and any
+later commit, however small, is followed by a new refresh and `--verify`. The SHA in a
+response is the head on which `--verify` ran clean and which has its own green CI run.
+
+*Evidence: E3, E9, E15, E24, E25, E28, E52, E92, E112, E114, E116 (the rule known and not
+applied to a "comment-only" commit).*
 
 ### R7 — Reproduce a fix's absence, not just its presence
 
@@ -125,6 +131,15 @@ its own help or code which form plans and which executes. Leaving out `--yes` is
 a dry run unless the command says so.
 
 *Evidence: E102, E103, E106 (2026-10-28, Tab+Enter on the restore summary -- the rule known and not applied).*
+
+### R15 — A shipped file names no customer and no lab host
+
+Comments, messages and test text in files that ship describe the situation ("first
+install"), never the customer, the firm or a lab address. The release scrub
+(`release/publish.sh`, pattern after `scrub.sed`) rejects them only at release time; in
+the tree nothing stops them. Before the push, grep the diff for that pattern.
+
+*Evidence: E115.*
 
 ### R9, R10, R11 — on running suites
 
@@ -1991,6 +2006,38 @@ consistency (freeze pins, twin metadata, status digest) is part of the delivery.
 *Rule.* R6, widened: the SHA in the response is the commit on which `./test/impact.sh --verify`
 was run clean AND which has its own green CI run -- recorded with the command, rc and run id.
 Any commit after it that is not the response or generated views means the header moves.
+
+### E115 — a customer's name in a comment of a shipped file (2026-11-05, R15)
+**2026-11-05, PR #1073 (skucha 11).**
+
+*Genesis.* The comment above the new half-state menu in `tui/new-relation.sh` named the
+customer whose first install showed the defect. CI went red on the release scrub
+(`release/publish.sh` rejects customer and lab names in shipped files). One more push only to
+reword the comment.
+
+*Cause.* The scrub rule was known since 1.0.6, but it was applied only when writing a release,
+not when writing a comment in the tree. The night's notes all used the customer's name.
+
+*Rule.* R15 (new): a comment or message in a shipped file names the situation ("first
+install"), never the customer or the lab host. Nothing in the tree runs the scrub pattern on
+a diff; before the push, grep `git diff` for the pattern that `release/publish.sh` applies to
+the exported copy.
+
+### E116 — the digest again not refreshed after the last commit; the round-0 SHA had no CI run (2026-11-05, R6, repeat of E112/E114)
+**2026-11-05, PR #1072 and #1073, REV-20261104-187.**
+
+*Genesis.* (1) #1073: after the scrub fix (E115) I pushed without `--refresh-status`; CI went
+red on "dependency graph matches the tree", one more push for the digest. (2) #1072 named
+`implementation: 83602af7` in the response; no CI run had that `head_sha` (the green run was a
+later head). The Reviewer's CHANGES-REQUIRED on 83602af7 names this point, beside the method/tier
+contract break.
+
+*Cause.* E112 and E114 were read, but a fix "only to a comment" was not treated as a commit
+that moves the digest and the header.
+
+*Rule.* R6, widened again (section 1 now says it): every commit after the digest is followed
+by `--refresh-status` and `--verify`; the response SHA is the head whose own CI run is green.
+A repeat: the rule is known and is not being applied to "small" commits.
 
 ### E110 — merged a PR while a blocking review of it was on main (2026-10-30, R2)
 **2026-10-30, PR #1007, REV-20261030-184.**
