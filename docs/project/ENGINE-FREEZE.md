@@ -2,8 +2,8 @@
 
 <!-- frozen: snapsend.sh 100755 fd00b49d0e1873c3554a4635dd3c630ab17ea1ed -->
 <!-- frozen: snapget.sh 100755 cb6f18dd62e9b62c9e30774bb5cdc570803551dd -->
-<!-- frozen: delsnaps.sh 100755 d02e8d449e56913b8a8794d0483758a77ee0e505 -->
-<!-- frozen: check-snap-age.sh 100755 821030d457b18a73a3ba1cbb755d533434027add -->
+<!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
+<!-- frozen: check-snap-age.sh 100755 5a0ea69903070daeb4b438728de258c90156916a -->
 <!-- frozen: lib-zfs-snap.sh 100644 54dc026d1cfb81a360f13812ae5a593ab8f26cbe -->
 <!-- unfreeze: - -->
 
@@ -1253,6 +1253,16 @@ Owner-authorized refreezes:
   - Untouched: a root with the family, a bare root, explicit (non -R) targets (test/monitor
     S10 and its two controls).
   twin: none -- check-snap-age.sh is the only monitor engine.
+- 2026-11-05 (check-snap-age.sh, delsnaps.sh): **U149 -- the -R root check reads a
+  here-string.** Owner direction (2026-11-05, Dąbrowska alarm: "zdiagnozuj, zaproponuj
+  naprawę" and "naprawę błędów z dabrowskiej"). Under `set -o pipefail`,
+  `printf '%s\n' "$list" | grep -qxF -- "$root"` returned 141 when grep -q left at the root's
+  line while printf still wrote: a present root read as missing. Live: pve0 39 false UNKNOWN,
+  pve2 delsnaps -R rc=1 with nothing pruned. check-snap-age v2.9 -> v2.10, delsnaps v1.30 ->
+  v1.31.
+  - Both checks now `grep -qxF -- "$root" <<< "$list"`; nothing else in either engine moved.
+  - Tests: monitor F12 and delsnaps F3, a complete walk over 64 KiB (red against main).
+  twin: none -- check-snap-age.sh has no twin; delsnaps.sh has no twin.
 
 ## How it is enforced
 

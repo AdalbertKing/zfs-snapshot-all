@@ -730,6 +730,7 @@ if [ "\$1" = list ] && [ -n "\${F_WALK:-}" ] && printf '%s ' "\$@" | grep -q -- 
         emptyfail) echo "cannot iterate: I/O error" >&2; exit 1 ;;
         noroot)  printf '%s\n' "\$last/c1"; exit 0 ;;
         outside) printf '%s\n%s\n' "\$last" "${POOL}-other/x"; exit 0 ;;
+        big)     "$FREAL" "\$@" || exit; yes "\$last" | head -n 4000; exit 0 ;;
     esac
 fi
 exec "$FREAL" "\$@"
@@ -813,6 +814,12 @@ check "F3 remote control: ssh shim, walk intact -> rc 0, root and child keep the
 mkds f3ok/c1; mksnaps f3ok auto_1 auto_2 auto_3; mksnaps f3ok/c1 auto_1 auto_2 auto_3
 check "F3 control: shim, walk intact -> rc 0, root and child keep the newest" \
       "0|4|auto_3|auto_3" "$(f_run -R "$POOL/f3ok" "auto_" -H1)|$(snaps_of f3ok)|$(snaps_of f3ok/c1)"
+# U149: a COMPLETE walk longer than a pipe buffer (the real listing, then the root's
+# line 4000 times, ~90 KiB). `printf | grep -q` took SIGPIPE after the first line and
+# pipefail read the root as missing: rc 1, nothing pruned. Must prune like the control.
+mkds f3big/c1; mksnaps f3big auto_1 auto_2 auto_3; mksnaps f3big/c1 auto_1 auto_2 auto_3
+check "F3 U149: a complete walk over 64 KiB -> rc 0, root and child keep the newest" \
+      "0|4|auto_3|auto_3" "$(F_WALK=big f_run -R "$POOL/f3big" "auto_" -H1)|$(snaps_of f3big)|$(snaps_of f3big/c1)"
 rm -rf "$FSHIM"
 
 # --- summary ----------------------------------------------------------------
