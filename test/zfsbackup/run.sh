@@ -13915,11 +13915,17 @@ cat > "$QG/bin/zfs" <<'EOF'
 #!/bin/bash
 # zfs list [-r] -H -o name -- <ds>
 r=0; for a in "$@"; do [ "$a" = -r ] && r=1; done; ds="${@: -1}"
+# REV-20261105-188: QG_FAIL=<ds>:before|after -- this listing fails with rc 77, before
+# any row or after the rows it has (a pool going away mid-walk).
+case "${QG_FAIL:-}" in "$ds:before") echo "cannot open '$ds': stub failure" >&2; exit 77 ;; esac
 all="hdd/lxc
 hdd/lxc/subvol-102-disk-0
 hdd/lxc/subvol-102-disk-1
 hdd/lxc/subvol-105-disk-0"
 if [ "$r" = 1 ]; then printf '%s\n' "$all" | grep -E "^$ds(/|$)"; else printf '%s\n' "$all" | grep -xF "$ds"; fi
+rc=$?
+case "${QG_FAIL:-}" in "$ds:after") echo "cannot iterate '$ds': stub failure" >&2; exit 77 ;; esac
+exit "$rc"
 EOF
 chmod +x "$QG/bin/zfs"
 printf '# managed\nhdd/lxc/subvol-102-disk-0\nhdd/lxc/subvol-102-disk-1\n' > "$QG/allow/zfsbackup"
@@ -13933,10 +13939,43 @@ quiesce_whitelist_gaps '$1' '$2'"; }
 qg_all=$(qg zfsbackup "$QG/blk"); qg_23=$(qg zfsbackup "$QG/blk23"); qg_root=$(qg root "$QG/blk1")
 rm "$QG/allow/zfsbackup"; qg_none=$(qg zfsbackup "$QG/blk1")
 if [ -n "$qgfn" ] && [ "$qg_all" = "105 hdd/lxc/subvol-105-disk-0" ] && [ -z "$qg_23" ] && [ -z "$qg_root" ] \
-        && [ "$(printf '%s\n' "$qg_none" | wc -l)" = 3 ] && grep -q 'quiesce_whitelist_gaps "$(cron_target_user)" "$_blk"' "$ZFSBACKUP"; then
+        && [ "$(printf '%s\n' "$qg_none" | wc -l)" = 3 ] && grep -q 'quiesce_whitelist_warn "$(cron_target_user)" "$_blk"' "$ZFSBACKUP"; then
     ok "U149-c: a -q line of a delegated account names the guest its whitelist misses (CT 105), parent-only and -q-less lines and root name none, no whitelist = every guest; the install path asks it"
 else
     bad "U149-c: quiesce_whitelist_gaps" "all=[$qg_all] 23=[$qg_23] root=[$qg_root] none=[$qg_none]"
+fi
+# REV-20261105-188: a listing that fails is not an empty answer. Job side and
+# whitelist side, failing before any row and after the rows it has: the answer is
+# "? <dataset> <reason>", and no gap line is built from the job side's partial rows.
+# The caller (quiesce_whitelist_warn, as the install path runs it) says UNKNOWN with
+# the dataset and the reason. Controls: the healthy answers above, and a healthy
+# whitelist with a failure elsewhere still naming CT 105.
+printf '# managed\nhdd/lxc/subvol-102-disk-0\nhdd/lxc/subvol-102-disk-1\n' > "$QG/allow/zfsbackup"
+qgwfn=$(sed -n '/^quiesce_whitelist_warn() {/,/^}$/p' "$ZFSBACKUP")
+qgf() { QG_FAIL="$3" PATH="$QG/bin:$PATH" QUIESCE_ALLOW_DIR="$QG/allow" bash -c "$qgfn
+quiesce_whitelist_gaps '$1' '$2'"; }
+qgw() { QG_FAIL="$3" PATH="$QG/bin:$PATH" QUIESCE_ALLOW_DIR="$QG/allow" bash -c "warn() { echo \"WARNING: \$*\"; }
+$qgfn
+$qgwfn
+quiesce_whitelist_warn '$1' '$2'" 2>&1; }
+r188_bad=""
+for _m in before after; do
+    _o=$(qgf zfsbackup "$QG/blk1" "hdd/lxc:$_m")
+    case "$_o" in "? hdd/lxc zfs list rc=77: cannot "*) ;; *) r188_bad="$r188_bad job-$_m=[$_o]" ;; esac
+    printf '%s\n' "$_o" | grep -q '^105 ' && r188_bad="$r188_bad job-$_m-gap-from-partial"
+    _o=$(qgf zfsbackup "$QG/blk1" "hdd/lxc/subvol-102-disk-0:$_m")
+    printf '%s\n' "$_o" | grep -q '^? hdd/lxc/subvol-102-disk-0 zfs list rc=77: cannot ' || r188_bad="$r188_bad allow-$_m=[$_o]"
+    _w=$(qgw zfsbackup "$QG/blk1" "hdd/lxc:$_m")
+    case "$_w" in *"is UNKNOWN -- hdd/lxc: zfs list rc=77: cannot "*) ;; *) r188_bad="$r188_bad warn-$_m=[$_w]" ;; esac
+    case "$_w" in *"does not cover:"*) r188_bad="$r188_bad warn-$_m-claims-gaps" ;; esac
+done
+_ctl=$(qgf zfsbackup "$QG/blk1" "hdd/other:before"); _wctl=$(qgw zfsbackup "$QG/blk1" "")
+_wroot=$(qgw root "$QG/blk1" "hdd/lxc:before")
+if [ -z "$r188_bad" ] && [ "$_ctl" = "105 hdd/lxc/subvol-105-disk-0" ] && [ -z "$_wroot" ] \
+        && case "$_wctl" in *"does not cover: 105 (hdd/lxc/subvol-105-disk-0)"*) ! printf '%s' "$_wctl" | grep -q UNKNOWN ;; *) false ;; esac; then
+    ok "REV-188: a failed zfs list (job or whitelist side, before or after rows) is '? <ds> <reason>' and the install warning says UNKNOWN with it; no gap from partial rows; healthy answer, root and the known gap unchanged"
+else
+    bad "REV-188: failed enumeration in the quiesce preflight" "${r188_bad:- none}" "ctl=[$_ctl] root=[$_wroot]" "warn=[$_wctl]"
 fi
 rm -rf "$QG"
 # T7 (install test 2026-11-05): two live records with NO peer are not a shared

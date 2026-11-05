@@ -6366,10 +6366,15 @@ runuser_can() {   # <user> -> 0 this process can act as <user>
 # Only lines that run HERE are read: snapsend.sh (its source is local) and
 # snapget.sh -s with a local scope. The block is generated text; its quoted
 # operands are, in order, -m's prefix and the dataset list.
+# REV-20261105-188: a listing that fails (before or after some rows) or a whitelist
+# that cannot be read is NOT an empty answer -- it prints "? <dataset> <reason>",
+# and the caller says the coverage is unknown. Partial rows from a failed listing
+# are dropped: they would read as a complete set.
 quiesce_whitelist_gaps() {
     local acct="$1" blk="$2" allow="${QUIESCE_ALLOW_DIR:-/etc/zfs-quiesce-allow}/$1"
     [ "$acct" = root ] && return 0
-    local line dss ds rec name leaf covered="" want="" root
+    local line dss ds rec name leaf covered="" want="" root out rc ef
+    ef=$(mktemp) || { printf '? %s %s\n' "$blk" "mktemp failed"; return 0; }
     while IFS= read -r line; do
         case "$line" in *" -q "*) ;; *) continue ;; esac
         case "$line" in *"/snapsend.sh "*|*"/snapget.sh -s "*) ;; *) continue ;; esac
@@ -6380,28 +6385,39 @@ quiesce_whitelist_gaps() {
         rec=""; case "$line" in *" -R "*|*" -r "*) rec=-r ;; esac
         local -a _ds=(); IFS=',' read -ra _ds <<< "$dss"
         for ds in "${_ds[@]}"; do
+            out=$(zfs list $rec -H -o name -- "$ds" 2>"$ef"); rc=$?
+            if [ "$rc" -ne 0 ]; then
+                printf '? %s %s\n' "$ds" "zfs list rc=$rc: $(tail -1 "$ef")"; continue
+            fi
             while IFS= read -r name; do
                 leaf=${name##*/}
                 case "$leaf" in vm-*-disk-*|subvol-*-disk-*)
                     leaf=${leaf#vm-}; leaf=${leaf#subvol-}
                     want="$want ${leaf%%-disk-*}:$name" ;;
                 esac
-            done < <(zfs list $rec -H -o name -- "$ds" 2>/dev/null)
+            done <<< "$out"
         done
     done < "$blk"
-    [ -n "$want" ] || return 0
-    if [ -r "$allow" ]; then
+    [ -n "$want" ] || { rm -f "$ef"; return 0; }
+    if [ -e "$allow" ] && [ ! -r "$allow" ]; then
+        printf '? %s %s\n' "$allow" "the whitelist cannot be read"
+    elif [ -r "$allow" ]; then
         while IFS= read -r root; do
             root="${root%%#*}"; root="${root//[[:space:]]/}"
             [ -n "$root" ] || continue
+            out=$(zfs list -r -H -o name -- "$root" 2>"$ef"); rc=$?
+            if [ "$rc" -ne 0 ]; then
+                printf '? %s %s\n' "$root" "zfs list rc=$rc: $(tail -1 "$ef")"; continue
+            fi
             while IFS= read -r name; do
                 leaf=${name##*/}
                 case "$leaf" in vm-*-disk-*|subvol-*-disk-*)
                     leaf=${leaf#vm-}; leaf=${leaf#subvol-}; covered="$covered ${leaf%%-disk-*} " ;;
                 esac
-            done < <(zfs list -r -H -o name -- "$root" 2>/dev/null)
+            done <<< "$out"
         done < "$allow"
     fi
+    rm -f "$ef"
     local w seen=" "
     for w in $want; do
         case "$covered" in *" ${w%%:*} "*) continue ;; esac
@@ -6409,6 +6425,21 @@ quiesce_whitelist_gaps() {
         seen="$seen$w "
         printf '%s %s\n' "${w%%:*}" "${w#*:}"
     done
+}
+
+# quiesce_whitelist_warn <account> <block file> -- the install-time warnings from
+# quiesce_whitelist_gaps: guests the whitelist misses, and (REV-20261105-188) a
+# coverage that could not be established, named per dataset with its reason.
+quiesce_whitelist_warn() {
+    local _qa _qg _qu; _qa=$(quiesce_whitelist_gaps "$1" "$2")
+    _qg=$(printf '%s\n' "$_qa" | awk '$1 != "?" && NF')
+    _qu=$(printf '%s\n' "$_qa" | awk '$1 == "?"')
+    if [ -n "$_qu" ]; then
+        warn "the block freezes guests (-q) as '$1', and whether ${QUIESCE_ALLOW_DIR:-/etc/zfs-quiesce-allow}/$1 covers them is UNKNOWN -- $(printf '%s\n' "$_qu" | awk '{ d = $2; $1 = ""; $2 = ""; sub(/^  /, ""); printf "%s%s: %s", (NR > 1 ? "; " : ""), d, $0 }'). A guest it does not cover is snapshotted UNFROZEN under ,degrade; check the dataset and re-run the install. The list of uncovered guests below, if any, may be incomplete or name guests that are covered."
+    fi
+    if [ -n "$_qg" ]; then
+        warn "the block freezes guests (-q) as '$1', but ${QUIESCE_ALLOW_DIR:-/etc/zfs-quiesce-allow}/$1 does not cover: $(printf '%s' "$_qg" | awk '{ printf "%s%s (%s)", (NR > 1 ? ", " : ""), $1, $2 }') -- under ,degrade their snapshots are taken UNFROZEN (exit 8), under ,strict not at all (exit 3). Either take the guest out of the relationship, or add its dataset to the account's quiesce grant (deploy.sh --add-quiesce merges the --grant-datasets list into it)."
+    fi
 }
 
 assert_block_runnable_by() {   # <account> <block file>
@@ -6611,10 +6642,7 @@ atomic_replace_and_install() {
         fi
         # A warning, not a refusal: the snapshots still happen, unfrozen. The
         # operator decides between widening the grant and leaving the guest out.
-        local _qg; _qg=$(quiesce_whitelist_gaps "$(cron_target_user)" "$_blk")
-        if [ -n "$_qg" ]; then
-            warn "the block freezes guests (-q) as '$(cron_target_user)', but ${QUIESCE_ALLOW_DIR:-/etc/zfs-quiesce-allow}/$(cron_target_user) does not cover: $(printf '%s' "$_qg" | awk '{ printf "%s%s (%s)", (NR > 1 ? ", " : ""), $1, $2 }') -- under ,degrade their snapshots are taken UNFROZEN (exit 8), under ,strict not at all (exit 3). Either take the guest out of the relationship, or add its dataset to the account's quiesce grant (deploy.sh --add-quiesce merges the --grant-datasets list into it)."
-        fi
+        quiesce_whitelist_warn "$(cron_target_user)" "$_blk"
     fi
     rm -f "$_blk"
     local backup="" crontab_backup
