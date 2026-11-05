@@ -350,6 +350,13 @@ for where in "root@srcA:tank/root" "tank/root"; do
     check "F12 control: valid root-only container walk ($where) -> OK" "0" "$(rc_of -R "$where" zsalab_ 2h 4h)"
     reset_world; add_ds tank/root 0; add_ds tank/root/a 0; add_snap tank/root/a "zsalab_1" $((9 * H))
     check "F12 control: valid walk, stale child ($where) -> CRITICAL" "2" "$(rc_of -R "$where" zsalab_ 2h 4h)"
+    # U149: a complete walk longer than a pipe buffer (64 KiB). `printf | grep
+    # -q` took SIGPIPE after the root's line and pipefail made it UNKNOWN; on
+    # pve0 the same race fired on four lines under load. Large = every time.
+    reset_world; add_ds tank/root 0
+    pad=$(printf 'c%.0s' $(seq 1 200))
+    for n in $(seq 1 340); do add_ds "tank/root/$pad$n" 0; done
+    check "F12 U149: a complete walk over 64 KiB ($where) -> OK, not UNKNOWN" "0" "$(rc_of -R "$where" zsalab_ 2h 4h)"
 done
 for pre in "root@srcA:" ""; do
 reset_world; add_ds tank/root 0; add_ds tank/crit 0; add_snap tank/crit "zsalab_1" $((9 * H))
