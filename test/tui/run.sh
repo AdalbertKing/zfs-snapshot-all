@@ -378,6 +378,22 @@ else
     bad "lustro: -M we WLASNEJ linii pobrania czyni zadanie lustrem; cudza linia z -M w tym samym bloku -- nie" "got=$MIOUT"
 fi
 
+# NASTEPNY KROK relacji nieaktywnej = czasownik, ktory ja przyjmie: pending_enroll -> seed (activate
+# odmawia "not seeded yet"), migawki zdalne pending_enroll -> activate (nie maja seeda). Skucha 11
+# (A-TASSA): F3 radzilo "activate", ktore odmawia.
+NSOUT="$("$PY" - "$TUI" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+print(m.next_step({"state": "pending_enroll"}), "|", m.next_step({"state": "pending_enroll", "mode": "snaponly"}), "|", m.next_step({"state": "seed_complete"}))
+PYEOF
+)"
+if [ "$NSOUT" = "seed NAME | activate NAME | activate NAME" ]; then
+    ok "F3 nastepny krok: pending_enroll -> seed, migawki zdalne pending_enroll -> activate, seed_complete -> activate"
+else
+    bad "F3 nastepny krok relacji nieaktywnej" "$NSOUT"
+fi
 # ODSWIEZANIE PO POWROCIE (wlasciciel 2026-10-09, uwaga 1: zapisany szablon pojawial sie na
 # F5 dopiero po Odswiez). Pelne refresh() czyta od nowa takze dane czytane na zadanie:
 # szablony (F5) i config relacji (panel F3). Plik szablonow podmieniony miedzy odczytami
@@ -3125,13 +3141,23 @@ case "$1" in
     delete-relation) case " $* " in *" --yes "*) : > "$NR_DIR/freed-$2"; echo "delete-relation: '$2' is gone." ;; *) echo "delete-relation '$2' (state=removed, peer=192.168.28.99):"; echo "plan only." ;; esac ;;
     status)         if [ -n "${NR_STATUS:-}" ]; then cat "$NR_STATUS"
                     elif [ -e "$NR_DIR/freed-192.168.28.99" ]; then sed 's/"name": *"192.168.28.99"/"name":"zwolniona"/' "$NR_FIX/status.json"
+                    elif [ -e "$NR_DIR/half" ] && [ ! -e "$NR_DIR/freed-pve9b" ]; then
+                        "${PYTHON:-python3}" -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); d["relations"].append({"name":"pve9b","state":"pending_enroll","mode":"","profile":"default"}); print(json.dumps(d))' "$NR_FIX/status.json"
                     elif [ -n "${NR_FLAT:-}" ]; then sed 's/"profile": *"default"/"profile":"d30h24"/g' "$NR_FIX/status.json"     # konto root "plaskie"
                     else cat "$NR_FIX/status.json"; fi ;;
     --source=*)     case "$1" in --source=*:*) ;; *)   # kopia lokalna: bez hosta, bez praw
                         case " $* " in *" --install "*) echo ">>> atrapa: lokalna zainstalowana"; exit 0 ;; *) echo "Plan lokalnego backupu (atrapa)"; exit 0 ;; esac ;; esac
                     case " $* " in
                         *" --install "*) case " $* " in
-                                *" --grant-remotely "*) echo ">>> atrapa: zainstalowano"; exit 0 ;;
+                                *" --grant-remotely "*)
+                                    # NR_HALF (skucha 11): porazka po zapisie rekordu -- znacznik half = rekord
+                                    # pending_enroll w status; once = drugi bieg (Ponow) przechodzi; nomark = bez rekordu.
+                                    case "${NR_HALF:-}" in
+                                        "") echo ">>> atrapa: zainstalowano"; exit 0 ;;
+                                        once) [ -e "$NR_DIR/half" ] && { echo ">>> atrapa: zainstalowano (wznowione)"; exit 0; } ;;
+                                    esac
+                                    [ "$NR_HALF" = nomark ] || : > "$NR_DIR/half"
+                                    echo "FATAL: atrapa: commit-scope na zrodle nie przeszedl"; exit 1 ;;
                                 *) echo "FATAL: the source has GRANTED nothing yet: on the source run"; echo "    deploy.sh --commit-scope=pve10"; exit 1 ;;
                             esac ;;
                         *) echo "RUX plan (atrapa)"; exit 0 ;;
@@ -3165,7 +3191,7 @@ mkdir -p "$NR/zbin"
 printf '#!/bin/sh\n[ -n "${NR_SNAPS:-}" ] && printf "%%b\\n" "$NR_SNAPS"\nexit 0\n' > "$NR/zbin/zfs"
 chmod +x "$NR/zbin/zfs"
 nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienniki w $NR
-    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR"/freed-* "$NR"/new-relation-*.cmd "$NR/tree.n" "$NR/tree.log" "$NR/treekeys" "$NR/tree-spec.last"
+    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR/half" "$NR"/freed-* "$NR"/new-relation-*.cmd "$NR/tree.n" "$NR/tree.log" "$NR/treekeys" "$NR/tree-spec.last"
     printf '%s' "$1" > "$NR/answers"; shift
     ( export HOME="$NR" NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"
       # Drzewo wyboru datasetow (tui/tree.py) bez terminala: klawisze z NR_TREE, jedna linia
@@ -4478,6 +4504,37 @@ if has "$NROUT" " --profile=default " && has "$NROUT" " --local-user=zfsbackup "
 else
     bad "new-relation: niedopasowanie szablonu do konta" "$NROUT" "$(grep -F 'Szablon nie pasuje' "$NR/wt.log" | cut -c1-400)" "$(cat "$NR/err")"
 fi
+# SKUCHA 11 (A-TASSA 2026-11-04): porazka po zapisie rekordu = relacja wpol zalozona na dwoch
+# hostach. Okno mowi "zalozona do polowy (stan: ...)" i daje Wycofaj (delete-relation NAZWA --yes:
+# tu i na zrodle) albo Ponow (ta sama komenda, bez nowego planu). Kontrola: porazka bez rekordu --
+# stare "nie zostala zalozona", bez menu. Na main: zawsze "nie zostala zalozona", zadnego wyjscia.
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+${NRT}0${T}wycofaj
+0${T}
+" NR_HALF=1 NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); NRRC=$?
+H_A=$(grep -c -- '--grant-remotely --install --yes' "$NR/zb.log"); H_AW="$(cat "$NR/wt.log")"
+H_AD=0; grep -qx 'delete-relation pve9b --yes' "$NR/zb.log" && H_AD=1
+H_AC=0; [ -e "$NR/new-relation-pve9b.cmd" ] && H_AC=1
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+${NRT}0${T}ponow
+0${T}
+" NR_HALF=once NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); NRRC=$?
+H_B=$(grep -c -- '--grant-remotely --install --yes' "$NR/zb.log"); H_BD=0; grep -q '^delete-relation' "$NR/zb.log" && H_BD=1
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+${NRT}0${T}wycofaj
+" NR_HALF=nomark NR_TREE='goto:hdd/data,space,enter|goto:hdd/backups,enter'); NRRC=$?
+H_CW="$(cat "$NR/wt.log")"
+if [ "$H_A" -eq 1 ] && [ "$H_AD" -eq 1 ] && [ "$H_AC" -eq 0 ] && has "$H_AW" "założona do połowy (stan: pending_enroll)" && has "$H_AW" "stan pośredni"    && ! has "$H_AW" "nie została założona"    && [ "$H_B" -eq 2 ] && [ "$H_BD" -eq 0 ]    && has "$H_CW" "nie została założona" && ! has "$H_CW" "stan pośredni"; then
+    ok "new-relation: skucha 11 -- porazka z rekordem: okno 'zalozona do polowy' + Wycofaj (delete-relation --yes) albo Ponow (ta sama komenda drugi raz); bez rekordu -- stare okno, bez menu"
+else
+    bad "new-relation: skucha 11 stan posredni" "wycofaj: installs=$H_A delete=$H_AD cmdfile=$H_AC" "ponow: installs=$H_B delete=$H_BD" "$(printf '%s' "$H_AW" | grep -E 'połowy|pośredni|wycofana|nie została' | cut -c1-160)" "$(printf '%s' "$H_CW" | grep -E 'pośredni|nie została' | cut -c1-160)"
+fi
 # 3f. 'Zatwierdze sam na zrodle': instalacja MA stanac -- to nie awaria, tylko dwa kroki do zrobienia
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
@@ -5508,7 +5565,7 @@ case "$1" in
                     echo ">>> atrapa: $1 $2 $3" ;;
     show-config)    echo '{"sections":[{"kind":"dataset","name":"hdd/backups/192.168.28.99/hdd/data","fields":{"pair_label":"r1","compression":"none"'"${ER_RAW:+,\"raw\":\"yes\"}"'}}]}' ;;
     set-transfer)   case " $* " in *" --yes "*) echo ">>> atrapa: set-transfer" ;; *) echo "Relation 'r1': history=newest (sections: 1)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
-    show-tiers)     echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"'"${ER_SRC_KEEP:-24}"'","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}' ;;
+    show-tiers)     if [ "${ER_MODE:-}" = snaponly ]; then echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"'"${ER_SRC_KEEP:-24}"'","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}' | sed 's/"source":\[.*\]}$/"source":[]}/'; else echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"'"${ER_SRC_KEEP:-24}"'","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}'; fi ;;
     set-tiers)      case " $* " in *" --yes "*) echo ">>> atrapa: set-tiers" ;; *) echo "Relation 'r1' -- tiers:"; echo "  hourly: keep=12 (source)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
     *)            echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
@@ -6023,6 +6080,22 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'show-tiers r1 --json' "$ER/zb.log" \
 else
     bad "edit-relation: REV-187 snaponly harmonogram" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(tail -3 "$ER/err")"
 fi
+# REV-20261104-187 runda 1: w tej samej tabeli migawek zdalnych zmiana SPOSOBU, dodanie i usuniecie
+# szczebla ida tym samym jednym set-tiers (config), nie do szablonu. Na rundzie 0 CLI ich odmawialo.
+for so_case in "method|right,space,enter|--method=" "add|down,down,down,space,enter|--add-tier=weekly" "drop|down,space,enter|--drop-tier=hourly"; do
+    so_k="${so_case#*|}"; so_want="${so_k#*|}"; so_k="${so_k%%|*}"
+    EROUT=$(ER_MODE=snaponly er_run "0${T}harmon
+0${T}__manual__
+0${T}wykonaj
+0${T}
+" "$so_k"); ERRC=$?
+    if [ "$ERRC" -eq 0 ] && grep -q "^set-tiers r1 .*$so_want.* --yes$" "$ER/zb.log" \
+       && ! grep -qE '^(save-profile|delete-profile|edit-relation)' "$ER/zb.log"; then
+        ok "edit-relation: REV-187 r1 -- migawki zdalne, ${so_case%%|*}: $so_want w jednym set-tiers, bez szablonu"
+    else
+        bad "edit-relation: REV-187 r1 snaponly ${so_case%%|*}" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(tail -3 "$ER/err")"
+    fi
+done
 # X15 (wlasciciel 2026-10-13): szczebel DODANY w tabeli celu (harmon -> __manual__) jest w oknie
 # zrodla (srcret, z liczba jak w celu) -- okno zrodla widzi szczeble po zmianach w celu.
 # set-tiers dostaje dodanie i liczbe zrodla tego szczebla, bez drugiego dodawania.
