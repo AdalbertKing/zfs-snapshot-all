@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 fd00b49d0e1873c3554a4635dd3c630ab17ea1ed -->
-<!-- frozen: snapget.sh 100755 cb6f18dd62e9b62c9e30774bb5cdc570803551dd -->
+<!-- frozen: snapsend.sh 100755 10a56e160dc073ad4b139794bf6c0cc92404d600 -->
+<!-- frozen: snapget.sh 100755 64a7dba9fee7cc4d9931b2ca1eb0617fc0c68b4b -->
 <!-- frozen: delsnaps.sh 100755 d02e8d449e56913b8a8794d0483758a77ee0e505 -->
 <!-- frozen: check-snap-age.sh 100755 821030d457b18a73a3ba1cbb755d533434027add -->
 <!-- frozen: lib-zfs-snap.sh 100644 54dc026d1cfb81a360f13812ae5a593ab8f26cbe -->
@@ -1242,6 +1242,22 @@ Owner-authorized refreezes:
     name the root and stay under it; otherwise nothing in the tree is pruned, rc 1.
   twin: snapsend.sh <-> snapget.sh changed symmetrically (F1, F4, F5, F6); the shared parts
   live in lib-zfs-snap.sh.
+- 2026-11-05 (snapsend.sh, snapget.sh): **REV-20261104-186 round 3 -- F5 at the filter and the
+  -n callers.** Same owner route as the entry above, continued under the owner's 2026-11-04
+  night direction (repair with the reviewer, autonomously); the Reviewer's verification of
+  92c81fcf asks for exactly this change.
+  - `get_sorted_snapshots`: the local filter's status is checked (a failed awk was an empty
+    list behind a successful `echo`); a failed LOCAL listing is logged, as the remote one was.
+  - `find_conflicting_snapshots`: every list it decides from is assigned apart from `local`
+    and checked; the target is asked with `target_exists` (absent = nothing can conflict,
+    unknown = failure); an unanswerable source child fails the scan instead of being skipped;
+    `find_common_snapshot` and the recursion propagate their status.
+  - `process_dataset -n`: a failed `find_common_snapshot`, conflict scan or bookmark-base
+    target listing returns 1 with a diagnostic and prints no PLAN= line; the -n run exits 2
+    with `INCOMPLETE: <dataset>` on stderr (1 still means "conflict list on stdout"). Every
+    caller in zfs-backup.sh treats a nonzero rc other than history-only conflicts as failure.
+  twin: snapsend.sh <-> snapget.sh changed symmetrically; snapsend.sh's bookmark-base branch
+  additionally handles `target_exists` = 2, which snapget.sh's local target cannot return.
 - 2026-11-04 (check-snap-age.sh): **U164 -- an -R root with a foreign snapshot is a container.**
   Owner direction ("Proszę przejść do implementacji", the U161-U164 batch, 2026-11-04), found
   on Dąbrowska pve0 the same day: the archive relation read "czeka" for hours because its -R
