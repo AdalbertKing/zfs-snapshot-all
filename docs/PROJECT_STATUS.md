@@ -33,6 +33,8 @@
   teraz wraca do podsumowania z odpowiedziami;
   plan zmiany relacji obiecywał „pierwsza migawka/kopia od razu”, a `set-datasets` niczego od razu nie
   robi -- teraz „przy najbliższym biegu z crona”.
+  REV-20261105-188 (recenzent, U149-c): `zfs list`, które padło przy sprawdzaniu listy quiesce, dawało
+  pustą odpowiedź („brak luk”); teraz linia `? <dataset> <powód>` i ostrzeżenie instalacji „UNKNOWN”.
   Zostaje: w oknach `--scrolltext` Enter nie zamyka (fokus na tekście, Tab+Enter) -- zachowanie whiptaila,
   nie zmienione; T12 odłożone (wpis niżej).
 - **Paczka po teście od zera i U149 (2026-11-05, gałąź `fix/batch-zero-test`; NIEWYDANE).** Poprawione
