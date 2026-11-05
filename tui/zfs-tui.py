@@ -2229,7 +2229,7 @@ def render_tabbed(data, width, height, now, ch, screen, title, heads, cells, cur
             cbody.append("")
         many = len(child["tabs"]) > 1
         snaps = any(it.get("relname") and it.get("pair") is not None for it in child.get("items") or [])
-        cfoot = (child.get("foot") or ((_(u"m migawki   ") if snaps else u"") + u"Enter okno   " + (_(u"←→ zakładki   ") if many else u"")
+        cfoot = (child.get("foot") or ((_(u"m migawki   ") if snaps else u"") + _(u"Enter okno   ") + (_(u"←→ zakładki   ") if many else u"")
                  + _(u"Esc wraca   Tab do linii poleceń"))) if in_child else ""
         bottom = box(ch, tab_title(child.get("name"), child["tabs"], child.get("ti", 0)), cbody, width, footer=cfoot)
         if pcur is not None:

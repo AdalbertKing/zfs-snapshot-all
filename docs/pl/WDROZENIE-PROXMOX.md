@@ -57,11 +57,13 @@ Na **obu** hostach:
 Wymagane pakiety (`zfs`, `mbuffer`, `zstd`) **doinstaluje `deploy.sh` sam** —
 nie musisz tego robić ręcznie.
 
-Sklonuj repozytorium na oba hosty, w to samo miejsce:
+Sklonuj repozytorium na oba hosty, w to samo miejsce. Ścieżka `/root/scripts/zfs-snapshot-all`
+to ścieżka `deploy.sh`: tam instaluje i aktualizuje pakiet (link `zfs-backup`, cron), więc
+klon w innym miejscu zostałby obok nieużywany.
 
 ```bash
 apt-get install -y git      # świeży Proxmox nie ma gita
-git clone https://github.com/AdalbertKing/zfsbackup.git /root/zfs-snapshot-all
+git clone https://github.com/AdalbertKing/zfsbackup.git /root/scripts/zfs-snapshot-all
 ```
 
 > **Nigdy nie kopiuj skryptów przez `scp`/`pscp` na hosty.** Aktualizacje
@@ -79,7 +81,7 @@ Kolejność jest obowiązkowa.
 ### Krok 1 — przygotowanie kolektora `pve-backup`
 
 ```bash
-cd /root/zfs-snapshot-all
+cd /root/scripts/zfs-snapshot-all
 ./deploy.sh --backup-user=zfsbackup
 ```
 
@@ -122,7 +124,7 @@ roboczej, pendrive, cokolwiek). To jedyny moment, gdy coś przenosisz ręcznie.
 ### Krok 4 — przyjęcie parowania na źródle `pve-prod`
 
 ```bash
-cd /root/zfs-snapshot-all
+cd /root/scripts/zfs-snapshot-all
 ./deploy.sh --join=/root/prod01-package.tgz
 ```
 
@@ -612,7 +614,7 @@ vi /etc/zfs-snapshot-all/peers/pve-backup.scope      # wybór + wykluczenia
 | `verify-endpoint` odmawia | adres/port; komunikat rozróżnia „nie mogę się połączyć" od problemu z danymi |
 | brak wpisów w cronie | klient nie doszedł do `endpoint_verified` — sprawdź `status` |
 | nowa VM nie jest kopiowana | to punkt 7.1, nie awaria |
-| aktualizacje przestały przychodzić | `git -C /root/zfs-snapshot-all status` — brudne drzewo blokuje `--ff-only` |
+| aktualizacje przestały przychodzić | `git -C /root/scripts/zfs-snapshot-all status` — brudne drzewo blokuje `--ff-only` |
 | backup działa, ale nie ma alertów | `./deploy.sh --check-only` wyda werdykt o poczcie; potem `mailq`. Na nie-Proxmoksie zwykle brak MTA (rozdz. 5) |
 | `mailq` pokazuje `alias database unavailable` | brak `/etc/aliases.db` — `newaliases` odbudowuje |
 

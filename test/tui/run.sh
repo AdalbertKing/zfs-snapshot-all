@@ -7187,6 +7187,41 @@ else
     bad "kopie: sciezka kopii z pary relacji" "$kcr"
 fi
 
+# Test od zera 2 (2026-11-05, pve11 <- pve9b):
+# D4: okno "migawki naszej rodziny są już na źródle" wymieniało hdd/data/photos, który admin
+# wykluczył -- relacja go nie weźmie, więc "bierzemy"/"zestarzeją się" go nie dotyczy.
+Z2="$(mktemp -d)"
+printf 'hdd/data\t0\t25\t0\nhdd/data/docs\t0\t25\t0\nhdd/data/photos\t0\t25\t0\nhdd/data/photos/raw\t0\t3\t0\nhdd/fz0a\t0\t9\t0\n' > "$Z2/own.tsv"
+z2_d4="$( WHIPTAIL=true bash -c '. "$1/tui/wt-lib.sh"; eval "$(sed -n "/^chain_facts()/,/^}/p" "$1/tui/new-relation.sh")"
+    MODE=backup TMPD="$2"; B_ROOT=(hdd/data hdd/fz0a); B_EXCL=("hdd/data/photos" "")
+    chain_facts' x "$REPO" "$Z2" 2>&1 | cut -d: -f1 | tr -d ' ' | paste -sd' ')"
+if [ "$z2_d4" = "hdd/data hdd/data/docs hdd/fz0a" ]; then
+    ok "D4: lista migawek na źródle pomija wykluczony dataset i jego dzieci"
+else
+    bad "D4: wykluczony w liście migawek" "got=[$z2_d4]"
+fi
+# D5/D11: polskie słowa w angielskim GUI -- "(^nazwa$ = ...)" w planie i "Enter okno" na ramce
+# szły mimo T()/_(): prefiks i napis stały poza tłumaczeniem.
+if ! grep -q '"(^nazwa' "$REPO/tui/new-relation.sh" && grep -q '(^$(T nazwa)' "$REPO/tui/new-relation.sh" \
+   && grep -qF '_(u"Enter okno   ")' "$TUI" \
+   && "$PY" -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); sys.exit(0 if d.get("nazwa")=="name" and d.get("Enter okno   ")=="Enter window   " else 1)' "$REPO/tui/lang/en.json"; then
+    ok "D5/D11: '(^nazwa\$' i 'Enter okno' idą przez tłumaczenie (en: name / Enter window)"
+else
+    bad "D5/D11: polskie słowa poza tłumaczeniem" "$(grep -n '"(^nazwa\|u"Enter okno' "$REPO/tui/new-relation.sh" "$TUI")"
+fi
+# D12: okno zmiany relacji -- po odznaczeniu fz0b wiersz Datasety pokazywał STARĄ listę z
+# "[zmiana]" na końcu (ucięte za kartą). Teraz: zmiana z przodu, potem nowa lista.
+z2_d12="$( bash -c '_zm="[zmiana]"; _ds="5: a, b, c, d, hdd/fz0b"; P_ADDED=""; P_REMOVED="hdd/fz0b"
+    P_ENT=$(printf "hdd/data\tno\nhdd/data/docs\tflat\nhdd/data/mail\tflat\nhdd/fz0a\tflat\n")
+    _dsp="  $_zm -hdd/fz0b"
+    eval "$(sed -n "/# Test od zera 2 (D12)/,/^    fi$/p" "$1/tui/edit-relation.sh")"
+    printf "%s|%s" "$_ds" "$_dsp"' x "$REPO" 2>&1 )"
+if [ "$z2_d12" = "[zmiana] -hdd/fz0b  ->  4: hdd/data, hdd/data/docs, hdd/data/mail, hdd/fz0a|  " ]; then
+    ok "D12: wiersz Datasety po zmianie = zmiana z przodu + NOWA lista (nie stara z [zmiana] na końcu)"
+else
+    bad "D12: wiersz Datasety po zmianie" "got=[$z2_d12]"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
