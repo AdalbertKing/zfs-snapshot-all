@@ -20,6 +20,32 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Paczka po teście od zera i U149 (2026-11-05, gałąź `fix/batch-zero-test`; NIEWYDANE).** Poprawione
+  wady T1-T9 z testu pierwszej instalacji na labie:
+  (T1) `check-source` uznaje katalog za pakiet tylko z `.git`; stary katalog bez `.git` daje okno
+  „Katalog pakietu zajęty”;
+  (T2) pierwszy `git` w starym katalogu (`pregit_checkout` w `deploy.sh`) najpierw pobiera, potem
+  przenosi do kopii tylko kolidujące wpisy; po nieudanym pobraniu katalog zostaje jak był, bez `.git`;
+  (T3) okno porażki zaczyna „Powód:” od linii FATAL (log bez linii `[on HOST]`; te zostają w kolejności pliku);
+  (T4) `--pair=<etykieta> --unpair` odmawia, gdy `peers/<etykieta>.conf` to manifest dołączenia,
+  i wskazuje `--leave`;
+  (T5) FATAL przy zerowej delegacji wymienia żądane datasety, pule hosta i `--grant-datasets=`; ESENCJA i
+  ESSENTIALS podają `--grant-datasets=` w kroku 1;
+  (T6) teksty migawek zdalnych nie mówią o kopiowaniu („nowe wejdą same”, F7 „bieg teraz”);
+  (T7) `delete-relation` bez pary nie pisze pustej nazwy;
+  (T8) porażka przed zmianą wraca do podsumowania kreatora, odpowiedzi zostają;
+  (T9) Esc w oknie nazwy relacji to Wstecz (na żywo na pve11).
+  Do tego trzy części U149:
+  (a) `gen-cron` ostrzega, gdy dwa szczeble jednego datasetu mają tę samą minutę i spotykają się
+  godziny (kształt pve2 kopie :40 rc=75);
+  (b) przegląd potoków w plikach z pipefail: 57 czytników `| grep -q` przeszło na `grep_q`
+  (`grep -c >/dev/null`, czyta do końca), reszta policzona z powodem w zapadce `test/evalfree`;
+  (c) instalacja crona ostrzega, gdy linia `-q` obejmuje gościa spoza `/etc/zfs-quiesce-allow/<konto>`
+  (na pve0 na kopii crona sprzed U148: `105 hdd/lxc/subvol-105-disk-0`; bieżący cron czysty).
+  U148 zrobione: CT 105 wyłączony z `migawki-hdd-lxc` na pve0, kopia stanu sprzed zmiany w
+  `/root/u148-przed-20261105`. Odłożone: T12 (fałszywe WARNING silnika „neither -r nor -R” dla rodzica
+  `[-]`) -- token `--recursive=no` w linii crona zmieniłby tożsamość każdej linii nierekurencyjnej i
+  `hostscripts/capacity-guard.sh` by go odrzucił; T10, T11 niezbadane.
 - **Fałszywy brak korzenia listy -R: UNKNOWN monitora i błąd czyszczenia (2026-11-05, U149, gałąź
   `fix/u149-pipefail-sigpipe`; NIEWYDANE).** Monitor (`check-snap-age.sh -R`) i czyszczenie
   (`delsnaps.sh -R`) sprawdzały korzeń listy przez `printf | grep -qxF` pod `set -o pipefail`; `grep -q`
@@ -28,7 +54,7 @@
   `rpool/data`, `hdd/backups/pve1/rpool/data`; pve2 (metropolis) zadanie `prune (bookmarks)` 11-05 04:30 rc=1,
   `hdd/vm-disks` niewyczyszczone. Teraz here-string; test: kompletna lista > 64 KiB (monitor F12, delsnaps
   F3), przeciw `main` na pve9 czerwony (120/2, 94/1), z poprawką 122/0 i 95/0. Ten sam kształt (potok kończony
-  `grep -q`/`grep -m`/`head`) stoi w 72 miejscach plików z pipefail (inwentarz 2026-11-05) -- osobny przegląd. Wnioski: E117.
+  `grep -q`/`grep -m`/`head`) stoi w 72 miejscach plików z pipefail (inwentarz 2026-11-05) -- przegląd zrobiony w paczce `fix/batch-zero-test` (wpis wyżej, U149-b). Wnioski: E117.
 - **Pierwsza instalacja, test na labie (2026-11-05, `23ae35ca..4e1fb203`; NIEWYDANE).** Trzecią paczkę
   sprawdzono na pve9, pve10 i pve11 z prawdziwym 404 (podstawione lokalne repo security z wersjami bez
   plików .deb). Potwierdzone na żywo: git w `prepare-source`, sudo przed pierwszą zmianą `--grant-quiesce`
