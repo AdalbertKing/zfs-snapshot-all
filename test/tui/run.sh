@@ -5643,7 +5643,7 @@ EROUT=$(ER_TREE='goto:hdd/iso,space,goto:hdd/data,space,space,enter' er_run "0${
 "); ERRC=$?
 ERB="$(cat "$ER/tree.log" 2>/dev/null)"
 if [ "$ERRC" -eq 0 ] && grep -qx 'set-datasets r1 --dataset=hdd/iso:flat --yes' "$ER/zb.log" && ! grep -qE '^(add|remove)-source' "$ER/zb.log" \
-   && grep -qF 'DOJDĄ' "$ER/wt.log" && grep -qF 'ODPADNĄ' "$ER/wt.log" && has "$ERB" 'Co kopiować z' && has "$ERB" '[ ] data' && has "$ERB" '[x] iso' \
+   && grep -qF 'DOJDĄ' "$ER/wt.log" && ! grep -qF 'od razu' "$ER/wt.log" && grep -qF 'ODPADNĄ' "$ER/wt.log" && has "$ERB" 'Co kopiować z' && has "$ERB" '[ ] data' && has "$ERB" '[x] iso' \
    && ! has "$ERB" 'Wyjątki' && ! has "$ERB" 'Sposób'; then
     ok "edit-relation: Datasety -- koszyk z configu (relation-sources), kilka zmian, jeden plan DOJDA/ODPADNA, JEDNO set-datasets --yes ze stanem docelowym; bez Sposob"
 else
