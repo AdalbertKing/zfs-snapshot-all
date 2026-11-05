@@ -14022,6 +14022,26 @@ else
     bad "REV-188: install path with a failed listing" "${r188i_bad:- none}" "healthy=[$(printf '%s' "$_ih" | tr '\n' ' ' | cut -c1-300)]"
 fi
 rm -rf "$QG"
+# U165 (CI 2026-11-05, run 42100030120): cron_block_source fed the managed block to
+# `grep -m1`, which leaves after the first `# Source:` line while sed still writes the
+# rest. With SIGPIPE ignored (as it was in that CI job) sed says "couldn't flush stdout:
+# Broken pipe" and, under pipefail, the status is non-zero; list-jobs --json got the
+# message inside its JSON. A block well past the pipe buffer makes the race certain.
+CBS="$(mktemp)"
+{ echo '# BEGIN zfs-backup-managed (generated)'
+  echo '# Source: /etc/zfs-backup/jobs.conf -- DO NOT EDIT BY HAND'
+  for _i in $(seq 1 20000); do echo "# filler line $_i of the managed block, long enough"; done
+  echo '# Source: /tmp/second.conf -- not the first'
+  echo '# END zfs-backup-managed'; } > "$CBS"
+_cbs=$( ( trap '' PIPE; cron_block_source < "$CBS"; echo "rc=$?" ) 2>"$CBS.err" )
+_cbs_err=$(head -c 200 "$CBS.err")
+if [ "$_cbs" = "/etc/zfs-backup/jobs.conf
+rc=0" ] && [ -z "$_cbs_err" ]; then
+    ok "U165: cron_block_source over a block past the pipe buffer, SIGPIPE ignored -- the first Source path, status 0, nothing on stderr"
+else
+    bad "U165: cron_block_source with an early reader" "got=[$_cbs]" "stderr=[$_cbs_err]"
+fi
+rm -f "$CBS" "$CBS.err"
 # T7 (install test 2026-11-05): two live records with NO peer are not a shared
 # pairing -- the plan names no "other relationships" and no empty peer.
 printf 'CLIENT_NAME=np1\nSTATE=active\n' > "$DR/clients/np1.conf"
