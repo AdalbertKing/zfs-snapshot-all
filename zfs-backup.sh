@@ -6348,6 +6348,64 @@ runuser_can() {   # <user> -> 0 this process can act as <user>
 # It is also the reason the per-line check reported rc=0: the generated cron
 # idiom ends in `rm -f "$e"`, so the LINE succeeds whatever the job did. Only
 # the monitors alerted, and only because they carry their own rc test.
+# quiesce_whitelist_gaps <account> <block file> -> prints "<id> <dataset>" per
+# guest a -q line of the block would freeze that the account's whitelist
+# (/etc/zfs-quiesce-allow/<account>) does not cover; nothing for root.
+#
+# U149-c (pve0, 2026-11-05): a LOCAL relationship of a delegated account froze
+# guests through the quiesce helper, and nothing on the local path writes or
+# reads that whitelist -- the remote path grants it on the source at commit
+# time. A guest outside it ran unfrozen every night (exit 8 under ,degrade).
+# Same rule as the helper's own id_is_allowed: a guest is covered when a disk
+# named vm-<id>-disk-* / subvol-<id>-disk-* lies under a whitelisted root.
+# Only lines that run HERE are read: snapsend.sh (its source is local) and
+# snapget.sh -s with a local scope. The block is generated text; its quoted
+# operands are, in order, -m's prefix and the dataset list.
+quiesce_whitelist_gaps() {
+    local acct="$1" blk="$2" allow="${QUIESCE_ALLOW_DIR:-/etc/zfs-quiesce-allow}/$1"
+    [ "$acct" = root ] && return 0
+    local line dss ds rec name leaf covered="" want="" root
+    while IFS= read -r line; do
+        case "$line" in *" -q "*) ;; *) continue ;; esac
+        case "$line" in *"/snapsend.sh "*|*"/snapget.sh -s "*) ;; *) continue ;; esac
+        dss=$(printf '%s\n' "$line" | awk -F'"' '{ n = 0; for (i = 2; i <= NF; i += 2) if (++n == 3) { print $i; exit } }')
+        # the 1st quoted string is the zfs-job label, the 2nd -m's prefix
+        [ -n "$dss" ] || continue
+        case "$dss" in *:*) continue ;; esac
+        rec=""; case "$line" in *" -R "*|*" -r "*) rec=-r ;; esac
+        local -a _ds=(); IFS=',' read -ra _ds <<< "$dss"
+        for ds in "${_ds[@]}"; do
+            while IFS= read -r name; do
+                leaf=${name##*/}
+                case "$leaf" in vm-*-disk-*|subvol-*-disk-*)
+                    leaf=${leaf#vm-}; leaf=${leaf#subvol-}
+                    want="$want ${leaf%%-disk-*}:$name" ;;
+                esac
+            done < <(zfs list $rec -H -o name -- "$ds" 2>/dev/null)
+        done
+    done < "$blk"
+    [ -n "$want" ] || return 0
+    if [ -r "$allow" ]; then
+        while IFS= read -r root; do
+            root="${root%%#*}"; root="${root//[[:space:]]/}"
+            [ -n "$root" ] || continue
+            while IFS= read -r name; do
+                leaf=${name##*/}
+                case "$leaf" in vm-*-disk-*|subvol-*-disk-*)
+                    leaf=${leaf#vm-}; leaf=${leaf#subvol-}; covered="$covered ${leaf%%-disk-*} " ;;
+                esac
+            done < <(zfs list -r -H -o name -- "$root" 2>/dev/null)
+        done < "$allow"
+    fi
+    local w seen=" "
+    for w in $want; do
+        case "$covered" in *" ${w%%:*} "*) continue ;; esac
+        case "$seen" in *" $w "*) continue ;; esac
+        seen="$seen$w "
+        printf '%s %s\n' "${w%%:*}" "${w#*:}"
+    done
+}
+
 assert_block_runnable_by() {   # <account> <block file>
     local acct="$1" blk="$2" p unreachable=""
     # A1 (2026-08-21): written after the 2026-08-01 metropolis pve2 incident
@@ -6545,6 +6603,12 @@ atomic_replace_and_install() {
         if ! ( assert_block_runnable_by "$(cron_target_user)" "$_blk" ); then
             rm -f "$_blk" "$workfile"
             die "refusing to install: the rendered block is not runnable by $(cron_target_user) (see above) -- neither $realfile nor the crontab was touched"
+        fi
+        # A warning, not a refusal: the snapshots still happen, unfrozen. The
+        # operator decides between widening the grant and leaving the guest out.
+        local _qg; _qg=$(quiesce_whitelist_gaps "$(cron_target_user)" "$_blk")
+        if [ -n "$_qg" ]; then
+            warn "the block freezes guests (-q) as '$(cron_target_user)', but ${QUIESCE_ALLOW_DIR:-/etc/zfs-quiesce-allow}/$(cron_target_user) does not cover: $(printf '%s' "$_qg" | awk '{ printf "%s%s (%s)", (NR > 1 ? ", " : ""), $1, $2 }') -- under ,degrade their snapshots are taken UNFROZEN (exit 8), under ,strict not at all (exit 3). Either take the guest out of the relationship, or add its dataset to the account's quiesce grant (deploy.sh --add-quiesce merges the --grant-datasets list into it)."
         fi
     fi
     rm -f "$_blk"

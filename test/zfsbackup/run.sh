@@ -13903,6 +13903,40 @@ if [ "$rc" -eq 0 ] && printf '%s' "$DROUT" | grep -q '1\. collector : remove-cli
 else
     bad "delrel: plan for a shared peer" "rc=$rc" "$DROUT" "$(cat "$DR/err")"
 fi
+# U149-c (pve0, 2026-11-05): the shipped quiesce_whitelist_gaps over a block of
+# real pve0 shape and a stub zfs. The account's whitelist names 102's disks; the
+# -q line on hdd/lxc with -R also reaches CT 105, which it lists; the parent-only
+# -q line (no -R) and the line without -q list nothing; root lists nothing.
+QG="$(mktemp -d)"; mkdir -p "$QG/bin" "$QG/allow"
+qgfn=$(sed -n '/^quiesce_whitelist_gaps() {/,/^}$/p' "$ZFSBACKUP")
+cat > "$QG/bin/zfs" <<'EOF'
+#!/bin/bash
+# zfs list [-r] -H -o name -- <ds>
+r=0; for a in "$@"; do [ "$a" = -r ] && r=1; done; ds="${@: -1}"
+all="hdd/lxc
+hdd/lxc/subvol-102-disk-0
+hdd/lxc/subvol-102-disk-1
+hdd/lxc/subvol-105-disk-0"
+if [ "$r" = 1 ]; then printf '%s\n' "$all" | grep -E "^$ds(/|$)"; else printf '%s\n' "$all" | grep -xF "$ds"; fi
+EOF
+chmod +x "$QG/bin/zfs"
+printf '# managed\nhdd/lxc/subvol-102-disk-0\nhdd/lxc/subvol-102-disk-1\n' > "$QG/allow/zfsbackup"
+J='/h/zfs-job.sh "pve0 rel daily snapshot (x)" --log=/h/cron.log --detail=8 -- /h/zfs-snapshot-all/snapsend.sh -m "automated_daily_"'
+{ printf '27 1 * * * %s -R -E vzdump -q auto,degrade -L rel "hdd/lxc"\n' "$J"
+  printf '27 1 * * * %s -q auto,degrade -L rel "hdd/lxc"\n' "$J"
+  printf '17 * * * * %s -R -E vzdump -L rel "hdd/lxc"\n' "$J"; } > "$QG/blk"
+head -1 "$QG/blk" > "$QG/blk1"; sed -n 2,3p "$QG/blk" > "$QG/blk23"
+qg() { PATH="$QG/bin:$PATH" QUIESCE_ALLOW_DIR="$QG/allow" bash -c "$qgfn
+quiesce_whitelist_gaps '$1' '$2'"; }
+qg_all=$(qg zfsbackup "$QG/blk"); qg_23=$(qg zfsbackup "$QG/blk23"); qg_root=$(qg root "$QG/blk1")
+rm "$QG/allow/zfsbackup"; qg_none=$(qg zfsbackup "$QG/blk1")
+if [ -n "$qgfn" ] && [ "$qg_all" = "105 hdd/lxc/subvol-105-disk-0" ] && [ -z "$qg_23" ] && [ -z "$qg_root" ] \
+        && [ "$(printf '%s\n' "$qg_none" | wc -l)" = 3 ] && grep -q 'quiesce_whitelist_gaps "$(cron_target_user)" "$_blk"' "$ZFSBACKUP"; then
+    ok "U149-c: a -q line of a delegated account names the guest its whitelist misses (CT 105), parent-only and -q-less lines and root name none, no whitelist = every guest; the install path asks it"
+else
+    bad "U149-c: quiesce_whitelist_gaps" "all=[$qg_all] 23=[$qg_23] root=[$qg_root] none=[$qg_none]"
+fi
+rm -rf "$QG"
 # T7 (install test 2026-11-05): two live records with NO peer are not a shared
 # pairing -- the plan names no "other relationships" and no empty peer.
 printf 'CLIENT_NAME=np1\nSTATE=active\n' > "$DR/clients/np1.conf"
