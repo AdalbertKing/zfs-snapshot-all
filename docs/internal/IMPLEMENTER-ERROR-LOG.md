@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83, E85, E94, E109, E110, E117 (an idle rerun read as the state the cron minute sees).*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83, E85, E94, E109, E110, E117 (an idle rerun read as the state the cron minute sees), E122.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -2053,6 +2053,19 @@ the first circle.
 the first circle. While collecting, check each fix only with `bash -n` and the new case cut out.
 Then run ONE full circle at the end of the batch. A hole found inside the circle goes on the
 list; unless it blocks, it rides the next batch.
+
+### E122 — the heredoc ate a backslash again, in a test's failure message (2026-11-05, R2, repeat of E53)
+**2026-11-05, branch `fix/t10-t11`, the T8 test in `test/tui/run.sh`.**
+
+*Genesis.* A Python patch fed through the tool's heredoc wrote `tr '\n' ';'` as `tr '<newline>' ';'`.
+`bash -n` passed (a newline in quotes is valid) and only a grep of the new line showed it. The
+same day two earlier patches lost `\n` and `\(` the same way.
+
+*Cause.* E53's rule says patches with backslashes go through a Write-tool file or `chr(92)`; I
+used the heredoc because the patch was "mostly prose".
+
+*Rule.* R2 (E53 put this tool's heredoc on R2's list of boundaries), no new rule: any patch text containing a backslash goes through the Edit or Write
+tool. `bash -n` is not the check for this; reading the written line back is.
 
 ### E121 — two shapes the batch's own tests never ran, both red in CI (2026-11-05, R12)
 **2026-11-05, PR #1092 at 749ca91e: `gencron` and `draftscope` red.**
