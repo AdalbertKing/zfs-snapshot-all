@@ -3485,14 +3485,18 @@ apt_install_with_fallback() {
 # for, each at its newest version outside the security archive. Pinning the
 # named package alone is not enough: on A-TASSA pve0 (2026-11-05) git from the
 # main archive still pulled git-man from the security archive -- a 404 again.
-# A name with no such version stays out. zfs-backup.sh carries the same function
+# A name with no such version stays out, and so does anything that is not a
+# Debian package name or version: apt's output is data, and the pins go
+# unquoted into apt-get (one word each). zfs-backup.sh carries the same function
 # (a test compares the two).
 apt_main_archive_pins() {
     local p="$1" o="$2" pins="${3:-}" q v
     for q in "$p" $(printf '%s\n' "$o" | sed -n 's#^E: Failed to fetch .*/\([^/_]*\)_[^/]*[[:space:]]404[[:space:]].*#\1#p' | sort -u); do
+        case "$q" in ''|*[!a-z0-9.+-]*) continue ;; esac    # a Debian package name, nothing else
         case " $pins " in *" $q="*) continue ;; esac
         v=$(apt-cache madison "$q" 2>/dev/null | awk -F'|' '$3 !~ /security/ { gsub(/[[:space:]]/, "", $2); print $2; exit }')
-        [ -n "$v" ] && pins="${pins:+$pins }$q=$v"
+        case "$v" in ''|*[!A-Za-z0-9.+~:-]*) continue ;; esac    # a Debian version, nothing else
+        pins="${pins:+$pins }$q=$v"
     done
     printf '%s' "$pins"
 }

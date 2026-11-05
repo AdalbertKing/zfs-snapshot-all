@@ -15459,7 +15459,8 @@ SOURCE_REPO_DIR="${SOURCE_REPO_DIR:-/root/scripts/zfs-snapshot-all}"
 # security.debian.org no longer served the bullseye debs the lists named; the
 # main-archive version installed). Runs in a subshell, so `exit` ends only it;
 # on failure apt's own output is what it prints. The package name is a literal
-# from this file, never data.
+# from this file, never data; the pins taken from apt's output are checked by
+# apt_main_archive_pins.
 remote_apt_install_cmd() {
     local p="$1"
     printf '%s' "$(declare -f apt_main_archive_pins); ( export DEBIAN_FRONTEND=noninteractive; apt-get install -y $p >/dev/null 2>&1 && exit 0; apt-get update >/dev/null 2>&1; o=\$(apt-get install -y $p 2>&1) && exit 0; pins=''; for try in 1 2 3; do case \"\$o\" in *404*) ;; *) break ;; esac; new=\$(apt_main_archive_pins $p \"\$o\" \"\$pins\"); [ \"\$new\" != \"\$pins\" ] || break; pins=\$new; echo \"apt: 404 for $p from the archive its list names -- trying \$pins from the main archive\"; o=\$(apt-get install -y \$pins 2>&1) && exit 0; done; printf '%s\\n' \"\$o\"; exit 1 )"
@@ -15471,14 +15472,18 @@ remote_apt_install_cmd() {
 # for, each at its newest version outside the security archive. Pinning the
 # named package alone is not enough: on A-TASSA pve0 (2026-11-05) git from the
 # main archive still pulled git-man from the security archive -- a 404 again.
-# A name with no such version stays out. deploy.sh carries the same function
+# A name with no such version stays out, and so does anything that is not a
+# Debian package name or version: apt's output is data, and the pins go
+# unquoted into apt-get (one word each). deploy.sh carries the same function
 # (a test compares the two).
 apt_main_archive_pins() {
     local p="$1" o="$2" pins="${3:-}" q v
     for q in "$p" $(printf '%s\n' "$o" | sed -n 's#^E: Failed to fetch .*/\([^/_]*\)_[^/]*[[:space:]]404[[:space:]].*#\1#p' | sort -u); do
+        case "$q" in ''|*[!a-z0-9.+-]*) continue ;; esac    # a Debian package name, nothing else
         case " $pins " in *" $q="*) continue ;; esac
         v=$(apt-cache madison "$q" 2>/dev/null | awk -F'|' '$3 !~ /security/ { gsub(/[[:space:]]/, "", $2); print $2; exit }')
-        [ -n "$v" ] && pins="${pins:+$pins }$q=$v"
+        case "$v" in ''|*[!A-Za-z0-9.+~:-]*) continue ;; esac    # a Debian version, nothing else
+        pins="${pins:+$pins }$q=$v"
     done
     printf '%s' "$pins"
 }

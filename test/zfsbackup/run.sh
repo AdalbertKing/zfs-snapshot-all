@@ -13936,6 +13936,10 @@ done
     done
 ) > "$AD/deploy.res" 2>&1
 dep_res="$dep_res$(cat "$AD/deploy.res")"
+# apt's output is data: a 404 line whose file name is not a Debian package
+# name adds no pin (the pins go unquoted into apt-get)
+odd=$(PATH="$AD:$PATH" apt_main_archive_pins git 'E: Failed to fetch http://x/pool/main/g/g$(id)*_1_all.deb  404  Not Found [IP: 1.2.3.4 80]')
+[ "$odd" = "git=1:2.30.2-1+deb11u2" ] || dep_res="$dep_res odd name: '$odd';"
 # the two copies of apt_main_archive_pins are one function
 [ "$(product_fn "$ZFSBACKUP" apt_main_archive_pins)" = "$(product_fn "$REPO/deploy.sh" apt_main_archive_pins)" ] \
     || dep_res="$dep_res apt_main_archive_pins differs between zfs-backup.sh and deploy.sh;"
