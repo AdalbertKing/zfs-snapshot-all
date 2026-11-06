@@ -272,6 +272,40 @@ SYNCED="$STATE_DIR/$LABEL.synced"
 # the medium already held everything. The second matters: a quiet source makes
 # no new copy, and a medium that is up to date must not read as stale.
 CURRENT="$STATE_DIR/$LABEL.current"
+
+# ONE REPLICA, ONE RUN AT A TIME (A11/A13, owner 2026-11-06).
+#
+# Found in the field, 2026-11-06: the first copy onto a 2 TB USB disk runs for two
+# days, and the next scheduled or on-insert run of the SAME replica started under
+# it. The engines lock per source+target, so the second run went straight to the
+# next source and wrote to the same disk in parallel -- and worse, its detach found
+# the imported-by-us marker of the FIRST run, matched the GUID, called the pool its
+# own and would have exported it in the middle of that copy.
+#
+# So attach records which run holds the medium: the pid of the bracket's subshell
+# (attach and detach are both its children, so $PPID names the run) and that
+# process's start time, so a reused pid is not mistaken for it. Another run of the
+# same label meets a live holder and stops: attach exits 75 before it touches the
+# disk (zfs-job reports 75 as a skipped run, a WARN, not a failure), its detach
+# leaves the medium alone, and `age` reports the copy as running instead of
+# warning that none was ever made. No queue, nothing killed. A holder that is no
+# longer alive is a run that died; its record is ignored.
+RUNNING="$STATE_DIR/$LABEL.running"
+proc_start() { awk '{print $22}' "/proc/$1/stat" 2>/dev/null; }
+running_holder() {   # -> "pid since" of a LIVE run holding this medium, or nothing
+    local pid st since
+    [ -r "$RUNNING" ] || return 0
+    read -r pid st since < "$RUNNING" 2>/dev/null || return 0
+    case "$pid$st$since" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$(proc_start "$pid")" = "$st" ] && printf '%s %s\n' "$pid" "$since"
+    return 0
+}
+running_since() { date -d "@${1#* }" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "${1#* }"; }
+clear_running() {   # only this run's record
+    local h; h=$(running_holder)
+    [ "${h%% *}" = "$PPID" ] && rm -f "$RUNNING" 2>/dev/null
+    return 0
+}
 mark_current() { mkdir -p "$STATE_DIR" 2>/dev/null && date '+%s' > "$CURRENT" 2>/dev/null || :; }
 
 if [ "$VERB" = age ]; then
@@ -287,6 +321,16 @@ if [ "$VERB" = age ]; then
     }
     _w=$(to_sec "$AGE_WARN") && _c=$(to_sec "$AGE_CRIT") && [ "$_w" -lt "$_c" ] \
         || { echo "UNKNOWN replica=$LABEL -- --warn and --crit need durations like 9d/36h, warn below crit (got '$AGE_WARN' / '$AGE_CRIT')"; exit 3; }
+    # A copy running now is not a medium nobody looks after. It stays OK until it
+    # has itself been running longer than crit -- a copy that never ends must
+    # still reach somebody.
+    _run=$(running_holder)
+    if [ -n "$_run" ]; then
+        _rs=${_run#* }; _ra=$(( $(date +%s) - _rs ))
+        if [ "$_ra" -ge "$_c" ]; then _v=WARNING; _rc=1; else _v=OK; _rc=0; fi
+        echo "$_v replica=$LABEL pool=$POOL -- a copy is running since $(running_since "$_run") ($(( _ra / 86400 ))d$(( (_ra % 86400) / 3600 ))h, pid ${_run%% *}) (warn=$AGE_WARN crit=$AGE_CRIT)"
+        exit "$_rc"
+    fi
     _at=""
     if [ -r "$CURRENT" ]; then
         _at=$(head -1 "$CURRENT" 2>/dev/null); case "$_at" in ''|*[!0-9]*) _at="" ;; esac
@@ -414,6 +458,24 @@ status)
     ;;
 
 attach)
+    # ONE RUN AT A TIME (see RUNNING above). Checked and claimed under a short
+    # flock, so two runs starting in the same second cannot both see "free".
+    # A state directory that cannot be written is not decided here: the
+    # imported-by-us marker below cannot be written either, and that refusal
+    # (REV-20260829-123 F2) puts the pool back and says why.
+    mkdir -p "$STATE_DIR" 2>/dev/null || :
+    if ( : >> "$RUNNING.lock" ) 2>/dev/null; then
+        exec 8>>"$RUNNING.lock"
+        flock -w 30 8 || { say "could not take $RUNNING.lock in 30 s -- skipping rather than risk two runs on one medium"; emit busy; exit 75; }
+        _run=$(running_holder)
+        if [ -n "$_run" ] && [ "${_run%% *}" != "$PPID" ]; then
+            say "a copy onto '$LABEL' is already running since $(running_since "$_run") (pid ${_run%% *}) -- this run is skipped, the medium is not touched"
+            emit busy; exit 75
+        fi
+        printf '%s %s %s\n' "$PPID" "$(proc_start "$PPID")" "$(date +%s)" > "$RUNNING" 2>/dev/null || :
+        exec 8>&-
+    fi
+
     # NOTHING TO SEND MEANS NOTHING TO RISK.
     #
     # The window in which pulling this disk can hang the host is exactly the
@@ -745,6 +807,17 @@ EOF
     ;;
 
 detach)
+    # ANOTHER RUN'S MEDIUM IS NOT OURS TO PUT AWAY (see RUNNING above): its
+    # imported-by-us marker would match this pool's GUID, and exporting here
+    # would pull the disk out from under that copy. This run's own record is
+    # cleared on every way out.
+    _run=$(running_holder)
+    if [ -n "$_run" ] && [ "${_run%% *}" != "$PPID" ]; then
+        say "the copy onto '$LABEL' running since $(running_since "$_run") (pid ${_run%% *}) holds '$POOL' -- this run leaves it alone"
+        emit busy; exit 0
+    fi
+    trap clear_running EXIT
+
     # PRESENCE IS THE FIRST QUESTION, OWNERSHIP THE SECOND.
     #
     # Found on the lab, 2026-08-29. These two tests used to run the other way

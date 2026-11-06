@@ -461,7 +461,7 @@
 "Teraz:": "Now:",
 "tylko po podłączeniu": "only after connecting",
 "Replika $NAME -- własny harmonogram": "Replica $NAME -- custom schedule",
-"Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):": "Five cron fields (minute hour day month weekday):",
+"Pięć pól crona: minuta godzina dzień miesiąc dzień-tygodnia. Najpierw MINUTA. Przykłady: 7 0 * * * = codziennie 00:07; 0 22 * * 5 = piątek 22:00.": "Five cron fields: minute hour day month weekday. MINUTE first. Examples: 7 0 * * * = daily at 00:07; 0 22 * * 5 = Friday 22:00.",
 "Replika $NAME -- ostrzeżenie": "Replica $NAME -- warning",
 "To nie liczba": "Not a number",
 "Replika $NAME -- także po podłączeniu?": "Replica $NAME -- also on connect?",
@@ -927,5 +927,9 @@
 "%s. Krótka retencja źródła:": "%s. Short source retention:",
 "Puste pole nie zmienia retencji. Inną retencję źródła ustawisz w Harmonogram -> Ręcznie (liczby szczebli) albo wybierając szablon.": "An empty field does not change the retention. Set a different source retention in Schedule -> Manual (the tier numbers) or by choosing a template.",
 "Relacja nie ma szczebla z migawkami -- nic do zmiany.": "The relationship has no tier that takes snapshots -- nothing to change.",
-"Enter okno   ": "Enter window   "
+"Enter okno   ": "Enter window   ",
+"Tak, teraz": "Yes, now",
+"Dysk $POOL jest podłączony. Zacząć pierwszą kopię teraz?\\n\\nKopia biegnie w tle, także po wyjściu z programu. Stan: F2 Przebiegi.": "Disk $POOL is connected. Start the first copy now?\\n\\nThe copy runs in the background, also after you leave the program. Progress: F2 Runs.",
+"relacja %s (pvesr)": "relation %s (pvesr)",
+"brak kopii pvesr na tym hoście": "no pvesr copies on this host"
 }

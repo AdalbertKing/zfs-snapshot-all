@@ -154,6 +154,16 @@ if [ -d "$PROG_DIR" ]; then
         if [ "$age" -ge 1800 ]; then
             ds=$(sed -n 's/.*"dataset":"\([^"]*\)".*/\1/p' "$f")
             lb=$(sed -n 's/.*"label":"\([^"]*\)".*/\1/p' "$f")
+            # A19 (field 2026-11-06): a record whose engine is GONE is an orphan, not a
+            # hang -- the relation was deleted mid-copy and nothing closed it. Said as such,
+            # and the record is closed as "dead" (progress_reap drops it after 7 days), so
+            # it does not alarm again every day.
+            pid=$(sed -n 's/.*"pid":\([0-9]*\).*/\1/p' "$f")
+            if [ -n "$pid" ] && [ ! -d "/proc/$pid" ]; then
+                sed -i 's/"state":"running"/"state":"dead"/' "$f" 2>/dev/null || :
+                alert "transfer '${ds}' (${lb:-bez etykiety}) na ${HOST}: rekord osierocony, proces ${pid} nie zyje"                   "Rekord transferu '${ds}' mowil 'running', ale jego proces (pid ${pid}) nie zyje, a rekord nie odswiezyl sie od $(( age / 60 )) minut. To nie zawieszony transfer: przerwano go bez zamkniecia rekordu (np. relacje usunieto w trakcie kopii). Rekord oznaczono jako 'dead'; sprawdz cel, kopia tego biegu jest niepelna. Plik: ${f}."
+                continue
+            fi
             alert "transfer '${ds}' (${lb:-bez etykiety}) na ${HOST}: bez pulsu od $(( age / 60 )) min"                   "Rekord transferu '${ds}' wciaz mowi 'running', ale nie odswiezyl sie od $(( age / 60 )) minut (odswieza co 2 s). Transfer najpewniej wisi albo zostal ubity tak, ze kod wyjscia zadania tego nie zglosi. Sprawdz: zfs-backup.sh progress na ${HOST}."
         fi
     done

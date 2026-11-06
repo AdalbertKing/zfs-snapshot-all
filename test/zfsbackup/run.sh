@@ -2724,6 +2724,41 @@ else
     bad "clobber: a job on a DIFFERENT dataset is still a deletion, retention normalizer or not" "rc=$rc out=$out"
 fi
 
+# A5 (A-TASSA 2026-11-05): gen-cron spells out a basename two datasets share, so
+# an installed "(pve0-data)" job comes back as "(pve0-hdd-data)". The same job
+# under a new label is not a deletion -- and is said out loud.
+CLL="$WORK/clobber-label"; mkdir -p "$CLL/bin"; : > "$CLL/new.conf"
+cat > "$CLL/target.cron" <<'EOF'
+# BEGIN zfs-backup-managed
+44 * * * * /R/zfs-job.sh "pve1 hourly snapshot (pve0-data)" --log=/L --notify=/N -- /R/snapget.sh -s -m "automated_hourly_" -R -L pve0 "acct@h:hdd/data"
+# END zfs-backup-managed
+EOF
+cat > "$CLL/proposal.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+44 * * * * /R/zfs-job.sh "pve1 hourly snapshot (pve0-hdd-data)" --log=/L --notify=/N -- /R/snapget.sh -s -m "automated_hourly_" -R -L pve0 "acct@h:hdd/data"
+# END zfs-backup-managed
+EOF
+cat > "$CLL/proposal-gone.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+44 * * * * /R/zfs-job.sh "pve1 hourly snapshot (pve0-hdd-data)" --log=/L --notify=/N -- /R/snapget.sh -s -m "automated_hourly_" -R -L pve0 "acct@h:rpool/data"
+# END zfs-backup-managed
+EOF
+printf '#!/bin/bash\ncat "%s"\nexit 0\n' "$CLL/target.cron" > "$CLL/bin/crontab"; chmod +x "$CLL/bin/crontab"
+out=$( PATH="$CLL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CLL/proposal.txt'; }; assert_target_block_not_clobbered '$CLL/new.conf'" 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && case "$out" in *"job label changed"*"(pve0-data)"*"(pve0-hdd-data)"*) true ;; *) false ;; esac; then
+    ok "clobber: the same job under a new label is not a deletion, and the rename is reported (A5)"
+else
+    bad "clobber: the same job under a new label is not a deletion (A5)" "rc=$rc out=$out"
+fi
+out=$( PATH="$CLL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CLL/proposal-gone.txt'; }; assert_target_block_not_clobbered '$CLL/new.conf'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"would be DELETED"*) true ;; *) false ;; esac; then
+    ok "clobber: a new label over a DIFFERENT dataset is still a deletion (A5 control)"
+else
+    bad "clobber: a new label over a DIFFERENT dataset is still a deletion (A5 control)" "rc=$rc out=$out"
+fi
+
 # THE NORMALIZER IS NARROW, and this is the claim its comment makes: a flag is
 # only a retention flag when it is a whole argument. Two datasets whose NAMES
 # contain the text -- tank/rack-D7 and tank/rack-D3 -- are different datasets,
@@ -13558,7 +13593,8 @@ case "$*" in
     "list -H -p -o name,type -r -t filesystem,volume -- "*)
         printf 'tank/c\tfilesystem\ntank/c/a\tfilesystem\ntank/c/vm\tvolume\ntank/c/empty\tfilesystem\n' ;;
     "list -H -p -o name,creation -r -t snapshot -- "*)
-        printf 'tank/c/a@s1\t1000\ntank/c/a@s2\t3000\ntank/c/a@s0\t500\ntank/c/vm@z1\t2000\ntank/c@r1\t100\n' ;;
+        printf 'tank/c/a@s1\t1000\ntank/c/a@s2\t3000\ntank/c/a@s0\t500\ntank/c/vm@z1\t2000\ntank/c@r1\t100\n'
+        [ -n "${ZT_PVESR:-}" ] && printf 'tank/c/vm@__replicate_105-0_1700000000__\t2500\n' ;;
     "list -H -p -o name,used,refer,written,creation -t snapshot -d 1 -s creation -- "*)
         printf 'tank/c/a@s0\t0\t10\t0\t500\ntank/c/a@s1\t4096\t20\t5\t1000\ntank/c/a@s2\t0\t30\t7\t3000\n' ;;
     *) exit 1 ;;
@@ -13573,6 +13609,16 @@ if [ "$got" = "[('tank/c', 'filesystem', 1, 100), ('tank/c/a', 'filesystem', 3, 
     ok "zfstree: zfs-tree --json ROOT = datasets in zfs's order with type, snapshot count and NEWEST creation (a max over unsorted snapshots, 0/0 for a dataset with none), from two zfs list calls"
 else
     bad "zfstree: zfs-tree" "got=$got" "$ZTOUT" "$(cat "$ZT/zfs.argv" 2>/dev/null)" "$(cat "$ZT/err")"
+fi
+# A17 (A-TASSA 2026-11-06): a dataset holding a pvesr snapshot (@__replicate_) says so --
+# F4 lists a snapshot-only relation's pvesr copies by it, and nothing else under its roots.
+rm -f "$ZT/zfs.argv"
+ZTOUT=$(ZT_PVESR=1 zt_run zfs-tree --json tank/c)
+got=$(printf '%s' "$ZTOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print([(x["name"], x["pvesr"]) for x in d["datasets"]])' 2>/dev/null | tr -d '\r')
+if [ "$got" = "[('tank/c', False), ('tank/c/a', False), ('tank/c/vm', True), ('tank/c/empty', False)]" ]; then
+    ok "zfstree: a dataset with a @__replicate_ snapshot is marked pvesr, the others are not (A17)"
+else
+    bad "zfstree: pvesr mark (A17)" "got=$got" "$ZTOUT"
 fi
 rm -f "$ZT/zfs.argv"
 ZTOUT=$(zt_run zfs-snapshots --json tank/c/a)
@@ -14384,6 +14430,19 @@ if [ "$u154y" -ne 0 ] && printf '%s%s' "$U154Y" "$U154E" | grep -q "has a run in
 else
     bad "delrel U154: running run" "rc=$u154y" "$U154Y" "err: $U154E" "plan: $U154P" "control: $U154C" "zfs: $(cat "$DR/zfs154.calls")"
 fi
+# A18 (Dabrowska 2026-11-06): delete-relation's last step drops the progress records of
+# the deleted relationship (label = its name) -- one left "running" by a cut-short copy
+# alarmed "bez pulsu" two days later. Exactly that label: "e2" is another relationship.
+A18D="$DR/prog18"; mkdir -p "$A18D"
+printf '{"dataset":"a","target":"t","label":"e","mode":"full","state":"running","pid":1}\n' > "$A18D/1.json"
+printf '{"dataset":"b","target":"t","label":"e","mode":"incr","state":"ok","pid":2}\n' > "$A18D/2.json"
+printf '{"dataset":"c","target":"t","label":"e2","mode":"incr","state":"ok","pid":3}\n' > "$A18D/3.json"
+a18n=$( ZFS_PROGRESS_DIR="$A18D" bash -c "source '$ZFSBACKUP'; progress_forget_label e" 2>&1 )
+if [ "$a18n" = 2 ] && [ ! -e "$A18D/1.json" ] && [ ! -e "$A18D/2.json" ] && [ -e "$A18D/3.json" ]; then
+    ok "delrel A18: the deleted relationship's progress records go (running or not); another label's stays"
+else
+    bad "delrel A18: progress records" "n=$a18n" "$(ls "$A18D")"
+fi
 # REV-144: THE RECORD IS THE RETRY STATE. A source half that did not complete used to
 # be logged as rc=1 and then walked straight into `--purge` -- which deleted the peer,
 # the endpoint and the label the retry needs, so `delete-relation NAME --yes` answered
@@ -14836,6 +14895,28 @@ if [ "$r1" -ne 0 ] && printf '%s' "$out" | grep -q 'usage: prepare-media POOL DE
     ok "prepare-media: no arguments and a bad pool name are refusals, before any disk is touched"
 else
     bad "prepare-media: refusals" "$out" "$out2"
+fi
+# A14 (A-TASSA 2026-11-06): a USB bridge reported 512/512 for a 4096-byte disk and
+# the pool came out ashift=9 -- every write a read-modify-write, 11 MB/s. The
+# medium is created ashift=12 whatever the bridge says. zpool is a stub that
+# records its arguments; nothing touches a disk. Needs any block device for the
+# [ -b ] check, read only.
+PMBD=$(find /dev -maxdepth 1 -type b 2>/dev/null | head -1)
+if [ -n "$PMBD" ]; then
+    out=$( ( source "$ZFSBACKUP"
+             media_disk_in_use() { return 1; }
+             lsblk() { :; }
+             zpool() { echo "zpool $*" >> "$PMD/zpool.log"; [ "$1" = create ] && return 1; return 1; }
+             MEDIA_KEY_DIR="$PMD/keys"
+             cmd_prepare_media pm1 "$PMBD" --yes ) 2>&1 )
+    if grep -q '^zpool create .*-o ashift=12 ' "$PMD/zpool.log" 2>/dev/null \
+       && printf '%s' "$out" | grep -q 'zpool create -f -m none -o ashift=12 '; then
+        ok "prepare-media: the pool is created ashift=12, and the plan says so (A14)"
+    else
+        bad "prepare-media: ashift=12" "$(cat "$PMD/zpool.log" 2>/dev/null)" "$out"
+    fi
+else
+    echo "SKIP prepare-media ashift: no block device on this host"
 fi
 rm -rf "$PMD"
 fi   # --- koniec sekcji runreplicas ---

@@ -861,6 +861,53 @@ case "$out" in
     *) bad "W3 a missing lock directory refuses and names deploy.sh" "$out" ;;
 esac
 
+# L1 (A5, A-TASSA 2026-11-05): two datasets of one relation with the same basename
+# (tank/data, pool2/data) both carry notify = r-data. The label spells out the path
+# for those two only; a unique label and a hand-written one stay as they were.
+cat > "$TMPD/l1.conf" <<'EOF'
+[defaults]
+	host_label = w
+[template:hourly]
+	send_schedule = 7 * * * *
+	prefix        = automated_
+[dataset:tank/data]
+	use_template = hourly
+	notify       = r-data
+[dataset:pool2/data]
+	use_template = hourly
+	notify       = r-data
+[dataset:tank/vm]
+	use_template = hourly
+	notify       = r-vm
+[dataset:tank/x/vm2]
+	use_template = hourly
+	notify       = custom-label
+EOF
+out=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$TMPD/l1.conf" 2>&1)
+case "$out" in
+    *'"w hourly backup (r-tank-data+r-pool2-data+r-vm+custom-label)"'*) ok "L1 a basename two datasets share is spelled out as the path; other labels unchanged" ;;
+    *) bad "L1 a basename two datasets share is spelled out as the path" "$out" ;;
+esac
+
+# W6 (A6, A-TASSA 2026-11-05): the guard against a hand-built schedule counts only
+# lines that RUN. A crontab with no managed block whose snapsend lines are all
+# commented out installs; one live line still refuses (the control).
+W6T="$TMPD/w6-tabs"; mkdir -p "$W6T"; me6=$(id -un)
+printf '%s\n' '# old schedule, retired' '#0 * * * * /root/scripts/snapsend.sh -i tank/a x' '  # 5 0 * * * /root/scripts/delsnaps.sh tank/a automated_ -M3' > "$W6T/$me6"
+out=$(CRONTAB_DIR="$W6T" CRON_LOCK_DIR="$W_LOCKS" REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$TMPD/w.conf" --install 2>&1); rc6=$?
+if [ "$rc6" -eq 0 ] && grep -q '^# BEGIN zfs-backup-managed' "$W6T/$me6" && grep -q '^#0 \* \* \* \* /root/scripts/snapsend.sh' "$W6T/$me6"; then
+    ok "W6 commented-out snapsend/delsnaps lines do not block the install, and stay as they were"
+else
+    bad "W6 commented-out snapsend/delsnaps lines do not block the install" "rc=$rc6 $out"
+fi
+printf '%s\n' '#0 * * * * /root/scripts/snapsend.sh -i tank/a x' '0 * * * * /root/scripts/snapsend.sh -i tank/b x' > "$W6T/$me6"
+out=$(CRONTAB_DIR="$W6T" CRON_LOCK_DIR="$W_LOCKS" REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$TMPD/w.conf" --install 2>&1); rc6=$?
+if [ "$rc6" -ne 0 ] && printf '%s' "$out" | grep -q 'tank/b' && ! printf '%s' "$out" | grep -q 'tank/a'; then
+    ok "W6 a live snapsend line still refuses, and only it is named"
+else
+    bad "W6 a live snapsend line still refuses" "rc=$rc6 $out"
+fi
+
 # ---- X. the emitted job line witnesses its own run --------------------------
 #
 # Found live 2026-08-17. On 2026-08-09 pve2's weekly job for CT 103 fired and

@@ -146,7 +146,7 @@ basket_xargs() {          # B_EXCL -> XARGS: --exclude-child=^x$ (i ^x/, gdy x m
 XARGS=()
 
 # PRZYGOTOWANIE NOŚNIKA (uwaga 15, 2026-10-08): pusty dysk -> pula repliki, przez wsad
-# prepare-media (zpool create -m none -o failmode=continue -O compression=zstd, zfs create POOL/BAZA, export).
+# prepare-media (zpool create -m none -o ashift=12 -o failmode=continue -O compression=zstd, zfs create POOL/BAZA, export).
 # Dwie drogi, jeden czasownik: nowy nośnik (pula i baza do wpisania) albo kolejny dysk
 # TEJ repliki (rotacja: ta sama pula i baza, brama rozróżnia dyski po GUID).
 # 0 = przygotowano (PREP_DST), 1 = wstecz.
@@ -637,7 +637,7 @@ PYEOF
             _back=0
             while :; do
                 wt --title "$(Tv 'Replika $NAME -- własny harmonogram' '$NAME' "$NAME")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
-                   --inputbox "$(T 'Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):')" 9 "$W" "$_c" || { _back=1; break; }
+                   --inputbox "$(T 'Pięć pól crona: minuta godzina dzień miesiąc dzień-tygodnia. Najpierw MINUTA. Przykłady: 7 0 * * * = codziennie 00:07; 0 22 * * 5 = piątek 22:00.')" 11 "$W" "$_c" || { _back=1; break; }
                 _c="$(printf '%s' "$WT_OUT" | tr -s ' ' | sed 's/^ //; s/ $//')"
                 # Kampania 2026-10-22: "0 22 * * *zle" przechodził aż do planu. Pięć pól ze znaków crona.
                 if printf '%s\n' "$_c" | awk '
@@ -795,6 +795,18 @@ PYEOF
               Tv '    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '\''$NAME'\'' i naciśnij F7 (Uruchom teraz).' '$NAME' "$NAME"; echo
             } >"$TMPD/result.txt"
             result_box "$(Tv 'Replika $NAME: GOTOWE' '$NAME' "$NAME")" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
+            # A8 (field 2026-11-05): dysk był podłączony przy instalacji, a pierwsza kopia
+            # ruszyła dopiero następnej nocy -- udev reaguje tylko na WŁOŻENIE. Nowa replika
+            # na dysku, który już jest: pytanie, czy zacząć teraz. Bieg w tle, ten sam
+            # czasownik co F7, przeżywa wyjście z GUI.
+            _pool="${DST%%/*}"
+            if [ "$EDIT" -eq 0 ] && [ "$MEDIA" = removable ] \
+               && { zpool list -H -o name "$_pool" >/dev/null 2>&1 \
+                    || zpool import 2>/dev/null | awk -v p="$_pool" '$1 == "pool:" && $2 == p {f=1} END {exit !f}'; } \
+               && wt --title "$(Tv 'Replika $NAME' '$NAME' "$NAME")" --yes-button "$(T 'Tak, teraz')" --no-button "$(T 'Nie')" \
+                     --yesno "$(Tv 'Dysk $POOL jest podłączony. Zacząć pierwszą kopię teraz?\n\nKopia biegnie w tle, także po wyjściu z programu. Stan: F2 Przebiegi.' '$POOL' "$_pool")" 10 "$W"; then
+                setsid -f "$ZB" run-replicas --name="$NAME" </dev/null >/dev/null 2>&1 || :
+            fi
         else
             T 'Nie udało się -- nic nie zainstalowano.' >"$TMPD/result.txt"
             result_box "$(Tv 'Replika $NAME: instaluję' '$NAME' "$NAME")" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"

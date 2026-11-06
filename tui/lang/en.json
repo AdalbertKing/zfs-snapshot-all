@@ -1023,7 +1023,7 @@
 "Pełny plan (z liniami crona): $planf": "Full plan (with the cron lines): $planf",
 "Pierwsza kopia": "First copy",
 "Pięć okien nad zfs-snapshot-all (tylko odczyt)": "Five windows over zfs-snapshot-all (read only)",
-"Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):": "Five cron fields (minute hour day month weekday):",
+"Pięć pól crona: minuta godzina dzień miesiąc dzień-tygodnia. Najpierw MINUTA. Przykłady: 7 0 * * * = codziennie 00:07; 0 22 * * 5 = piątek 22:00.": "Five cron fields: minute hour day month weekday. MINUTE first. Examples: 7 0 * * * = daily at 00:07; 0 22 * * 5 = Friday 22:00.",
 "Plan": "Plan",
 "Plan (to samo, co czasownik pokazał bez --yes):": "Plan (the same as the verb showed without --yes):",
 "Plan ODRZUCONY przez czasownik": "Plan REJECTED by the verb",
@@ -2187,5 +2187,9 @@
 "←→ zakładki   ": "←→ tabs   ",
 "↑↓ wiersz ←→ pole spacja kratka cyfry liczba Enter dalej  Esc wraca": "↑↓ row ←→ field space box digits number Enter next  Esc back",
 "→ tutaj": "→ here",
-"Enter okno   ": "Enter window   "
+"Enter okno   ": "Enter window   ",
+"Tak, teraz": "Yes, now",
+"Dysk $POOL jest podłączony. Zacząć pierwszą kopię teraz?\\n\\nKopia biegnie w tle, także po wyjściu z programu. Stan: F2 Przebiegi.": "Disk $POOL is connected. Start the first copy now?\\n\\nThe copy runs in the background, also after you leave the program. Progress: F2 Runs.",
+"relacja %s (pvesr)": "relation %s (pvesr)",
+"brak kopii pvesr na tym hoście": "no pvesr copies on this host"
 }

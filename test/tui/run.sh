@@ -651,8 +651,8 @@ fi
 # dobowego jest jutro; te testy pinuja tresc wierszy relacji przy 100 kolumnach,
 # wiersze replik maja wlasne testy przy NOSNIKACH.
 Z="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --progress "$P10/progress.json" --config "$P10/show-config.json" --stats "$P10/job-stats.json" --screen zadania --width 160 2>&1)"
-if has "$Z" '╔═ Przebiegi na pve10 -- wykonane 12h i nadchodzące 6h'; then
-    ok "zadania: F2 to Przebiegi -- tytul nazywa host i okno: wykonane 12h, nadchodzace 6h (nie liczy zadan ani relacji)"
+if has "$Z" '╔═ Przebiegi na pve10 -- wykonane 72h i nadchodzące 6h'; then
+    ok "zadania: F2 to Przebiegi -- tytul nazywa host i okno: wykonane 72h, nadchodzace 6h (nie liczy zadan ani relacji)"
 else
     bad "zadania: tytul" "$Z"
 fi
@@ -758,8 +758,8 @@ fi
 ZJARGS="--jobs $FIX/jobs.json --monitors $FIX/monitors.json"
 ZSORT0="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --width 200 --height 100 2>&1)"
 ZSORT1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F8 --width 200 2>&1)"
-if has "$ZSORT0" 'Przebiegi na ' && has "$ZSORT0" 'wykonane 12h i nadchodzące 6h' && has "$ZSORT0" 'F8 Schowaj wykonane' \
-   && has "$ZSORT1" 'Przebiegi na ' && has "$ZSORT1" '-- tylko nadchodzące' && ! has "$ZSORT1" 'wykonane 12h' && has "$ZSORT1" 'F8 Pokaż wykonane' \
+if has "$ZSORT0" 'Przebiegi na ' && has "$ZSORT0" 'wykonane 72h i nadchodzące 6h' && has "$ZSORT0" 'F8 Schowaj wykonane' \
+   && has "$ZSORT1" 'Przebiegi na ' && has "$ZSORT1" '-- tylko nadchodzące' && ! has "$ZSORT1" 'wykonane 72h' && has "$ZSORT1" 'F8 Pokaż wykonane' \
    && ! has "$ZSORT1" 'sort:' && ! has "$ZSORT1" 'Sortuj'; then
     ok "zadania: F8 raz -- tytul 'tylko nadchodzące', podpis na pasku 'Pokaż wykonane' (bylo: sort: oś czasu)"
 else
@@ -773,26 +773,26 @@ else
     bad "zadania: kolejnosc wierszy na osi czasu" "L1=$L1 L2=$L2" "$ZSORT0"
 fi
 ZSORT2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F8,F8 --width 200 2>&1)"
-if has "$ZSORT2" 'wykonane 12h i nadchodzące 6h' && ! has "$ZSORT2" 'tylko nadchodzące' && has "$ZSORT2" 'F8 Schowaj wykonane'; then
-    ok "zadania: F8 dwa razy -- wykonane wracaja (tytul 'wykonane 12h i nadchodzące 6h', pasek 'Schowaj wykonane')"
+if has "$ZSORT2" 'wykonane 72h i nadchodzące 6h' && ! has "$ZSORT2" 'tylko nadchodzące' && has "$ZSORT2" 'F8 Schowaj wykonane'; then
+    ok "zadania: F8 dwa razy -- wykonane wracaja (tytul 'wykonane 72h i nadchodzące 6h', pasek 'Schowaj wykonane')"
 else
     bad "zadania: F8 dwa razy -- tytul" "$ZSORT2"
 fi
 ZSORTS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys s --width 200 2>&1)"
-if has "$ZSORTS" 'wykonane 12h i nadchodzące 6h' && has "$ZSORTS" '$ s_ '; then
+if has "$ZSORTS" 'wykonane 72h i nadchodzące 6h' && has "$ZSORTS" '$ s_ '; then
     ok "zadania: 's' to TEKST linii polecen -- widok zostaje (R4-2)"
 else
     bad "zadania: 's' jako tekst" "$ZSORTS"
 fi
 ZSORT3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F8,F8,F8 --width 200 2>&1)"
-if has "$ZSORT3" '-- tylko nadchodzące' && ! has "$ZSORT3" 'wykonane 12h' && ! has "$ZSORT3" 'po relacjach'; then
+if has "$ZSORT3" '-- tylko nadchodzące' && ! has "$ZSORT3" 'wykonane 72h' && ! has "$ZSORT3" 'po relacjach'; then
     ok "zadania: F8 trzy razy -- to przelacznik, nie cykl: znowu 'tylko nadchodzące'"
 else
     bad "zadania: F8 trzy razy -- przelacznik" "$ZSORT3"
 fi
 ZG9="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F9 --width 200 2>&1)"   # U84: wciecie wiersza grupy = 4 spacje + kreska
 ZG99="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F9,F9 --width 200 2>&1)"
-if has "$ZG9" 'wykonane 12h i nadchodzące 6h, po relacjach' && hasE "$ZG9" '^║ Kiedy +Zadanie +Co +Wynik' && hasE "$ZG9" '^║ ▸ ' \
+if has "$ZG9" 'wykonane 72h i nadchodzące 6h, po relacjach' && hasE "$ZG9" '^║ Kiedy +Zadanie +Co +Wynik' && hasE "$ZG9" '^║ ▸ ' \
    && hasE "$ZG9" "^║     │ $KD " && has "$ZG9" 'F9 Jedna oś czasu' \
    && ! has "$ZG99" 'po relacjach' && hasE "$ZG99" '^║ Kiedy +Relacja +Co +Wynik' && ! hasE "$ZG99" '^║ ▸ ' && has "$ZG99" 'F9 Grupuj po relacji'; then
     ok "zadania: F9 grupuje po relacji (naglowki '▸ NAZWA', wiersze '│ dd.mm HH:MM', kolumna Zadanie, tytul ', po relacjach'); drugi F9 wraca do jednej osi czasu"
@@ -1225,6 +1225,38 @@ if hasE "$PRZS" 'Nadchodzący bieg' && ! hasE "$PRZS" '── Ten bieg'; then
     ok "przebiegi: F2 otwiera sie z kursorem przy 'teraz' (najblizszy nadchodzacy bieg)"
 else
     bad "przebiegi: start kursora" "$(printf '%s\n' "$PRZS" | grep -E 'Ten bieg|Nadchodzący')"
+fi
+# A15 (A-TASSA 2026-11-06): okno wykonanych to 72 h (bylo 12 h), a bieg TRWAJACY (koniec "-", rc -1) stoi
+# na liscie zawsze -- tez po F8 (schowane wykonane) i gdy ruszyl dawniej niz okno. Fikstura: zadanie a --
+# wykonany OK 30 h przed NOW (stare okno 12 h go gubilo); zadanie d -- ruszylo 40 h przed NOW, nie skonczone.
+PRW="$(mktemp)"
+"$PY" - "$GES" "$PRW" "$NOW" "$GEJ" <<'PYEOF'
+import datetime, json, sys
+st = json.load(open(sys.argv[1], encoding="utf-8"))
+now = int(sys.argv[3])
+j = json.load(open(sys.argv[4], encoding="utf-8"))
+lead = {}
+for x in j["jobs"]:
+    if x["label"] == "sync-test":
+        lead.setdefault(x["schedule"], x["scope"].rsplit("/", 1)[-1])
+grp = {x["scope"].rsplit("/", 1)[-1]: lead[x["schedule"]] for x in j["jobs"] if x["label"] == "sync-test"}
+def iso(ts):
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone(datetime.timedelta(hours=2))).isoformat()
+st["runs"] = [{"label": "hourly backup (sync-test-%s)" % grp["a"], "start": iso(now - 108030), "end": iso(now - 108000), "rc": 0, "error": ""},
+              {"label": "hourly backup (sync-test-%s)" % grp["d"], "start": iso(now - 144000), "end": "-", "rc": -1, "error": ""}]
+json.dump(st, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+PRWARGS="--status $GS --jobs $GEJ --monitors $GM --stats $PRW"
+PRW1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PRWARGS --screen zadania --keys home --width 200 --height 60 2>&1)"
+PRW2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PRWARGS --screen zadania --keys home,F8 --width 200 --height 60 2>&1)"
+rm -f "$PRW"
+PRW1L="$(lst "$PRW1")"; PRW2L="$(lst "$PRW2")"
+# wiersz wykonanego OK = data w Kiedy i wynik 'OK' na koncu wiersza (nadchodzace maja 'nadchodzący')
+if [ "$(printf '%s\n' "$PRW1L" | grep -cE "^║ $KD .* OK( |$)")" = 1 ] && [ "$(printf '%s\n' "$PRW1L" | grep -cE "^║ $KD .* biegnie( |$)")" = 1 ] \
+   && [ "$(printf '%s\n' "$PRW2L" | grep -cE "^║ $KD .* OK( |$)")" = 0 ] && [ "$(printf '%s\n' "$PRW2L" | grep -cE "^║ $KD .* biegnie( |$)")" = 1 ]; then
+    ok "przebiegi: wykonany bieg sprzed 30 h jest w oknie 72 h; po F8 znika, a bieg trwajacy od 40 h zostaje ('biegnie')"
+else
+    bad "przebiegi: okno 72 h i bieg trwajacy" "pokazane: $(printf '%s\n' "$PRW1L" | grep -E 'OK|biegnie')" "schowane: $(printf '%s\n' "$PRW2L" | grep -E 'OK|biegnie')"
 fi
 # Kursor na OSTATNIM wierszu okna, gdy nizej sa dalsze: wiersz byl zastepowany przez
 # "... jeszcze N" i biegu z panelu nie bylo na liscie. Niska wysokosc, kursor przy "teraz":
@@ -2451,6 +2483,29 @@ if hasE "$SO2" "^║ $KD +som +migawka +hourly: [^ ]+ +nadchodzący" && hasE "$S
     ok "zadania: zadania snaponly to 'migawka' z wlasnym szczeblem (hourly, daily) w kolumnie Co"
 else
     bad "zadania: zadania snaponly" "$(printf '%s\n' "$SO2" | grep -E 'som')"
+fi
+# A17 (A-TASSA 2026-11-06): F4 Kopie dla relacji snaponly -- grupa 'pvesr' z korzeniami = dataset z zakresu
+# zadania ("konto@host:hdd/solab" -> hdd/solab), TYLKO datasety z "pvesr": true w zfs-tree. Fikstura: korzen
+# i 'scratch' bez znacznika, dysk goscia ze znacznikiem. Kontrola: to samo drzewo bez znacznika -> brak wiersza
+# (wiec wiersz pochodzi ze znacznika, nie z samego prefiksu sciezki).
+SOT="$SOD/zfs-tree.json"; SOT0="$SOD/zfs-tree-nopvesr.json"
+"$PY" - "$SOT" "$SOT0" <<'PYEOF'
+import json, sys
+def ds(n, pv, s=0):
+    return {"name": n, "type": "filesystem", "snapshots": s, "newest": 1788955200 if s else 0, "pvesr": pv}
+d = [ds("hdd/solab", False), ds("hdd/solab/vm-105-disk-0", True, 5), ds("hdd/solab/scratch", False, 2)]
+json.dump({"datasets": d}, open(sys.argv[1], "w", encoding="utf-8"))
+for x in d:
+    x["pvesr"] = False
+json.dump({"datasets": d}, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+SOK="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --zfs-tree "$SOT" --screen relacje --keys F4 --width 200 --height 50 2>&1)"
+SOK0="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --zfs-tree "$SOT0" --screen relacje --keys F4 --width 200 --height 50 2>&1)"
+if has "$SOK" '╔═ Kopie na' && hasE "$SOK" '^║ som +pvesr +hdd/solab/vm-105-disk-0 +5 ' && ! has "$SOK" 'scratch' \
+   && ! has "$SOK0" 'vm-105-disk-0' && ! has "$SOK0" 'scratch'; then
+    ok "kopie: F4 dla relacji snaponly -- grupa 'pvesr' pokazuje tylko dataset z znacznikiem pvesr (vm-105-disk-0, 5 migawek), nie 'scratch'; bez znacznika brak wiersza"
+else
+    bad "kopie: F4 grupa pvesr relacji snaponly" "$(printf '%s\n' "$SOK" | grep -E 'som|vm-105|scratch|Kopie na')" "bez znacznika: $(printf '%s\n' "$SOK0" | grep -E 'vm-105|scratch')"
 fi
 rm -rf "$SOD" "$SOL"
 
@@ -4943,6 +4998,60 @@ if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=re
     ok "replica: rodzaj przed nosnikiem, nosnik z listy (bez wpisywania), ID puli -> --media-guid; B Tak -> --on-insert=yes i regula w planie"
 else
     bad "replica: kreator, pasywna + harmonogram + B" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)" "$(cat "$RP/err")"
+fi
+# A8 (A-TASSA 2026-11-05): nowa replika na dysku, ktory juz jest w maszynie -- po instalacji pytanie
+# 'Zacząć pierwszą kopię teraz?'; Tak = run-replicas --name=NAZWA w tle (setsid -f, wiec dziennik zb
+# dostaje wpis asynchronicznie). Atrapa zpool zalezy od ZP_MODE: imported (zpool list POOL rc 0),
+# slot (tylko w 'zpool import'), gone (dysk znika po instalacji repliki: zb.log ma '--install --yes').
+# Kontrola 'gone': to samo przejscie kreatora, ale po instalacji puli nie ma -> okna nie ma.
+cp "$RP/bin/zpool" "$RP/bin/zpool.orig"
+rp_zpool() {
+    cat > "$RP/bin/zpool" <<'EOF'
+#!/bin/sh
+done_=no; grep -qs -e '--install --yes' "$NR_DIR/zb.log" && done_=yes
+case "$1" in
+    list) if [ $# -ge 5 ]; then
+              case "$ZP_MODE" in imported) exit 0 ;; slot) exit 1 ;; gone) [ "$done_" = no ] || exit 1 ;; esac
+          fi
+          echo hdd ;;
+    import) case "$ZP_MODE" in gone) [ "$done_" = no ] || exit 0 ;; esac
+            printf "   pool: repl\n     id: 4242\n" ;;
+esac
+exit 0
+EOF
+    chmod +x "$RP/bin/zpool"
+}
+rp_zpool
+rp_a8() {   # <nazwa> <ZP_MODE> -> kreator jak wyzej (usb2), potem: komunikat GOTOWE (0), pytanie A8 (0 = Tak), zapas
+    rm -f "$RP/rules"
+    rp_run "0${T}$1
+0${T}passive
+0${T}removable
+0${T}repl
+0${T}0 22 * * 5
+0${T}
+0${T}
+0${T}
+0${T}
+0${T}
+" RP_TREE='goto:hdd/backups,space,enter' ZP_MODE="$2" >/dev/null; RPRC=$?
+}
+A8Q='Zacząć pierwszą kopię teraz?'
+rp_a8 usb9a imported; A8RC1=$RPRC; A8Q1=$(grep -cF "$A8Q" "$RP/wt.log")
+for _i in $(seq 1 25); do grep -qx 'run-replicas --name=usb9a' "$RP/zb.log" 2>/dev/null && break; sleep 0.2; done
+A8L1="$(grep -x 'run-replicas --name=usb9a' "$RP/zb.log" 2>/dev/null)"
+rp_a8 usb9b slot; A8RC2=$RPRC; A8Q2=$(grep -cF "$A8Q" "$RP/wt.log")
+for _i in $(seq 1 25); do grep -qx 'run-replicas --name=usb9b' "$RP/zb.log" 2>/dev/null && break; sleep 0.2; done
+A8L2="$(grep -x 'run-replicas --name=usb9b' "$RP/zb.log" 2>/dev/null)"
+rp_a8 usb9c gone; A8RC3=$RPRC; A8Q3=$(grep -cF "$A8Q" "$RP/wt.log")
+sleep 1
+A8L3="$(grep 'run-replicas' "$RP/zb.log" 2>/dev/null)"
+cp "$RP/bin/zpool.orig" "$RP/bin/zpool"
+if [ "$A8RC1" -eq 0 ] && [ "$A8Q1" = 1 ] && [ -n "$A8L1" ] && [ "$A8RC2" -eq 0 ] && [ "$A8Q2" = 1 ] && [ -n "$A8L2" ] \
+   && [ "$A8RC3" -eq 0 ] && [ "$A8Q3" = 0 ] && [ -z "$A8L3" ]; then
+    ok "replika A8: nowa replika na podlaczonym dysku (zaimportowanym albo tylko w zpool import) -> pytanie 'Zacząć pierwszą kopię teraz?', Tak = run-replicas --name=NAZWA; dysk, ktorego po instalacji nie ma -> bez pytania i bez biegu"
+else
+    bad "replika A8: pierwsza kopia teraz" "rc=$A8RC1/$A8RC2/$A8RC3 pytan=$A8Q1/$A8Q2/$A8Q3" "bieg: '$A8L1' '$A8L2' '$A8L3'" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
 fi
 # (1e) wlasciciel 2026-10-12: pod zrodlem repliki jest kopia ZASZYFROWANA (relacja
 #      pobrana raw, kolektor nie ma klucza) -> nowa replika z --raw i zdanie w planie;

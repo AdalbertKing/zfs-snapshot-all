@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 6977a6b4eb7a6816 -->
+<!-- status-covers-digest: ed3c68460b885a88 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,21 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Paczka 1.0.12 (2026-11-06, gałąź `fix/batch-1.0.12`, PR #1104; niewydane).** Usterki z wdrożenia 1.0.11
+  na A-TASSA (A3-A19) i z Dąbrowskiej (A18, A19). Jedna replika = jeden bieg naraz (`zfs-media-gate.sh`:
+  znacznik `<etykieta>.running` z PID i czasem startu procesu; drugi bieg kończy rc 75 z komunikatem „already running since …”, jego
+  detach nie eksportuje dysku spod trwającej kopii; monitor wieku zgłasza trwającą kopię jako OK, po przekroczeniu progu krytycznego jako WARNING);
+  `prepare-media` tworzy pulę z `ashift=12` (most USB zgłasza 512 B przy dysku 4 KiB); kreator repliki pyta
+  o pierwszą kopię od razu, gdy dysk jest podłączony; F2: okno wykonanych 72 h, trwający bieg zawsze na liście,
+  pełne przerysowanie raz na minutę bezczynności (komunikat `wall` psuł ekran); F4 relacji snaponly pokazuje
+  dyski gości z replikacji `pvesr`; gen-cron rozróżnia etykiety powiadomień dwóch datasetów o tej samej nazwie
+  bazowej, a strażnik instalacji w `zfs-backup.sh` przepuszcza samą zmianę etykiety i ignoruje zakomentowane linie;
+  `delete-relation` usuwa rekordy postępu relacji, monitor pojemności rozpoznaje rekord osierocony (PID nie
+  żyje); `deploy.sh` kończy wskazaniem następnego kroku zamiast przepisów crona; tekst pola crona w kreatorze.
+  Testy regresji w suitach alertmail, cron, mediagate, tui, zfsbackup; wycięte przypadki przechodzą na gałęzi
+  i padają na `main` (kontrola negatywna); pełne suity w CI. Nieodtworzone: A7 (komunikat „nie tutaj” przy
+  dysku w slocie), A9 (drugi bieg po F7 bez śladu w F2) -- do sprawdzenia w poniedziałek na A-TASSA.
+  Na żywo niesprawdzone: blokada biegu i `ashift=12` na prawdziwym dysku (pomiar w poniedziałek, nowy dysk).
 - **A-TASSA, wdrożenie 1.0.11 (2026-11-05 wieczór; poprawka w gałęzi `fix/apt-404-deps`, niewydane).**
   Kolektor pve1 (192.168.0.10): `deploy.sh --backup-user=zfsbackup` przeszedł, sudo doinstalowane obejściem
   404 z 1.0.11; jedyna uwaga audytu to poczta (7 maili w kolejce, brak relayhosta -- decyzja właściciela).

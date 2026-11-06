@@ -1747,6 +1747,29 @@ resolve_field() {
     return 1
 }
 
+# notify_label <section> [template] -- the section's notify, made unique (A5).
+#
+# Found in the field, 2026-11-05: zfs-backup.sh writes `notify = <relation>-<basename>`,
+# so hdd/data and rpool/data of one relation both became "pve0-data" -- every job,
+# alert and F2 row of the two read the same. Where another section of the same kind
+# carries the identical value for a DIFFERENT dataset, the basename is spelled out
+# as the whole path (pve0-hdd-data, pve0-rpool-data). Only then: a label that was
+# already unique stays byte-identical, and so does every line, history and test that
+# keys on it. A hand-written label that does not end in the basename is left alone.
+notify_label() {
+    local sec="$1" tmpl="${2:-}" v path b o
+    v="$(resolve_field notify "$sec" "$tmpl" "")" || return 1
+    path="${sec##*:}"; b="${path##*/}"
+    case "$v" in *"-$b") ;; *) printf '%s' "$v"; return 0 ;; esac
+    for o in "${SECTION_ORDER[@]}"; do
+        [ "$o" != "$sec" ] && [ "${o%%:*}" = "${sec%%:*}" ] && [ "${o##*:}" != "$path" ] || continue
+        ini_has "$o" notify && [ "$(ini_get "$o" notify)" = "$v" ] || continue
+        printf '%s' "${v%-"$b"}-$(printf '%s' "$path" | tr / -)"
+        return 0
+    done
+    printf '%s' "$v"
+}
+
 # Same as resolve_field(), but for fields where a BLANK value is exactly as
 # broken as a missing one -- 'pattern' has no sensible empty meaning (unlike
 # 'dst', where blank legitimately means "no target, snapshot only"). ini_has
@@ -2603,7 +2626,7 @@ build_dataset() {
             # can never merge into one cron line that a single pause would
             # have to half-skip -- and emit_send needs no change at all.
             [ -n "$pair_label" ] && flags="${flags:+$flags }-L $pair_label"
-            label="$(resolve_field notify "$ds" "" "")" || label=""
+            label="$(notify_label "$ds")" || label=""
             raw_notify="$(resolve_field notify_raw "$ds" "$tmpl" "")" || raw_notify=""
             word="$(resolve_field notify_word "" "$tmpl" "")" || word="backup"
             if [ -n "$raw_notify" ]; then
@@ -2658,7 +2681,7 @@ build_dataset() {
             fi
             resolve_keep_retain "$ds" "$tmpl" "$tier" || die "[dataset:$ds_path] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
             retain_flag="$RESOLVED_RETAIN"
-            plabel="$(resolve_field notify "$ds" "$tmpl" "")" || plabel=""
+            plabel="$(notify_label "$ds" "$tmpl")" || plabel=""
             praw="$(resolve_field notify_raw_prune "" "$tmpl" "")" || praw=""
             if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
             # PER-TIER LADDER. `gfs = yes` on a tier makes THIS tier's own
@@ -2836,7 +2859,7 @@ build_snaponly_section() {
             [ -n "$ssh_flags" ] && flags="${flags:+$flags }$ssh_flags"
             flags="${flags:+$flags }-L $pair_label"
             local label raw_notify word notify
-            label="$(resolve_field notify "$sec" "" "")" || label=""
+            label="$(notify_label "$sec")" || label=""
             raw_notify="$(resolve_field notify_raw "$sec" "$tmpl" "")" || raw_notify=""
             word="$(resolve_field notify_word "" "$tmpl" "")" || word="snapshot"
             if [ -n "$raw_notify" ]; then notify="$raw_notify"; else notify="$(notify_text "$host_label" "$ntier" "$word" "$label")"; fi
@@ -2860,7 +2883,7 @@ build_snaponly_section() {
                 fi
             fi
             local mlabel mnotify mbroken mwarntext
-            mlabel="$(resolve_field notify "$sec" "" "")" || mlabel=""
+            mlabel="$(notify_label "$sec")" || mlabel=""
             mnotify="$(notify_text "$host_label" "$ntier" "stale" "$mlabel")"
             mbroken="$(notify_text "$host_label" "$ntier" "monitor BROKEN" "$mlabel")"
             mwarntext="$(notify_text "$host_label" "$ntier" "getting stale" "$mlabel")"
@@ -2960,7 +2983,7 @@ build_prune_section() {
         resolve_bool_field prune "$sec" "$tmpl" "[prune:$scope] tier=$tier" 1; emit_prune="$BOOL_FIELD"
         [ "$emit_prune" -eq 1 ] && any_prune=1
 
-        plabel="$(resolve_field notify "$sec" "$tmpl" "")" || plabel=""
+        plabel="$(notify_label "$sec" "$tmpl")" || plabel=""
         pattern="$(require_field pattern "$sec" "$tmpl" defaults)" \
             || die "[prune:$scope] tier=$tier: 'pattern' did not resolve (missing, or set but blank)"
 
@@ -3098,7 +3121,7 @@ build_prune_section() {
             gpnotify="$gpraw"
         else
             local gplabel
-            gplabel="$(resolve_field notify "$sec" "" "")" || gplabel=""
+            gplabel="$(notify_label "$sec")" || gplabel=""
             gpnotify="$(notify_text "$host_label" "gfs" "prune" "$gplabel")"
         fi
         GFS_PRUNE_SEC_ENTITIES+=("${scope}${SEP}${gfs_pattern}${SEP}${gfs_retain_parts}${SEP}${gfs_schedule}${SEP}${gpnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${ssh_flags}${SEP}${pair_label}")
@@ -3245,7 +3268,7 @@ build_replica_section() {
     # Composed here, like every other section type, so the emitter has nothing
     # to assemble and $host_label does not have to be in scope at emit time.
     local label notify
-    label="$(resolve_field notify "$sec" "" "")" || label=""
+    label="$(notify_label "$sec")" || label=""
     [ -n "$label" ] || label="$name"
     notify="$(notify_text "$host_label" "replica" "copy" "$label")"
 
@@ -3463,7 +3486,7 @@ build_bookmark_prune_section() {
     resolve_bool_field recursive "$sec" "" "[prune-bookmarks:$scope]" 0; recursive="$BOOL_FIELD"
 
     local label notify
-    label="$(resolve_field notify "$sec" "" "")" || label=""
+    label="$(notify_label "$sec")" || label=""
     notify="$(notify_text "$host_label" "bookmarks" "prune" "$label")"
 
     local ssh_flags
@@ -4807,7 +4830,9 @@ install_crontab() {
     cron_read "$me" "$current" || { rm -f "$current"; die "$CRON_ERR"; }
     if ! grep -qE '^# BEGIN zfs-backup-managed' "$current" && [ -s "$current" ]; then
         local conflicts
-        conflicts="$(grep -E 'snapsend\.sh|delsnaps\.sh|check-snap-age\.sh' "$current" || true)"
+        # Only lines that RUN: a commented-out line schedules nothing (A6, field
+        # 2026-11-05: 25 '#...snapsend' lines of a retired schedule refused the install).
+        conflicts="$(grep -vE '^[[:space:]]*#' "$current" | grep -E 'snapsend\.sh|delsnaps\.sh|check-snap-age\.sh' || true)"
         if [ -n "$conflicts" ]; then
             {
                 echo "gen-cron.sh: error: crontab has no managed block yet, but already contains"

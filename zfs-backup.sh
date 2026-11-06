@@ -4061,6 +4061,21 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
                 warn "    $line"
                 continue
             fi
+            # Label exemption (A5, 2026-11-06): the same job under a new zfs-job label --
+            # gen-cron now spells out a basename two datasets share (pve0-data ->
+            # pve0-hdd-data). Everything but the "(...)" in the label must match, and the
+            # change is said out loud: history keyed by the old label stops there.
+            local lnorm ltwin=""
+            lnorm=$(printf '%s\n' "$norm" | schedule_normalized_identity | sed -E 's/(zfs-job\.sh "[^"(]*)\([^)"]*\)"/\1()"/')
+            while IFS= read -r pline; do
+                [ -n "$pline" ] || continue
+                [ "$(printf '%s\n' "$pline" | schedule_normalized_identity | sed -E 's/(zfs-job\.sh "[^"(]*)\([^)"]*\)"/\1()"/')" = "$lnorm" ] || continue
+                ltwin="$pline"; break
+            done <<< "$proposed_norm"
+            if [ -n "$ltwin" ]; then
+                warn "  job label changed, the job itself stays: $(printf '%s' "$line" | grep -o 'zfs-job\.sh "[^"]*"' | head -1) -> $(printf '%s' "$ltwin" | grep -o 'zfs-job\.sh "[^"]*"' | head -1)"
+                continue
+            fi
             # Fifth exemption: the peer-root ladder this run is migrating off.
             # Unlike the four above it admits that coverage IS dropped, and
             # names who stops being covered -- see line_scope_narrowed_by_migration.
@@ -8170,7 +8185,7 @@ cmd_set_transfer() {
 # Owner note 15 (2026-10-08): "Prepare the medium once, by hand" was the one step
 # of a replica the package could not do, from batch or from the GUI. This is it:
 #
-#   zpool create -m none -o failmode=continue -O compression=zstd POOL DEVICE
+#   zpool create -m none -o ashift=12 -o failmode=continue -O compression=zstd POOL DEVICE
 #   zfs create POOL/BASE           -- the dataset that tells the gate it is THIS disk
 #   zpool export POOL              -- the disk can go to the safe
 #
@@ -8245,7 +8260,7 @@ cmd_prepare_media() {
     echo "PLAN (prepare-media):"
     echo "  disk:     $dev  ($real, $(lsblk -dn -o SIZE,MODEL "$real" 2>/dev/null | sed 's/  */ /g'))"
     lsblk -nr -o NAME,FSTYPE,LABEL "$real" 2>/dev/null | awk 'NF > 1 {print "  WIPED:    " $1 " holds " $2 (NF > 2 ? " (" $3 ")" : "")}'
-    echo "  1. zpool create -f -m none -o failmode=continue -O compression=zstd $pool $dev   -- EVERYTHING on the disk is erased"
+    echo "  1. zpool create -f -m none -o ashift=12 -o failmode=continue -O compression=zstd $pool $dev   -- EVERYTHING on the disk is erased"
     # W19(b) (owner 2026-10-11, "ma byc proste" 2026-10-13): the medium encrypted with a
     # KEY FILE on this host, never a passphrase -- a passphrase would stop the nightly and
     # the on-insert runs. One key per pool name, so the disks of a rotation pair (same
@@ -8271,7 +8286,7 @@ cmd_prepare_media() {
     # compression=zstd (W19, owner 2026-10-11): what the replica receives with zfs send -c
     # keeps its own compression; this is for everything written there otherwise, and so
     # the pool says plainly what it is.
-    zpool create -f -m none -o failmode=continue -O compression=zstd "$pool" "$dev" || die "prepare-media: zpool create failed (see above). Nothing else was done."
+    zpool create -f -m none -o ashift=12 -o failmode=continue -O compression=zstd "$pool" "$dev" || die "prepare-media: zpool create failed (see above). Nothing else was done."
     if [ "$enc" -eq 1 ]; then
         if [ "$keynew" -eq 1 ]; then
             ( umask 077; mkdir -p "$MEDIA_KEY_DIR" && od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "$keyfile" ) \
@@ -8650,12 +8665,14 @@ cmd_zfs_tree() {
       zfs list -H -p -o name,creation -r -t snapshot -- "${roots[@]}" 2>/dev/null | sed 's/^/S\t/'
     } | awk -F'\t' '
         $1 == "D" { if (!($2 in typ)) ord[++n] = $2; typ[$2] = $3; next }
-        $1 == "S" { i = index($2, "@"); d = substr($2, 1, i - 1); c[d]++; if ($3 + 0 > nw[d] + 0) nw[d] = $3; next }
+        $1 == "S" { i = index($2, "@"); d = substr($2, 1, i - 1); c[d]++; if ($3 + 0 > nw[d] + 0) nw[d] = $3
+                    if (substr($2, i + 1, 11) == "__replicate") pv[d] = 1   # A17: a pvesr replica holds these
+                    next }
         END {
             printf "{\"datasets\":["
             for (i = 1; i <= n; i++) {
                 d = ord[i]
-                printf "%s{\"name\":\"%s\",\"type\":\"%s\",\"snapshots\":%d,\"newest\":%d}", (i > 1 ? "," : ""), d, typ[d], c[d] + 0, nw[d] + 0
+                printf "%s{\"name\":\"%s\",\"type\":\"%s\",\"snapshots\":%d,\"newest\":%d,\"pvesr\":%s}", (i > 1 ? "," : ""), d, typ[d], c[d] + 0, nw[d] + 0, (d in pv ? "true" : "false")
             }
             print "]}"
         }'
@@ -15778,6 +15795,18 @@ record_is_removed_name_live_as_source() {
     id "zfsbackup-$1" >/dev/null 2>&1 && [ -s "${PEER_STATE_DIR:-/etc/zfs-snapshot-all/peers}/$1.conf" ]
 }
 
+# progress_forget_label <label> -- delete the transfer progress records carrying exactly
+# this label; prints how many. A18: delete-relation's last step (see there).
+progress_forget_label() {
+    local d="${ZFS_PROGRESS_DIR:-/var/lib/zfs-snapshot-all/progress}" f n=0
+    for f in "$d"/*.json; do
+        [ -e "$f" ] || continue
+        grep -qF "\"label\":\"$1\"," "$f" 2>/dev/null || continue
+        rm -f "$f" 2>/dev/null && n=$((n + 1))
+    done
+    printf '%s' "$n"
+}
+
 cmd_delete_relation() {
     local name="" yes=0 keep_source=0 keep_record=0 destroy=0 ask=0 check_source=0 a
     for a in "$@"; do
@@ -16006,6 +16035,12 @@ cmd_delete_relation() {
             done
         done
     fi
+    # A18 (Dabrowska 2026-11-06): the progress records of the deleted relationship's runs
+    # (label = its name) outlived it, and one left at "running" by a copy cut short alarmed
+    # "bez pulsu" days later. A run in progress refused the delete above, so whatever
+    # carries this label now is history of a relationship that no longer exists.
+    local _pn; _pn=$(progress_forget_label "$name")
+    [ "${_pn:-0}" -gt 0 ] && log "delete-relation: removed $_pn progress record(s) of '$name'"
     [ "$rc" -eq 0 ] && log "delete-relation: '$name' is gone${others:+ (the pairing with $peer stays: $others)}." \
                     || log "delete-relation: '$name' removed WITH LEFTOVERS -- read the !!! lines above."
     return "$rc"

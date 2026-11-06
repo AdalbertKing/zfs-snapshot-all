@@ -130,7 +130,10 @@ export IMPORTED_LOG="$TMPD/imported" EXPORTED_LOG="$TMPD/exported"
 export POOLS IMPORTABLE DATASETS EXPORT_FAILS="" POOL_GUID POOL_FAILMODE EXPORT_HANGS SRC_TREE SRC_SNAP SRC_WRITTEN
 : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
 
-g() { PATH="$BIN:$PATH" MEDIA_STATE_DIR="$STATE" bash "$GATE" "$@" 2>&1; }
+# Every call in its own short-lived parent, as separate cron runs are: since A11/A13
+# the gate names a run by $PPID, and a call straight from this shell would make the
+# suite itself a live run holding the medium. '; exit' keeps bash from exec'ing it.
+g() { ( PATH="$BIN:$PATH" MEDIA_STATE_DIR="$STATE" bash "$GATE" "$@" 2>&1; exit $? ); }
 
 # ---------------------------------------------------------------------------
 # 1. The refusals that happen before anything is touched
@@ -1229,6 +1232,47 @@ check "AG8: the no-work skip still skips" "1" "$rc"
 [ -s "$STATE/rep.current" ] && ok "AG8: ...and records the medium as proved current (.current)" \
                             || bad "AG8: ...and records the medium as proved current (.current)" "$(ls "$STATE")"
 SRC_TREE=""; SRC_SNAP=""; SRC_WRITTEN=""; POOL_GUID=11111111
+
+# RU. ONE REPLICA, ONE RUN AT A TIME (A11/A13, A-TASSA 2026-11-06). A live
+# process holds the medium (its pid and start time in rep.running, as attach
+# writes them); every gate call here runs under a DIFFERENT parent.
+sleep 120 & RU_PID=$!
+RU_ST=$(awk '{print $22}' "/proc/$RU_PID/stat" 2>/dev/null)
+if [ -z "$RU_ST" ]; then
+    echo "SKIP RU: no /proc/<pid>/stat on this host"
+else
+    printf '%s %s %s\n' "$RU_PID" "$RU_ST" "$(( $(date +%s) - 7200 ))" > "$STATE/rep.running"
+    : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
+    POOLS="hdd"; IMPORTABLE="rotpool"; DATASETS="hdd rotpool/replica"
+    out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+    check "RU1: a second run of a replica that is copying exits 75 (skipped)" "75" "$rc"
+    check "RU1: ...without importing anything" "" "$(cat "$IMPORTED_LOG")"
+    has "already running since" "$out" && ok "RU1: ...and says since when" || bad "RU1: ...and says since when" "$out"
+    # The first run imported the pool and holds the imported-by-us marker for it:
+    # a second run's detach used to call that pool its own and export it.
+    POOLS="hdd rotpool"; IMPORTABLE=""
+    printf 'guid=%s\n' "$POOL_GUID" > "$STATE/rep.imported-by-us"
+    out="$(g detach rotpool rep --engine-rc 75)"; rc=$?
+    check "RU2: that run's detach succeeds" "0" "$rc"
+    check "RU2: ...and does NOT export the pool under the running copy" "" "$(cat "$EXPORTED_LOG")"
+    out="$(g age rotpool rep --warn 3d --crit 5d)"; rc=$?
+    check "RU3: age during a running copy is OK, not 'no copy ever recorded'" "0" "$rc"
+    has "a copy is running since" "$out" && ok "RU3: ...and says the copy is running" || bad "RU3: ...says running" "$out"
+    printf '%s %s %s\n' "$RU_PID" "$RU_ST" "$(( $(date +%s) - 6 * 86400 ))" > "$STATE/rep.running"
+    out="$(g age rotpool rep --warn 3d --crit 5d)"; rc=$?
+    check "RU4: a copy running longer than crit is a WARNING" "1" "$rc"
+    # Control: the holder dies -- its record is a dead run's and blocks nothing.
+    kill "$RU_PID" 2>/dev/null; wait "$RU_PID" 2>/dev/null
+    rm -f "$STATE/rep.imported-by-us"
+    POOLS="hdd"; IMPORTABLE="rotpool"; : > "$IMPORTED_LOG"
+    out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+    check "RU5: a record left by a dead run does not block (attach imports)" "0" "$rc"
+    check "RU5: ...the pool is imported" "rotpool" "$(cat "$IMPORTED_LOG")"
+    POOLS="hdd rotpool"; IMPORTABLE=""
+    g detach rotpool rep >/dev/null
+    rm -f "$STATE"/rep.running "$STATE"/rep.imported-by-us
+fi
+POOLS="hdd"; IMPORTABLE=""
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
