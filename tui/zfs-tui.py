@@ -2067,7 +2067,9 @@ def sort_zad_rows(rows, mode, data):
 # na zadanie). F8 chowa wykonane, F9 grupuje po relacji (w grupie chronologicznie).
 # Lista = kiedy i z jakim skutkiem; panel = jak ustawione + ten bieg; dol =
 # zrodlo -> cel tego biegu. Kazdy fakt w jednym miejscu.
-PRZ_PAST_H = 12
+# A15 (wlasciciel 2026-11-06, A-TASSA: "moglem sprawdzac wstecz, a to bardzo wazne"): 12 h
+# ucinalo wczoraj, choc job-stats i tak przynosi PRZ_RUNS_H. F2 pokazuje cale pobrane okno.
+PRZ_PAST_H = 72
 # F6 (U130): przebiegi repliki siegaja dalej -- replika "pn-pt" ma przerwe pt->pn. Czytnik
 # job-stats bierze tyle godzin biegow (pve10: 48 h ~5 s, 168 h ~12 s; idzie w drugim etapie),
 # F2 nadal pokazuje PRZ_PAST_H.
@@ -2379,14 +2381,18 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False, past_h=PRZ_PAS
         base = {"kind": "run", "item": it0, "items": its, "jobs": gjobs, "name": it0["name"], "label": lbl}
         # Bieg z dziennika jest JEDEN na etykiete: dwa szczeble jednej linii crona (pve10:
         # pobranie hourly i daily w jednym snapget) nie dostaja go po razie (zmierzone 10-27).
-        if show_done and lbl and lbl not in shown:
+        # A15: bieg TRWAJACY (koniec "-", rc -1) jest widoczny zawsze -- takze przy schowanych
+        # wykonanych (F8) i gdy ruszyl dawniej niz okno (pierwsza kopia na USB: dwie doby).
+        # Na A-TASSA trwajaca replika byla widac tylko jako "nadchodzacy".
+        if lbl and lbl not in shown:
             shown.add(lbl)
             prev, mine = None, []
             for x in runs_by.get(lbl, []):
                 st, en = iso_epoch(x.get("start") or ""), iso_epoch(x.get("end") or "")
                 at = en or st
                 p_end, prev = prev, (en or st)
-                if at is None or at < now - past_h * 3600:
+                running = en is None and x.get("rc") in (-1, None) and st is not None
+                if not running and (not show_done or at is None or at < now - past_h * 3600):
                     continue
                 r = dict(base)
                 r.update({"past": True, "at": at, "start": st, "end": en, "rc": x.get("rc"), "err": x.get("error") or "",
@@ -7375,9 +7381,14 @@ def curses_loop(ui):
             elif ui.bg_pending() or ui.slow_pending():
                 stdscr.timeout(300)          # dane z tła: przerysuj, gdy dojdą
             else:
-                stdscr.timeout(-1)
+                # A16 (A-TASSA 2026-11-06): komunikat systemu (wall z journald) wypisany na
+                # konsole rozjezdza ekran, a curses maluje tylko roznice wzgledem tego, co
+                # MYSLI, ze jest na ekranie. W bezczynnosci co minute pelne przerysowanie.
+                stdscr.timeout(60000)
             k, seqname, is_char = read_key()
             if k == -1:
+                if not (ui.bg_pending() or ui.slow_pending() or (ui.window and ui.window[0] == "output")):
+                    stdscr.clear()
                 ui.poll_bg()
                 ui.poll_slow()
                 continue
@@ -7389,6 +7400,9 @@ def curses_loop(ui):
             # U90 (wlasciciel 2026-10-27: "w całym pakiecie przycisk pokazujący, co jest pod
             # panelem"): Ctrl-O jak w mc -- konsola pod oknami, czyli wyjscie ostatnich polecen;
             # dowolny klawisz wraca. Okna wracaja same, bez "Enter = powrót".
+            # A16: Ctrl-R odswieza dane I caly ekran -- obejscie, ktore wlasciciel juz zna.
+            if name == "ctrl-r":
+                stdscr.clear()
             if name == "ctrl-o" and not (ui.window and ui.window[0] in ("prompt", "form")):
                 show_console(stdscr)
                 continue
