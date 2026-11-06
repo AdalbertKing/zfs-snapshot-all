@@ -4748,6 +4748,22 @@ def kopie_groups(rows, data, now, ch):
         groups.append({"kind": "relation", "name": x["name"], "word": _(u"relacja %s") % x["name"],
                        "what": u"%s  %s" % (x.get("typ") or "", x.get("dir") or ""), "roots": roots, "note": "",
                        "typ": x.get("typ") or "", "dir": x.get("dir") or ""})
+    # A17 (wlasciciel 2026-11-06, A-TASSA): relacja "tylko migawki" niczego tu nie kopiuje, ale
+    # na kolektorze jej migawki przychodza z pvesr -- dyski gosci pod tymi samymi sciezkami.
+    # To glowne zrodlo odzysku, a lista kazala ich szukac w "inny dysk". Grupa pokazuje TYLKO
+    # datasety z migawka __replicate_ (silnik: zfs-tree "pvesr"), nie np. rpool/ROOT tego hosta.
+    for r in rows or []:
+        rel = r.get("rel") or {}
+        if r.get("kind") != "relation" or rel.get("mode") != "snaponly" or rel.get("state") == "removed":
+            continue
+        roots = []
+        for pr in rel_pairs(r, data, now, ch)[0]:
+            d = ((pr.get("src") or "").split() or [""])[0].rsplit(":", 1)[-1]
+            if d and d not in roots:
+                roots.append(d)
+        groups.append({"kind": "pvesr", "name": r["name"], "word": _(u"relacja %s (pvesr)") % r["name"],
+                       "what": u"pvesr", "roots": roots, "typ": u"pvesr", "dir": r.get("dir") or "",
+                       "note": _(u"brak kopii pvesr na tym hoście"), "pvesr_only": True})
     for r in ((data.replicas or {}).get("replicas") or []) if data is not None else []:
         here = r.get("present") == "here"
         srcs = r.get("sources") or [s for s in (r.get("source") or "").split(",") if s]
@@ -4770,6 +4786,8 @@ def kopie_items(groups, tree):
             for d in tree:
                 nm = d.get("name") or ""
                 if nm in seen or not (nm == root or nm.startswith(root + "/")):
+                    continue
+                if g.get("pvesr_only") and not d.get("pvesr"):
                     continue
                 seen.add(nm)
                 depth = nm[len(root):].count("/")

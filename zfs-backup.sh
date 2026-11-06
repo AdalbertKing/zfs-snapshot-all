@@ -8665,12 +8665,14 @@ cmd_zfs_tree() {
       zfs list -H -p -o name,creation -r -t snapshot -- "${roots[@]}" 2>/dev/null | sed 's/^/S\t/'
     } | awk -F'\t' '
         $1 == "D" { if (!($2 in typ)) ord[++n] = $2; typ[$2] = $3; next }
-        $1 == "S" { i = index($2, "@"); d = substr($2, 1, i - 1); c[d]++; if ($3 + 0 > nw[d] + 0) nw[d] = $3; next }
+        $1 == "S" { i = index($2, "@"); d = substr($2, 1, i - 1); c[d]++; if ($3 + 0 > nw[d] + 0) nw[d] = $3
+                    if (substr($2, i + 1, 11) == "__replicate") pv[d] = 1   # A17: a pvesr replica holds these
+                    next }
         END {
             printf "{\"datasets\":["
             for (i = 1; i <= n; i++) {
                 d = ord[i]
-                printf "%s{\"name\":\"%s\",\"type\":\"%s\",\"snapshots\":%d,\"newest\":%d}", (i > 1 ? "," : ""), d, typ[d], c[d] + 0, nw[d] + 0
+                printf "%s{\"name\":\"%s\",\"type\":\"%s\",\"snapshots\":%d,\"newest\":%d,\"pvesr\":%s}", (i > 1 ? "," : ""), d, typ[d], c[d] + 0, nw[d] + 0, (d in pv ? "true" : "false")
             }
             print "]}"
         }'

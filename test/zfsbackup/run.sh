@@ -13593,7 +13593,8 @@ case "$*" in
     "list -H -p -o name,type -r -t filesystem,volume -- "*)
         printf 'tank/c\tfilesystem\ntank/c/a\tfilesystem\ntank/c/vm\tvolume\ntank/c/empty\tfilesystem\n' ;;
     "list -H -p -o name,creation -r -t snapshot -- "*)
-        printf 'tank/c/a@s1\t1000\ntank/c/a@s2\t3000\ntank/c/a@s0\t500\ntank/c/vm@z1\t2000\ntank/c@r1\t100\n' ;;
+        printf 'tank/c/a@s1\t1000\ntank/c/a@s2\t3000\ntank/c/a@s0\t500\ntank/c/vm@z1\t2000\ntank/c@r1\t100\n'
+        [ -n "${ZT_PVESR:-}" ] && printf 'tank/c/vm@__replicate_105-0_1700000000__\t2500\n' ;;
     "list -H -p -o name,used,refer,written,creation -t snapshot -d 1 -s creation -- "*)
         printf 'tank/c/a@s0\t0\t10\t0\t500\ntank/c/a@s1\t4096\t20\t5\t1000\ntank/c/a@s2\t0\t30\t7\t3000\n' ;;
     *) exit 1 ;;
@@ -13608,6 +13609,16 @@ if [ "$got" = "[('tank/c', 'filesystem', 1, 100), ('tank/c/a', 'filesystem', 3, 
     ok "zfstree: zfs-tree --json ROOT = datasets in zfs's order with type, snapshot count and NEWEST creation (a max over unsorted snapshots, 0/0 for a dataset with none), from two zfs list calls"
 else
     bad "zfstree: zfs-tree" "got=$got" "$ZTOUT" "$(cat "$ZT/zfs.argv" 2>/dev/null)" "$(cat "$ZT/err")"
+fi
+# A17 (A-TASSA 2026-11-06): a dataset holding a pvesr snapshot (@__replicate_) says so --
+# F4 lists a snapshot-only relation's pvesr copies by it, and nothing else under its roots.
+rm -f "$ZT/zfs.argv"
+ZTOUT=$(ZT_PVESR=1 zt_run zfs-tree --json tank/c)
+got=$(printf '%s' "$ZTOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print([(x["name"], x["pvesr"]) for x in d["datasets"]])' 2>/dev/null | tr -d '\r')
+if [ "$got" = "[('tank/c', False), ('tank/c/a', False), ('tank/c/vm', True), ('tank/c/empty', False)]" ]; then
+    ok "zfstree: a dataset with a @__replicate_ snapshot is marked pvesr, the others are not (A17)"
+else
+    bad "zfstree: pvesr mark (A17)" "got=$got" "$ZTOUT"
 fi
 rm -f "$ZT/zfs.argv"
 ZTOUT=$(zt_run zfs-snapshots --json tank/c/a)
