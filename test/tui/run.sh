@@ -4985,7 +4985,7 @@ RPOUT=$(rp_run "0${T}usb2
 0${T}
 0${T}
 " RP_TREE='goto:hdd/backups,space,enter'); RPRC=$?
-if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=repl/replica --schedule=0 22 \* \* 5 --removable --recursive=yes --passive --media-guid=4242 --on-insert=yes --install --yes$' "$RP/zb.log" \
+if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=repl/replica --schedule=0 22 \* \* 5 --removable --recursive=yes --passive --exclude-family=__replicate_,vzdump,__migration__ --media-guid=4242 --on-insert=yes --install --yes$' "$RP/zb.log" \
    && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
    && grep -F '3/6 migawki' "$RP/wt.log" | grep -qF -- '--default-item ~ passive ~' \
    && grep -F '4/6 rodzaj' "$RP/wt.log" | grep -q . && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'repl  dysk podłączony' \

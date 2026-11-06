@@ -1755,6 +1755,12 @@ printf '[defaults]\n\thost_label = f\n[replica:pk]\n\tsource = tank/a\n\tdst = u
 fo=$(for_run); frc=$?
 check "PRK3 keep with passive = yes is refused (nothing of its own to keep)" "1:1" \
       "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s' "$fo" | grep -c 'nothing of its own to keep')"
+# A22 (field 2026-11-06): a passive replica's -E (add-replica --exclude-family, in flags)
+# reaches the engine, so the pickup skips pvesr's __replicate_ as a relationship does.
+printf '[defaults]\n\thost_label = f\n[replica:pe]\n\tsource = tank/a\n\tdst = usb/rep\n\tschedule = 0 1 * * *\n\tpassive = yes\n\tflags = -E __replicate_ -E vzdump\n' > "$FOR/c.conf"
+fo=$(for_run); frc=$?
+check "A22 passive replica with -E in flags: rc=0 and snapget -e carries both -E" "0:1" \
+      "$frc:$(printf '%s\n' "$fo" | grep 'replica copy (pe)' | grep -c 'snapget.sh -e -M .*-E __replicate_ -E vzdump')"
 # A FIXED replica with several sources (found 2026-10-12 testing W18 on pve9b): its
 # subshell sat bare after zfs-job's "--" -- a syntax error in cron and in run-replicas.
 # The command part of every replica line must parse as shell.

@@ -14829,6 +14829,19 @@ if printf '%s' "$lr" | grep -q '"name":"pv"[^}]*"prefix":"-"'; then
 else
     bad "addreplica: list-replicas passive" "$lr"
 fi
+# A22 (field 2026-11-06): a passive replica skips snapshot families as a relationship does
+# (exclude_family -> -E). pvesr renames and rotates __replicate_ under a long copy; a copy
+# standing on it reported VERIFY FAILED. -E in the section's flags, read back as
+# list-replicas' exclude_family; refused without --passive and for a malformed name.
+( source "$ZFSBACKUP"; replica_section_upsert "$PV/c.conf" pve "hdd/data" "repl/replica" "0 22 * * 5" "" 1 removable "" "" "" "" 1 '-E __replicate_ -E vzdump' ) 2>&1
+lr=$( ( source "$ZFSBACKUP"; zfs() { return 1; }; zpool() { return 1; }; cmd_list_replicas --json --config="$PV/c.conf" ) 2>&1 )
+out=$(bash "$ZFSBACKUP" add-replica pve --source=hdd/data --dst=repl/replica --exclude-family=__replicate_ 2>&1); rc=$?
+out2=$(bash "$ZFSBACKUP" add-replica pve --source=hdd/data --dst=repl/replica --passive --exclude-family=-E 2>&1); rc2=$?
+if printf '%s' "$lr" | grep -q '"name":"pve"[^}]*"exclude_family":"__replicate_,vzdump"'    && printf '%s' "$lr" | grep -q '"name":"pv"[^}]*"exclude_family":""'    && [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q -- '--exclude-family needs --passive'    && [ "$rc2" -ne 0 ] && printf '%s' "$out2" | grep -q 'family names, comma-separated'; then
+    ok "A22 addreplica: -E in flags is list-replicas' exclude_family; without --passive or with '-E' as a name it is refused"
+else
+    bad "A22 addreplica: exclude_family" "$lr" "rc=$rc $out" "rc=$rc2 $out2"
+fi
 # T11 (test od zera, 2026-11-05): the only relation runs on a delegated account, so
 # root's default config does not exist. The GUI's reader got a FATAL and the header
 # said "! no response: 1" on a fresh host. No config is no replicas; a --config=
