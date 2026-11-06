@@ -963,6 +963,15 @@ lint_scope_passive() {   # <value> <flags> <ctx>
 # comma, so the separator can never appear inside an entry. (The child excludes
 # below are REGULAR EXPRESSIONS and get no such guarantee, which is why they are
 # numbered rather than listed.)
+# A snapshot FAMILY name (a prefix such as autosnap_, __replicate_, vzdump):
+# characters ZFS allows in a snapshot name, minus the space, not starting with
+# '-'. One grammar for exclude_family and for -E in 'flags' (REV-20261106-190);
+# zfs-backup.sh add-replica holds the same pattern.
+family_name_ok() {
+    case "$1" in ''|-*|*[!A-Za-z0-9_.:-]*) return 1 ;; esac
+    return 0
+}
+
 lint_scope_exclude_family() {   # <value> <flags> <ctx>
     local val="$1" flags="$2" ctx="$3"
     [ -z "$val" ] && die "$ctx: 'exclude_family' is present but blank -- name at least one snapshot family, or remove the line"
@@ -980,6 +989,7 @@ lint_scope_exclude_family() {   # <value> <flags> <ctx>
             -*) IFS="$oldifs"; die "$ctx: exclude_family='$val' -- give the family NAME only; the '-E' is what this field renders for you" ;;
             *[[:space:]]*) IFS="$oldifs"; die "$ctx: exclude_family='$val' -- one family per comma-separated entry, no spaces" ;;
         esac
+        family_name_ok "$one" || { IFS="$oldifs"; die "$ctx: exclude_family='$val' -- '$one' is not a snapshot family name (letters, digits, _ . : -)"; }
     done
     IFS="$oldifs"
     link_flag_letter_present "$flags" E \
@@ -1166,7 +1176,20 @@ split_recursion_flags() {   # <flags>  -> 0 ok / 1 refused (SR_ERR set)
 # runtime, and a regeneration that suddenly refuses to produce a crontab is worse
 # than one that produces a correct crontab and tells you to tidy the config.
 lint_flags() {
-    local flags="$1" ctx="$2" dst="${3:-}" tok letters
+    local flags="$1" ctx="$2" dst="${3:-}" tok letters _l _a
+    # REV-20261106-190: 'flags' is pasted into a root crontab line as it stands.
+    # It stays the admin's free-form engine options, but never shell syntax: a
+    # command separator, pipe, redirection or substitution in it would run as
+    # root on every firing. And an -E value is a snapshot FAMILY, held to the
+    # same grammar as every other family field (family_name_ok).
+    case "$flags" in
+        *[\;\&\|\<\>\`]*|*'$('*|*$'\n'*)
+            die "$ctx: flags='$flags' -- carries shell syntax (; & | < > \` \$( or a newline). 'flags' is engine options only; it is pasted into the cron line as written." ;;
+    esac
+    while IFS=$'\t' read -r _l _a; do
+        [ "$_l" = E ] || continue
+        family_name_ok "$_a" || die "$ctx: flags carries -E '$_a' -- not a snapshot family name (letters, digits, _ . : -, not starting with -)"
+    done < <(flags_opt_pairs "$flags")
     letters="$(flags_opt_letters "$flags")"
     for tok in $letters; do
         case "$tok" in

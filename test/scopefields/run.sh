@@ -188,6 +188,14 @@ refuses() {   # <label> <want-substring> <extra lines...>
     fi
 }
 
+# REV-20261106-190: a family is a snapshot-name word, nothing a shell would read.
+refuses "exclude_family with shell syntax is refused" "not a snapshot family name" \
+        "exclude_family = foo;touch>/tmp/rev190-proof"
+refuses "exclude_family with a glob is refused" "not a snapshot family name" \
+        "exclude_family = a*b"
+refuses "-E in flags with shell syntax is refused" "carries shell syntax" \
+        "flags        = -E foo;id"
+
 refuses "collision: passive vs -e in flags" "one option, one home" \
         "flags        = -K /key -e" "passive      = yes"
 refuses "collision: exclude_family vs -E in flags" "one option, one home" \
