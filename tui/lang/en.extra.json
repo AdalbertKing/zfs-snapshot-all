@@ -461,7 +461,7 @@
 "Teraz:": "Now:",
 "tylko po podłączeniu": "only after connecting",
 "Replika $NAME -- własny harmonogram": "Replica $NAME -- custom schedule",
-"Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):": "Five cron fields (minute hour day month weekday):",
+"Pięć pól crona: minuta godzina dzień miesiąc dzień-tygodnia. Najpierw MINUTA. Przykłady: 7 0 * * * = codziennie 00:07; 0 22 * * 5 = piątek 22:00.": "Five cron fields: minute hour day month weekday. MINUTE first. Examples: 7 0 * * * = daily at 00:07; 0 22 * * 5 = Friday 22:00.",
 "Replika $NAME -- ostrzeżenie": "Replica $NAME -- warning",
 "To nie liczba": "Not a number",
 "Replika $NAME -- także po podłączeniu?": "Replica $NAME -- also on connect?",

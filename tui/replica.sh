@@ -146,7 +146,7 @@ basket_xargs() {          # B_EXCL -> XARGS: --exclude-child=^x$ (i ^x/, gdy x m
 XARGS=()
 
 # PRZYGOTOWANIE NOŚNIKA (uwaga 15, 2026-10-08): pusty dysk -> pula repliki, przez wsad
-# prepare-media (zpool create -m none -o failmode=continue -O compression=zstd, zfs create POOL/BAZA, export).
+# prepare-media (zpool create -m none -o ashift=12 -o failmode=continue -O compression=zstd, zfs create POOL/BAZA, export).
 # Dwie drogi, jeden czasownik: nowy nośnik (pula i baza do wpisania) albo kolejny dysk
 # TEJ repliki (rotacja: ta sama pula i baza, brama rozróżnia dyski po GUID).
 # 0 = przygotowano (PREP_DST), 1 = wstecz.
@@ -637,7 +637,7 @@ PYEOF
             _back=0
             while :; do
                 wt --title "$(Tv 'Replika $NAME -- własny harmonogram' '$NAME' "$NAME")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
-                   --inputbox "$(T 'Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):')" 9 "$W" "$_c" || { _back=1; break; }
+                   --inputbox "$(T 'Pięć pól crona: minuta godzina dzień miesiąc dzień-tygodnia. Najpierw MINUTA. Przykłady: 7 0 * * * = codziennie 00:07; 0 22 * * 5 = piątek 22:00.')" 11 "$W" "$_c" || { _back=1; break; }
                 _c="$(printf '%s' "$WT_OUT" | tr -s ' ' | sed 's/^ //; s/ $//')"
                 # Kampania 2026-10-22: "0 22 * * *zle" przechodził aż do planu. Pięć pól ze znaków crona.
                 if printf '%s\n' "$_c" | awk '
