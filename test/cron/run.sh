@@ -861,6 +861,34 @@ case "$out" in
     *) bad "W3 a missing lock directory refuses and names deploy.sh" "$out" ;;
 esac
 
+# L1 (A5, A-TASSA 2026-11-05): two datasets of one relation with the same basename
+# (tank/data, pool2/data) both carry notify = r-data. The label spells out the path
+# for those two only; a unique label and a hand-written one stay as they were.
+cat > "$TMPD/l1.conf" <<'EOF'
+[defaults]
+	host_label = w
+[template:hourly]
+	send_schedule = 7 * * * *
+	prefix        = automated_
+[dataset:tank/data]
+	use_template = hourly
+	notify       = r-data
+[dataset:pool2/data]
+	use_template = hourly
+	notify       = r-data
+[dataset:tank/vm]
+	use_template = hourly
+	notify       = r-vm
+[dataset:tank/x/vm2]
+	use_template = hourly
+	notify       = custom-label
+EOF
+out=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$TMPD/l1.conf" 2>&1)
+case "$out" in
+    *'"w hourly backup (r-tank-data+r-pool2-data+r-vm+custom-label)"'*) ok "L1 a basename two datasets share is spelled out as the path; other labels unchanged" ;;
+    *) bad "L1 a basename two datasets share is spelled out as the path" "$out" ;;
+esac
+
 # W6 (A6, A-TASSA 2026-11-05): the guard against a hand-built schedule counts only
 # lines that RUN. A crontab with no managed block whose snapsend lines are all
 # commented out installs; one live line still refuses (the control).

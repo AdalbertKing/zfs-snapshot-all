@@ -4061,6 +4061,21 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
                 warn "    $line"
                 continue
             fi
+            # Label exemption (A5, 2026-11-06): the same job under a new zfs-job label --
+            # gen-cron now spells out a basename two datasets share (pve0-data ->
+            # pve0-hdd-data). Everything but the "(...)" in the label must match, and the
+            # change is said out loud: history keyed by the old label stops there.
+            local lnorm ltwin=""
+            lnorm=$(printf '%s\n' "$norm" | schedule_normalized_identity | sed -E 's/(zfs-job\.sh "[^"(]*)\([^)"]*\)"/\1()"/')
+            while IFS= read -r pline; do
+                [ -n "$pline" ] || continue
+                [ "$(printf '%s\n' "$pline" | schedule_normalized_identity | sed -E 's/(zfs-job\.sh "[^"(]*)\([^)"]*\)"/\1()"/')" = "$lnorm" ] || continue
+                ltwin="$pline"; break
+            done <<< "$proposed_norm"
+            if [ -n "$ltwin" ]; then
+                warn "  job label changed, the job itself stays: $(printf '%s' "$line" | grep -o 'zfs-job\.sh "[^"]*"' | head -1) -> $(printf '%s' "$ltwin" | grep -o 'zfs-job\.sh "[^"]*"' | head -1)"
+                continue
+            fi
             # Fifth exemption: the peer-root ladder this run is migrating off.
             # Unlike the four above it admits that coverage IS dropped, and
             # names who stops being covered -- see line_scope_narrowed_by_migration.

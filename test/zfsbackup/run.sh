@@ -2724,6 +2724,41 @@ else
     bad "clobber: a job on a DIFFERENT dataset is still a deletion, retention normalizer or not" "rc=$rc out=$out"
 fi
 
+# A5 (A-TASSA 2026-11-05): gen-cron spells out a basename two datasets share, so
+# an installed "(pve0-data)" job comes back as "(pve0-hdd-data)". The same job
+# under a new label is not a deletion -- and is said out loud.
+CLL="$WORK/clobber-label"; mkdir -p "$CLL/bin"; : > "$CLL/new.conf"
+cat > "$CLL/target.cron" <<'EOF'
+# BEGIN zfs-backup-managed
+44 * * * * /R/zfs-job.sh "pve1 hourly snapshot (pve0-data)" --log=/L --notify=/N -- /R/snapget.sh -s -m "automated_hourly_" -R -L pve0 "acct@h:hdd/data"
+# END zfs-backup-managed
+EOF
+cat > "$CLL/proposal.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+44 * * * * /R/zfs-job.sh "pve1 hourly snapshot (pve0-hdd-data)" --log=/L --notify=/N -- /R/snapget.sh -s -m "automated_hourly_" -R -L pve0 "acct@h:hdd/data"
+# END zfs-backup-managed
+EOF
+cat > "$CLL/proposal-gone.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+44 * * * * /R/zfs-job.sh "pve1 hourly snapshot (pve0-hdd-data)" --log=/L --notify=/N -- /R/snapget.sh -s -m "automated_hourly_" -R -L pve0 "acct@h:rpool/data"
+# END zfs-backup-managed
+EOF
+printf '#!/bin/bash\ncat "%s"\nexit 0\n' "$CLL/target.cron" > "$CLL/bin/crontab"; chmod +x "$CLL/bin/crontab"
+out=$( PATH="$CLL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CLL/proposal.txt'; }; assert_target_block_not_clobbered '$CLL/new.conf'" 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && case "$out" in *"job label changed"*"(pve0-data)"*"(pve0-hdd-data)"*) true ;; *) false ;; esac; then
+    ok "clobber: the same job under a new label is not a deletion, and the rename is reported (A5)"
+else
+    bad "clobber: the same job under a new label is not a deletion (A5)" "rc=$rc out=$out"
+fi
+out=$( PATH="$CLL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CLL/proposal-gone.txt'; }; assert_target_block_not_clobbered '$CLL/new.conf'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"would be DELETED"*) true ;; *) false ;; esac; then
+    ok "clobber: a new label over a DIFFERENT dataset is still a deletion (A5 control)"
+else
+    bad "clobber: a new label over a DIFFERENT dataset is still a deletion (A5 control)" "rc=$rc out=$out"
+fi
+
 # THE NORMALIZER IS NARROW, and this is the claim its comment makes: a flag is
 # only a retention flag when it is a whole argument. Two datasets whose NAMES
 # contain the text -- tank/rack-D7 and tank/rack-D3 -- are different datasets,
