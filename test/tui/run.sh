@@ -651,8 +651,8 @@ fi
 # dobowego jest jutro; te testy pinuja tresc wierszy relacji przy 100 kolumnach,
 # wiersze replik maja wlasne testy przy NOSNIKACH.
 Z="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --progress "$P10/progress.json" --config "$P10/show-config.json" --stats "$P10/job-stats.json" --screen zadania --width 160 2>&1)"
-if has "$Z" '╔═ Przebiegi na pve10 -- wykonane 12h i nadchodzące 6h'; then
-    ok "zadania: F2 to Przebiegi -- tytul nazywa host i okno: wykonane 12h, nadchodzace 6h (nie liczy zadan ani relacji)"
+if has "$Z" '╔═ Przebiegi na pve10 -- wykonane 72h i nadchodzące 6h'; then
+    ok "zadania: F2 to Przebiegi -- tytul nazywa host i okno: wykonane 72h, nadchodzace 6h (nie liczy zadan ani relacji)"
 else
     bad "zadania: tytul" "$Z"
 fi
@@ -758,8 +758,8 @@ fi
 ZJARGS="--jobs $FIX/jobs.json --monitors $FIX/monitors.json"
 ZSORT0="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --width 200 --height 100 2>&1)"
 ZSORT1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F8 --width 200 2>&1)"
-if has "$ZSORT0" 'Przebiegi na ' && has "$ZSORT0" 'wykonane 12h i nadchodzące 6h' && has "$ZSORT0" 'F8 Schowaj wykonane' \
-   && has "$ZSORT1" 'Przebiegi na ' && has "$ZSORT1" '-- tylko nadchodzące' && ! has "$ZSORT1" 'wykonane 12h' && has "$ZSORT1" 'F8 Pokaż wykonane' \
+if has "$ZSORT0" 'Przebiegi na ' && has "$ZSORT0" 'wykonane 72h i nadchodzące 6h' && has "$ZSORT0" 'F8 Schowaj wykonane' \
+   && has "$ZSORT1" 'Przebiegi na ' && has "$ZSORT1" '-- tylko nadchodzące' && ! has "$ZSORT1" 'wykonane 72h' && has "$ZSORT1" 'F8 Pokaż wykonane' \
    && ! has "$ZSORT1" 'sort:' && ! has "$ZSORT1" 'Sortuj'; then
     ok "zadania: F8 raz -- tytul 'tylko nadchodzące', podpis na pasku 'Pokaż wykonane' (bylo: sort: oś czasu)"
 else
@@ -773,26 +773,26 @@ else
     bad "zadania: kolejnosc wierszy na osi czasu" "L1=$L1 L2=$L2" "$ZSORT0"
 fi
 ZSORT2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F8,F8 --width 200 2>&1)"
-if has "$ZSORT2" 'wykonane 12h i nadchodzące 6h' && ! has "$ZSORT2" 'tylko nadchodzące' && has "$ZSORT2" 'F8 Schowaj wykonane'; then
-    ok "zadania: F8 dwa razy -- wykonane wracaja (tytul 'wykonane 12h i nadchodzące 6h', pasek 'Schowaj wykonane')"
+if has "$ZSORT2" 'wykonane 72h i nadchodzące 6h' && ! has "$ZSORT2" 'tylko nadchodzące' && has "$ZSORT2" 'F8 Schowaj wykonane'; then
+    ok "zadania: F8 dwa razy -- wykonane wracaja (tytul 'wykonane 72h i nadchodzące 6h', pasek 'Schowaj wykonane')"
 else
     bad "zadania: F8 dwa razy -- tytul" "$ZSORT2"
 fi
 ZSORTS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys s --width 200 2>&1)"
-if has "$ZSORTS" 'wykonane 12h i nadchodzące 6h' && has "$ZSORTS" '$ s_ '; then
+if has "$ZSORTS" 'wykonane 72h i nadchodzące 6h' && has "$ZSORTS" '$ s_ '; then
     ok "zadania: 's' to TEKST linii polecen -- widok zostaje (R4-2)"
 else
     bad "zadania: 's' jako tekst" "$ZSORTS"
 fi
 ZSORT3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F8,F8,F8 --width 200 2>&1)"
-if has "$ZSORT3" '-- tylko nadchodzące' && ! has "$ZSORT3" 'wykonane 12h' && ! has "$ZSORT3" 'po relacjach'; then
+if has "$ZSORT3" '-- tylko nadchodzące' && ! has "$ZSORT3" 'wykonane 72h' && ! has "$ZSORT3" 'po relacjach'; then
     ok "zadania: F8 trzy razy -- to przelacznik, nie cykl: znowu 'tylko nadchodzące'"
 else
     bad "zadania: F8 trzy razy -- przelacznik" "$ZSORT3"
 fi
 ZG9="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F9 --width 200 2>&1)"   # U84: wciecie wiersza grupy = 4 spacje + kreska
 ZG99="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F9,F9 --width 200 2>&1)"
-if has "$ZG9" 'wykonane 12h i nadchodzące 6h, po relacjach' && hasE "$ZG9" '^║ Kiedy +Zadanie +Co +Wynik' && hasE "$ZG9" '^║ ▸ ' \
+if has "$ZG9" 'wykonane 72h i nadchodzące 6h, po relacjach' && hasE "$ZG9" '^║ Kiedy +Zadanie +Co +Wynik' && hasE "$ZG9" '^║ ▸ ' \
    && hasE "$ZG9" "^║     │ $KD " && has "$ZG9" 'F9 Jedna oś czasu' \
    && ! has "$ZG99" 'po relacjach' && hasE "$ZG99" '^║ Kiedy +Relacja +Co +Wynik' && ! hasE "$ZG99" '^║ ▸ ' && has "$ZG99" 'F9 Grupuj po relacji'; then
     ok "zadania: F9 grupuje po relacji (naglowki '▸ NAZWA', wiersze '│ dd.mm HH:MM', kolumna Zadanie, tytul ', po relacjach'); drugi F9 wraca do jednej osi czasu"
@@ -2501,7 +2501,7 @@ json.dump({"datasets": d}, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 SOK="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --zfs-tree "$SOT" --screen relacje --keys F4 --width 200 --height 50 2>&1)"
 SOK0="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --zfs-tree "$SOT0" --screen relacje --keys F4 --width 200 --height 50 2>&1)"
-if has "$SOK" '╔═ Kopie na' && hasE "$SOK" '^║ som +pvesr +vm-105-disk-0 +5 ' && ! has "$SOK" 'scratch' \
+if has "$SOK" '╔═ Kopie na' && hasE "$SOK" '^║ som +pvesr +hdd/solab/vm-105-disk-0 +5 ' && ! has "$SOK" 'scratch' \
    && ! has "$SOK0" 'vm-105-disk-0' && ! has "$SOK0" 'scratch'; then
     ok "kopie: F4 dla relacji snaponly -- grupa 'pvesr' pokazuje tylko dataset z znacznikiem pvesr (vm-105-disk-0, 5 migawek), nie 'scratch'; bez znacznika brak wiersza"
 else

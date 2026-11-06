@@ -130,7 +130,10 @@ export IMPORTED_LOG="$TMPD/imported" EXPORTED_LOG="$TMPD/exported"
 export POOLS IMPORTABLE DATASETS EXPORT_FAILS="" POOL_GUID POOL_FAILMODE EXPORT_HANGS SRC_TREE SRC_SNAP SRC_WRITTEN
 : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
 
-g() { PATH="$BIN:$PATH" MEDIA_STATE_DIR="$STATE" bash "$GATE" "$@" 2>&1; }
+# Every call in its own short-lived parent, as separate cron runs are: since A11/A13
+# the gate names a run by $PPID, and a call straight from this shell would make the
+# suite itself a live run holding the medium. '; exit' keeps bash from exec'ing it.
+g() { ( PATH="$BIN:$PATH" MEDIA_STATE_DIR="$STATE" bash "$GATE" "$@" 2>&1; exit $? ); }
 
 # ---------------------------------------------------------------------------
 # 1. The refusals that happen before anything is touched
