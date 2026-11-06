@@ -262,7 +262,7 @@ check "F2: ...and imports nothing" "" "$(cat "$IMPORTED_LOG")"
 
 # The marker itself unwritable (a directory in its place), the claim fine: the
 # import happens and ownership cannot be recorded -- the original F2 path.
-mkdir -p "$STATE/rep.imported-by-us"
+: > "$EXPORTED_LOG"; rm -f "$STATE/rep.imported-by-us"; mkdir "$STATE/rep.imported-by-us"
 : > "$IMPORTED_LOG"
 out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
 check "F2: an import whose ownership cannot be recorded is NOT success" "2" "$rc"
@@ -1289,7 +1289,7 @@ else
     # attach BEFORE the import; and a second run must not then export the
     # medium the first run holds.
     POOLS="hdd"; IMPORTABLE="rotpool"; : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
-    mkdir -p "$STATE/rep.running"
+    rm -f "$STATE/rep.running"; mkdir "$STATE/rep.running"
     out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
     check "RU6: a run claim that cannot be written stops attach (rc 2)" "2" "$rc"
     check "RU6: ...before anything is imported" "" "$(cat "$IMPORTED_LOG")"
@@ -1314,7 +1314,7 @@ else
     rm -f "$STATE/rep.running" "$STATE/rep.imported-by-us"
     # A lock that cannot be created (a directory in its place).
     POOLS="hdd"; IMPORTABLE="rotpool"; : > "$IMPORTED_LOG"
-    mkdir -p "$STATE/rep.running.lock"
+    rm -f "$STATE/rep.running.lock"; mkdir "$STATE/rep.running.lock"
     out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
     check "RU9: a run lock that cannot be created stops attach (rc 2)" "2" "$rc"
     check "RU9: ...before anything is imported" "" "$(cat "$IMPORTED_LOG")"
