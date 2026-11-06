@@ -15795,6 +15795,18 @@ record_is_removed_name_live_as_source() {
     id "zfsbackup-$1" >/dev/null 2>&1 && [ -s "${PEER_STATE_DIR:-/etc/zfs-snapshot-all/peers}/$1.conf" ]
 }
 
+# progress_forget_label <label> -- delete the transfer progress records carrying exactly
+# this label; prints how many. A18: delete-relation's last step (see there).
+progress_forget_label() {
+    local d="${ZFS_PROGRESS_DIR:-/var/lib/zfs-snapshot-all/progress}" f n=0
+    for f in "$d"/*.json; do
+        [ -e "$f" ] || continue
+        grep -qF "\"label\":\"$1\"," "$f" 2>/dev/null || continue
+        rm -f "$f" 2>/dev/null && n=$((n + 1))
+    done
+    printf '%s' "$n"
+}
+
 cmd_delete_relation() {
     local name="" yes=0 keep_source=0 keep_record=0 destroy=0 ask=0 check_source=0 a
     for a in "$@"; do
@@ -16023,6 +16035,12 @@ cmd_delete_relation() {
             done
         done
     fi
+    # A18 (Dabrowska 2026-11-06): the progress records of the deleted relationship's runs
+    # (label = its name) outlived it, and one left at "running" by a copy cut short alarmed
+    # "bez pulsu" days later. A run in progress refused the delete above, so whatever
+    # carries this label now is history of a relationship that no longer exists.
+    local _pn; _pn=$(progress_forget_label "$name")
+    [ "${_pn:-0}" -gt 0 ] && log "delete-relation: removed $_pn progress record(s) of '$name'"
     [ "$rc" -eq 0 ] && log "delete-relation: '$name' is gone${others:+ (the pairing with $peer stays: $others)}." \
                     || log "delete-relation: '$name' removed WITH LEFTOVERS -- read the !!! lines above."
     return "$rc"

@@ -14430,6 +14430,19 @@ if [ "$u154y" -ne 0 ] && printf '%s%s' "$U154Y" "$U154E" | grep -q "has a run in
 else
     bad "delrel U154: running run" "rc=$u154y" "$U154Y" "err: $U154E" "plan: $U154P" "control: $U154C" "zfs: $(cat "$DR/zfs154.calls")"
 fi
+# A18 (Dabrowska 2026-11-06): delete-relation's last step drops the progress records of
+# the deleted relationship (label = its name) -- one left "running" by a cut-short copy
+# alarmed "bez pulsu" two days later. Exactly that label: "e2" is another relationship.
+A18D="$DR/prog18"; mkdir -p "$A18D"
+printf '{"dataset":"a","target":"t","label":"e","mode":"full","state":"running","pid":1}\n' > "$A18D/1.json"
+printf '{"dataset":"b","target":"t","label":"e","mode":"incr","state":"ok","pid":2}\n' > "$A18D/2.json"
+printf '{"dataset":"c","target":"t","label":"e2","mode":"incr","state":"ok","pid":3}\n' > "$A18D/3.json"
+a18n=$( ZFS_PROGRESS_DIR="$A18D" bash -c "source '$ZFSBACKUP'; progress_forget_label e" 2>&1 )
+if [ "$a18n" = 2 ] && [ ! -e "$A18D/1.json" ] && [ ! -e "$A18D/2.json" ] && [ -e "$A18D/3.json" ]; then
+    ok "delrel A18: the deleted relationship's progress records go (running or not); another label's stays"
+else
+    bad "delrel A18: progress records" "n=$a18n" "$(ls "$A18D")"
+fi
 # REV-144: THE RECORD IS THE RETRY STATE. A source half that did not complete used to
 # be logged as rc=1 and then walked straight into `--purge` -- which deleted the peer,
 # the endpoint and the label the retry needs, so `delete-relation NAME --yes` answered
