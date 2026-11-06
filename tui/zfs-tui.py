@@ -2067,7 +2067,7 @@ def sort_zad_rows(rows, mode, data):
 # na zadanie). F8 chowa wykonane, F9 grupuje po relacji (w grupie chronologicznie).
 # Lista = kiedy i z jakim skutkiem; panel = jak ustawione + ten bieg; dol =
 # zrodlo -> cel tego biegu. Kazdy fakt w jednym miejscu.
-# A15 (wlasciciel 2026-11-06, A-TASSA: "moglem sprawdzac wstecz, a to bardzo wazne"): 12 h
+# A15 (wlasciciel 2026-11-06, field: "moglem sprawdzac wstecz, a to bardzo wazne"): 12 h
 # ucinalo wczoraj, choc job-stats i tak przynosi PRZ_RUNS_H. F2 pokazuje cale pobrane okno.
 PRZ_PAST_H = 72
 # F6 (U130): przebiegi repliki siegaja dalej -- replika "pn-pt" ma przerwe pt->pn. Czytnik
@@ -2383,7 +2383,7 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False, past_h=PRZ_PAS
         # pobranie hourly i daily w jednym snapget) nie dostaja go po razie (zmierzone 10-27).
         # A15: bieg TRWAJACY (koniec "-", rc -1) jest widoczny zawsze -- takze przy schowanych
         # wykonanych (F8) i gdy ruszyl dawniej niz okno (pierwsza kopia na USB: dwie doby).
-        # Na A-TASSA trwajaca replika byla widac tylko jako "nadchodzacy".
+        # W terenie trwajaca replika byla widac tylko jako "nadchodzacy".
         if lbl and lbl not in shown:
             shown.add(lbl)
             prev, mine = None, []
@@ -4748,7 +4748,7 @@ def kopie_groups(rows, data, now, ch):
         groups.append({"kind": "relation", "name": x["name"], "word": _(u"relacja %s") % x["name"],
                        "what": u"%s  %s" % (x.get("typ") or "", x.get("dir") or ""), "roots": roots, "note": "",
                        "typ": x.get("typ") or "", "dir": x.get("dir") or ""})
-    # A17 (wlasciciel 2026-11-06, A-TASSA): relacja "tylko migawki" niczego tu nie kopiuje, ale
+    # A17 (wlasciciel 2026-11-06, teren): relacja "tylko migawki" niczego tu nie kopiuje, ale
     # na kolektorze jej migawki przychodza z pvesr -- dyski gosci pod tymi samymi sciezkami.
     # To glowne zrodlo odzysku, a lista kazala ich szukac w "inny dysk". Grupa pokazuje TYLKO
     # datasety z migawka __replicate_ (silnik: zfs-tree "pvesr"), nie np. rpool/ROOT tego hosta.
@@ -7399,7 +7399,7 @@ def curses_loop(ui):
             elif ui.bg_pending() or ui.slow_pending():
                 stdscr.timeout(300)          # dane z tła: przerysuj, gdy dojdą
             else:
-                # A16 (A-TASSA 2026-11-06): komunikat systemu (wall z journald) wypisany na
+                # A16 (field 2026-11-06): komunikat systemu (wall z journald) wypisany na
                 # konsole rozjezdza ekran, a curses maluje tylko roznice wzgledem tego, co
                 # MYSLI, ze jest na ekranie. W bezczynnosci co minute pelne przerysowanie.
                 stdscr.timeout(60000)

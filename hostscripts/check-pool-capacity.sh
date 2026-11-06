@@ -154,7 +154,7 @@ if [ -d "$PROG_DIR" ]; then
         if [ "$age" -ge 1800 ]; then
             ds=$(sed -n 's/.*"dataset":"\([^"]*\)".*/\1/p' "$f")
             lb=$(sed -n 's/.*"label":"\([^"]*\)".*/\1/p' "$f")
-            # A19 (Dabrowska 2026-11-06): a record whose engine is GONE is an orphan, not a
+            # A19 (field 2026-11-06): a record whose engine is GONE is an orphan, not a
             # hang -- the relation was deleted mid-copy and nothing closed it. Said as such,
             # and the record is closed as "dead" (progress_reap drops it after 7 days), so
             # it does not alarm again every day.

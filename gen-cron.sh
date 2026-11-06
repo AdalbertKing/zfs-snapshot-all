@@ -1749,7 +1749,7 @@ resolve_field() {
 
 # notify_label <section> [template] -- the section's notify, made unique (A5).
 #
-# Found on A-TASSA, 2026-11-05: zfs-backup.sh writes `notify = <relation>-<basename>`,
+# Found in the field, 2026-11-05: zfs-backup.sh writes `notify = <relation>-<basename>`,
 # so hdd/data and rpool/data of one relation both became "pve0-data" -- every job,
 # alert and F2 row of the two read the same. Where another section of the same kind
 # carries the identical value for a DIFFERENT dataset, the basename is spelled out
@@ -4830,7 +4830,7 @@ install_crontab() {
     cron_read "$me" "$current" || { rm -f "$current"; die "$CRON_ERR"; }
     if ! grep -qE '^# BEGIN zfs-backup-managed' "$current" && [ -s "$current" ]; then
         local conflicts
-        # Only lines that RUN: a commented-out line schedules nothing (A6, A-TASSA
+        # Only lines that RUN: a commented-out line schedules nothing (A6, field
         # 2026-11-05: 25 '#...snapsend' lines of a retired schedule refused the install).
         conflicts="$(grep -vE '^[[:space:]]*#' "$current" | grep -E 'snapsend\.sh|delsnaps\.sh|check-snap-age\.sh' || true)"
         if [ -n "$conflicts" ]; then

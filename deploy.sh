@@ -8378,7 +8378,7 @@ echo
 log "===================================================================="
 log "Automated part done. Next step:"
 log "===================================================================="
-# A3 (A-TASSA 2026-11-05): this used to list four hand-written cron recipes
+# A3 (field 2026-11-05): this used to list four hand-written cron recipes
 # ("Part 5, NOT scripted") from before gen-cron and the GUI existed. After the
 # wizard had already done the work it read like unfinished business. The
 # schedule is the package's job now; the one step that stays human is the mail relay.

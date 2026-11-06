@@ -275,7 +275,7 @@ CURRENT="$STATE_DIR/$LABEL.current"
 
 # ONE REPLICA, ONE RUN AT A TIME (A11/A13, owner 2026-11-06).
 #
-# Found on A-TASSA, 2026-11-06: the first copy onto a 2 TB USB disk runs for two
+# Found in the field, 2026-11-06: the first copy onto a 2 TB USB disk runs for two
 # days, and the next scheduled or on-insert run of the SAME replica started under
 # it. The engines lock per source+target, so the second run went straight to the
 # next source and wrote to the same disk in parallel -- and worse, its detach found

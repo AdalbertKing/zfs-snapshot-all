@@ -795,7 +795,7 @@ PYEOF
               Tv '    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '\''$NAME'\'' i naciśnij F7 (Uruchom teraz).' '$NAME' "$NAME"; echo
             } >"$TMPD/result.txt"
             result_box "$(Tv 'Replika $NAME: GOTOWE' '$NAME' "$NAME")" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
-            # A8 (A-TASSA 2026-11-05): dysk był podłączony przy instalacji, a pierwsza kopia
+            # A8 (field 2026-11-05): dysk był podłączony przy instalacji, a pierwsza kopia
             # ruszyła dopiero następnej nocy -- udev reaguje tylko na WŁOŻENIE. Nowa replika
             # na dysku, który już jest: pytanie, czy zacząć teraz. Bieg w tle, ten sam
             # czasownik co F7, przeżywa wyjście z GUI.
