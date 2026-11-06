@@ -26,6 +26,7 @@ geom
 info "$(T 'Replika')" "$(T 'Czytam repliki, datasety i nośniki...')"
 "$ZB" list-replicas --json >"$TMPD/rep.json" 2>"$TMPD/rep.err" || echo '{"replicas":[]}' >"$TMPD/rep.json"
 # rep.tsv: nazwa <TAB> źródła(,) <TAB> dst <TAB> harmonogram <TAB> media <TAB> recursive <TAB> próg ostrzeżenia <TAB> prefiks ("-" = pasywna) <TAB> wyjątki (-X, spacjami)
+#          ... <TAB> pomijane rodziny migawek (-E, po przecinku; ostatnia kolumna)
 "$PY" - "$TMPD/rep.json" >"$TMPD/rep.tsv" <<'PYEOF'
 import sys, json
 try:
@@ -36,13 +37,17 @@ for r in d.get("replicas", []):
     print("\t".join([r.get("name") or "-", ",".join(r.get("sources") or [r.get("source") or ""]) or "-",
                      r.get("dst") or "-", r.get("schedule") or "-", r.get("media") or "-", r.get("recursive") or "-",
                      r.get("monitor_warn") or "-", r.get("prefix") or "-", " ".join(r.get("exclude_child") or []) or "-",
-                     r.get("media_guids") or "-", r.get("on_insert") or "no", r.get("keep") or "-", r.get("raw") or "no", r.get("history") or "all"]))
+                     r.get("media_guids") or "-", r.get("on_insert") or "no", r.get("keep") or "-", r.get("raw") or "no", r.get("history") or "all",
+                     r.get("exclude_family") or "-"]))
 PYEOF
 SRCS=""; DST=""; SCHED="auto"; MEDIA=removable; REC=yes; TRIG=no; UNTRIG=no; MONDAYS=""; PASSIVE=""
 GUIDS=""; ONINS=no; CURGUIDS=""; KEEP=""; RAW=no; HIST=all; ENGINE_ONLY=0
+# A22 (teren 2026-11-06): pasywna replika pomija te rodziny jak relacja (exclude_family);
+# __replicate_ pvesr wymienia co kilka godzin i przemianowuje przy odbiorze.
+EXFAM="__replicate_,vzdump,__migration__"
 RULES="${ZFS_REPLICA_RULES:-/etc/udev/rules.d/90-zfs-replica.rules}"
 if [ "$EDIT" -eq 1 ]; then
-    if ! IFS=$'\t' read -r _n SRCS DST SCHED MEDIA REC CURWARN CURPFX CURX CURGUIDS ONINS KEEP RAW HIST < <(awk -F'\t' -v n="$NAME" '$1==n' "$TMPD/rep.tsv"); then
+    if ! IFS=$'\t' read -r _n SRCS DST SCHED MEDIA REC CURWARN CURPFX CURX CURGUIDS ONINS KEEP RAW HIST EXFAM < <(awk -F'\t' -v n="$NAME" '$1==n' "$TMPD/rep.tsv"); then
         _rerr="$(tail -1 "$TMPD/rep.err" 2>/dev/null)"
         wt --title "$(Tv 'Nie ma repliki '\''$NAME'\''' '$NAME' "$NAME")" --msgbox "$(Tv 'W configu tego kolektora nie ma [replica:$NAME].\n(list-replicas: $_rerr)' '$NAME' "$NAME" '$_rerr' "$_rerr")" 10 "$W"
         exit 1
@@ -55,6 +60,8 @@ if [ "$EDIT" -eq 1 ]; then
     [ "${KEEP:-}" = - ] && KEEP=""
     [ "${RAW:-}" = yes ] || RAW=no
     case "${HIST:-}" in ''|-) HIST=all ;; esac
+    # replika sprzed A22 nie ma listy: dostaje tę samą, plan ją pokazuje przed instalacją
+    [ "${EXFAM:--}" = - ] && EXFAM="__replicate_,vzdump,__migration__"
 fi
 # Reguła udev sprzed P5 (run-replicas bez --on-insert) uruchamiała przy włożeniu WSZYSTKIE
 # repliki; plan ją wtedy odnawia (install-media-trigger --install), jak brakującą.
@@ -697,6 +704,7 @@ PYEOF
         [ "$REC" = yes ] && ARGV+=(--recursive=yes) || ARGV+=(--recursive=no)
         ARGV+=(${XARGS[@]+"${XARGS[@]}"})
         [ "$PASSIVE" = yes ] && ARGV+=(--passive)
+        [ "$PASSIVE" = yes ] && [ -n "$EXFAM" ] && ARGV+=("--exclude-family=$EXFAM")
         [ -n "$KEEP" ] && ARGV+=("--keep=$KEEP")
         [ "$RAW" = yes ] && ARGV+=(--raw)
         [ "$HIST" != all ] && ARGV+=("--history=$HIST")
@@ -721,6 +729,7 @@ PYEOF
                 [ -n "${B_EXCL[$_i]}" ] && echo "$(T 'Pomijane:   ')$(printf '%s' "${B_EXCL[$_i]}" | paste -sd, - | sed 's/,/, /g')"
             done
             echo "$(T 'Migawki:    ')$([ "$PASSIVE" = yes ] && T 'cała historia (istniejące, bez własnych)' || T 'stan na chwilę kopii (własne, replica_)')"
+            [ "$PASSIVE" = yes ] && [ -n "$EXFAM" ] && echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
             [ "$PASSIVE" = yes ] || echo "$(T 'Na dysku:   ')$([ -n "$KEEP" ] && T '%s ostatnich kopii, niezależnie od kolektora' "$KEEP" || T 'odbicie kolektora')"
             [ "$RAW" = yes ] && echo "$(T 'Szyfrowane: źródło jest zaszyfrowane -- kopia idzie zaszyfrowana (raw), kolektor nie potrzebuje klucza')"
             # X10: przy "cała historia" i przy "N ostatnich" Historia nie jest wyborem -- plan mówi,

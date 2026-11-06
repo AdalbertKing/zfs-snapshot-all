@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: ce2851bb5656ed1b -->
+<!-- status-covers-digest: e035dfa52d8ee250 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,14 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **A22 (2026-11-06, gałąź `fix/a22-skip-reserved`; niewydane, dołącza do 1.0.12).** Pasywna replika
+  pomija rodziny migawek tak jak relacja: `add-replica --exclude-family=A,B` (tylko z `--passive`) zapisuje
+  `-E` w `flags` sekcji (jak `-X` z `--exclude-child`), `list-replicas --json` oddaje to jako
+  `exclude_family`; kreator ustawia pasywnej replice `__replicate_,vzdump,__migration__` (nowej i
+  zmienianej, która listy jeszcze nie ma; plan pokazuje ją przed instalacją). Silnik i gen-cron bez zmian (`snapget -e -E` już bierze najnowszą migawkę spoza
+  wykluczonych). Powód: pvesr przemianował i wymienił `__replicate_` w trakcie 2,7 h kopii na usb1; strumień
+  pvesr niesie na pve1 migawki `automated_*` z pve0 z tymi samymi GUID-ami, więc replika stoi na nich.
+  Istniejąca replika bez listy działa po staremu do pierwszej zmiany w kreatorze.
 - **A20/A21 (2026-11-06, gałąź `fix/a20-a21`; niewydane, dołącza do 1.0.12).** Pierwsza kopia na usb1
   (A-TASSA, 00:27-18:27) skończyła rc=1 na jednym datasecie: `VERIFY FAILED` dla
   `hdd/data/vm-105-disk-0@__replicate_105-0_1793970034__`. Źródło jest pod pvesr, więc migawka nie ma

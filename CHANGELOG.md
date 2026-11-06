@@ -39,6 +39,11 @@ when they change how the tool is used.
   GUID is recorded when it is sent and proves the copy when the source no longer has it.
 - **First copy:** a target dataset that does not exist yet is no longer logged as "Could not list
   the snapshots ... failure".
+- **A passive replica skips snapshot families like a relationship does.** `add-replica
+  --exclude-family=A,B` (with `--passive`) gives the copy the same `-E` exclusions a relationship
+  has; the replica wizard sets `__replicate_,vzdump,__migration__` for a passive replica that has none, so the
+  copy stands on the tool's own snapshots instead of the ones Proxmox VE replication renames and
+  replaces every few hours. `list-replicas --json` shows the list as `exclude_family`.
 
 ## [1.0.11] — 2026-11-05
 

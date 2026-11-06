@@ -391,6 +391,11 @@ front end never edits the config file:
                                     relationship's copies, whose next pull would
                                     discard any replica_ snapshot). list-replicas
                                     shows its prefix as '-'.
+                                    [--exclude-family=A,B] (with --passive): snapshot
+                                    families the pickup never takes, as in a
+                                    relationship -- written as -E in the section's
+                                    flags (A22: __replicate_ is renamed and rotated by
+                                    pvesr, a copy must not stand on it).
                                     on-insert = no time, only when the disk is
                                     plugged in (needs install-media-trigger).
                                     [--recursive=yes|no] [--fixed|--removable]
@@ -8427,7 +8432,7 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
     local name="" source="" dst="" sched="" pref="replica_" rec=1 media="removable" notify="" history=""
     local mon_warn="" mon_crit="" passive=0 _prefset=0 on_insert="" keep="" rraw=0
     local -a xchild=() mguids=()
-    local config="" do_install=0 assume_yes=0 a _ans
+    local config="" do_install=0 assume_yes=0 a _ans xfam=""
     # --source IS REPEATABLE, and also takes a comma list, so a front end can
     # send either shape. One medium often holds more than one thing worth
     # keeping, and a second [replica:] onto the same disk is refused further
@@ -8450,6 +8455,8 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
             # wizard uses the same basket as the relationship wizard, exceptions
             # included). Written as -X in the section's flags; needs recursion.
             --exclude-child=*) xchild+=("${a#*=}") ;;
+            # A22 (field 2026-11-06): the same -E the relationships carry (exclude_family).
+            --exclude-family=*) xfam="${xfam:+$xfam,}${a#*=}" ;;
             # P5 (owner 2026-10-09, "po ID"): the disks of this replica by pool GUID,
             # repeatable or comma-separated; the gate refuses any other disk.
             --media-guid=*) IFS=',' read -ra _sp <<< "${a#*=}"
@@ -8508,6 +8515,14 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
         xflags="$xflags${xflags:+ }-X $_xc"
     done
     [ -z "$xflags" ] || [ "$rec" -eq 1 ] || die "add-replica: --exclude-child needs --recursive=yes -- without children there is nothing to leave out"
+    if [ -n "$xfam" ]; then
+        [ "$passive" -eq 1 ] || die "add-replica: --exclude-family needs --passive -- a replica with its own prefix takes only that family already"
+        local _xf
+        for _xf in ${xfam//,/ }; do
+            case "$_xf" in -*|*[[:space:]]*|*\'*|*\"*) die "add-replica: --exclude-family='$xfam' -- family names, comma-separated, no spaces or quotes (each becomes -E in the cron line)" ;; esac
+            xflags="$xflags${xflags:+ }-E $_xf"
+        done
+    fi
     local _i _j
     for ((_i=0; _i<${#sources[@]}; _i++)); do
         for ((_j=_i+1; _j<${#sources[@]}; _j++)); do
@@ -8705,15 +8720,16 @@ cmd_zfs_snapshots() {
 # one piece that knows the difference between "the pool is not imported" and
 # "the pool is imported but this is the WRONG disk". A listing that flattened
 # those two into a boolean would hide the only dangerous one.
-# replica_section_excludes <config> <name> -- the -X patterns in [replica:<name>]'s
-# flags, one per line. They are written there by add-replica --exclude-child.
+# replica_section_excludes <config> <name> [option] -- the -X patterns (or another
+# option's values, -E) in [replica:<name>]'s flags, one per line. add-replica writes
+# them there: --exclude-child as -X, --exclude-family as -E.
 replica_section_excludes() {
-    awk -v want="[replica:$2]" '
+    awk -v want="[replica:$2]" -v opt="${3:--X}" '
         $0 == want { f = 1; next } /^\[/ { f = 0 }
         f { t = $0; sub(/^[ \t]+/, "", t); k = t; sub(/[ \t]*=.*$/, "", k)
             if (k != "flags") next
             v = t; sub(/^[^=]*=[ \t]*/, "", v); n = split(v, a, /[ \t]+/)
-            for (i = 1; i < n; i++) if (a[i] == "-X") print a[i + 1] }' "$1"
+            for (i = 1; i < n; i++) if (a[i] == opt) print a[i + 1] }' "$1"
 }
 
 cmd_list_replicas() {
@@ -8849,11 +8865,12 @@ JSRC
                 [ -n "$_x" ] || continue
                 _xarr="$_xarr${_xarr:+,}\"$(json_escape "$_x")\""
             done < <(replica_section_excludes "$config" "$name")
+            local _xfam; _xfam=$(replica_section_excludes "$config" "$name" -E | paste -sd, -)
             # media_key (W19b): the key file of an encrypted medium, by the pool name of
             # dst -- known without the disk in the slot.
             local _mk="$MEDIA_KEY_DIR/${dst%%/*}.key"; [ -s "$_mk" ] || _mk=""
-            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"media_guids":"%s","on_insert":"%s","keep":"%s","raw":"%s","media_key":"%s"}' \
-                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$mg" "${oi:-no}" "$kp" "${rw:-no}" "$_mk"
+            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"exclude_family":"%s","media_guids":"%s","on_insert":"%s","keep":"%s","raw":"%s","media_key":"%s"}' \
+                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$(json_escape "$_xfam")" "$mg" "${oi:-no}" "$kp" "${rw:-no}" "$_mk"
         else
             printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
             [ -n "$last" ] && printf '%-14s   last seen: %s\n' "" "$last"
