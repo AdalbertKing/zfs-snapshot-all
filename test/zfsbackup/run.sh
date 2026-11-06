@@ -14837,6 +14837,28 @@ if [ "$r1" -ne 0 ] && printf '%s' "$out" | grep -q 'usage: prepare-media POOL DE
 else
     bad "prepare-media: refusals" "$out" "$out2"
 fi
+# A14 (A-TASSA 2026-11-06): a USB bridge reported 512/512 for a 4096-byte disk and
+# the pool came out ashift=9 -- every write a read-modify-write, 11 MB/s. The
+# medium is created ashift=12 whatever the bridge says. zpool is a stub that
+# records its arguments; nothing touches a disk. Needs any block device for the
+# [ -b ] check, read only.
+PMBD=$(find /dev -maxdepth 1 -type b 2>/dev/null | head -1)
+if [ -n "$PMBD" ]; then
+    out=$( ( source "$ZFSBACKUP"
+             media_disk_in_use() { return 1; }
+             lsblk() { :; }
+             zpool() { echo "zpool $*" >> "$PMD/zpool.log"; [ "$1" = create ] && return 1; return 1; }
+             MEDIA_KEY_DIR="$PMD/keys"
+             cmd_prepare_media pm1 "$PMBD" --yes ) 2>&1 )
+    if grep -q '^zpool create .*-o ashift=12 ' "$PMD/zpool.log" 2>/dev/null \
+       && printf '%s' "$out" | grep -q 'zpool create -f -m none -o ashift=12 '; then
+        ok "prepare-media: the pool is created ashift=12, and the plan says so (A14)"
+    else
+        bad "prepare-media: ashift=12" "$(cat "$PMD/zpool.log" 2>/dev/null)" "$out"
+    fi
+else
+    echo "SKIP prepare-media ashift: no block device on this host"
+fi
 rm -rf "$PMD"
 fi   # --- koniec sekcji runreplicas ---
 

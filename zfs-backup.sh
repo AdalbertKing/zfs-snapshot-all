@@ -8170,7 +8170,7 @@ cmd_set_transfer() {
 # Owner note 15 (2026-10-08): "Prepare the medium once, by hand" was the one step
 # of a replica the package could not do, from batch or from the GUI. This is it:
 #
-#   zpool create -m none -o failmode=continue -O compression=zstd POOL DEVICE
+#   zpool create -m none -o ashift=12 -o failmode=continue -O compression=zstd POOL DEVICE
 #   zfs create POOL/BASE           -- the dataset that tells the gate it is THIS disk
 #   zpool export POOL              -- the disk can go to the safe
 #
@@ -8245,7 +8245,7 @@ cmd_prepare_media() {
     echo "PLAN (prepare-media):"
     echo "  disk:     $dev  ($real, $(lsblk -dn -o SIZE,MODEL "$real" 2>/dev/null | sed 's/  */ /g'))"
     lsblk -nr -o NAME,FSTYPE,LABEL "$real" 2>/dev/null | awk 'NF > 1 {print "  WIPED:    " $1 " holds " $2 (NF > 2 ? " (" $3 ")" : "")}'
-    echo "  1. zpool create -f -m none -o failmode=continue -O compression=zstd $pool $dev   -- EVERYTHING on the disk is erased"
+    echo "  1. zpool create -f -m none -o ashift=12 -o failmode=continue -O compression=zstd $pool $dev   -- EVERYTHING on the disk is erased"
     # W19(b) (owner 2026-10-11, "ma byc proste" 2026-10-13): the medium encrypted with a
     # KEY FILE on this host, never a passphrase -- a passphrase would stop the nightly and
     # the on-insert runs. One key per pool name, so the disks of a rotation pair (same
@@ -8271,7 +8271,7 @@ cmd_prepare_media() {
     # compression=zstd (W19, owner 2026-10-11): what the replica receives with zfs send -c
     # keeps its own compression; this is for everything written there otherwise, and so
     # the pool says plainly what it is.
-    zpool create -f -m none -o failmode=continue -O compression=zstd "$pool" "$dev" || die "prepare-media: zpool create failed (see above). Nothing else was done."
+    zpool create -f -m none -o ashift=12 -o failmode=continue -O compression=zstd "$pool" "$dev" || die "prepare-media: zpool create failed (see above). Nothing else was done."
     if [ "$enc" -eq 1 ]; then
         if [ "$keynew" -eq 1 ]; then
             ( umask 077; mkdir -p "$MEDIA_KEY_DIR" && od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "$keyfile" ) \
