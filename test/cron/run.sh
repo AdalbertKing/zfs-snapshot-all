@@ -1761,6 +1761,19 @@ printf '[defaults]\n\thost_label = f\n[replica:pe]\n\tsource = tank/a\n\tdst = u
 fo=$(for_run); frc=$?
 check "A22 passive replica with -E in flags: rc=0 and snapget -e carries both -E" "0:1" \
       "$frc:$(printf '%s\n' "$fo" | grep 'replica copy (pe)' | grep -c 'snapget.sh -e -M .*-E __replicate_ -E vzdump')"
+# REV-20261106-190: flags is pasted into root's crontab as written, so shell syntax
+# in it is refused, and an -E value must be a family name. Render only -- nothing
+# generated here is ever run. On d89e4cc4 this line rendered with the ';' intact.
+for _bad in '-E foo;touch>/tmp/rev190-proof' '-E foo|id' '-E $(id)' '-E foo&' '-E a*b'; do
+    printf '[defaults]\n\thost_label = f\n[replica:pe]\n\tsource = tank/a\n\tdst = usb/rep\n\tschedule = 0 1 * * *\n\tpassive = yes\n\tflags = %s\n' "$_bad" > "$FOR/c.conf"
+    fo=$(for_run); frc=$?
+    check "REV190 flags='$_bad' is refused and no replica line is emitted" "1:0" \
+          "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s\n' "$fo" | grep -c 'replica copy (pe)')"
+done
+printf '[defaults]\n\thost_label = f\n[replica:pe]\n\tsource = tank/a\n\tdst = usb/rep\n\tschedule = 0 1 * * *\n\tpassive = yes\n\tflags = -E autosnap_:x.1 -E __migration__\n' > "$FOR/c.conf"
+fo=$(for_run); frc=$?
+check "REV190 control: valid families render literally" "0:1" \
+      "$frc:$(printf '%s\n' "$fo" | grep 'replica copy (pe)' | grep -c -- '-E autosnap_:x.1 -E __migration__ ')"
 # A FIXED replica with several sources (found 2026-10-12 testing W18 on pve9b): its
 # subshell sat bare after zfs-job's "--" -- a syntax error in cron and in run-replicas.
 # The command part of every replica line must parse as shell.

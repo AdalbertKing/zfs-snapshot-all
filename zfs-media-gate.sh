@@ -460,21 +460,33 @@ status)
 attach)
     # ONE RUN AT A TIME (see RUNNING above). Checked and claimed under a short
     # flock, so two runs starting in the same second cannot both see "free".
-    # A state directory that cannot be written is not decided here: the
-    # imported-by-us marker below cannot be written either, and that refusal
-    # (REV-20260829-123 F2) puts the pool back and says why.
+    # FAIL CLOSED (REV-20261106-189): a lock that cannot be taken, or a claim
+    # that cannot be written and read back as this run's, stops here -- before
+    # any import, the medium untouched. A run that could not record itself is
+    # invisible to the next one, and two runs on one medium is the harm this
+    # guard exists for. The claim is written to a temp file and renamed over
+    # the record, so a reader sees the old record or the new one, never half.
+    claim_refuse() {
+        say "cannot record this run as the holder of '$LABEL' ($1) -- will not proceed; the medium is not touched. Fix $STATE_DIR and run again."
+        emit failed; exit 2
+    }
     mkdir -p "$STATE_DIR" 2>/dev/null || :
-    if ( : >> "$RUNNING.lock" ) 2>/dev/null; then
-        exec 8>>"$RUNNING.lock"
-        flock -w 30 8 || { say "could not take $RUNNING.lock in 30 s -- skipping rather than risk two runs on one medium"; emit busy; exit 75; }
-        _run=$(running_holder)
-        if [ -n "$_run" ] && [ "${_run%% *}" != "$PPID" ]; then
-            say "a copy onto '$LABEL' is already running since $(running_since "$_run") (pid ${_run%% *}) -- this run is skipped, the medium is not touched"
-            emit busy; exit 75
-        fi
-        printf '%s %s %s\n' "$PPID" "$(proc_start "$PPID")" "$(date +%s)" > "$RUNNING" 2>/dev/null || :
-        exec 8>&-
+    ( : >> "$RUNNING.lock" ) 2>/dev/null || claim_refuse "cannot create $RUNNING.lock"
+    exec 8>>"$RUNNING.lock" || claim_refuse "cannot open $RUNNING.lock"
+    flock -w 30 8 || { say "could not take $RUNNING.lock in 30 s -- skipping rather than risk two runs on one medium"; emit busy; exit 75; }
+    _run=$(running_holder)
+    if [ -n "$_run" ] && [ "${_run%% *}" != "$PPID" ]; then
+        say "a copy onto '$LABEL' is already running since $(running_since "$_run") (pid ${_run%% *}) -- this run is skipped, the medium is not touched"
+        emit busy; exit 75
     fi
+    _st=$(proc_start "$PPID")
+    [ -n "$_st" ] || claim_refuse "cannot read the start time of pid $PPID from /proc"
+    _me="$PPID $_st"
+    { printf '%s %s\n' "$_me" "$(date +%s)" > "$RUNNING.tmp.$$" && mv -fT "$RUNNING.tmp.$$" "$RUNNING"; } 2>/dev/null \
+        || { rm -f "$RUNNING.tmp.$$" 2>/dev/null; claim_refuse "cannot write $RUNNING"; }
+    _back=""; read -r _p _s _ < "$RUNNING" 2>/dev/null && _back="$_p $_s"
+    [ "$_back" = "$_me" ] || claim_refuse "$RUNNING does not read back as this run"
+    exec 8>&-
 
     # NOTHING TO SEND MEANS NOTHING TO RISK.
     #
@@ -811,10 +823,28 @@ detach)
     # imported-by-us marker would match this pool's GUID, and exporting here
     # would pull the disk out from under that copy. This run's own record is
     # cleared on every way out.
+    # A record that is there but cannot be read as one (not a regular file,
+    # unreadable, garbage) cannot say whose the medium is, so it is not
+    # exported on a guess (REV-20261106-189). No record at all is an unclaimed
+    # medium -- a manual detach, a run from before this guard -- and the
+    # imported-by-us marker below decides as it always has.
     _run=$(running_holder)
     if [ -n "$_run" ] && [ "${_run%% *}" != "$PPID" ]; then
         say "the copy onto '$LABEL' running since $(running_since "$_run") (pid ${_run%% *}) holds '$POOL' -- this run leaves it alone"
         emit busy; exit 0
+    fi
+    if [ -e "$RUNNING" ] || [ -L "$RUNNING" ]; then
+        _p=""; _s=""; _t=""; _x=""
+        { [ -f "$RUNNING" ] && read -r _p _s _t _x < "$RUNNING"; } 2>/dev/null
+        # exactly three numeric fields, as attach writes them
+        case "${_p:-x}/${_s:-x}/${_t:-x}/${_x}" in *[!0-9/]*|*[0-9])
+            if imported; then
+                say "$RUNNING is not a readable run record -- cannot tell which run holds '$POOL', so it is NOT exported. DO NOT UNPLUG: the pool is still imported. Check that no copy is running, remove $RUNNING, then run detach again."
+            else
+                say "$RUNNING is not a readable run record -- '$POOL' is not imported; nothing was done."
+            fi
+            emit failed; exit 2 ;;
+        esac
     fi
     trap clear_running EXIT
 

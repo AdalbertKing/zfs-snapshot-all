@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: e035dfa52d8ee250 -->
+<!-- status-covers-digest: 50ee102232593ec8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,12 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **REV-20261106-189/190 (2026-11-06, gałąź `fix/rev-189-190`; niewydane, dołącza do 1.0.12).**
+  Bramka nośnika: `attach` bez blokady albo bez zapisu przebiegu, który odczytany z powrotem wskazuje ten
+  przebieg, kończy się rc 2 przed importem; `detach` nie eksportuje puli przy zapisie przebiegu, którego nie
+  da się odczytać (nie są to dokładnie trzy pola liczbowe). Nazwy rodzin migawek (`--exclude-family`,
+  `exclude_family`, `-E` w `flags`) tylko z liter, cyfr i `_ . : -`; gen-cron odmawia `flags` ze składnią
+  powłoki (`;` `&` `|` `<` `>` backtick `$(` nowa linia). Na pve9: mediagate 185/0, cron 289/0; reszta suit w CI.
 - **A22 (2026-11-06, gałąź `fix/a22-skip-reserved`; niewydane, dołącza do 1.0.12).** Pasywna replika
   pomija rodziny migawek tak jak relacja: `add-replica --exclude-family=A,B` (tylko z `--passive`) zapisuje
   `-E` w `flags` sekcji (jak `-X` z `--exclude-child`), `list-replicas --json` oddaje to jako

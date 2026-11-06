@@ -44,6 +44,14 @@ when they change how the tool is used.
   has; the replica wizard sets `__replicate_,vzdump,__migration__` for a passive replica that has none, so the
   copy stands on the tool's own snapshots instead of the ones Proxmox VE replication renames and
   replaces every few hours. `list-replicas --json` shows the list as `exclude_family`.
+- **A replica run that cannot record itself does not start.** If the gate cannot create or open its
+  lock, or write and read back its run record (state directory not writable, a directory where the record
+  belongs), attach stops with rc 2 before any import. A detach that finds a record it cannot read
+  does not export the pool (it says DO NOT UNPLUG if the pool is imported).
+- **Snapshot family names are checked.** `--exclude-family` (add-replica, add-client, rux,
+  local-backup), `exclude_family` and `-E` in `flags` accept letters, digits and `_ . : -` only;
+  gen-cron refuses `flags` that contain `;`, `&`, `|`, `<`, `>`, a backtick, `$(` or a newline,
+  because the value is copied into root's crontab line unchanged.
 
 ## [1.0.11] — 2026-11-05
 

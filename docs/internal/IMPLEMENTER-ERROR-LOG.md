@@ -149,6 +149,25 @@ the tree nothing stops them. Before the push, grep the diff for that pattern.
 
 *Evidence: E115.*
 
+### R16 — One review, one pass: lab first, paperwork once
+
+Owner, 2026-11-06 ("100 linii kodu i 3 godziny -- niedopuszczalne"). Order, no loops back:
+
+1. The regression first, run on pve9 against `main` (negative control) -- seconds. pve9 not
+   answering is said at once and waited for, not worked around.
+2. The fix; the edited suites on pve9 until green, and every suite that greps a message the
+   change rewrites (`grep -rn` the old text in `test/`).
+3. Only then: text-checker on the response, a single commit for the response, views and
+   status, `reviewctl --generate` / `impact.sh --refresh-status` / `--verify` run on pve9 with
+   `REVIEWCTL_PUBREF=HEAD`, not here (5+ min on this box). One push, one CI read.
+4. Code edits through the Edit tool only; never a Python/heredoc patch with a backslash in it (E53, E122).
+
+A guard in front of an irreversible step refuses on its own failure, and a value
+written into a cron line is checked against a whitelist of characters, from the first
+version -- not after the review.
+
+*Evidence: E123.*
+
 ### R9, R10, R11 — on running suites
 
 Stated with their measurements in section 2b, because the case for them is the
@@ -2066,6 +2085,23 @@ used the heredoc because the patch was "mostly prose".
 
 *Rule.* R2 (E53 put this tool's heredoc on R2's list of boundaries), no new rule: any patch text containing a backslash goes through the Edit or Write
 tool. `bash -n` is not the check for this; reading the written line back is.
+
+### E123 — two review rounds, ~100 lines of code, ~3 hours (2026-11-06, R16)
+**2026-11-06, branch `fix/rev-189-190`, PR #1109.**
+
+*Genesis.* REV-189 (media gate claim fail-open) and REV-190 (`--exclude-family` let `;` into
+root's crontab) were both defects I wrote the same day: the claim kept `|| :` "to preserve
+REV-123 F2", and the family check was a blacklist. The fix was ~110 lines of code; the round
+took ~3 hours.
+
+*Cause.* The order was code, response, ledger, then tests. The tests ran last (pve9 did not
+answer for an hour), so three corrections came after the paperwork, each one re-doing it:
+text-checker found the record check accepting one field (code + test + response SHA); pve9
+showed the failure fixtures were never built (`mkdir -p` over a leftover file); CI failed an
+old A22 test that grepped the replaced message. `reviewctl --generate` and `impact --verify`
+ran here (5+ min each) several times. Two heredoc patches lost backslashes again.
+
+*Rule.* R16.
 
 ### E121 — two shapes the batch's own tests never ran, both red in CI (2026-11-05, R12)
 **2026-11-05, PR #1092 at 749ca91e: `gencron` and `draftscope` red.**

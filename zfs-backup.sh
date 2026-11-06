@@ -8410,6 +8410,24 @@ cmd_remove_media_trigger() {
     log "media trigger removed. Replicas now run only on their schedule; the cron entries are untouched."
 }
 
+# A snapshot FAMILY list as --exclude-family takes it (A,B,...): each name in
+# the characters ZFS allows in a snapshot name, minus the space, not starting
+# with '-' -- the grammar gen-cron.sh family_name_ok holds for exclude_family
+# and for -E in 'flags' (REV-20261106-190). Every name becomes an -E word in a
+# root crontab line, so anything else is refused here, before any config is
+# written.
+check_family_list() {   # <verb> <list>
+    local _f
+    case "$2" in *[!A-Za-z0-9_.:,-]*) die "$1: --exclude-family='$2' -- not a list of snapshot family names (letters, digits, _ . : -, comma-separated)" ;; esac
+    case ",$2," in *,,*) die "$1: --exclude-family='$2' has an empty entry -- a stray comma, most likely" ;; esac
+    for _f in ${2//,/ }; do
+        case "$_f" in -*|*[!A-Za-z0-9_.:-]*)
+            die "$1: --exclude-family='$2' -- '$_f' is not a snapshot family name (letters, digits, _ . : -, comma-separated, not starting with -)" ;;
+        esac
+    done
+    return 0
+}
+
 cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [...]
     # --ask [NAME]: the same questions as whiptail windows (F6 in the GUI: Ins =
     # a new replica, Enter + 'e' = change one). The windows only ask and show
@@ -8456,7 +8474,7 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
             # included). Written as -X in the section's flags; needs recursion.
             --exclude-child=*) xchild+=("${a#*=}") ;;
             # A22 (field 2026-11-06): the same -E the relationships carry (exclude_family).
-            --exclude-family=*) xfam="${xfam:+$xfam,}${a#*=}" ;;
+            --exclude-family=*) check_family_list add-replica "${a#*=}"; xfam="${xfam:+$xfam,}${a#*=}" ;;
             # P5 (owner 2026-10-09, "po ID"): the disks of this replica by pool GUID,
             # repeatable or comma-separated; the gate refuses any other disk.
             --media-guid=*) IFS=',' read -ra _sp <<< "${a#*=}"
@@ -8519,7 +8537,6 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
         [ "$passive" -eq 1 ] || die "add-replica: --exclude-family needs --passive -- a replica with its own prefix takes only that family already"
         local _xf
         for _xf in ${xfam//,/ }; do
-            case "$_xf" in -*|*[[:space:]]*|*\'*|*\"*) die "add-replica: --exclude-family='$xfam' -- family names, comma-separated, no spaces or quotes (each becomes -E in the cron line)" ;; esac
             xflags="$xflags${xflags:+ }-E $_xf"
         done
     fi
@@ -9213,7 +9230,7 @@ cmd_local_backup() {
             # The same exclusions as the remote form, written as the same
             # [dataset:] scope fields (exclude_child_<n> -> -X, exclude_family -> -E).
             --exclude-child=*)  lb_excl+=("${a#*=}") ;;
-            --exclude-family=*) lb_exfam="${lb_exfam:+$lb_exfam,}${a#*=}" ;;
+            --exclude-family=*) check_family_list local-backup "${a#*=}"; lb_exfam="${lb_exfam:+$lb_exfam,}${a#*=}" ;;
             # W17: an encrypted source copied encrypted (-w), first copy included.
             --raw)       lb_raw=1 ;;
             # --passive (2026-10-24, Metropolis pve2): the copy ADOPTS snapshots somebody
@@ -10325,7 +10342,7 @@ cmd_add_client() {
             --own-snapshots) own_snaps=1 ;;
             --stamp-family) stamp_family=1 ;;
             --raw)         raw_send=1 ;;
-            --exclude-family=*) exclude_family="${exclude_family:+$exclude_family,}${a#*=}" ;;
+            --exclude-family=*) check_family_list add-client "${a#*=}"; exclude_family="${exclude_family:+$exclude_family,}${a#*=}" ;;
             --exclude-child=*) excludes+=("${a#*=}") ;;
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}"; target_given=1 ;;
@@ -23341,7 +23358,7 @@ rux_entry() {
             --own-snapshots) rux_own=1 ;;   # passed to add-client: the family on the source is leftovers
             --stamp-family) rux_stamp=1 ;;  # passed to add-client: snaponly family stamped with this collector's label (U141)
             --raw)         rux_raw=1 ;;
-            --exclude-family=*) exclude_family="${exclude_family:+$exclude_family,}${a#*=}" ;;
+            --exclude-family=*) check_family_list rux "${a#*=}"; exclude_family="${exclude_family:+$exclude_family,}${a#*=}" ;;
             --exclude-child=*) excludes+=("${a#*=}") ;;
             --profile=*) profile="${a#*=}"; flag_profile rux "$profile" ;;
             --source-profile=*) source_profile="${a#*=}" ;;
