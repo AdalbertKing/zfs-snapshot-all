@@ -60,7 +60,8 @@ if [ "$EDIT" -eq 1 ]; then
     [ "${KEEP:-}" = - ] && KEEP=""
     [ "${RAW:-}" = yes ] || RAW=no
     case "${HIST:-}" in ''|-) HIST=all ;; esac
-    [ "${EXFAM:--}" = - ] && EXFAM=""
+    # replika sprzed A22 nie ma listy: dostaje tę samą, plan ją pokazuje przed instalacją
+    [ "${EXFAM:--}" = - ] && EXFAM="__replicate_,vzdump,__migration__"
 fi
 # Reguła udev sprzed P5 (run-replicas bez --on-insert) uruchamiała przy włożeniu WSZYSTKIE
 # repliki; plan ją wtedy odnawia (install-media-trigger --install), jak brakującą.
