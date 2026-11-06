@@ -14837,10 +14837,24 @@ fi
 lr=$( ( source "$ZFSBACKUP"; zfs() { return 1; }; zpool() { return 1; }; cmd_list_replicas --json --config="$PV/c.conf" ) 2>&1 )
 out=$(bash "$ZFSBACKUP" add-replica pve --source=hdd/data --dst=repl/replica --exclude-family=__replicate_ 2>&1); rc=$?
 out2=$(bash "$ZFSBACKUP" add-replica pve --source=hdd/data --dst=repl/replica --passive --exclude-family=-E 2>&1); rc2=$?
-if printf '%s' "$lr" | grep -q '"name":"pve"[^}]*"exclude_family":"__replicate_,vzdump"'    && printf '%s' "$lr" | grep -q '"name":"pv"[^}]*"exclude_family":""'    && [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q -- '--exclude-family needs --passive'    && [ "$rc2" -ne 0 ] && printf '%s' "$out2" | grep -q 'family names, comma-separated'; then
+if printf '%s' "$lr" | grep -q '"name":"pve"[^}]*"exclude_family":"__replicate_,vzdump"'    && printf '%s' "$lr" | grep -q '"name":"pv"[^}]*"exclude_family":""'    && [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q -- '--exclude-family needs --passive'    && [ "$rc2" -ne 0 ] && printf '%s' "$out2" | grep -q 'not a snapshot family name'; then
     ok "A22 addreplica: -E in flags is list-replicas' exclude_family; without --passive or with '-E' as a name it is refused"
 else
     bad "A22 addreplica: exclude_family" "$lr" "rc=$rc $out" "rc=$rc2 $out2"
+fi
+# REV-20261106-190: every name becomes an -E word in root's crontab, so the CLI
+# refuses shell syntax and empty entries before anything is written; several
+# --exclude-family options and a valid list still pass the check.
+_r190=""
+for _v in 'foo;touch>/tmp/rev190-proof' 'a,,b' '' 'a,' 'a b'; do
+    out=$(bash "$ZFSBACKUP" add-replica pve --source=hdd/data --dst=repl/replica --passive "--exclude-family=$_v" 2>&1); rc=$?
+    { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qE 'not a (list of )?snapshot family name|empty entry'; } || _r190="$_r190 [$_v rc=$rc]"
+done
+out=$( ( source "$ZFSBACKUP"; check_family_list t __replicate_,vzdump && check_family_list t autosnap_:x.1 && echo OK ) 2>&1 )
+if [ -z "$_r190" ] && [ "$out" = OK ]; then
+    ok "REV190 add-replica: shell syntax, empty and stray-comma families refused; valid lists pass"
+else
+    bad "REV190 add-replica: family grammar" "not refused:$_r190" "valid: $out"
 fi
 # T11 (test od zera, 2026-11-05): the only relation runs on a delegated account, so
 # root's default config does not exist. The GUI's reader got a FATAL and the header
