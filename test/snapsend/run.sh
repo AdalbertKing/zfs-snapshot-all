@@ -1712,6 +1712,46 @@ for engfile in "$SNAPSEND" "$SNAPGET"; do
           "$(F5_SSH255=1 f5 "$POOL/f5ok" "")"
     check "F5 $en: dataset that does not exist -> rc 0, empty list" "0|" "$(f5 "$POOL/f5nope" "")"
     check "F5 $en: two snapshots -> rc 0, oldest first" "0|auto_1 auto_2" "$(f5 "$POOL/f5ok" "")"
+    # A21 (field 2026-11-06): the LOCAL side. A dataset that does not exist yet (the first copy onto
+    # a replica medium) is an empty list, not "Could not list ... failure"; a real failure still is.
+    f5l() {   # <dataset> <bad-dataset-or-empty> -> "rc|names|failure-lines"
+        local o r
+        o=$( . "$R186D/fn-$en.sh"
+             log() { echo "LOG $*"; }
+             SSH_OPTS=(); RECURSIVE=0
+             export F5_BAD="$2" PATH="$R186D/f5bin:$PATH"
+             get_sorted_snapshots "$1" 2>/dev/null )
+        r=$?
+        printf '%s|%s|%s' "$r" "$(printf '%s
+' "$o" | grep -v '^LOG' | tr '
+' ' ' | sed 's/ *$//')"             "$(printf '%s
+' "$o" | grep -c 'Could not list the snapshots')"
+    }
+    check "A21 $en: local dataset that does not exist -> rc 0, empty list, no failure line" "0||0" "$(f5l "$POOL/f5nope" "")"
+    check "A21 $en: local zfs list fails on an EXISTING dataset -> rc 1, failure said" "1||1" "$(f5l "$POOL/f5bad" "$POOL/f5bad")"
+done
+
+# A20 (field 2026-11-06): a pvesr source is never held, and Proxmox VE rotates its __replicate_
+# snapshot every few hours; a 2.7 h send onto a USB medium found the snapshot it sent gone at the
+# proof and called a landed copy VERIFY FAILED. validate_snapshot lifted from each engine, with
+# get_snapshot_guid answering from a table: the GUID recorded at the send proves it; a wrong
+# target GUID, or nothing recorded, still fails.
+for engfile in "$SNAPSEND" "$SNAPGET"; do
+    en="$(basename "$engfile" .sh)"
+    r186_fn "$engfile" validate_snapshot > "$R186D/vs-$en.sh"
+    [ -s "$R186D/vs-$en.sh" ] || { echo "cannot lift validate_snapshot from $en" >&2; exit 1; }
+    a20() {   # <src-guid-or-empty> <tgt-guid> <recorded-or-empty> -> rc
+        ( . "$R186D/vs-$en.sh"
+          log() { :; }
+          get_snapshot_guid() { case "$1" in src/*) [ -n "$A20_S" ] && echo "$A20_S" ;; *) echo "$A20_T" ;; esac; }
+          A20_S="$1" A20_T="$2"
+          validate_snapshot src/ds tgt/ds snap u h "$3" )
+        echo $?
+    }
+    check "A20 $en: source snapshot gone, target carries the GUID recorded at the send -> proven" "0" "$(a20 "" 111 111)"
+    check "A20 $en: source snapshot gone, target GUID differs from the recorded one -> FAILED" "1" "$(a20 "" 222 111)"
+    check "A20 $en: source snapshot gone, nothing recorded -> FAILED" "1" "$(a20 "" 111 "")"
+    check "A20 $en: live source GUID still wins over the recorded one" "1" "$(a20 333 111 111)"
 done
 
 # F6: -m is a literal prefix. `.` used to match any character, so the newer
