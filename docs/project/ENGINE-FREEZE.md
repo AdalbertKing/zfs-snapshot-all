@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 93005937ee10440c0e09e72c234058f00ebdaee9 -->
-<!-- frozen: snapget.sh 100755 4dcdc2fe777cf65ec0f9e85ed7fe1f9ab34fec0a -->
+<!-- frozen: snapsend.sh 100755 2afbc3d6aeefc30cc9406e9cfa6e73b310fa13b5 -->
+<!-- frozen: snapget.sh 100755 3e1b1458ab177de6a3ea7edf7598ca7cd33801de -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 5a0ea69903070daeb4b438728de258c90156916a -->
 <!-- frozen: lib-zfs-snap.sh 100644 4ef896cf1191f00f4226c41e1776a52249488119 -->
@@ -1302,6 +1302,22 @@ Owner-authorized refreezes:
   - Both checks now `grep -qxF -- "$root" <<< "$list"`; nothing else in either engine moved.
   - Tests: monitor F12 and delsnaps F3, a complete walk over 64 KiB (red against main).
   twin: none -- check-snap-age.sh has no twin; delsnaps.sh has no twin.
+- 2026-11-06 (snapsend.sh, snapget.sh): **A20/A21 -- a pvesr source rotated away during the
+  send; a missing target is not a failed list.** Owner direction (2026-11-06: "Wpierw usterki
+  napraw"). Field: the first 18 h copy onto a USB replica ended rc=1 on one dataset --
+  `VERIFY FAILED` for `vm-105-disk-0@__replicate_105-0_1793970034__`. The source is pvesr-managed,
+  so `hold_snapshot` deliberately does not hold it, and Proxmox VE replaced that snapshot at 16:00
+  while the 2.7 h send ran; `validate_snapshot` read the source GUID live and found nothing.
+  - The source GUID is recorded before the send (`sent_guid`); `validate_snapshot` takes it as an
+    optional 6th argument and uses it ONLY when the live source GUID cannot be read. A live GUID
+    still wins; a target with another GUID, or nothing recorded, still fails.
+  - A21: the local branch of `get_sorted_snapshots` asks `dataset_presence` before calling a
+    failed list a failure, as the remote branch already did -- a target that does not exist yet
+    (the first copy) is an empty list, not 16 "Could not list ... failure" lines.
+  - Tests: snapsend suite A20 (validate_snapshot lifted from both engines, red against main) and
+    A21 (both engines, local side).
+  twin: both changed identically (validate_snapshot, get_sorted_snapshots local branch, the
+  recorded GUID at the send and its use at the proof).
 
 ## How it is enforced
 

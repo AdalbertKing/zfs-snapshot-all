@@ -33,6 +33,12 @@ when they change how the tool is used.
   record whose process is gone as orphaned (and marks it dead) instead of a hung copy.
 - **`deploy.sh`** ends with the next step (`zfs-backup gui`) instead of hand-written cron recipes.
 - **Replica wizard:** the cron field names its five fields, minute first, with examples.
+- **A long copy from a Proxmox VE replicated disk is no longer reported as failed.** Proxmox VE
+  replaces its `__replicate_` snapshot every few hours and a dataset carrying them is not held, so a copy
+  running longer than that found the sent snapshot gone and said `VERIFY FAILED`. The snapshot's
+  GUID is recorded when it is sent and proves the copy when the source no longer has it.
+- **First copy:** a target dataset that does not exist yet is no longer logged as "Could not list
+  the snapshots ... failure".
 
 ## [1.0.11] — 2026-11-05
 

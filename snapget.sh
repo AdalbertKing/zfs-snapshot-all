@@ -719,7 +719,12 @@ get_sorted_snapshots() {
     else
         local _out
         _out=$(zfs list -H -o name -t snapshot -s creation $depth_option "$dataset" 2>/dev/null) || {
-            log 0 "Could not list the snapshots of '$dataset' (exit $?) -- treating this as a failure, not as an empty dataset."
+            local _rc=$?
+            # A21 (field 2026-11-06): a target that does not exist YET (the first copy) is
+            # an empty list, as on the remote side above -- asked, not assumed.
+            dataset_presence "$dataset"
+            [ $? -eq 1 ] && return 0
+            log 0 "Could not list the snapshots of '$dataset' (exit $_rc) -- treating this as a failure, not as an empty dataset."
             return 1
         }
     fi
@@ -898,6 +903,7 @@ validate_snapshot() {
     local snapshot="$3"
     local remote_user="$4"
     local remote_host="$5"
+    local sent_guid="${6:-}"
 
     # GUID, not creation timestamp: it's ZFS's own identity for a snapshot
     # (1-second creation resolution can't tell two distinct snapshots apart),
@@ -907,6 +913,15 @@ validate_snapshot() {
     local tgt_guid
     tgt_guid=$(get_snapshot_guid "$tgt_dataset" "$snapshot")
 
+    # A20 (field 2026-11-06): the snapshot can no longer be read on the source, but its
+    # GUID was recorded when it was sent -- the target carrying that GUID is the same
+    # proof. Proxmox VE rotates its __replicate_ snapshots every few hours and a pvesr
+    # source is never held (see hold_snapshot), so a long first copy outlives the
+    # snapshot it sent.
+    if [ -z "$src_guid" ] && [ -n "$sent_guid" ]; then
+        src_guid=$sent_guid
+        log 1 "${src_dataset}@${snapshot} cannot be read on the source any more (Proxmox VE rotates its replication snapshots) -- proving it by the GUID recorded when it was sent"
+    fi
     if [ -z "$src_guid" ] || [ -z "$tgt_guid" ]; then
         return 1
     fi
@@ -1652,6 +1667,11 @@ process_dataset() {
         latest_snap="${snapshot##*@}"
     fi
 
+    # A20: the identity of what is sent, recorded before the send -- the proof below
+    # falls back to it when the source rotated the snapshot away meanwhile.
+    local sent_guid
+    sent_guid=$(get_snapshot_guid "$src_dataset" "$latest_snap" "$remote_user" "$remote_host")
+
     # Hold it for the whole transfer window, including across a resume that
     # spans later cron runs -- see HOLD-BASED PROTECTION in lib-zfs-snap.sh.
     # Source may be remote here. Released on the success path below and in
@@ -2139,7 +2159,7 @@ process_dataset() {
     # "the descendants rode the same stream and cannot have arrived
     # separately" -- was measured FALSE and is now checked, not assumed.
     # Under -R each dataset is its own job and each is proven on its own pass.
-    if ! validate_snapshot "$src_dataset" "$tgt_dataset" "$latest_snap" "$remote_user" "$remote_host"; then
+    if ! validate_snapshot "$src_dataset" "$tgt_dataset" "$latest_snap" "$remote_user" "$remote_host" "$sent_guid"; then
         progress_mark_verified "$tgt_dataset" verify_failed
         log 0 "VERIFY FAILED: ${tgt_dataset}@${latest_snap} is not on the target with the source's GUID -- the transfer reported success but the snapshot cannot be confirmed. Treating this dataset as FAILED rather than reporting a backup that may not exist."
         return 1

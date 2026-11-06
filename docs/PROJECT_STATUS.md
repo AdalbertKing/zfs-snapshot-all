@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: ed3c68460b885a88 -->
+<!-- status-covers-digest: ce2851bb5656ed1b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,14 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **A20/A21 (2026-11-06, gałąź `fix/a20-a21`; niewydane, dołącza do 1.0.12).** Pierwsza kopia na usb1
+  (A-TASSA, 00:27-18:27) skończyła rc=1 na jednym datasecie: `VERIFY FAILED` dla
+  `hdd/data/vm-105-disk-0@__replicate_105-0_1793970034__`. Źródło jest pod pvesr, więc migawka nie ma
+  blokady (`hold_snapshot`), a Proxmox VE wymienił ją o 16:00 w trakcie 2,7 h wysyłki. Teraz `snapsend.sh`
+  i `snapget.sh` zapisują GUID migawki przed wysyłką i weryfikacja używa go, gdy źródło migawki już
+  nie ma (żywy GUID nadal ma pierwszeństwo). A21: brak datasetu celu przy pierwszej kopii to pusta
+  lista, nie „Could not list ... failure” (lokalna gałąź `get_sorted_snapshots`, jak zdalna).
+  Test A20 wycięty: na gałęzi przechodzi, na `main` pada; A21 w suicie snapsend (CI, ZFS).
 - **Paczka 1.0.12 (2026-11-06, gałąź `fix/batch-1.0.12`, PR #1104; niewydane).** Usterki z wdrożenia 1.0.11
   na A-TASSA (A3-A19) i z Dąbrowskiej (A18, A19). Jedna replika = jeden bieg naraz (`zfs-media-gate.sh`:
   znacznik `<etykieta>.running` z PID i czasem startu procesu; drugi bieg kończy rc 75 z komunikatem „already running since …”, jego
