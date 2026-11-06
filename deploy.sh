@@ -6211,7 +6211,7 @@ fi
 # the dependency/repo/alerting/capacity phases above, but is otherwise a
 # separate one-shot operation: it deliberately does NOT touch Phase 8's
 # BACKUP_USER account below (a different, unrelated delegation) and never
-# adds cron lines -- that stays manual, same as everything else in Part 5.
+# adds cron lines -- those are gen-cron.sh's, through the GUI or zfs-backup.sh.
 # ------------------------------------------------------------------------------
 # PEER_STATE_DIR/PEER_KEY_DIR and the path helpers built from them moved to
 # just above do_join_check -- do_commit_scope_check needs peer_manifest_path
@@ -8376,48 +8376,20 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
 fi
 echo
 log "===================================================================="
-log "Automated part done. Manual steps remaining (Part 5, NOT scripted):"
+log "Automated part done. Next step:"
 log "===================================================================="
+# A3 (A-TASSA 2026-11-05): this used to list four hand-written cron recipes
+# ("Part 5, NOT scripted") from before gen-cron and the GUI existed. After the
+# wizard had already done the work it read like unfinished business. The
+# schedule is the package's job now; the one step that stays human is the mail relay.
 cat <<'EOF'
 
-  1. Add the actual snapsend.sh / snapget.sh / delsnaps.sh cron lines for
-     THIS host's datasets. There is no generic template here on purpose --
-     copying another host's dataset names blindly is how backups silently
-     stop protecting the right data. Prefer writing a config and letting
-     gen-cron.sh render the lines -- it lints what these hand-written
-     shapes cannot. If writing manually anyway:
+  Relations, replicas and their schedule are made by the package itself:
+      zfs-backup gui        (or: zfs-backup.sh --help)
+  gen-cron.sh writes the cron lines. Do not write snapsend/delsnaps lines by hand.
 
-       <schedule> /root/scripts/zfs-snapshot-all/snapsend.sh -m <prefix> \
-         [-e] [-r|-R] [-u] [-z] -v 3 <DATASETS> [<REMOTE>] \
-         2>>/root/scripts/cron.log || /root/scripts/notify-fail.sh "<short job name>"
-
-     For delsnaps.sh (retention): its -v is a bare TOGGLE, not '-v 3' --
-     the engines' -v takes a level, delsnaps' does not, and '-v 3' there
-     makes '3' the dataset list (basket B7; the two parsers are frozen).
-     Use -R when subtree retention is wanted, and a specific enough pattern
-     (e.g. automated_hourly, not just automated_) unless a flat/blanket
-     retention is genuinely what you want. Always give explicit retention
-     flags: delsnaps with NO retention flags defaults to age-mode with
-     threshold=now, which deletes everything the pattern matches.
-
-  2. Before adding a new schedule, sanity-check it against what's ALREADY
-     in crontab -l on this host -- specifically watch for jobs that can
-     legitimately overrun into the next scheduled slot for a DIFFERENT job
-     touching related data (this is what caused the original silent
-     backup-gap bug and the near-miss on hdd/lxc weekly snapshots). The
-     per-target flock lock (added 2026-07-07) protects against two
-     invocations of the SAME target colliding, but does not protect two
-     DIFFERENT jobs from stepping on each other's dataset lifecycle
-     (e.g. a pruning job racing a send job on the same dataset).
-
-  3. After adding cron lines, verify with a manual dry-run first:
-       ./snapsend.sh -n <DATASETS> [<REMOTE>]   # -n = read-only, no side effects
-     and only then let cron pick it up.
-
-  4. If mail alerting (Part 4 above) needs a relay because direct postfix
-     delivery didn't work: that requires host-specific SMTP credentials and
-     is a decision for a human, not this script -- see the notes it printed
-     above.
+  Mail: if direct delivery did not work (the notes above say so), a relay needs
+  this host's SMTP credentials -- a decision for a human, not this script.
 
 EOF
 
