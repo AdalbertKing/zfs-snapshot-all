@@ -795,6 +795,18 @@ PYEOF
               Tv '    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '\''$NAME'\'' i naciśnij F7 (Uruchom teraz).' '$NAME' "$NAME"; echo
             } >"$TMPD/result.txt"
             result_box "$(Tv 'Replika $NAME: GOTOWE' '$NAME' "$NAME")" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
+            # A8 (A-TASSA 2026-11-05): dysk był podłączony przy instalacji, a pierwsza kopia
+            # ruszyła dopiero następnej nocy -- udev reaguje tylko na WŁOŻENIE. Nowa replika
+            # na dysku, który już jest: pytanie, czy zacząć teraz. Bieg w tle, ten sam
+            # czasownik co F7, przeżywa wyjście z GUI.
+            _pool="${DST%%/*}"
+            if [ "$EDIT" -eq 0 ] && [ "$MEDIA" = removable ] \
+               && { zpool list -H -o name "$_pool" >/dev/null 2>&1 \
+                    || zpool import 2>/dev/null | awk -v p="$_pool" '$1 == "pool:" && $2 == p {f=1} END {exit !f}'; } \
+               && wt --title "$(Tv 'Replika $NAME' '$NAME' "$NAME")" --yes-button "$(T 'Tak, teraz')" --no-button "$(T 'Nie')" \
+                     --yesno "$(Tv 'Dysk $POOL jest podłączony. Zacząć pierwszą kopię teraz?\n\nKopia biegnie w tle, także po wyjściu z programu. Stan: F2 Przebiegi.' '$POOL' "$_pool")" 10 "$W"; then
+                setsid -f "$ZB" run-replicas --name="$NAME" </dev/null >/dev/null 2>&1 || :
+            fi
         else
             T 'Nie udało się -- nic nie zainstalowano.' >"$TMPD/result.txt"
             result_box "$(Tv 'Replika $NAME: instaluję' '$NAME' "$NAME")" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
