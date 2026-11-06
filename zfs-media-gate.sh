@@ -834,9 +834,10 @@ detach)
         emit busy; exit 0
     fi
     if [ -e "$RUNNING" ] || [ -L "$RUNNING" ]; then
-        _p=""; _s=""; _t=""
-        { [ -f "$RUNNING" ] && read -r _p _s _t < "$RUNNING"; } 2>/dev/null
-        case "$_p$_s$_t" in ''|*[!0-9]*)
+        _p=""; _s=""; _t=""; _x=""
+        { [ -f "$RUNNING" ] && read -r _p _s _t _x < "$RUNNING"; } 2>/dev/null
+        # exactly three numeric fields, as attach writes them
+        case "${_p:-x}/${_s:-x}/${_t:-x}/${_x}" in *[!0-9/]*|*[0-9])
             if imported; then
                 say "$RUNNING is not a readable run record -- cannot tell which run holds '$POOL', so it is NOT exported. DO NOT UNPLUG: the pool is still imported. Check that no copy is running, remove $RUNNING, then run detach again."
             else

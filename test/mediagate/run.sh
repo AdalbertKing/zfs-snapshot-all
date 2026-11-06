@@ -1308,6 +1308,9 @@ else
     printf 'guid=%s\n' "$POOL_GUID" > "$STATE/rep.imported-by-us"
     out="$(g detach rotpool rep)"; rc=$?
     check "RU8: detach with a garbage run record does not export" "" "$(cat "$EXPORTED_LOG")"
+    echo "12345" > "$STATE/rep.running"      # numeric, but not pid + start + since
+    out="$(g detach rotpool rep)"; rc=$?
+    check "RU8: ...nor with a truncated one (one field)" "" "$(cat "$EXPORTED_LOG")"
     rm -f "$STATE/rep.running" "$STATE/rep.imported-by-us"
     # A lock that cannot be created (a directory in its place).
     POOLS="hdd"; IMPORTABLE="rotpool"; : > "$IMPORTED_LOG"
