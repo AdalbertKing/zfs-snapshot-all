@@ -929,5 +929,7 @@
 "Relacja nie ma szczebla z migawkami -- nic do zmiany.": "The relationship has no tier that takes snapshots -- nothing to change.",
 "Enter okno   ": "Enter window   ",
 "Tak, teraz": "Yes, now",
-"Dysk $POOL jest podłączony. Zacząć pierwszą kopię teraz?\\n\\nKopia biegnie w tle, także po wyjściu z programu. Stan: F2 Przebiegi.": "Disk $POOL is connected. Start the first copy now?\\n\\nThe copy runs in the background, also after you leave the program. Progress: F2 Runs."
+"Dysk $POOL jest podłączony. Zacząć pierwszą kopię teraz?\\n\\nKopia biegnie w tle, także po wyjściu z programu. Stan: F2 Przebiegi.": "Disk $POOL is connected. Start the first copy now?\\n\\nThe copy runs in the background, also after you leave the program. Progress: F2 Runs.",
+"relacja %s (pvesr)": "relation %s (pvesr)",
+"brak kopii pvesr na tym hoście": "no pvesr copies on this host"
 }
