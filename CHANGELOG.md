@@ -14,6 +14,25 @@ when they change how the tool is used.
   to three tries.
 - **Deployment guide:** the first `git` on Debian 11, before the package exists, names the same
   pinning by hand (`git` and `git-man`).
+- **One replica, one run at a time.** A copy still running when the next trigger comes (schedule
+  or a re-plug) is not started a second time: the new run ends with rc 75 and says since when the
+  copy runs; its detach no longer exports the disk under the running copy. The age monitor reports
+  a running copy as OK (WARNING past the critical age).
+- **New replica on a disk already attached:** the wizard asks whether to start the first copy now
+  (in the background, as F7).
+- **`prepare-media` creates the pool with `ashift=12`.** USB bridges report 512-byte sectors on
+  4 KiB disks; ZFS then chose `ashift=9` and every write became a read-modify-write.
+- **F2 Przebiegi:** finished runs of the last 72 h (was 12 h); a running run is always listed, also
+  after F8 and when it started before the window. The idle screen is redrawn whole once a minute,
+  so a console broadcast no longer leaves garbage on it (Ctrl-R does the same at once).
+- **F4 Kopie** of a snapshot-only relation lists the guest disks replicated by `pvesr`.
+- **gen-cron:** two datasets with the same basename in one relation get distinct notify labels;
+  the relation install (`zfs-backup.sh`) no longer refuses a block where only such a label changed. Commented-out
+  `snapsend`/`delsnaps` lines in root's crontab no longer block the install.
+- **delete-relation** also removes the relation's progress records; the capacity monitor reports a
+  record whose process is gone as orphaned (and marks it dead) instead of a hung copy.
+- **`deploy.sh`** ends with the next step (`zfs-backup gui`) instead of hand-written cron recipes.
+- **Replica wizard:** the cron field names its five fields, minute first, with examples.
 
 ## [1.0.11] — 2026-11-05
 
