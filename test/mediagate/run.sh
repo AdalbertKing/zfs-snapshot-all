@@ -249,23 +249,35 @@ EXPORT_FAILS=""
 # safe to unplug. Both compensating outcomes are covered, because the one that
 # cannot put the pool back is the one that must shout.
 # ---------------------------------------------------------------------------
-: > "$EXPORTED_LOG"
+: > "$EXPORTED_LOG"; : > "$IMPORTED_LOG"
 POOLS="hdd"; IMPORTABLE="rotpool"; DATASETS="hdd rotpool/replica"
 UNWRITABLE="$TMPD/nope/deeper"
 : > "$TMPD/nope"          # a FILE where the state dir would have to be
+# A state dir that cannot be written now stops attach at the run claim, BEFORE
+# the import (REV-20261106-189): same refusal, nothing to put back.
 out="$(PATH="$BIN:$PATH" MEDIA_STATE_DIR="$UNWRITABLE" bash "$GATE" attach rotpool rep --dataset rotpool/replica 2>&1)"; rc=$?
-check "F2: an import whose ownership cannot be recorded is NOT success" "2" "$rc"
+check "F2: an attach whose state cannot be recorded is NOT success" "2" "$rc"
 has "will not proceed" "$out" && ok "F2: ...and says why it stops" || bad "F2: ...and says why it stops" "$out"
+check "F2: ...and imports nothing" "" "$(cat "$IMPORTED_LOG")"
+
+# The marker itself unwritable (a directory in its place), the claim fine: the
+# import happens and ownership cannot be recorded -- the original F2 path.
+mkdir -p "$STATE/rep.imported-by-us"
+: > "$IMPORTED_LOG"
+out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+check "F2: an import whose ownership cannot be recorded is NOT success" "2" "$rc"
+has "will not proceed" "$out" && ok "F2: ...and says why it stops (marker)" || bad "F2: ...and says why it stops (marker)" "$out"
 check "F2: ...and the pool it imported is exported again" "rotpool" "$(cat "$EXPORTED_LOG")"
 has "as it was before this run" "$out" && ok "F2: ...and says the machine was put back" || bad "F2: ...and says the machine was put back" "$out"
 
 # ...and when the compensating export ALSO fails, the disk must not be pulled.
 : > "$EXPORTED_LOG"
 EXPORT_FAILS=1
-out="$(PATH="$BIN:$PATH" MEDIA_STATE_DIR="$UNWRITABLE" EXPORT_FAILS=1 bash "$GATE" attach rotpool rep --dataset rotpool/replica 2>&1)"; rc=$?
+out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
 check "F2: ...and if it cannot be exported either, still nonzero" "2" "$rc"
 has "DO NOT UNPLUG" "$out" && ok "F2: ...carrying DO NOT UNPLUG" || bad "F2: ...carrying DO NOT UNPLUG" "$out"
 EXPORT_FAILS=""
+rmdir "$STATE/rep.imported-by-us"; rm -f "$STATE"/rep.running
 
 # ---------------------------------------------------------------------------
 # G. THE GENERATED LINE, RUN WHOLE
@@ -1270,6 +1282,47 @@ else
     check "RU5: ...the pool is imported" "rotpool" "$(cat "$IMPORTED_LOG")"
     POOLS="hdd rotpool"; IMPORTABLE=""
     g detach rotpool rep >/dev/null
+    rm -f "$STATE"/rep.running "$STATE"/rep.imported-by-us
+
+    # FAIL CLOSED (REV-20261106-189). A claim that cannot be written (a directory
+    # where rep.running belongs) or a lock that cannot be created must stop
+    # attach BEFORE the import; and a second run must not then export the
+    # medium the first run holds.
+    POOLS="hdd"; IMPORTABLE="rotpool"; : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
+    mkdir -p "$STATE/rep.running"
+    out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+    check "RU6: a run claim that cannot be written stops attach (rc 2)" "2" "$rc"
+    check "RU6: ...before anything is imported" "" "$(cat "$IMPORTED_LOG")"
+    has "will not proceed" "$out" && ok "RU6: ...and says why" || bad "RU6: ...and says why" "$out"
+    # The other run's medium: imported, its marker matches -- a detach that
+    # cannot read the record must not export it.
+    POOLS="hdd rotpool"; IMPORTABLE=""
+    printf 'guid=%s\n' "$POOL_GUID" > "$STATE/rep.imported-by-us"
+    out="$(g detach rotpool rep --engine-rc 75)"; rc=$?
+    check "RU7: detach with an unreadable run record does not export" "" "$(cat "$EXPORTED_LOG")"
+    check "RU7: ...and is not reported as success" "2" "$rc"
+    has "DO NOT UNPLUG" "$out" && ok "RU7: ...and says DO NOT UNPLUG" || bad "RU7: ...and says DO NOT UNPLUG" "$out"
+    rmdir "$STATE/rep.running"; rm -f "$STATE/rep.imported-by-us"
+    # Garbage in the record is the same unknown.
+    echo "not a record" > "$STATE/rep.running"
+    printf 'guid=%s\n' "$POOL_GUID" > "$STATE/rep.imported-by-us"
+    out="$(g detach rotpool rep)"; rc=$?
+    check "RU8: detach with a garbage run record does not export" "" "$(cat "$EXPORTED_LOG")"
+    rm -f "$STATE/rep.running" "$STATE/rep.imported-by-us"
+    # A lock that cannot be created (a directory in its place).
+    POOLS="hdd"; IMPORTABLE="rotpool"; : > "$IMPORTED_LOG"
+    mkdir -p "$STATE/rep.running.lock"
+    out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+    check "RU9: a run lock that cannot be created stops attach (rc 2)" "2" "$rc"
+    check "RU9: ...before anything is imported" "" "$(cat "$IMPORTED_LOG")"
+    rmdir "$STATE/rep.running.lock"
+    # Control: healthy state again -- attach imports, its own detach exports.
+    out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+    check "RU10: control -- with a sound state dir attach imports" "0" "$rc"
+    POOLS="hdd rotpool"; IMPORTABLE=""; : > "$EXPORTED_LOG"
+    rm -f "$STATE/rep.running"   # a separate g() call is a different run; clear the claim as its end would
+    out="$(g detach rotpool rep)"; rc=$?
+    check "RU10: ...and with no record detach exports as before" "rotpool" "$(cat "$EXPORTED_LOG")"
     rm -f "$STATE"/rep.running "$STATE"/rep.imported-by-us
 fi
 POOLS="hdd"; IMPORTABLE=""
