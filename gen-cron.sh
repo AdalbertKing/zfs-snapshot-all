@@ -4807,7 +4807,9 @@ install_crontab() {
     cron_read "$me" "$current" || { rm -f "$current"; die "$CRON_ERR"; }
     if ! grep -qE '^# BEGIN zfs-backup-managed' "$current" && [ -s "$current" ]; then
         local conflicts
-        conflicts="$(grep -E 'snapsend\.sh|delsnaps\.sh|check-snap-age\.sh' "$current" || true)"
+        # Only lines that RUN: a commented-out line schedules nothing (A6, A-TASSA
+        # 2026-11-05: 25 '#...snapsend' lines of a retired schedule refused the install).
+        conflicts="$(grep -vE '^[[:space:]]*#' "$current" | grep -E 'snapsend\.sh|delsnaps\.sh|check-snap-age\.sh' || true)"
         if [ -n "$conflicts" ]; then
             {
                 echo "gen-cron.sh: error: crontab has no managed block yet, but already contains"

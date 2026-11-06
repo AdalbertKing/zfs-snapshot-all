@@ -861,6 +861,25 @@ case "$out" in
     *) bad "W3 a missing lock directory refuses and names deploy.sh" "$out" ;;
 esac
 
+# W6 (A6, A-TASSA 2026-11-05): the guard against a hand-built schedule counts only
+# lines that RUN. A crontab with no managed block whose snapsend lines are all
+# commented out installs; one live line still refuses (the control).
+W6T="$TMPD/w6-tabs"; mkdir -p "$W6T"; me6=$(id -un)
+printf '%s\n' '# old schedule, retired' '#0 * * * * /root/scripts/snapsend.sh -i tank/a x' '  # 5 0 * * * /root/scripts/delsnaps.sh tank/a automated_ -M3' > "$W6T/$me6"
+out=$(CRONTAB_DIR="$W6T" CRON_LOCK_DIR="$W_LOCKS" REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$TMPD/w.conf" --install 2>&1); rc6=$?
+if [ "$rc6" -eq 0 ] && grep -q '^# BEGIN zfs-backup-managed' "$W6T/$me6" && grep -q '^#0 \* \* \* \* /root/scripts/snapsend.sh' "$W6T/$me6"; then
+    ok "W6 commented-out snapsend/delsnaps lines do not block the install, and stay as they were"
+else
+    bad "W6 commented-out snapsend/delsnaps lines do not block the install" "rc=$rc6 $out"
+fi
+printf '%s\n' '#0 * * * * /root/scripts/snapsend.sh -i tank/a x' '0 * * * * /root/scripts/snapsend.sh -i tank/b x' > "$W6T/$me6"
+out=$(CRONTAB_DIR="$W6T" CRON_LOCK_DIR="$W_LOCKS" REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$TMPD/w.conf" --install 2>&1); rc6=$?
+if [ "$rc6" -ne 0 ] && printf '%s' "$out" | grep -q 'tank/b' && ! printf '%s' "$out" | grep -q 'tank/a'; then
+    ok "W6 a live snapsend line still refuses, and only it is named"
+else
+    bad "W6 a live snapsend line still refuses" "rc=$rc6 $out"
+fi
+
 # ---- X. the emitted job line witnesses its own run --------------------------
 #
 # Found live 2026-08-17. On 2026-08-09 pve2's weekly job for CT 103 fired and
