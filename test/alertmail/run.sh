@@ -1555,6 +1555,26 @@ ST
         bad "health: a live transfer, a finished record and an ONLINE pool stay silent" "alerty: $(cat "$hv_dir/alerts")"
     fi
 
+    # A19 (Dabrowska 2026-11-06): a silent record whose engine pid no longer exists is
+    # an ORPHAN -- said so, and closed as "dead" so it does not alarm every day. A
+    # silent record whose pid is alive (this shell) is still "bez pulsu" (control).
+    true & hv_gone=$!; wait "$hv_gone" 2>/dev/null
+    mkdir -p "$hv_dir/prog19"
+    printf '{"dataset":"hdd/o@s","label":"pve2","state":"running","updated_epoch":%s,"pid":%s}\n' $((hv_now-3600)) "$hv_gone" > "$hv_dir/prog19/orphan.json"
+    printf '{"dataset":"hdd/h@s","label":"pve2","state":"running","updated_epoch":%s,"pid":%s}\n' $((hv_now-3600)) "$$" > "$hv_dir/prog19/hung.json"
+    : > "$hv_dir/alerts"
+    HV_RPOOL_HEALTH=ONLINE NLOG="$hv_dir/alerts" PATH="$hv_dir/bin:$PATH" \
+        ZFS_NOTIFY_SCRIPT="$hv_dir/bin/notify.sh" ZFS_PROGRESS_DIR="$hv_dir/prog19" \
+        bash "$hv_dir/check.sh" >/dev/null 2>&1
+    if [ -d "/proc/$$" ] && grep -q "hdd/o@s.*osierocony" "$hv_dir/alerts" && grep -q '"state":"dead"' "$hv_dir/prog19/orphan.json" \
+       && grep -q "hdd/h@s.*bez pulsu" "$hv_dir/alerts" && grep -q '"state":"running"' "$hv_dir/prog19/hung.json"; then
+        ok "health: a silent record with a dead pid is an orphan, closed as dead; with a live pid it is still 'bez pulsu' (A19)"
+    elif [ ! -d "/proc/$$" ]; then
+        echo "SKIP health A19: no /proc on this host"
+    else
+        bad "health: orphan record (A19)" "alerty: $(cat "$hv_dir/alerts") orphan: $(cat "$hv_dir/prog19/orphan.json")"
+    fi
+
     : > "$hv_dir/alerts"
     HV_RPOOL_HEALTH=ONLINE NLOG="$hv_dir/alerts" PATH="$hv_dir/bin:$PATH" \
         ZFS_NOTIFY_SCRIPT="$hv_dir/bin/notify.sh" ZFS_PROGRESS_DIR="$hv_dir/empty" \
