@@ -523,6 +523,8 @@
     recenzenta (`docs/project/DESIGN-REPO-WYDAN-2026-10-24.md` §9).
   - Scalenie PR-a w repo dev NIE wdraża. Hosty dostają zmianę dopiero po `release/publish.sh origin/main
     <klon zfsbackup> --push` (ze świeżego `origin/main`) i po godzinnej aktualizacji hosta (cron o :15 każdej godziny).
+    Od 2026-11-07 `--push` odmawia, gdy w ledgerze wydawanej rewizji jest REV `OPEN` albo `IMPLEMENTED`
+    (`release/review-gate.sh`, PROTOCOL V3.13). Wyjątek: właściciel sam wskaże taki REV w `--accept-open-review=REV-...`.
   - Wydanie niesie whitelistowy `.gitignore` (#870). Bez niego pliki hosta (`jobs.<host>.conf`) blokowały
     `update-control` jako „not clean”.
 - **Rollback z nieudanym ponownym wdrożeniem = błąd (2026-10-28, REV-20261028-181).** `--rollback`, gdy checkout
@@ -880,7 +882,7 @@
 - **Narzędzia wydania 1.0 (`feat/release-tooling`, projekt `docs/project/DESIGN-REPO-WYDAN-2026-10-24.md`,
   repo wydań `AdalbertKing/zfsbackup`).** `release/MANIFEST` wymienia pliki pakietu (skrypty w korzeniu,
   `lib-*.sh`, `hostscripts/`, `profiles/`, `tui/` bez narzędzi budowy katalogu, `docs/pl`, `docs/en`,
-  LICENSE). `release/publish.sh <rewizja> <klon repo wydań> [--push]` eksportuje te pliki z tej
+  LICENSE). `release/publish.sh <rewizja> <klon repo wydań> [--push] [--accept-open-review=REV-...]` eksportuje te pliki z tej
   rewizji (`git archive`, nie working tree), czyści je mapą `release/scrub.sed` (adresy labu i firm
   na adresy dokumentacyjne RFC 5737, nazwa firmy na „Site-A” / „site-a”; wzorce zakresów prywatnych w kodzie
   zostają), wkłada `release/README.md` jako README, zapisuje `RELEASE-OF` (pełny SHA dev) i commituje

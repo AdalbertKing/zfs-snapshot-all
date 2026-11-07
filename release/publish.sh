@@ -14,11 +14,29 @@
 set -euo pipefail
 
 die() { echo "publish: $*" >&2; exit 1; }
-[ $# -ge 2 ] || die "usage: release/publish.sh <dev-rev> <release-checkout> [--push]"
-push=0; [ "${3:-}" = --push ] && push=1
+[ $# -ge 2 ] || die "usage: release/publish.sh <dev-rev> <release-checkout> [--push] [--accept-open-review=REV-...,REV-...]"
+push=0; accept_open=""
+for a in "${@:3}"; do
+    case "$a" in
+        --push) push=1 ;;
+        --accept-open-review=*) accept_open="${a#*=}" ;;
+        *) die "unknown option '$a'" ;;
+    esac
+done
 
 dev=$(cd "$(dirname "$0")/.." && pwd)
 rev=$(git -C "$dev" rev-parse --verify "$1^{commit}") || die "'$1' is not a commit of $dev"
+
+# --- the Reviewer's gate, before anything is written (PROTOCOL V3.13) ----------------------
+# Only a pushed release reaches hosts; a local commit into a throw-away checkout (CI, the
+# release suite) is not a publication and is not gated.
+accepted=""
+if [ "$push" -eq 1 ]; then
+    ledger=$(git -C "$dev" show "$rev:docs/internal/reviews/REVIEW_LEDGER.md") \
+        || die "no REVIEW_LEDGER.md in $rev -- cannot check the Reviewer's gate"
+    accepted=$(printf '%s\n' "$ledger" | bash "$dev/release/review-gate.sh" "$accept_open") \
+        || die "the Reviewer's gate refused $rev (see above)"
+fi
 dst="$2"
 [ -d "$dst/.git" ] || die "$dst is not a git checkout (clone the release repo first)"
 [ -z "$(git -C "$dst" status --porcelain)" ] || die "$dst has uncommitted changes -- refusing to mix them into a release"
@@ -94,9 +112,23 @@ done < <(git -C "$dev" ls-tree -r "$rev" | awk -F'\t' 'NR == FNR { want[$0] = 1;
 if git -C "$dst" diff --cached --quiet; then
     echo "publish: $dst already holds $rev's package -- no commit"
 else
-    git -C "$dst" commit -q -m "release of ${rev:0:12}: $subject" -m "Development revision: $rev"
+    git -C "$dst" commit -q -m "release of ${rev:0:12}: $subject" -m "Development revision: $rev" \
+        ${accepted:+-m "$accepted"}
     echo "publish: committed release of ${rev:0:12} in $dst ($(git -C "$dst" rev-parse --short HEAD))"
 fi
 if [ "$push" -eq 1 ]; then
+    # Reviewer F3 on PR #1127: an Owner override must never reach the release repo
+    # unaudited. On the no-diff path above (the package was already committed by an earlier
+    # run without --push) no new commit carries the `accepted:` lines, and a bare push would
+    # publish the earlier commit without them. So the commit being pushed must carry every
+    # accepted line, or nothing is pushed.
+    if [ -n "$accepted" ]; then
+        msg=$(git -C "$dst" log -1 --format=%B HEAD)
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            printf '%s\n' "$msg" | grep -qxF -- "$line" \
+                || die "refusing to push: HEAD of $dst does not record the Owner's override ('$line') -- it was committed by an earlier run; reset $dst to its origin and publish again with --push"
+        done <<< "$accepted"
+    fi
     git -C "$dst" push origin HEAD:main
 fi

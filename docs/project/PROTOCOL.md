@@ -1,9 +1,12 @@
-# REVIEW PROTOCOL V2.2
+# REVIEW PROTOCOL V3
 ## Claude + Reviewer + Owner workflow
 
-Status: **ACTIVE — V2.2 agreed and in use**
+Status: **V3 = V2.2 + the "V3 amendments" section below.** It is ACTIVE once the
+amendment PR that introduced it is merged and read back on `main`, and that PR is merged only after the Reviewer approves it
+(Reviewer decision `docs/project/PROTOCOL-V3-REVIEW-20261107.md`, instruction 3). Until that
+merge is read back on `main`, V2.2 applies.
 
-Revision date: 2026-08-28
+Revision date: 2026-11-07 (V3); V2.2 2026-08-28
 Original V2 agreement: 2026-08-07
 
 This document consolidates:
@@ -20,6 +23,251 @@ This document consolidates:
 - the 2026-08-27 PR-as-handoff incident and publication-completion amendment.
 
 Where the V2.1 operational amendments or V2.2 transport/workspace rules below are more specific than earlier V2 wording, the newer rule controls. The four-state review FSM and role ownership of review/response/closure artifacts are unchanged.
+
+V3 adds:
+- the Implementer's proposal `docs/project/PROTOCOL-V3-PROPOSAL.md`, written on the Owner's instruction of 2026-11-07 ("szybkie dotarcie do celu");
+- the Reviewer's point-by-point decision `docs/project/PROTOCOL-V3-REVIEW-20261107.md`;
+- the Owner's 2026-11-07 additions: delegation to cheaper agents is a duty for both sides, and the protocol is amended in the course of the work.
+
+Where the V3 section is more specific than any earlier wording, V3 controls.
+
+---
+
+# V3 amendments (2026-11-07)
+
+The Owner's goal: reach the result fast. Each review costs one pass, each batch one full cycle,
+and only the required runs are made. Nothing below waives a safety obligation or an Owner gate.
+The four-state FSM, one response per REV, the generated ledger and role ownership of artifacts
+are unchanged.
+
+## V3.1 Batch scope (decision P1)
+
+- A **batch** is one coherent contract or feature: several fixes on one branch, one submission
+  SHA, one response per REV.
+- Do not combine unrelated faults or independent existing REVs only to save paperwork.
+- The Reviewer reviews the batch in one thorough pass and lists **every finding known at the
+  time of the verdict**. Findings are not handed out one per round.
+- An independently found material regression may still block the same boundary later (V3.3).
+
+## V3.2 Blocking findings (decision P2)
+
+Every `CHANGES-REQUIRED` finding gives one of:
+- a reproducible test or command, with expected and actual results;
+- precise code or contract evidence: `file:line`, the invariant that fails, and the failure
+  mechanism.
+
+When a live destructive reproduction would be unsafe, an exact code-path proof plus the bounded
+test or evidence required is enough. Missing mandatory real-host, ZFS, account, security or
+destructive-path evidence may itself block, as a specific unmet obligation. Only observations
+with no demonstrated contract, release or safety impact are non-blocking backlog notes, and a
+backlog note does not reopen a REV.
+
+## V3.3 Scope after publication (decision P3)
+
+A genuinely independent finding outside the submitted contract gets a new REV. An approved REV
+is not reopened for unrelated work. The **current** submission may still be rejected for:
+- a regression inside the submitted behaviour;
+- a missing required negative control;
+- invalid acceptance evidence;
+- a release or safety blocker;
+- another material backup-correctness or compatibility failure that invalidates the requested
+  acceptance, even if it was not listed in the first round.
+
+Same-REV resubmission for the same finding is preserved (Principle 9).
+
+## V3.4 What a verdict binds to (decision P4)
+
+A verdict attaches to the reviewed implementation SHA and its demonstrated behaviour, not to an
+incidental merge SHA. Later unrelated commits do not invalidate it.
+
+- An empty `git diff <impl-sha> <candidate> -- <files of the diff>` is **necessary, not
+  sufficient**. Tests, fixtures, the dependency graph, frozen baselines, generated commands and
+  gate configuration that carry the evidence are checked against the candidate tree as well.
+- Gate-only commits (re-freeze, twin bless, pinning) do not force a new review **only if** they
+  preserve the demonstrated behaviour, carry auditable intentional-diff evidence, and pass the
+  applicable CI on the exact resulting head.
+- An unrelated regeneration of `PROJECT_STATUS.md` or the ledger does not by itself reopen a verdict.
+
+## V3.5 Evidence (decision P5)
+
+1. **No suite runs on the Implementer's Windows box.** By hand the Implementer runs, on the lab
+   test host, only the edited suite and its negative control. The `impact.sh` list is what CI
+   must show.
+2. **Three statuses, never mixed.** Every mapped suite or obligation in a response is one of:
+   - `EXECUTED PASS`, a body that ran and passed (a body that ran and failed is
+     `EXECUTED FAIL`, a red check, not evidence);
+   - `SKIPPED / NOT IMPACTED`, a CI body skipped by the impact gate;
+   - `MANUAL / NOT RUN`, a required obligation that was **not executed**.
+
+   A root, ZFS, second-host or lab test that actually ran is `EXECUTED PASS` or
+   `EXECUTED FAIL`, with its command, host and SHA. It is not `MANUAL / NOT RUN`.
+
+   A skipped body still shows as a green check. It is never described as an executed test.
+   Each CI suite job writes its `EXECUTED ...` or `SKIPPED / NOT IMPACTED` status into its job
+   summary and as a notice. The `privileged-reminder` job prints the `impact.sh --all` lines for
+   suites that need root, a second host or a git checkout, plus a fixed list of manual
+   obligations. That list is not authoritative. `test/impact.sh` for the diff names the manual
+   obligations, `project-status` included. Required lab, delegated-account, live and
+   destructive-safety evidence remains required where applicable. If it is mandatory and
+   missing, it may block (V3.2). Otherwise its absence is recorded as open risk, not as proof.
+3. **Negative control = the new discriminating test against the old behaviour.** The old
+   implementation runs with the new test, and the test fails for the intended defect. Running
+   the parent's own suite, which lacks the new test, is not a negative control. State the
+   baseline SHA, the case, the expected failure and the observed failure.
+4. **The Reviewer relies on exact-head CI and verified lab logs** for the coverage they actually
+   establish, without routinely re-running passing suites. The Reviewer may request or perform
+   a **specific** additional test when the impact map, CI coverage, evidence or safety contract
+   is materially suspect. An incremental comment never triggers an automatic all-suite restart.
+5. Evidence names the exact command, host or environment, SHA, relevant result, and every
+   manual obligation not performed. CI on `main` runs the CI-eligible battery. It is never
+   called the full lab or privileged battery.
+6. **One evidence digest per batch.** It gives:
+   - the exact candidate SHA and the CI URL;
+   - the status of each mapped suite and obligation;
+   - the targeted lab negative control;
+   - the remaining material risk.
+
+   Link to the existing logs. Do not paste suite output, the generated ledger or the iteration
+   history again.
+7. **On resubmission, re-check only the delta.** The Reviewer inspects the changed lines and the
+   affected contract. The Implementer reruns the focused tests and the exact-head gate once,
+   after all fixes are in. A broader test scope is reopened only for a concrete dependency or
+   safety reason.
+
+## V3.6 Responses (decision P6)
+
+Each finding gets the change and commit, the reproducer or test result, and the remaining risk.
+Keep it to about one screen. Iteration and process history go to the Implementer's error log
+(`docs/internal/IMPLEMENTER-ERROR-LOG.md`). Exact evidence links and machine headers stay in the
+canonical response.
+
+## V3.7 Disputes (decision P7)
+
+After two evidenced rejections or disagreements on the **same claim**, stop circular prose.
+Write a compact dispute record with each side's strongest evidence and the smallest decisive
+next test. Escalate to the Owner **only** when the open choice is within existing Owner
+authority: a product or architecture alternative, scope, a compatibility break, a release, or
+explicit risk acceptance. An objectively testable technical disagreement stays blocked until
+the evidence decides it. It does not become Owner risk acceptance or an automatic approval
+because two rounds passed. Owner silence never approves.
+
+## V3.8 Approval and closure (decision P8: rejected, unchanged)
+
+Approval and closure remain two ordered **published** boundaries (Principles 5 and 14). A
+closure's `closed-by` names an approval commit that is already published and reachable, whose
+reviewer header says `APPROVED`. The `reviewctl close` writer checks that header. `--verify`
+does not read it.
+
+`reviewctl` checks `closed-by` twice. The first check is against the candidate publication ref,
+like every SHA. The second is always against the canonical published `origin/main`
+(`REVIEWCTL_CANONREF` overrides it in tests). The candidate ref is `HEAD` in `impact.sh --verify`
+on a PR. There, an approval commit and a closure written in the same unmerged PR are both
+reachable, so the second check is what refuses them. Without a resolvable canonical ref, a
+closure fails closed.
+
+Speed comes from automating the sequence, not from collapsing it:
+- the approval PR is merged and read back;
+- the closure is then generated on a new branch;
+- it goes through exact-head validation, merge and read-back.
+
+The closure needs no second substantive review discussion when no content or risk changed
+since the approval. The verified approval SHA and role ownership are preserved.
+
+## V3.9 Work while the Reviewer owns a boundary (decision P9)
+
+While a batch is `IMPLEMENTED | Reviewer`, Claude may prepare the next batch on another branch
+**only if** all of these hold:
+- it is dependency-independent;
+- it is permitted by the active work plan;
+- it does not assume that the pending boundary will be accepted.
+
+A rejection of batch N is corrected under **the same REV and response for N**, with a new
+implementation SHA. It is not moved silently to N+1. `OPEN | Claude` keeps priority. Dependent
+feature or release steps cannot leapfrog a rejected contract.
+
+## V3.10 Handoff notification (decision P10)
+
+Each submission ends with one convenience line (the Owner relays it where the Reviewer has no
+other channel):
+`REV-... IMPLEMENTED @ <sha>, PR #n, CI <run-url>`
+
+Verdict PR titles say `approve` or `reject` and the REV number. This is a notification only.
+An open PR or a pasted message never replaces merged publication and a fresh read of the
+generated ledger on `main`.
+
+## V3.11 Delegation to cheaper agents: a duty for both sides (Owner, 2026-11-07)
+
+This sharpens "Delegation" (V2.1). Delegation is no longer optional: token cost is a routing
+parameter.
+
+- **Implementer.** Apply the gate in `CLAUDE.md` "Which model -- delegation" before each call,
+  not after:
+  - reading more than ~150 lines or more than two files, inventories, and red CI logs go to a
+    cheap reader;
+  - typing a fully specified change of ~150 lines or more goes to a cheaper coder;
+  - prose goes to a cheap checker before commit;
+  - suites go to the lab host or CI.
+
+  The lead keeps design, diagnosis, guards, git, hosts and merge.
+- **Reviewer.** Delegate bounded mechanical work to cheaper models or deterministic tools where
+  the Reviewer's environment provides them. Examples: inventories, diff summaries, CI log
+  extraction, re-checking quoted `file:line`, and running a listed command. The Reviewer
+  personally verifies load-bearing evidence and makes the verdict.
+- **Both.** A delegated report is a lead, not evidence, until the lead verifies it. Every
+  response and every verdict ends with **one split line**: what was delegated, to what, and
+  what the lead verified personally. Where no cheaper tool exists, the line says so.
+
+## V3.12 Amending the protocol during the work (Owner, 2026-11-07)
+
+The protocol is amended in the course of the work. No separate redesign phase is needed.
+
+1. Either side proposes an amendment as a PR that names the problem it removes (Principle 16).
+   **Process-only reviews live in that PR's conversation.** The proposal is the PR description.
+   The point-by-point decision is one PR comment. The final rule change is the same PR, amended.
+   A separate proposal file, a standalone verdict PR or a lifecycle REV is used only when the
+   issue changes product or release risk.
+2. The other side answers point by point: `ACCEPTED`, `ACCEPTED WITH CHANGE` or `REJECTED`,
+   with a reason. An Implementer proposal needs the Reviewer's decision. A Reviewer proposal
+   needs the Implementer's concurrence or a recorded disagreement, which V3.7 then governs.
+   The Owner may impose, veto or reprioritise an amendment.
+3. The accepted text is added here as the next `V3.n` subsection. The amendment log below gets
+   one line, and only for a semantic change. It takes effect when merged and read back on `main`.
+4. A protocol-only amendment does not create a lifecycle REV and does not change the FSM or the
+   ledger, unless it exposes product or release risk.
+
+## V3.13 Merge on green, the Reviewer's verdict before the release (Owner decision, 2026-11-07)
+
+The Reviewer's check of PR #1127 (F1) asked that an implementation be merged only after the
+Reviewer's verdict. The Owner decided otherwise, within Owner authority over merge and release
+(V3.7).
+
+- An implementation PR is merged into dev `main` on green exact-head CI. As in V2, that merge
+  plus the response and the regenerated ledger on `main` is the **submission**. An open PR is
+  still not a submission.
+- `main` is development state. Hosts receive only the release repository. The Reviewer's
+  verdict is therefore required before **publication**: `release/publish.sh --push` runs
+  `release/review-gate.sh` on the ledger of the revision being released. It refuses while any
+  REV there is `OPEN` or `IMPLEMENTED`, and it names each one. `APPROVED` and `CLOSED` pass.
+- Only the Owner may publish over an open review, by naming each REV in
+  `--accept-open-review=REV-...,REV-...`. That is explicit Owner risk acceptance. The release
+  commit records it, one `accepted:` line per REV, and `publish.sh` refuses to push a commit that
+  does not carry every one of those lines (Reviewer F3). The Implementer passes the flag only on the
+  Owner's explicit word for those REVs.
+- A rejection after the merge is fixed under the same REV (V3.9). V3.3 decides what blocks the
+  batch. The release stays gated until the verdict.
+
+### Amendment log
+
+- V3.0 revision 2, 2026-11-07: V3.13. The Owner decided F1's merge timing: merge on green,
+  with the Reviewer's verdict gating publication (`release/review-gate.sh`).
+- V3.0 revision 1, 2026-11-07, after the Reviewer's check of PR #1127, done in the same PR:
+  - V3.8: `closed-by` is enforced against the published `origin/main`;
+  - V3.5: items 6 (one evidence digest) and 7 (re-check only the delta);
+  - V3.8: closure is automated as a second published commit;
+  - V3.12: process-only reviews live in the PR conversation;
+  - V3.5: `MANUAL / NOT RUN` = not executed.
+- V3.0, 2026-11-07: V3.1–V3.12 (proposal `PROTOCOL-V3-PROPOSAL.md`, decision
+  `PROTOCOL-V3-REVIEW-20261107.md`, Owner additions V3.11 and V3.12).
 
 ## Resolution of Claude's original V2 amendments
 
@@ -753,7 +1001,7 @@ Do not combine the required change with opportunistic refactoring, renaming, cle
 
 ## Delegation
 
-Lead models may delegate bounded mechanical work to subagents, cheaper models or deterministic tooling: searches, inventories, test execution, fixture comparison, log extraction, dependency extraction and candidate-test generation are normal examples.
+V3.11 makes this a duty for both sides, with a split line on every response and verdict. Lead models delegate bounded mechanical work to subagents, cheaper models or deterministic tooling: searches, inventories, test execution (on the lab host or in CI, never on the Implementer's Windows box), fixture comparison, log extraction, dependency extraction and candidate-test generation are normal examples.
 
 Delegate execution, not responsibility. The Implementer Lead remains accountable for code/evidence produced by delegated workers. The Reviewer Lead remains accountable for review conclusions and personally verifies load-bearing evidence. High-reasoning lead judgment remains required for architecture, contract changes, ambiguous failures, review verdicts, security/destructive risk and Owner escalation.
 

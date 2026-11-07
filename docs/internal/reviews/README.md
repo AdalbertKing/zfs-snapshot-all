@@ -5,7 +5,8 @@ implementer.
 
 The authoritative workflow specification is:
 
-`docs/project/PROTOCOL.md` — **REVIEW PROTOCOL V2**.
+`docs/project/PROTOCOL.md` — **REVIEW PROTOCOL V3** (V2.2 plus the "V3 amendments" section).
+The V2 names below (FSM, loop) are unchanged in V3.
 
 If this README and `PROTOCOL.md` disagree about state, routing, ownership,
 filenames or transitions, `PROTOCOL.md` wins.
@@ -143,6 +144,40 @@ Representative lifecycle:
 
 Never infer the active review from chat memory, the largest REV number,
 `PROJECT_STATUS.md`, or `OPEN-THREADS.md`.
+
+## V3 in short (full text: PROTOCOL.md, "V3 amendments")
+
+- **Batch:** one coherent contract, one submission SHA, one response per REV. The Reviewer lists
+  every finding known at verdict time in one pass (V3.1).
+- **Blocking findings:** a reproducer (expected vs actual) or `file:line` + invariant + mechanism.
+  Missing mandatory real-host, ZFS, account, security or destructive-path evidence may block,
+  as a specific unmet obligation. Only observations with no demonstrated contract, release or
+  safety impact are backlog notes, and they do not reopen the REV (V3.2).
+- **Rejection of the current submission:** possible for a regression in the submitted
+  behaviour, invalid evidence, a missing negative control, a safety or release blocker, or
+  another material backup-correctness or compatibility failure, even if it was not listed in
+  round one. Unrelated findings get a new REV (V3.3).
+- **Verdict:** binds to the implementation SHA and its demonstrated behaviour. Evidence-bearing
+  dependencies are checked against the candidate tree. Gate-only commits avoid a new review only if they preserve the
+  demonstrated behaviour, carry auditable intentional-diff evidence and pass exact-head CI (V3.4).
+- **Evidence statuses** (three): `EXECUTED PASS`; `SKIPPED / NOT IMPACTED`; `MANUAL / NOT RUN`
+  (= a required obligation not executed; a lab/ZFS test that ran is EXECUTED, with command, host
+  and SHA). One evidence digest per batch. On resubmission only the delta is re-checked.
+  Negative control = new test on old code. No suite on the Implementer's Windows box (V3.5).
+- **Approval and closure** stay two published boundaries. `reviewctl` checks `closed-by` against the
+  published `origin/main` even on a PR. The closure is generated and merged after the approval,
+  with no second discussion when nothing changed (V3.8).
+- **Rejection of batch N:** fixed under the same REV. Parallel work only if it is
+  dependency-independent, permitted by the active plan, and does not assume acceptance (V3.9).
+- **Merge and release:** an implementation is merged on green CI, and that merge is the submission.
+  `release/publish.sh --push` refuses while any REV is `OPEN` or `IMPLEMENTED`, unless the Owner names it
+  in `--accept-open-review` (V3.13).
+- **Handoff line:** `REV-... IMPLEMENTED @ <sha>, PR #n, CI <run-url>` is a notification only.
+  Verdict PR titles say `approve` / `reject` and the REV (V3.10).
+- **Delegation to cheaper agents** is a duty for both sides. Every response and verdict ends with
+  a one-line split (V3.11).
+- **The protocol is amended during the work:** proposal, point-by-point answer, then a `V3.n`
+  subsection and a log line (V3.12).
 
 ## Finding content
 

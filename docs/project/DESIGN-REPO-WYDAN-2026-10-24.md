@@ -73,7 +73,10 @@ wypakowanie do klona repo wydań -> `RELEASE-OF` -> commit „release of <SHA>�
   sekret repo dev -- zakłada właściciel), albo
 - **ręcznie** tym samym poleceniem.
 
-Do decyzji: automat po każdym zielonym main (hosty jak dziś dostają zmiany w ciągu godziny) czy ręcznie,
+Rozstrzygnięte 2026-11-07 (PROTOCOL V3.13): wydanie ręczne, paczkami, na „publikuj”. `--push` wymaga werdyktu
+recenzenta (`release/review-gate.sh`), więc automat po każdym zielonym main odpada.
+
+Do decyzji (historyczne): automat po każdym zielonym main (hosty jak dziś dostają zmiany w ciągu godziny) czy ręcznie,
 paczkami (wolniej, ale świadomie).
 
 ## 5. Zmiany w kodzie (jeden PR przed przepięciem)
