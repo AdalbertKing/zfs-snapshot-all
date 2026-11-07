@@ -13338,6 +13338,27 @@ if [ "$got" = "$want" ]; then
 else
     bad "jobstats: overlapping runs" "$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$got"))" "$(cat "$JS/err")"
 fi
+# THE SAME MINUTE (lab, 2026-11-07, live on pve9): the skip ended at :05 and the real run
+# at :40 of one minute. "Last" was compared to the minute, the tie kept the line read
+# first, and the replica showed "skipped, 0 s" as its last run; the skip's 0 s also pulled
+# the average down. Last is compared to the second; a skip is not in avg/max.
+tb=$(date -d '-30 minutes' +%Y-%m-%dT%H:%M); tz=$(date +%:z)
+cat > "$JS/tie.log" <<TLOG
+${tb}:01${tz} ZFS-JOB BEGIN pve10 hourly backup (rn-tie)
+${tb}:05${tz} ZFS-JOB BEGIN pve10 hourly backup (rn-tie)
+${tb}:05${tz} ZFS-JOB END pve10 hourly backup (rn-tie) rc=75
+${tb}:40${tz} ZFS-JOB END pve10 hourly backup (rn-tie) rc=0
+TLOG
+TIOUT=$( ( PATH="$JS/bin:$PATH" ZFS_CRON_LOGS="$JS/tie.log" bash "$ZFSBACKUP" job-stats --json ) 2>"$JS/err")
+got=$(printf '%s' "$TIOUT" | "$PY_OR_PYTHON" -c '
+import sys,json; d=json.load(sys.stdin)
+j=[x for x in d["jobs"] if x["label"] == "hourly backup (rn-tie)"][0]
+print(j["runs"], j["failures"], j["avg_s"], j["max_s"], j["last_s"], j["last_rc"])' 2>&1 | tr -d '\r')
+if [ "$got" = "2 0 39 39 39 0" ]; then
+    ok "jobstats: a skip and the real run ending in the same minute -- the later one (to the second) is last, and the skip is not in avg/max"
+else
+    bad "jobstats: same-minute last run" "want: 2 0 39 39 39 0" "got:  $got" "$(cat "$JS/err")"
+fi
 # A CONTROL CHARACTER IN AN ERROR LINE (pve10, 2026-10-29): ssh's "Connection reset by ...
 # port 22" reached the cron log with a trailing CR; job-stats put it raw into the JSON string,
 # json.load refused the whole document and the GUI showed "job-stats nie odpowiedział" on

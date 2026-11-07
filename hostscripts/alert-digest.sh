@@ -388,8 +388,8 @@ if [ -n "$CRON_LOGS" ]; then
         d = ""
         if (sp[lbl] > 0) {
             d = secs($1) - bt[lbl, sp[lbl]]; if (d < 0) d += 86400
-            tot[lbl] += d; c[lbl]++
-            if (d > mx[lbl]) mx[lbl] = d
+            # a skip (rc 75) took no time and copied nothing: not in the average, not the max
+            if (rc != 75) { tot[lbl] += d; c[lbl]++; if (d > mx[lbl]) mx[lbl] = d }
             delete bt[lbl, sp[lbl]]; sp[lbl]--
         }
         # THE NEWEST run, compared -- not the last line read. The logs are fed
@@ -400,8 +400,10 @@ if [ -n "$CRON_LOGS" ]; then
         # sum over the window, which is not a quantity anyone reads -- 27 runs
         # of a job add up to a number that says nothing about how long the job
         # takes. Owner, 2026-09-02: "Naglowek czas laczny jest bez sensu."
-        t = day " " substr($1,12,5)
-        if (!(lbl in lastwhen) || t > lastwhen[lbl]) { lastwhen[lbl] = t; lastrc[lbl] = rc; lastdur[lbl] = (d == "" ? -1 : d) }
+        # Compared to the SECOND, shown to the minute (lab 2026-11-07): a skip and the real
+        # run ending in the same minute tied, and the one read first -- the skip -- stayed last.
+        t = day " " substr($1,12,5); ts = day " " substr($1,12,8)
+        if (!(lbl in lastkey) || ts > lastkey[lbl]) { lastkey[lbl] = ts; lastwhen[lbl] = t; lastrc[lbl] = rc; lastdur[lbl] = (d == "" ? -1 : d) }
     }
     END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\t%s\t%d\t%d\t%d\n", k, n[k], f[k]+0, (c[k] ? tot[k]/c[k] : -1), mx[k]+0, lastwhen[k], lastrc[k], tot[k]+0, lastdur[k]+0 }
     ' | sort)

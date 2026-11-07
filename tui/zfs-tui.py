@@ -2879,10 +2879,10 @@ def job_panel_pairs(row, data, now, ch):
         newest = max(srows, key=lambda x: x.get("last_at") or "")
         pairs.append((_(u"Wywołania"), _(u"%d, błędów %d   w %d zadaniach") % (
             sum(int(x.get("runs") or 0) for x in srows), sum(int(x.get("failures") or 0) for x in srows), len(srows))))
-        pairs.append((_(u"Ostatni"), u"%s   %s" % (dshow(newest.get("last_at", "?")), u"OK" if str(newest.get("last_rc")) == "0" else _(u"BŁĄD (rc=%s)") % newest.get("last_rc"))))
+        pairs.append((_(u"Ostatni"), u"%s   %s" % (dshow(newest.get("last_at", "?")), rc_word(newest.get("last_rc")))))
     elif srow and not data.failed("stats"):
         pairs.append((_(u"Wywołania"), _(u"%s, błędów %s") % (srow.get("runs", "?"), srow.get("failures", 0))))
-        pairs.append((_(u"Ostatni"), u"%s   %s" % (dshow(srow.get("last_at", "?")), u"OK" if str(srow.get("last_rc")) == "0" else _(u"BŁĄD (rc=%s)") % srow.get("last_rc"))))
+        pairs.append((_(u"Ostatni"), u"%s   %s" % (dshow(srow.get("last_at", "?")), rc_word(srow.get("last_rc")))))
     for sc, (rc, at, txt) in row.get("fails") or []:
         pairs.append((_(u"Błąd"), u"%s  %s  rc=%s  %s" % (at, sc, rc, txt or _(u"(szczegóły w cron.log)"))))
     for sc, (at, txt) in sorted(row.get("discards") or [], key=lambda d: d[1][0], reverse=True)[:6]:
@@ -4404,6 +4404,17 @@ def replica_stats_row(data, name):
     return None
 
 
+def rc_word(rc):
+    """Wynik ostatniego biegu w oknach szczegolow -- tymi samymi slowami co kolumna
+    "Ostatni bieg" (replica_last_run). rc 75 to pominiecie pod blokada, nie blad: lab
+    2026-11-07, lista mowila "pominięty", szczegoly tego samego biegu "BŁĄD (rc=75)"."""
+    if str(rc) == "0":
+        return u"OK"
+    if str(rc) == "75":
+        return _(u"pominięty")
+    return _(u"BŁĄD (rc=%s)") % rc
+
+
 def replica_last_run(srow, stats_failed=False):
     """Kolumna "Ostatni bieg" w F6: wynik i czas ostatniego biegu z job-stats. "Wykonana"
     mowi tylko, kiedy kopia byla ostatnio aktualna -- na pve10 replika calapula
@@ -4523,7 +4534,7 @@ def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
         pairs.append((_(u"Ostatni bieg"), _(u"? (job-stats nie odpowiedział)")))
     elif srow:
         _rc = srow.get("last_rc")
-        pairs.append((_(u"Ostatni bieg"), u"%s   %s" % (dshow(srow.get("last_at") or "?"), u"OK" if str(_rc) == "0" else _(u"BŁĄD (rc=%s)") % _rc)))
+        pairs.append((_(u"Ostatni bieg"), u"%s   %s" % (dshow(srow.get("last_at") or "?"), rc_word(_rc))))
         pairs.append((_(u"Czas"), times_words(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s"))))
         pairs.append((_(u"Wywołania"), _(u"%s, błędów %s") % (srow.get("runs"), srow.get("failures"))))
     else:
