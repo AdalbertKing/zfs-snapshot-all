@@ -77,30 +77,54 @@ if grep -qF '10.*|127.*|192.168.*|169.254.*)' "$REL/deploy.sh" && grep -qF '192.
 else
     bad "scrub control: the scrub changed code it must not" "$(grep -n '169.254' "$REL/deploy.sh" | head -2)"
 fi
-# 4b. the name gate folds every Polish letter before matching (2026-11-07: the customer name
-# was in the code both as "Dabrowska" and "Dąbrowska"). Each fixture file spells one listed
-# name with a different diacritic, under both the C and a UTF-8 locale; a clean Polish file
-# and a binary file must not be listed.
+# 4b. the name gate folds every Polish letter before matching, and takes its names from a
+# PRIVATE list (REV-20261107-192: a public list of customer names is itself the disclosure).
+# Everything here is synthetic: a made-up list, made-up names. Each fixture file spells one
+# listed name with a different diacritic, under both the C and a UTF-8 locale; a clean Polish
+# file and a binary file must not be listed.
 NG="$WORK/ng"; mkdir -p "$NG"
-printf '# u klienta DĄBROWSKA\n'   > "$NG/a.sh"
-printf 'host METRÓPOLIS\n'         > "$NG/o.txt"
-printf 'x kancełaria\n'            > "$NG/l.txt"
-printf 'x vśql2 y\n'               > "$NG/s.txt"
-printf 'x a-tąssa\n'               > "$NG/q.txt"
+NL="$WORK/names.txt"
+printf '# synthetic test list\n\nwasowicz\nborowka\nplotek\nsniezka\nzrebak\n' > "$NL"
+printf '# u klienta WĄSOWICZ\n'    > "$NG/a.sh"
+printf 'host BORÓWKA\n'            > "$NG/o.txt"
+printf 'x Płotek\n'                > "$NG/l.txt"
+printf 'x Śnieżka y\n'             > "$NG/s.txt"
+printf 'x źrebak\n'                > "$NG/q.txt"
 printf 'zażółć gęślą jaźń\n'       > "$NG/clean.txt"
-printf 'dabrowska\0bin\n'          > "$NG/bin.dat"
+printf 'Wasowicz\0bin\n'           > "$NG/bin.dat"
 for loc in C C.UTF-8; do
-    got="$(LC_ALL=$loc bash "$REPO/release/name-gate.sh" "$NG" | sed "s|^$NG/||" | sort | tr '\n' ' ')"
+    got="$(LC_ALL=$loc ZFS_NAME_DENYLIST="$NL" bash "$REPO/release/name-gate.sh" "$NG" | sed "s|^$NG/||" | sort | tr '\n' ' ')"
     if [ "$got" = "a.sh l.txt o.txt q.txt s.txt " ]; then
         ok "name gate ($loc): each Polish-letter spelling of a listed name is refused; clean Polish text and binaries pass"
     else
         bad "name gate ($loc): wrong files listed" "got: '$got'" "want: 'a.sh l.txt o.txt q.txt s.txt '"
     fi
 done
-LC_ALL=C bash "$REPO/release/name-gate.sh" "$NG" >/dev/null; rc1=$?
-rm -f "$NG"/[aloqs].*; LC_ALL=C bash "$REPO/release/name-gate.sh" "$NG" >/dev/null; rc0=$?
+# without the private list: the names are not checked (and it says so), the addresses still are
+printf 'lab 192.168.28.5\n' > "$NG/ip.txt"
+got="$(LC_ALL=C bash "$REPO/release/name-gate.sh" "$NG" 2>"$WORK/ng.err" | sed "s|^$NG/||" | sort | tr '\n' ' ')"
+if [ "$got" = "ip.txt " ] && grep -q 'names NOT checked' "$WORK/ng.err"; then
+    ok "name gate without \$ZFS_NAME_DENYLIST: addresses refused, names not checked, and it says so"
+else
+    bad "name gate without the list" "got: '$got'" "stderr: $(cat "$WORK/ng.err")"
+fi
+rm -f "$NG/ip.txt"
+ZFS_NAME_DENYLIST="$WORK/nonexistent" bash "$REPO/release/name-gate.sh" "$NG" >/dev/null 2>&1; rcx=$?
+printf '# only a comment\n\n' > "$WORK/empty-names.txt"
+ZFS_NAME_DENYLIST="$WORK/empty-names.txt" bash "$REPO/release/name-gate.sh" "$NG" >/dev/null 2>&1; rce=$?
+[ "$rcx" = 2 ] && [ "$rce" = 2 ] && ok "name gate: an unreadable or empty name list is an error (rc 2), not a pass" \
+                                  || bad "name gate: bad list" "missing rc=$rcx (want 2)" "empty rc=$rce (want 2)"
+LC_ALL=C ZFS_NAME_DENYLIST="$NL" bash "$REPO/release/name-gate.sh" "$NG" >/dev/null; rc1=$?
+rm -f "$NG"/[aloqs].*; LC_ALL=C ZFS_NAME_DENYLIST="$NL" bash "$REPO/release/name-gate.sh" "$NG" >/dev/null; rc0=$?
 [ "$rc1" = 1 ] && [ "$rc0" = 0 ] && ok "name gate: rc 1 when something is listed, rc 0 when nothing is" \
                                   || bad "name gate: rc" "with hits rc=$rc1 (want 1)" "clean rc=$rc0 (want 0)"
+# publish --push refuses without the private list, before it reads or writes anything
+out="$(ZFS_NAME_DENYLIST= bash "$REPO/release/publish.sh" HEAD "$WORK/no-such-checkout" --push 2>&1)"; rcp=$?
+if [ "$rcp" -ne 0 ] && printf '%s' "$out" | grep -q 'needs the private name list' && [ ! -e "$WORK/no-such-checkout" ]; then
+    ok "publish --push refuses without \$ZFS_NAME_DENYLIST, nothing written"
+else
+    bad "publish --push without the name list" "rc=$rcp" "$out"
+fi
 
 # 5. the release README and RELEASE-OF
 if grep -qF 'github.com/AdalbertKing/zfsbackup.git' "$REL/README.md" && ! grep -qF 'test/README.md' "$REL/README.md"; then
