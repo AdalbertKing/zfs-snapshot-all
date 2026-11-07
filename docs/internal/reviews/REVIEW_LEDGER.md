@@ -134,3 +134,4 @@ with them, which is the failure REVIEW PROTOCOL V2 exists to remove.
 | REV-20261106-189 | CLOSED | - | 0c57f1280031a003c8a2cc839c9d4d1a59c6d8f7 | 0c57f1280031a003c8a2cc839c9d4d1a59c6d8f7 | responses/REV-20261106-189.md | - |
 | REV-20261106-190 | CLOSED | - | d37d50445cec3fa83b83b5b301b96c9abd9cf13e | d37d50445cec3fa83b83b5b301b96c9abd9cf13e | responses/REV-20261106-190.md | - |
 | REV-20261107-191 | CLOSED | - | e30f27c33a99e4a349226d676e44b7824dac7fe1 | e30f27c33a99e4a349226d676e44b7824dac7fe1 | responses/REV-20261107-191.md | - |
+| REV-20261107-192 | OPEN | Claude | - | - | - | implement and respond |
