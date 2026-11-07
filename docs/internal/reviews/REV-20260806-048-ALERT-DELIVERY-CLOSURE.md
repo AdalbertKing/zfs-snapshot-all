@@ -60,7 +60,7 @@ Reported impact-graph results:
 - selfupdate 28/28, with 7 standing environment skips;
 - impact 21/21, including graph verification.
 
-Live evidence on metropolis pve2 is consistent with the implementation: passive audit made no delivery claim; explicit test-mail observed the local queue drain; independent mail-log inspection showed relay acceptance with SMTP 250, while the tool itself stayed bounded to the weaker `LEFT THIS MTA` statement.
+Live evidence on Site-A pve2 is consistent with the implementation: passive audit made no delivery claim; explicit test-mail observed the local queue drain; independent mail-log inspection showed relay acceptance with SMTP 250, while the tool itself stayed bounded to the weaker `LEFT THIS MTA` statement.
 
 ## Regressions and remaining risk
 

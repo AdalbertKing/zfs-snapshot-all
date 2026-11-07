@@ -2,7 +2,7 @@
 
 ## Verdict
 
-**CHANGES REQUIRED.** The live run on metropolis pve1 measured roughly 18 seconds between freezing Windows VM 106 and taking the ZFS snapshot, while the code itself documents an approximately 10-second VSS freeze limit. The delay was dominated by `pct exec 101 -- sync` performed after the VM freeze.
+**CHANGES REQUIRED.** The live run on Site-A pve1 measured roughly 18 seconds between freezing Windows VM 106 and taking the ZFS snapshot, while the code itself documents an approximately 10-second VSS freeze limit. The delay was dominated by `pct exec 101 -- sync` performed after the VM freeze.
 
 A successful `fsfreeze-freeze` call is not proof that the guest is still frozen when `zfs snapshot` finally runs. The current ordering can therefore log and return a quiesced success for a snapshot taken after VSS has already thawed the guest.
 
