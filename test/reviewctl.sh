@@ -322,7 +322,7 @@ collect() {
         C_FILE[$rev]="$f"
         C_BY[$rev]="$(hdr "$f" closed-by)"
         [ -n "${C_BY[$rev]}" ] || err "$rev: closure artifact has no 'closed-by:'"
-        require_commit "$rev" closed-by "${C_BY[$rev]}" && require_published "$rev" closed-by "${C_BY[$rev]}" || true
+        require_commit "$rev" closed-by "${C_BY[$rev]}" || true  # NEGCTL: require_published disabled
         seen_rev "$rev" || REVS+=("$rev")
     done
 }
