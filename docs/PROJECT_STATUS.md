@@ -20,12 +20,31 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **Nazwa instalacji w temacie maili (2026-11-07, gałąź `feat/mail-site`; niewydane).** Prośba
+- **1.0.13 wydane (2026-11-07 ~12:55; repo wydań zfsbackup e5fff9f, zbudowane z `main` c15e6f8b).**
+  Weszły w nie wpisy z 2026-11-07 poniżej (#1111, #1114, #1117, #1118).
+  - **Hosty po aktualizacji o 13:15:** e5fff9f, deploy rc 0, na pve9, pve9b, pve11, Metropolis
+    pve1/pve2 i A-TASSA pve1/pve2. Niesprawdzone: pve10 (.97) odrzuca klucz roota, a Dąbrowska
+    (.11.10/.11.11) jest nieosiągalna (VPN).
+  - **Temat maila:** bez `alerts.site` temat ma pełną nazwę hosta. Metropolis: `pve2.metropolis.net`.
+    A-TASSA: `pve1.chello.pl`, czyli domena dostawcy internetu; tam do ustawienia `alerts.site` albo
+    domeny hosta. Na produkcji niczego nie ustawiono.
+- **A-TASSA replika usb1 (2026-11-07, za zgodą właściciela).**
+  - **Przyczyna rc=1:** sekcja `usb1` nie miała `-E`, bo powstała przed A22. Kopie vm-105 i
+    vm-102-disk-0/1/2 na nośniku stały tylko na migawkach `__replicate_`, które pvesr usuwa, więc
+    nie było wspólnej migawki ze źródłem.
+  - **Zmiany:** dopisane `-E __replicate_ -E vzdump -E __migration__` (kopia zapasowa:
+    `/root/jobs.pve1.conf.przed-E-20261107`). Cztery kopie usunięte z `pve1-usb1/replica/hdd/data`,
+    źródło nietknięte.
+  - **Nowy bieg od 13:19:** około 7 MiB/s, ogranicza go dysk USB (WD My Passport, `usb-storage`,
+    zajęty w 101% czasu). Sprawdzenie GUID-ów zapisze `/root/usb1-check.out`. Do tego czasu
+    `hdd/backups/pve1` zostaje.
+  - **„Could not list ... (exit 1)” z 11-06:** to A21 na 1.0.11, naprawione w 1.0.12.
+- **Nazwa instalacji w temacie maili (2026-11-07, #1118; wydane w 1.0.13).** Prośba
   właściciela: „pve2” jest w kilku firmach. Nowe ustawienie `alerts.site` (F10). Z nim temat
   zbiorczego maila i maila alertu (tryb „od razu”) brzmi `[ZFS] Metropolis pve2 ...`, a nadawca
   (gdy host ma sendmail) `zfs-backup Metropolis pve2`. Bez niego temat ma pełną nazwę hosta zamiast samego `pve2`.
   Nazwy trzeba ustawić na każdym kolektorze; to zrobi właściciel albo ja za jego zgodą.
-- **REV-191 i REV-190 r2 (2026-11-07, scalone w #1117; niewydane).**
+- **REV-191 i REV-190 r2 (2026-11-07, #1117; wydane w 1.0.13).**
   - **REV-191:** `zfs send -I` niesie każdą migawkę między końcami przedziału. Przy `-E`
     wykluczona migawka (np. `__replicate_`) leżąca w środku trafiała na cel. Dotyczyło to
     pierwszej kopii z #1111 i każdego zwykłego przyrostu, w `snapget.sh` i `snapsend.sh`.
@@ -35,7 +54,7 @@
     filtra; nowy S9 sprawdza to samo dla wypychania (`snapsend.sh`).
   - **REV-190 r2:** `flags_opt_pairs` dzieli `flags` bez rozwijania nazw plików. `-E a*b` jest
     odrzucane także wtedy, gdy w katalogu roboczym leży plik `axb`.
-- **Lab na żywo po #1111 (2026-11-07, gałąź `fix/jobstats-last-run-skip`; niewydane).** Na pve9
+- **Lab na żywo po #1111 (2026-11-07, #1114; wydane w 1.0.13).** Na pve9
   przez GUI: nowa replika hist1 (pełna historia, lustro) -- pierwsza kopia przeniosła wszystkie 4
   migawki źródła, GUID-y zgodne. Dwa nakładające się biegi: Przebiegi poprawne (OK 24 s, dwa
   pominięcia). Wyszły trzy usterki tego samego miejsca: pominięcie i prawdziwy bieg kończące się
@@ -44,7 +63,7 @@
   maksimum (oba bliźniaki), szczegóły mówią „pominięty” (`rc_word` w TUI). Test „THE SAME
   MINUTE” w `test/zfsbackup`; na `main` FAIL (ostatni rc 75, 0 s, średnia 19), z poprawką PASS;
   w GUI na pve9: „last 24s / avg 25s / max 37s”, ostatni OK.
-- **Scalone w #1111, niewydane (2026-11-07, gałąź `fix/mirror-first-copy-history`).** Z labu
+- **Scalone w #1111 (2026-11-07; wydane w 1.0.13).** Z labu
   „marudnego admina” na pve9. Pierwsza kopia pasywnej repliki (`snapget.sh -e -M`) wysyła
   najstarszą kwalifikującą się migawkę w całości, potem `-I` do najnowszej -- dotąd replika
   dostawała tylko najnowszą, a starsza historia nie docierała nigdy. Repliki zrobione wcześniej
