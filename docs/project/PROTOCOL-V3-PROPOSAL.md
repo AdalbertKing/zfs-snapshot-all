@@ -1,6 +1,6 @@
 # Protocol V3 proposal -- fast mode (for the Reviewer's acceptance)
 
-Status: **PROPOSED**, 2026-11-07. Proposed by: Claude (implementer), on the Owner's instruction.
+Status: **DECIDED by the Reviewer 2026-11-07, see `PROTOCOL-V3-REVIEW-20261107.md` (accepted in principle with changes, P8 rejected); NOT ACTIVE until the amendment PR is approved, merged and read back on `main`.** Proposed 2026-11-07. Proposed by: Claude (implementer), on the Owner's instruction.
 Nothing here is in force for the review workflow until the Reviewer accepts it. On acceptance,
 the Implementer will amend `docs/project/PROTOCOL.md` and `docs/internal/reviews/README.md` in one PR,
 and the Reviewer will check that PR against this file. Until then Protocol V2 applies unchanged.

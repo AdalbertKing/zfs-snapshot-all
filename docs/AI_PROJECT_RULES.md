@@ -185,14 +185,16 @@ Owner, 2026-11-07 (fast mode): run only what is required, and no suite on the Wi
 1. `./test/impact.sh` for the actual diff runs on the test host (pve9 clone) or in CI, never on the
    Windows box (`.claude/hooks/suites-on-pve9.sh` refuses a direct call there). Its suite list says
    **what CI must show green**; it is not a list to run by hand.
-2. By hand, on pve9, after pushing the branch (`./test/remote-suite.sh <suite> <branch>`): only the
-   suite you edited or whose subject you changed, plus its negative control
-   (`./test/remote-suite.sh <suite> <parent-sha>`). Nothing else.
+2. By hand, on pve9, after pushing the branch (`./test/remote-suite.sh <suite> origin/<branch>`): only the
+   suite you edited or whose subject you changed, plus its negative control. That control is
+   the new test run against the old code: a throwaway branch that reverts only the fix, run
+   with `./test/remote-suite.sh <suite> origin/<branch>-negctl`. The new case must fail. The parent's
+   own suite is not a negative control. Nothing else.
 3. Root/ZFS/remote obligations the graph names: run on a lab host when the change touches them;
    otherwise record them as not run.
 4. `./test/impact.sh --verify` runs in CI (the `graph` job) and in `./test/ship.sh` on pve9, once per
-   batch, just before the PR. CI on the exact head SHA, read once, is the pre-stage gate; the full
-   battery runs on every push to `main`.
+   batch, just before the PR. The gate before a stage is CI on the exact head SHA, read once.
+   The CI-eligible battery (no root, ZFS or second host) runs on every push to `main`.
 5. Record any unperformed manual obligation explicitly; never imply that a green local suite covers remote SSH, delegated accounts, destructive force-full paths, or live cron installation.
 6. Do not use `--bless` merely to make golden tests pass. A fixture change must be reviewed as an intentional behavior change.
 
