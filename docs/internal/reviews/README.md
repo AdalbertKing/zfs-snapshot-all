@@ -160,9 +160,13 @@ Never infer the active review from chat memory, the largest REV number,
 - **Verdict:** binds to the implementation SHA and its demonstrated behaviour. Evidence-bearing
   dependencies are checked against the candidate tree. Gate-only commits avoid a new review only if they preserve the
   demonstrated behaviour, carry auditable intentional-diff evidence and pass exact-head CI (V3.4).
-- **Evidence statuses** (three): `EXECUTED PASS`; `SKIPPED / NOT IMPACTED`; `MANUAL / NOT RUN`.
+- **Evidence statuses** (three): `EXECUTED PASS`; `SKIPPED / NOT IMPACTED`; `MANUAL / NOT RUN`
+  (= a required obligation not executed; a lab/ZFS test that ran is EXECUTED, with command, host
+  and SHA). One evidence digest per batch. On resubmission only the delta is re-checked.
   Negative control = new test on old code. No suite on the Implementer's Windows box (V3.5).
-- **Approval and closure** stay two published boundaries (V3.8).
+- **Approval and closure** stay two published boundaries. `reviewctl` checks `closed-by` against the
+  published `origin/main` even on a PR. The closure is generated and merged after the approval,
+  with no second discussion when nothing changed (V3.8).
 - **Rejection of batch N:** fixed under the same REV. Parallel work only if it is
   dependency-independent, permitted by the active plan, and does not assume acceptance (V3.9).
 - **Handoff line:** `REV-... IMPLEMENTED @ <sha>, PR #n, CI <run-url>` is a notification only.

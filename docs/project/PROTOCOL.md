@@ -97,7 +97,10 @@ incidental merge SHA. Later unrelated commits do not invalidate it.
    - `EXECUTED PASS`, a body that ran and passed (a body that ran and failed is
      `EXECUTED FAIL`, a red check, not evidence);
    - `SKIPPED / NOT IMPACTED`, a CI body skipped by the impact gate;
-   - `MANUAL / NOT RUN`, root, ZFS, second-host or manual obligations.
+   - `MANUAL / NOT RUN`, a required obligation that was **not executed**.
+
+   A root, ZFS, second-host or lab test that actually ran is `EXECUTED PASS` or
+   `EXECUTED FAIL`, with its command, host and SHA. It is not `MANUAL / NOT RUN`.
 
    A skipped body still shows as a green check. It is never described as an executed test.
    Each CI suite job writes its `EXECUTED ...` or `SKIPPED / NOT IMPACTED` status into its job
@@ -118,6 +121,18 @@ incidental merge SHA. Later unrelated commits do not invalidate it.
 5. Evidence names the exact command, host or environment, SHA, relevant result, and every
    manual obligation not performed. CI on `main` runs the CI-eligible battery. It is never
    called the full lab or privileged battery.
+6. **One evidence digest per batch.** It gives:
+   - the exact candidate SHA and the CI URL;
+   - the status of each mapped suite and obligation;
+   - the targeted lab negative control;
+   - the remaining material risk.
+
+   Link to the existing logs. Do not paste suite output, the generated ledger or the iteration
+   history again.
+7. **On resubmission, re-check only the delta.** The Reviewer inspects the changed lines and the
+   affected contract. The Implementer reruns the focused tests and the exact-head gate once,
+   after all fixes are in. A broader test scope is reopened only for a concrete dependency or
+   safety reason.
 
 ## V3.6 Responses (decision P6)
 
@@ -140,11 +155,22 @@ because two rounds passed. Owner silence never approves.
 
 Approval and closure remain two ordered **published** boundaries (Principles 5 and 14). A
 closure's `closed-by` names an approval commit that is already published and reachable, whose
-reviewer header says `APPROVED`. `reviewctl` refuses a `closed-by` that is not reachable from its
-publication ref: `origin/main` by default, `HEAD` under `REVIEWCTL_PUBREF=HEAD` in `impact.sh
---verify`. That local check does not by itself gate `main` (Principle 14). The published
-read-back on `main` is the proof. Speed comes from scripting the sequence (approval PR, merge, read-back; then closure
-PR, check, merge, read-back), not from collapsing it.
+reviewer header says `APPROVED`.
+
+`reviewctl` checks `closed-by` twice. The first check is against the candidate publication ref,
+like every SHA. The second is always against the canonical published `origin/main`
+(`REVIEWCTL_CANONREF` overrides it in tests). The candidate ref is `HEAD` in `impact.sh --verify`
+on a PR. There, an approval commit and a closure written in the same unmerged PR are both
+reachable, so the second check is what refuses them. Without a resolvable canonical ref, a
+closure fails closed.
+
+Speed comes from automating the sequence, not from collapsing it:
+- the approval PR is merged and read back;
+- the closure is then generated on a new branch;
+- it goes through exact-head validation, merge and read-back.
+
+The closure needs no second substantive review discussion when no content or risk changed
+since the approval. The verified approval SHA and role ownership are preserved.
 
 ## V3.9 Work while the Reviewer owns a boundary (decision P9)
 
@@ -194,19 +220,28 @@ parameter.
 
 The protocol is amended in the course of the work. No separate redesign phase is needed.
 
-1. Either side proposes an amendment as a compact note or PR that names the problem it removes
-   (Principle 16).
+1. Either side proposes an amendment as a PR that names the problem it removes (Principle 16).
+   **Process-only reviews live in that PR's conversation.** The proposal is the PR description.
+   The point-by-point decision is one PR comment. The final rule change is the same PR, amended.
+   A separate proposal file, a standalone verdict PR or a lifecycle REV is used only when the
+   issue changes product or release risk.
 2. The other side answers point by point: `ACCEPTED`, `ACCEPTED WITH CHANGE` or `REJECTED`,
    with a reason. An Implementer proposal needs the Reviewer's decision. A Reviewer proposal
    needs the Implementer's concurrence or a recorded disagreement, which V3.7 then governs.
    The Owner may impose, veto or reprioritise an amendment.
-3. The accepted text is added here as the next `V3.n` subsection, and the amendment log below
-   gets one line. It takes effect when merged and read back on `main`.
+3. The accepted text is added here as the next `V3.n` subsection. The amendment log below gets
+   one line, and only for a semantic change. It takes effect when merged and read back on `main`.
 4. A protocol-only amendment does not create a lifecycle REV and does not change the FSM or the
    ledger, unless it exposes product or release risk.
 
 ### Amendment log
 
+- V3.0, 2026-11-07, after the Reviewer's check of PR #1127, done in the same PR:
+  - V3.8: `closed-by` is enforced against the published `origin/main`;
+  - V3.5: items 6 (one evidence digest) and 7 (re-check only the delta);
+  - V3.8: closure is automated as a second published commit;
+  - V3.12: process-only reviews live in the PR conversation;
+  - V3.5: `MANUAL / NOT RUN` = not executed.
 - V3.0, 2026-11-07: V3.1–V3.12 (proposal `PROTOCOL-V3-PROPOSAL.md`, decision
   `PROTOCOL-V3-REVIEW-20261107.md`, Owner additions V3.11 and V3.12).
 

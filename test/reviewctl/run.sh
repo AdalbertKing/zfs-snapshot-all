@@ -219,6 +219,29 @@ if [ -n "$ORPHAN" ]; then
       *"$R"*closed-by*"$ORPHAN"*) ok "the refusal names the REV, closed-by and the SHA" ;;
       *) bad "the refusal names the REV, closed-by and the SHA" "$msg" ;;
     esac
+
+    # Reviewer, PR #1127 F2: p6b only proves the default ref. impact.sh --verify checks a
+    # PR with REVIEWCTL_PUBREF=HEAD, where an approval commit A and a closure B in the SAME
+    # unmerged PR are both reachable. Simulate that candidate: PUBREF = $ORPHAN (a commit
+    # on top of main, standing for A), closed-by = A. Must refuse: A is not published.
+    pubstate() {   # <pubref> -> state, or FAILED
+        REVIEWCTL_REPO="$W" REVIEWCTL_PUBREF="$1" "$CTL" --generate >"$TMPD/pub.out" 2>&1 || { echo FAILED; return; }
+        awk -F'|' -v r=" $R " '$2==r {gsub(/^ +| +$/,"",$3); print $3}' "$W/docs/internal/reviews/REVIEW_LEDGER.md"
+    }
+    world p6c; review $R APPROVED $sha2; respond $R IMPLEMENTED $sha2; closure $R "$ORPHAN"
+    got="$(pubstate "$ORPHAN")"
+    if [ "$got" = FAILED ] && grep -q 'two published boundaries' "$TMPD/pub.out"; then
+        ok "approval + closure in one unmerged PR (candidate ref) is refused: closed-by not published"
+    else
+        bad "approval + closure in one unmerged PR (candidate ref) is refused: closed-by not published" "got=$got $(cat "$TMPD/pub.out")"
+    fi
+    # Positive control: an approval already published on main, closed by a later PR
+    # validated from that PR's candidate ref, closes.
+    world p6d; review $R APPROVED $sha2; respond $R IMPLEMENTED $sha2; closure $R "$deadbeef"
+    got="$(pubstate "$ORPHAN")"
+    [ "$got" = CLOSED ] \
+        && ok "a published approval closed from a later PR's candidate ref -> CLOSED" \
+        || bad "a published approval closed from a later PR's candidate ref -> CLOSED" "got=$got $(cat "$TMPD/pub.out")"
 fi
 
 # `-` is the protocol's explicit "no commit yet". It must stay legal, or the

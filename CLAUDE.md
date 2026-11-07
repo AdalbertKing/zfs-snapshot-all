@@ -170,8 +170,10 @@ exception for one night. One batch:
    not after each fix.
 4. **Close once.** Write the response and PROJECT_STATUS, do the text-checker pass, commit,
    then run `./test/ship.sh` (push, digest, `--verify` on pve9; it refuses a dirty tree). Open the PR, read exact-head CI once,
-   and merge on green. A hole found during this step goes on the next batch's list. It does not
-   restart the step, unless it is data loss, a security hole, or a destructive guard.
+   and merge on green. A material defect or evidence gap found in this batch's scope is fixed
+   under the same REV, and the batch is finalised once. There is no suite rerun per edit, only
+   one targeted validation after the collected fixes. Only unrelated, non-blocking observations
+   go to the next batch (PROTOCOL V3.3).
 5. **One release per deployment**, on the Owner's "publikuj". Never one version per finding.
 6. **Reviewer: Protocol V3** (`docs/project/PROTOCOL.md`, section "V3 amendments"; active once
    its amendment PR is merged and read back on `main`). In practice:

@@ -163,6 +163,34 @@ require_commit() {   # <rev> <field> <value>
     return 0
 }
 
+# Protocol V3.8 (Reviewer, PR #1127 F2): approval and closure are two PUBLISHED
+# boundaries. require_commit checks against the candidate ref, and under
+# REVIEWCTL_PUBREF=HEAD (impact.sh --verify on a PR) an approval commit A and a
+# closure B in the SAME unmerged PR are both reachable -- so the candidate check
+# alone would let one PR approve and close. A closure's closed-by must therefore
+# already be on the canonical published branch, whatever the candidate ref is.
+# REVIEWCTL_CANONREF overrides it (tests); without one, a closure fails closed.
+canonref() {
+    local ref="${REVIEWCTL_CANONREF:-origin/main}" g
+    g="$(gitrepo)"
+    git -C "$g" rev-parse --verify -q "$ref^{commit}" >/dev/null 2>&1 || return 1
+    echo "$ref"
+}
+require_published() {   # <rev> <field> <sha>
+    local rev="$1" field="$2" sha="$3" ref g
+    [ -z "$sha" ] || [ "$sha" = "-" ] && return 0
+    g="$(gitrepo)"
+    if ! ref="$(canonref)"; then
+        err "$rev: $field names $sha but the canonical published ref (${REVIEWCTL_CANONREF:-origin/main}) does not resolve -- cannot prove the approval was published before the closure; fetch origin/main"
+        return 1
+    fi
+    if ! git -C "$g" merge-base --is-ancestor "$sha" "$ref" 2>/dev/null; then
+        err "$rev: $field names $sha, which is not on the published $ref -- approval and closure are two published boundaries (PROTOCOL V3.8): merge the approval first, read it back, then close in a later PR. If the approval was just merged, fetch origin/main."
+        return 1
+    fi
+    return 0
+}
+
 # ---- deliveries: direct-main work awaiting a first look --------------------
 #
 # REV-20260808-070 F4. Under the owner's direct-main exception the implementer
@@ -294,7 +322,7 @@ collect() {
         C_FILE[$rev]="$f"
         C_BY[$rev]="$(hdr "$f" closed-by)"
         [ -n "${C_BY[$rev]}" ] || err "$rev: closure artifact has no 'closed-by:'"
-        require_commit "$rev" closed-by "${C_BY[$rev]}" || true
+        require_commit "$rev" closed-by "${C_BY[$rev]}" && require_published "$rev" closed-by "${C_BY[$rev]}" || true
         seen_rev "$rev" || REVS+=("$rev")
     done
 }
