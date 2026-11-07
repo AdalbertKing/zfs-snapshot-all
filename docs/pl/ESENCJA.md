@@ -14,6 +14,7 @@ Wszystko w bashu, zadania chodzą z crona, a do codziennej pracy jest tekstowe G
 | rodzaje relacji | **backup** (kolektor pobiera kopie i trzyma własną historię), **lustro** (to samo co na źródle), **kopia lokalna** (na tym samym hoście), **migawki lokalne / zdalne** (same migawki, bez kopii) |
 | **szablon** | ile migawek trzymać na każdym szczeblu (godzinne, dobowe, tygodniowe…); w GUI do wyboru `default`, `full`, `d7h24`, `d30h24`, `m12w4d7h24-gfs` |
 | **replika** | kopia kopii na osobny nośnik (USB albo druga pula), raz na dobę w nocy |
+| **pasywnie** (kopia, replika) | przenosi migawki, które już są na źródle — stan z chwili ostatniej z nich, **nie stan bieżący**; dataset bez migawek nie jest kopiowany. Bieżący stan daje tylko tryb z własnymi migawkami (kopia robi migawkę sama) |
 | **strażnik** | sprawdza wiek najnowszej migawki i alarmuje, gdy kopia przestała przychodzić |
 
 ## Pierwsze uruchomienie

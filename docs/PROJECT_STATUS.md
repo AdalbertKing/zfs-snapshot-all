@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: de72317d2860fd8c -->
+<!-- status-covers-digest: 2cd801cddbab132b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -39,6 +39,14 @@
     2026-11-07 na A-TASSA na prawdziwym pvesr (PVE 7.4, zfs 2.1.9). Użyto tymczasowej VM 9990
     i zadania 9990-0 pve0->pve1; trzy „miesiące” na `hdd/bmlab/med`, zawartość i GUID zgodne,
     pvesr FailCount 0. Wszystko sprzątnięte. S13 na pve9: 69/0; kontrola bez zakładki odmawia.
+  - **Tryb pasywny opisany wprost (właściciel 2026-11-07):** kreator relacji i repliki (okno wyboru
+    i plan) oraz ESENCJA/ESSENTIALS i JAK-TO-DZIALA/HOW-IT-WORKS mówią, że kopia/replika pasywna niesie
+    stan z ostatniej istniejącej migawki źródła, nie stan bieżący, a dataset bez migawek nie idzie.
+    Silnik bez zmian. Raport wieku najnowszej migawki w kopii pasywnej: do następnej paczki.
+  - **Replika usb1 A-TASSA (pve1, 2026-11-07 13:19-21:22, wersja 1.0.13):** `hdd/backups` i `hdd/data`
+    skopiowane (status success w zfs-snapshot-stats.log); rc=1 z trzeciego źródła `rpool/data`, w którym
+    jest tylko CT 199 bez migawek (odmowa „found only scaffolding”, zgodna z projektem). Do czasu
+    zmiany konfiguracji (decyzja produkcyjna właściciela) każdy przebieg usb1 skończy się rc=1.
 - **1.0.13 wydane (2026-11-07 ~12:55; repo wydań zfsbackup e5fff9f, zbudowane z `main` c15e6f8b).**
   Weszły w nie wpisy z 2026-11-07 poniżej (#1111, #1114, #1117, #1118).
   - **Hosty po aktualizacji o 13:15:** e5fff9f, deploy rc 0, na pve9, pve9b, pve11, Metropolis

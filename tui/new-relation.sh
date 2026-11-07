@@ -732,7 +732,7 @@ step_passive() {   # U138: kopia lokalna pasywnie, choc na zrodle nie ma jeszcze
     local def=no; [ "${FORCE_PASSIVE:-0}" -eq 1 ] && def=yes
     geom
     wt --title "$(T 'Pasywnie?')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
-       --menu "$(T 'Na źródle nie ma jeszcze migawek naszej rodziny. Pasywnie: kopia tylko PRZYJMUJE migawki,\nktóre zrobi ktoś inny (np. relacja migawek zdalnych + replika pvesr), i niczego na źródle\nnie tworzy ani nie kasuje. Do czasu, aż tamte się pojawią, kopia nie ma czego kopiować.')" "$H" "$W" 2 \
+       --menu "$(T 'Na źródle nie ma jeszcze migawek naszej rodziny. Pasywnie: kopia tylko PRZYJMUJE migawki,\nktóre zrobi ktoś inny (np. relacja migawek zdalnych + replika pvesr), i niczego na źródle\nnie tworzy ani nie kasuje. Do czasu, aż tamte się pojawią, kopia nie ma czego kopiować.')\n\n$(T 'Pasywnie = istniejące migawki źródła: idzie stan z ostatniej z nich, nie bieżący; dataset bez migawek nie jest kopiowany.')" "$H" "$W" 2 \
        no "$(T 'Nie -- kopia robi własne migawki')" \
        yes "$(T 'Tak -- pasywnie, przyjmuje cudze migawki (łańcuch)')" || return 1
     [ "$WT_OUT" = yes ] && FORCE_PASSIVE=1 || FORCE_PASSIVE=0
@@ -1425,6 +1425,8 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
           elif [ "$MODE" = snaponly ]; then echo "$(Tv 'Bez kopii: migawki na $HOST, jego datasety.  Szablon: $PROFILE.' '$HOST' "$(hostw)" '$PROFILE' "$PROFILE")"
                [ -n "$FP_P" ] && echo "$(Tv 'Krótka retencja $FASTPRUNE h: szablon relacji $FP_P (kopia $PROFILE).' '$FASTPRUNE' "$FASTPRUNE" '$FP_P' "$FP_P" '$PROFILE' "$PROFILE")"
           else echo "$(T 'Cel:') ${TARGET:-$(T '(lustro: ta sama ścieżka)')}.  $(Tv 'Trzyma tutaj: $PROFILE.  U źródła:' '$PROFILE' "$PROFILE") $(if is_passive_copy; then T 'nic (pasywnie)'; else printf '%s' "${SRCPROF:-$(T 'jak tutaj')}"; fi)."; fi
+          if [ "$MODE" != snaponly ] && [ "$NOCOPY" -eq 0 ] && { is_passive_copy || passive_forced; }; then
+              echo "$(T 'Pasywnie = istniejące migawki źródła: idzie stan z ostatniej z nich, nie bieżący; dataset bez migawek nie jest kopiowany.')"; fi
           if [ "$MODE" = snaponly ] || [ "$NOCOPY" -eq 1 ]; then :
           elif [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
           else echo "$(T 'Pomijane migawki: żadne (kopiowane wszystkie).')"; fi

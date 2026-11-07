@@ -12,6 +12,11 @@ i krzyczy, jeśli najnowszy zrobił się za stary.
 
 Wszystko inne to szczegóły tych czterech czynności.
 
+Kopia i replika **pasywna** nie robią migawek: przenoszą te, które już są na źródle.
+Kopia ma więc stan z chwili ostatniej migawki źródła, nie stan bieżący — jeśli
+najnowsza ma miesiąc, kopia ma stan sprzed miesiąca. Dataset bez migawek nie jest
+kopiowany wcale. Bieżący stan daje tylko tryb z własnymi migawkami.
+
 ## Silniki: cztery skrypty, które dotykają snapshotów
 
 | skrypt | czynność | w jedną stronę |

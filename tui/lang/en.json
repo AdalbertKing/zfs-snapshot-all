@@ -1015,6 +1015,7 @@
 "Partycja jest zaszyfrowana, a na tym hoście nie ma cryptsetup (apt install cryptsetup-bin).": "The partition is encrypted and this host has no cryptsetup (apt install cryptsetup-bin).",
 "Pasywnie": "Passive",
 "Pasywnie -- bez retencji u źródła (szablon passive)": "Passive -- no retention at the source (template passive)",
+"Pasywnie = istniejące migawki źródła: idzie stan z ostatniej z nich, nie bieżący; dataset bez migawek nie jest kopiowany.": "Passive = the source's existing snapshots: the state as of the newest of them goes, not the current state; a dataset without snapshots is not copied.",
 "Pasywnie?": "Passive?",
 "Pauza": "Pause",
 "Pauza LOGICZNA: linie w cronie zostają, ale nic nie wysyła i nie kasuje;": "LOGICAL pause: cron lines stay, but nothing is sent or deleted;",

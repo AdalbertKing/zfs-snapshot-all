@@ -15,6 +15,7 @@ server console.
 | kinds of relation | **backup** (the collector pulls copies and keeps its own history), **mirror** (the same as on the source), **local copy** (on the same host), **local / remote snapshots** (snapshots only, no copies) |
 | **template** | how many snapshots to keep at each tier (hourly, daily, weekly…); the GUI offers `default`, `full`, `d7h24`, `d30h24`, `m12w4d7h24-gfs` |
 | **replica** | a copy of the copy on a separate medium (USB or a second pool), once a day at night |
+| **passive** (copy, replica) | carries the snapshots that already exist on the source — the state as of the newest of them, **not the current state**; a dataset without snapshots is not copied. Only the mode with its own snapshots (the copy takes a snapshot itself) gives the current state |
 | **monitor** | checks the age of the newest snapshot and raises an alarm when copies stop arriving |
 
 ## First run

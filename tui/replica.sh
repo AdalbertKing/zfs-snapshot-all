@@ -245,7 +245,7 @@ replica_engine() {   # 0 = coś zmienione (ARGV zbuduje krok 6), 1 = Wstecz bez 
         case "$WT_OUT" in
             mig)
                 wt --title "$(T 'Migawki')" --ok-button "$(T Wybierz)" --cancel-button "$(T Wstecz)" --notags --default-item "$([ "$p_pas" = yes ] && echo passive || echo own)" \
-                   --menu "$(T 'Jakie migawki ma przenosić replika?')" 10 "$W" 2 \
+                   --menu "$(T 'Jakie migawki ma przenosić replika?')\n\n$(T 'Pasywnie = istniejące migawki źródła: idzie stan z ostatniej z nich, nie bieżący; dataset bez migawek nie jest kopiowany.')" 13 "$W" 2 \
                    passive "$(T 'Cała historia -- migawki, które już są (wrócisz do wczoraj, tydzień temu…); więcej miejsca')" \
                    own "$(T 'Tylko stan na chwilę kopii -- jedna migawka replica_ na dysku; najmniej miejsca')" || continue
                 [ "$WT_OUT" = passive ] && { p_pas=yes; p_keep=""; p_h=all; } || p_pas=no ;;
@@ -491,7 +491,7 @@ PYEOF
         # Właściciel: to też potrzebny tryb ("najmniej miejsca"), więc oba zostają, opisane wprost.
         lead=""; covers_landing && lead="$(T 'Źródło obejmuje kopie relacji tego kolektora.\n\n')"
         wt --title "$(rtitle 3 "$(T 'migawki')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
-           --menu "${lead}$(T 'Jakie migawki ma przenosić replika?')" "$(fit 9)" "$W" 2 \
+           --menu "${lead}$(T 'Jakie migawki ma przenosić replika?')\n\n$(T 'Pasywnie = istniejące migawki źródła: idzie stan z ostatniej z nich, nie bieżący; dataset bez migawek nie jest kopiowany.')" "$(fit 12)" "$W" 2 \
            passive "$(T 'Cała historia -- migawki, które już są (wrócisz do wczoraj, tydzień temu…); więcej miejsca')" \
            own "$(T 'Tylko stan na chwilę kopii -- jedna migawka replica_ na dysku; najmniej miejsca')" || { step=2; continue; }
         [ "$WT_OUT" = passive ] && PASSIVE=yes || PASSIVE=no
@@ -729,6 +729,7 @@ PYEOF
                 [ -n "${B_EXCL[$_i]}" ] && echo "$(T 'Pomijane:   ')$(printf '%s' "${B_EXCL[$_i]}" | paste -sd, - | sed 's/,/, /g')"
             done
             echo "$(T 'Migawki:    ')$([ "$PASSIVE" = yes ] && T 'cała historia (istniejące, bez własnych)' || T 'stan na chwilę kopii (własne, replica_)')"
+            [ "$PASSIVE" = yes ] && echo "$(T 'Pasywnie = istniejące migawki źródła: idzie stan z ostatniej z nich, nie bieżący; dataset bez migawek nie jest kopiowany.')"
             [ "$PASSIVE" = yes ] && [ -n "$EXFAM" ] && echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
             [ "$PASSIVE" = yes ] || echo "$(T 'Na dysku:   ')$([ -n "$KEEP" ] && T '%s ostatnich kopii, niezależnie od kolektora' "$KEEP" || T 'odbicie kolektora')"
             [ "$RAW" = yes ] && echo "$(T 'Szyfrowane: źródło jest zaszyfrowane -- kopia idzie zaszyfrowana (raw), kolektor nie potrzebuje klucza')"

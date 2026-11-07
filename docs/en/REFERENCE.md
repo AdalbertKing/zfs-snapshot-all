@@ -182,6 +182,11 @@ identifier, if any). Nothing else on the source touches them, so exactly one boo
 [Bookmark pruning](#bookmark-pruning) for cleaning those up. Under `-r` (one atomic stream) the
 engines keep no bookmark.
 
+The same mechanism saves an active replica on a node that is a Proxmox VE replication (`pvesr`) target.
+pvesr's receive (`zfs recv -F`) destroys the replica's own snapshot on that node but leaves the
+bookmark, so the next copy continues from the bookmark as one increment (measured 2026-11-07 with
+real pvesr, PVE 7.4). This applies only to a job without `-r`.
+
 ### Resumable transfers
 
 If a `zfs receive` is interrupted mid-stream, ZFS leaves a `receive_resume_token` on the target.
@@ -503,7 +508,7 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 |---|---|
 | `-m <MESSAGE>` | Prefix for the new snapshot's name. Omitting it is legal but warned about, see below |
 | `-e` | Use the existing latest snapshot instead of creating a new one |
-| `-E <PREFIX>` | Used with `-e`: never adopt a snapshot whose name starts with PREFIX as the newest/base, even when it is newer (the newest non-excluded snapshot wins). Repeatable. For passive pickups of a foreign system's snapshots |
+| `-E <PREFIX>` | Used with `-e`: never adopt a snapshot whose name starts with PREFIX as the newest/base, even when it is newer (the newest non-excluded snapshot wins). Repeatable. For passive pickups of a foreign system's snapshots. For a stream that carries children (`-r`, the first copy under `-H`) excluded snapshots are looked up in the whole subtree; when the first stream cannot start without carrying one, nothing is sent and the log says why |
 | `-t` | The second argument is the EXACT dataset to write, not a base to append the source name under. Used by restore, where the copy has to land back at its original path. Refused with several datasets, without a base, and with `-R` |
 | `-z` / `-Z` | Compress the stream with zstd (`-Z` is a synonym for `-z`). On by default against a remote target |
 | `-g` | Compress with pigz instead (escape hatch when zstd is unavailable) |

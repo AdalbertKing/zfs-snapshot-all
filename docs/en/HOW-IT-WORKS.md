@@ -12,6 +12,12 @@ the old ones, and shouts if the newest one has become too old.
 
 Everything else is detail of these four actions.
 
+A **passive** copy or replica takes no snapshots: it carries the ones that already exist
+on the source. The target therefore holds the state as of the source's newest snapshot,
+not the current state — if the newest is a month old, the copy is a month old. A dataset
+without snapshots is not copied at all. Only the mode with its own snapshots gives the
+current state.
+
 ## Engines: four scripts that touch snapshots
 
 | script | action | in one direction |
