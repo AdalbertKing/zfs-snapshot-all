@@ -1489,6 +1489,7 @@ process_dataset() {
     # snapshot and all data on the target and only THEN reported "no source
     # snapshots matching message", leaving the backup gone until the next
     # successful full send. Confirmed live before the fix.
+    local src_all=()
     if [ "$USE_EXISTING_SNAPSHOT" -eq 1 ]; then
         local src_snaps
         src_snaps=($(get_sorted_snapshots "$src_dataset")) || return 1
@@ -1518,6 +1519,8 @@ process_dataset() {
         # a prefix skip-list, not a recogniser -- an excluded name can never be
         # adopted as the base, and the newest NON-excluded snapshot wins even
         # when an excluded one is newer.
+        # REV-20261107-191: the unfiltered, creation-ordered list is kept for the send.
+        src_all=(${src_snaps[@]+"${src_snaps[@]}"})
         if [ ${#EXCLUDE_SNAPS[@]} -gt 0 ]; then
             local _xs=() _sn _xp _hit
             for _sn in "${src_snaps[@]}"; do
@@ -1941,6 +1944,46 @@ process_dataset() {
 
     log 4 "RAW ZFS SEND COMMAND: $send_cmd"
     log 4 "RAW ZFS RECV COMMAND: $recv_cmd"
+
+    # -E AND -I (REV-20261107-191), as in snapget.sh -- keep the two in step.
+    # `zfs send -I a b` carries EVERY snapshot between a and b; the -E filter
+    # only chose the two ends, so an excluded family inside the interval still
+    # reached the target. When one lies inside, the same send is made as a chain
+    # of -i steps through the snapshots that are NOT excluded; otherwise the
+    # single -I stream stays. src_all is filled only under -e.
+    local _iend=" -I ${src_dataset}@${common_snapshot} $snapshot"
+    if [ ${#EXCLUDE_SNAPS[@]} -gt 0 ] && [ ${#src_all[@]} -gt 0 ] \
+       && [[ "$common_snapshot" != "null" ]] && [[ "$send_cmd" == *"$_iend" ]]; then
+        local _pre="${send_cmd%"$_iend"}" _steps=() _hidden=0 _on=0 _sn _xp _x _seen=" "
+        for _sn in "${src_all[@]}"; do
+            case "$_seen" in *" $_sn "*) continue ;; esac
+            _seen="$_seen$_sn "
+            if [ "$_on" -eq 0 ]; then
+                [ "$_sn" = "$common_snapshot" ] && _on=1
+                continue
+            fi
+            _x=0
+            for _xp in "${EXCLUDE_SNAPS[@]}"; do
+                case "$_sn" in "$_xp"*) _x=1; break ;; esac
+            done
+            if [ "$_x" -eq 1 ]; then _hidden=$((_hidden+1)); else _steps+=("$_sn"); fi
+            [ "$_sn" = "$latest_snap" ] && break
+        done
+        if [ "$_on" -eq 1 ] && [ "$_hidden" -gt 0 ] && [ ${#_steps[@]} -gt 0 ] \
+           && [ "${_steps[-1]}" = "$latest_snap" ]; then
+            log 1 "-E: $_hidden excluded snapshot(s) lie between @${common_snapshot} and @${latest_snap} -- -I would carry them; sending ${#_steps[@]} increment(s) one at a time instead"
+            local _prev="$common_snapshot" _i
+            for ((_i = 0; _i < ${#_steps[@]} - 1; _i++)); do
+                transfer_data "$_pre -i ${src_dataset}@${_prev} ${src_dataset}@${_steps[_i]}" "$recv_cmd" "$remote_host" "$remote_user" || {
+                    log 0 "Transfer failed (increment @${_prev} -> @${_steps[_i]})"
+                    abort_held_snapshot "$snapshot" "$tgt_dataset"
+                    return 1
+                }
+                _prev="${_steps[_i]}"
+            done
+            send_cmd="$_pre -i ${src_dataset}@${_prev} $snapshot"
+        fi
+    fi
 
     log 1 "Starting transfer..."
     transfer_data "$send_cmd" "$recv_cmd" "$remote_host" "$remote_user" || {

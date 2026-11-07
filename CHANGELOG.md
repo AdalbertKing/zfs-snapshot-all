@@ -11,6 +11,14 @@ when they change how the tool is used.
   now sends the oldest eligible snapshot in full and then every later one up to the newest. A
   replica made before this change keeps what it has; only "Start over on this disk" (F6, Enter, `e`) fills it in. `-i` and `-H` keep their
   own rules.
+- **Excluded families stay excluded inside an incremental.** `zfs send -I` carries every snapshot
+  between its two ends. With `-E` (for example a replica that excludes `__replicate_`), an
+  excluded snapshot between the last common one and the newest still reached the target. This
+  applied to the first copy and to every later run, in `snapget.sh` and `snapsend.sh`. When an
+  excluded snapshot lies in that interval, the engines now send the same data as a chain of `-i`
+  steps through the snapshots that are not excluded. Snapshots copied earlier are not removed.
+- **A family name in `flags` is checked as written.** `-E a*b` in a hand-edited `flags` used to
+  pass the check whenever a file matching `a*b` existed in the directory `gen-cron.sh` ran from.
 - **Runs and job statistics with overlapping runs.** A second start of the same line while the
   first one still runs ends at once with rc 75; its end took the start time of the real run, so
   that run showed no duration and the skip counted as a failure. Ends now pair with the newest

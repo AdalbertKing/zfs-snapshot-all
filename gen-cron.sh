@@ -752,8 +752,13 @@ FLAGS_ARG_LETTERS='mlvjpkqQToxcbXKOLE'
 # REV-20260808-069 fixed in the engines' own pre-pass, rewritten by hand a
 # second time. Hence: extract, do not re-implement.
 flags_opt_pairs() {   # <flags string> -> "<letter>	<argument>" per option
-    local tok rest c want_arg=0 pending=""
-    for tok in $1; do
+    local tok rest c want_arg=0 pending="" toks=()
+    # REV-20261106-190 r2: split on IFS but never expand a token as a pathname.
+    # 'for tok in $1' globbed, so '-E a*b' became '-E axb' whenever a file named
+    # axb sat in the working directory, and the family check passed on a name
+    # the config does not hold. read -a splits the same way and does not glob.
+    read -r -d '' -a toks <<< "$1" || true
+    for tok in "${toks[@]}"; do
         if [ "$want_arg" -eq 1 ]; then
             printf '%s	%s
 ' "$pending" "$tok"; want_arg=0; pending=""; continue

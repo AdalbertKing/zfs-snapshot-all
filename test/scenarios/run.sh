@@ -419,17 +419,55 @@ scenario "S8 the first copy of a mirror carries the source's history"          "
 
 S8="$ROOT/s8src"
 mk "$S8"
-for _s in automated_daily_1 automated_daily_2 __replicate_100-0_1__ automated_daily_3 __replicate_100-0_2__; do
+# in creation order, every snapshot the target holds -- nothing filtered out
+s8_list() { zfs list -H -o name -t snapshot -s createtxg -d1 "$ROOT/s8rep/$S8" 2>/dev/null | sed 's/.*@//' | xargs; }
+for _s in automated_daily_1 automated_daily_2 __replicate_100-0_1__ manual_x automated_daily_3 __replicate_100-0_2__; do
     zfs snapshot "$S8@$_s"
 done
-"$SNAPGET" -e -M -E __replicate_ "$S8" "$ROOT/s8rep" >"$TMPD/s8.log" 2>&1
+"$SNAPGET" -v 1 -e -M -E __replicate_ -E vzdump "$S8" "$ROOT/s8rep" >"$TMPD/s8.log" 2>&1
 check "the first mirror copy succeeds" "0" "$?"
-check "...and carries every automated snapshot, not just the newest"       "automated_daily_1 automated_daily_2 automated_daily_3"       "$(snaps_of "$ROOT/s8rep/$S8" | xargs -n1 | grep -v '^__replicate_' | xargs)"
-check "...ending at the newest NON-excluded snapshot" "automated_daily_3"       "$(zfs list -H -o name -t snapshot -s creation -d1 "$ROOT/s8rep/$S8" 2>/dev/null | tail -1 | sed 's/.*@//')"
-check "...with the source's GUID for the oldest" "$(guid_of "$S8@automated_daily_1")"       "$(guid_of "$ROOT/s8rep/$S8@automated_daily_1")"
-zfs snapshot "$S8@automated_daily_4"
-"$SNAPGET" -e -M -E __replicate_ "$S8" "$ROOT/s8rep" >>"$TMPD/s8.log" 2>&1
-check "the next run continues incrementally" "automated_daily_4"       "$(zfs list -H -o name -t snapshot -s creation -d1 "$ROOT/s8rep/$S8" 2>/dev/null | tail -1 | sed 's/.*@//')"
+# REV-20261107-191: the WHOLE target inventory, unfiltered. The earlier check removed
+# __replicate_ from the target before comparing, so it passed while -I carried the
+# excluded snapshot inside the interval. manual_x is a family NOT excluded: -I carried
+# it, and the stepwise send must too.
+check "...and carries every eligible snapshot and no excluded one (whole target list)" \
+      "automated_daily_1 automated_daily_2 manual_x automated_daily_3" \
+      "$(s8_list)"
+_g8=0
+for _s in automated_daily_1 automated_daily_2 manual_x automated_daily_3; do
+    [ "$(guid_of "$S8@$_s")" = "$(guid_of "$ROOT/s8rep/$S8@$_s")" ] || _g8=$((_g8 + 1))
+done
+check "...each with the source's GUID" "0" "$_g8"
+for _s in __replicate_100-0_3__ vzdump-x automated_daily_4 __replicate_100-0_4__ automated_daily_5; do
+    zfs snapshot "$S8@$_s"
+done
+"$SNAPGET" -v 1 -e -M -E __replicate_ -E vzdump "$S8" "$ROOT/s8rep" >>"$TMPD/s8.log" 2>&1
+check "the next run succeeds" "0" "$?"
+check "...continues incrementally, again without the excluded families inside the interval (whole target list)" \
+      "automated_daily_1 automated_daily_2 manual_x automated_daily_3 automated_daily_4 automated_daily_5" \
+      "$(s8_list)"
+# Control: no excluded snapshot inside the interval -> the single -I stream stays.
+zfs snapshot "$S8@automated_daily_6"; zfs snapshot "$S8@automated_daily_7"
+"$SNAPGET" -v 1 -e -M -E __replicate_ "$S8" "$ROOT/s8rep" >>"$TMPD/s8.log" 2>&1
+check "with nothing excluded inside the interval the run succeeds and carries both" "0:automated_daily_6 automated_daily_7" \
+      "$?:$(s8_list | xargs -n1 | tail -2 | xargs)"
+check "...and it took the ordinary -I path (one step message per run that needed steps: 2)" "2" \
+      "$(grep -c 'excluded snapshot(s) lie between' "$TMPD/s8.log")"
+
+# ============================================================================
+# S9. The push engine, same contract (REV-20261107-191): snapsend -e -E sends no
+#     excluded snapshot that lies between the common one and the newest.
+# ============================================================================
+scenario "S9 snapsend -e -E carries no excluded snapshot inside the interval" "push: stepwise -i past -E, -I otherwise"
+S9="$ROOT/s9src"
+mk "$S9"
+s9_list() { zfs list -H -o name -t snapshot -s createtxg -d1 "$ROOT/s9bk/$S9" 2>/dev/null | sed 's/.*@//' | xargs; }
+zfs snapshot "$S9@auto_1"
+"$SNAPSEND" -e -E __replicate_ "$S9" "$ROOT/s9bk" >"$TMPD/s9.log" 2>&1
+check "the first push succeeds" "0" "$?"
+for _s in __replicate_1 auto_2 __replicate_2 auto_3; do zfs snapshot "$S9@$_s"; done
+"$SNAPSEND" -e -E __replicate_ "$S9" "$ROOT/s9bk" >>"$TMPD/s9.log" 2>&1
+check "the incremental push succeeds and the target holds no excluded snapshot (whole list)" "0:auto_1 auto_2 auto_3" "$?:$(s9_list)"
 
 # ============================================================================
 # S7. Hygiene after everything: no held snapshots, no leftover state.
