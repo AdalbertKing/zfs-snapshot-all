@@ -26,7 +26,7 @@ Nie odpowiada jeszcze na pytanie:
 
 > czy **ten właśnie** snapshot/backup wywołał i objął ten freeze?
 
-Na `vsql2` równolegle działają pvesr, snapsend i testy ręczne. Zdarzenia z wcześniejszej operacji mieszczące się w oknie mogą dać `verdict=engaged`, nawet jeśli aktualnie oceniany quiesce nie uruchomił SQL albo nie doszedł do snapshotu. Zbilansowane sumy z 20 godzin również nie dowodzą przyporządkowania każdej pary do każdego pojedynczego backupu.
+Na `SQL guest` równolegle działają pvesr, snapsend i testy ręczne. Zdarzenia z wcześniejszej operacji mieszczące się w oknie mogą dać `verdict=engaged`, nawet jeśli aktualnie oceniany quiesce nie uruchomił SQL albo nie doszedł do snapshotu. Zbilansowane sumy z 20 godzin również nie dowodzą przyporządkowania każdej pary do każdego pojedynczego backupu.
 
 Dlatego zdanie:
 
