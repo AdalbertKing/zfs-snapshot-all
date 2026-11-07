@@ -182,6 +182,11 @@ na parę (cel, identyfikator) się kumuluje, aż cel zostanie wycofany; o ich sp
 [Prune bookmarków](#prune-bookmarków). Przy `-r` (jeden atomowy strumień) silniki nie trzymają
 żadnego bookmarka.
 
+To samo ratuje aktywną replikę na węźle, który jest celem replikacji Proxmox VE (`pvesr`). Odbiór
+pvesr (`zfs recv -F`) kasuje na tym węźle własną migawkę repliki, ale bookmark zostawia, więc
+następna kopia idzie przyrostem z bookmarka (zmierzone 2026-11-07 na prawdziwym pvesr, PVE 7.4).
+Dotyczy tylko zadania bez `-r`.
+
 ### Transfery wznawialne
 
 Jeśli `zfs receive` zostanie przerwany w środku strumienia, ZFS zostawia na celu
@@ -508,7 +513,7 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 |---|---|
 | `-m <KOMUNIKAT>` | Prefiks nazwy nowej migawki. Pominięcie jest dozwolone, ale ostrzegane, patrz niżej |
 | `-e` | Użyj istniejącej najnowszej migawki zamiast tworzyć nową |
-| `-E <PREFIKS>` | Z `-e`: nigdy nie przyjmuj za najnowszą/bazę migawki, której nazwa zaczyna się od PREFIKS, nawet gdy jest nowsza (wygrywa najnowsza niewykluczona). Powtarzalne. Do biernego podbierania migawek obcego systemu |
+| `-E <PREFIKS>` | Z `-e`: nigdy nie przyjmuj za najnowszą/bazę migawki, której nazwa zaczyna się od PREFIKS, nawet gdy jest nowsza (wygrywa najnowsza niewykluczona). Powtarzalne. Do biernego podbierania migawek obcego systemu. Przy strumieniu niosącym potomków (`-r`, pierwsza kopia przy `-H`) wykluczone migawki są szukane w całym poddrzewie; gdy pierwszego strumienia nie da się zacząć bez wykluczonej migawki, nic nie jest wysyłane, a log mówi dlaczego |
 | `-t` | Drugi argument to DOKŁADNY dataset do zapisu, a nie baza, pod którą dopisuje się nazwę źródła. Używane przez odzysk, gdzie kopia musi wrócić na swoją oryginalną ścieżkę. Odmowa przy kilku datasetach, bez bazy i z `-R` |
 | `-z` / `-Z` | Kompresuj strumień zstd (`-Z` to synonim `-z`). Domyślnie włączone wobec zdalnego celu |
 | `-g` | Kompresuj pigz zamiast tego (wyjście awaryjne, gdy zstd jest niedostępny) |
