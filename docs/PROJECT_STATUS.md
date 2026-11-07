@@ -20,6 +20,15 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Nazwa klienta w publicznym repo wydań (2026-11-07, NIEWYDANE).** zfsbackup od wydania `b6f040f`
+  (2026-11-03) miał nazwę klienta w 13 komentarzach w 4 plikach; bramka w `release/publish.sh` jej
+  nie znała. Gałąź `fix/scrub-customer-name`: komentarze bez nazwy, bramka zna ją także z „ą”
+  (test/release na pve9 23/0; kontrola negatywna z nazwą tylko w `tui/new-relation.sh`: publish
+  odmawia, 13/10). Historii repo wydań to nie czyści; decyzja właściciela: po 1.1 oba repo
+  prywatne, nowe czyste repo publiczne. Audyt z tego dnia znalazł też do decyzji właściciela:
+  e-mail autora we wszystkich commitach wydań (metadane autora), imię i nazwisko w LICENSE/README
+  (`AUDYT-PUBLIKACJI-2026-10-27.md` A9: zamierzone; do potwierdzenia), adresy
+  10.0.0.x i 192.168.1.x w dokumentacji (niesprawdzone, czy prawdziwe).
 - **1.0.14 gotowe do wydania, NIEWYDANE (2026-11-07; czeka na „publikuj”).** Zawiera REV-191
   r3–r5 (#1129, #1131, #1133; REV-191 zatwierdzony i zamknięty, `docs/internal/reviews/closures/REV-20261107-191.md`) i test S13. Wpis w CHANGELOG.
   - **S13 (replika aktywna po pvesr, zadanie bez `-r`):** odbiór pvesr (`recv -F` strumienia `-R`) kasuje na celu
