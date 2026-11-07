@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 07501133854c5b2f -->
+<!-- status-covers-digest: 06786eb6b801f011 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,16 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **REV-191 i REV-190 r2 (2026-11-07, gałąź `fix/rev-190-191`; niewydane).**
+  - **REV-191:** `zfs send -I` niesie każdą migawkę między końcami przedziału. Przy `-E`
+    wykluczona migawka (np. `__replicate_`) leżąca w środku trafiała na cel. Dotyczyło to
+    pierwszej kopii z #1111 i każdego zwykłego przyrostu, w `snapget.sh` i `snapsend.sh`.
+    Teraz, gdy w przedziale leży wykluczona migawka, oba silniki wysyłają łańcuch kroków `-i`
+    po migawkach niewykluczonych. Bez wykluczonej w środku zostaje jeden strumień `-I`.
+    Wcześniej skopiowane migawki zostają na celu. S8 porównuje teraz pełną listę celu, bez
+    filtra; nowy S9 sprawdza to samo dla wypychania (`snapsend.sh`).
+  - **REV-190 r2:** `flags_opt_pairs` dzieli `flags` bez rozwijania nazw plików. `-E a*b` jest
+    odrzucane także wtedy, gdy w katalogu roboczym leży plik `axb`.
 - **Lab na żywo po #1111 (2026-11-07, gałąź `fix/jobstats-last-run-skip`; niewydane).** Na pve9
   przez GUI: nowa replika hist1 (pełna historia, lustro) -- pierwsza kopia przeniosła wszystkie 4
   migawki źródła, GUID-y zgodne. Dwa nakładające się biegi: Przebiegi poprawne (OK 24 s, dwa
