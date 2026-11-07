@@ -160,7 +160,7 @@ The normal mandatory pre-stage verification command is:
 
 `./test/impact.sh --verify`
 
-Protocol verification is included in that gate; normal operation must not depend on remembering a separate second verification command.
+Protocol verification is included in that gate; normal operation must not depend on remembering a separate second verification command. It runs on the test host (via `./test/ship.sh`) or in CI, not on the Windows box (Test discipline below).
 
 ## Required evidence
 
@@ -180,10 +180,19 @@ A statement such as "tests pass" without commands and results is insufficient.
 
 Before declaring work complete:
 
-1. Run `./test/impact.sh <range>` or `./test/impact.sh` for the actual diff.
-2. Run every listed dependency-free suite.
-3. Run root/ZFS/remote suites when the impact graph requires them and the environment is available.
-4. Run `./test/impact.sh --verify` for the final pre-stage consistency gate.
+Owner, 2026-11-07 (fast mode): run only what is required, and no suite on the Windows box.
+
+1. `./test/impact.sh` for the actual diff runs on the test host (pve9 clone) or in CI, never on the
+   Windows box (`.claude/hooks/suites-on-pve9.sh` refuses a direct call there). Its suite list says
+   **what CI must show green**; it is not a list to run by hand.
+2. By hand, on pve9, after pushing the branch (`./test/remote-suite.sh <suite> <branch>`): only the
+   suite you edited or whose subject you changed, plus its negative control
+   (`./test/remote-suite.sh <suite> <parent-sha>`). Nothing else.
+3. Root/ZFS/remote obligations the graph names: run on a lab host when the change touches them;
+   otherwise record them as not run.
+4. `./test/impact.sh --verify` runs in CI (the `graph` job) and in `./test/ship.sh` on pve9, once per
+   batch, just before the PR. CI on the exact head SHA, read once, is the pre-stage gate; the full
+   battery runs on every push to `main`.
 5. Record any unperformed manual obligation explicitly; never imply that a green local suite covers remote SSH, delegated accounts, destructive force-full paths, or live cron installation.
 6. Do not use `--bless` merely to make golden tests pass. A fixture change must be reviewed as an intentional behavior change.
 

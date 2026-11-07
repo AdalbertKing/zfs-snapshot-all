@@ -35,6 +35,7 @@ case "$branch" in *[!A-Za-z0-9./_-]*) die "'$branch' is not a plain branch name"
 git push -q -u origin "$branch" || die "push failed"
 
 fetch="set -e
+[ -d $CLONE/.git ] || git clone -q https://github.com/AdalbertKing/zfs-snapshot-all.git $CLONE
 cd $CLONE
 git restore . 2>/dev/null || true
 git fetch -q origin '+refs/heads/*:refs/remotes/origin/*'

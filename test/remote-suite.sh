@@ -53,7 +53,10 @@ esac
 # The full refspec matters. `git fetch origin main` writes only FETCH_HEAD, and
 # several suites resolve origin/main as a ref -- without it dozens of assertions
 # fail for a reason that has nothing to do with the code under test.
+# The clone lives in /tmp and is gone after a reboot of the test host (2026-11-07):
+# recreate it instead of failing with an empty answer.
 remote_cmd="set -e
+[ -d $CLONE/.git ] || git clone -q https://github.com/AdalbertKing/zfs-snapshot-all.git $CLONE
 cd $CLONE
 git fetch -q origin '+refs/heads/*:refs/remotes/origin/*'
 git checkout -q -f -B remotesuite $ref
