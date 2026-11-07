@@ -117,5 +117,18 @@ else
     echo "publish: committed release of ${rev:0:12} in $dst ($(git -C "$dst" rev-parse --short HEAD))"
 fi
 if [ "$push" -eq 1 ]; then
+    # Reviewer F3 on PR #1127: an Owner override must never reach the release repo
+    # unaudited. On the no-diff path above (the package was already committed by an earlier
+    # run without --push) no new commit carries the `accepted:` lines, and a bare push would
+    # publish the earlier commit without them. So the commit being pushed must carry every
+    # accepted line, or nothing is pushed.
+    if [ -n "$accepted" ]; then
+        msg=$(git -C "$dst" log -1 --format=%B HEAD)
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            printf '%s\n' "$msg" | grep -qxF -- "$line" \
+                || die "refusing to push: HEAD of $dst does not record the Owner's override ('$line') -- it was committed by an earlier run; reset $dst to its origin and publish again with --push"
+        done <<< "$accepted"
+    fi
     git -C "$dst" push origin HEAD:main
 fi

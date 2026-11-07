@@ -195,6 +195,42 @@ elif printf '%s\n' "$out3" | grep -q "Reviewer's gate refused" && [ "$(git -C "$
 else
     bad "publish --push: an open review in HEAD's ledger refuses before anything is written" "$out3"
 fi
+# Reviewer F3 (PR #1127): an Owner override is never pushed without its audit record.
+# Deterministic: a throw-away worktree of this repo at HEAD whose ledger is a fixture with
+# exactly one open review, and release clones with a disposable local bare origin.
+DEVW="$WORK/dev"
+if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
+    printf '%s\n' '# REVIEW_LEDGER' '' '| REV | State | Owner | Implementation | Reviewed | Response | Next |' \
+        '|---|---|---|---|---|---|---|' '| REV-20990101-003 | OPEN | Claude | c | c | r | implement |' \
+        > "$DEVW/docs/internal/reviews/REVIEW_LEDGER.md"
+    git -C "$DEVW" commit -qam "fixture: one open review" && devrev="$(git -C "$DEVW" rev-parse HEAD)"
+    mkrel() {   # <dir> -> release clone with a bare local origin holding one start commit
+        git init -q --bare "$1.git"
+        git init -q -b main "$1" && git -C "$1" commit -q --allow-empty -m start
+        git -C "$1" remote add origin "$1.git" && git -C "$1" push -q origin main
+    }
+    mkrel "$WORK/f3"
+    start="$(git -C "$WORK/f3.git" rev-parse main)"
+    bash "$DEVW/release/publish.sh" "$devrev" "$WORK/f3" >/dev/null 2>&1      # run 1: commit, no push
+    out4="$(bash "$DEVW/release/publish.sh" "$devrev" "$WORK/f3" --push --accept-open-review=REV-20990101-003 2>&1)"; rc4=$?
+    if [ "$rc4" -ne 0 ] && printf '%s\n' "$out4" | grep -q "does not record the Owner's override" \
+       && [ "$(git -C "$WORK/f3.git" rev-parse main)" = "$start" ]; then
+        ok "publish: a second run with --push and an override does not push the earlier, unaudited commit"
+    else
+        bad "publish: a second run with --push and an override does not push the earlier, unaudited commit" "rc=$rc4" "$out4"
+    fi
+    mkrel "$WORK/f3b"
+    out5="$(bash "$DEVW/release/publish.sh" "$devrev" "$WORK/f3b" --push --accept-open-review=REV-20990101-003 2>&1)"; rc5=$?
+    if [ "$rc5" -eq 0 ] && git -C "$WORK/f3b.git" log -1 --format=%B main | grep -q '^accepted: REV-20990101-003 '; then
+        ok "publish: an override with a new release commit pushes, and the pushed commit records 'accepted: REV-...'"
+    else
+        bad "publish: an override with a new release commit pushes and records it" "rc=$rc5" "$out5"
+    fi
+    git -C "$REPO" worktree remove --force "$DEVW" 2>/dev/null
+else
+    bad "publish F3 cases" "could not create a throw-away worktree of $REPO"
+fi
+
 if bash "$REPO/release/publish.sh" HEAD "$REL" --bogus >/dev/null 2>&1; then
     bad "publish: an unknown option is refused" ""
 else

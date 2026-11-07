@@ -250,7 +250,8 @@ Reviewer's verdict. The Owner decided otherwise, within Owner authority over mer
   REV there is `OPEN` or `IMPLEMENTED`, and it names each one. `APPROVED` and `CLOSED` pass.
 - Only the Owner may publish over an open review, by naming each REV in
   `--accept-open-review=REV-...,REV-...`. That is explicit Owner risk acceptance. The release
-  commit records it, one `accepted:` line per REV. The Implementer passes the flag only on the
+  commit records it, one `accepted:` line per REV, and `publish.sh` refuses to push a commit that
+  does not carry every one of those lines (Reviewer F3). The Implementer passes the flag only on the
   Owner's explicit word for those REVs.
 - A rejection after the merge is fixed under the same REV (V3.9). V3.3 decides what blocks the
   batch. The release stays gated until the verdict.
