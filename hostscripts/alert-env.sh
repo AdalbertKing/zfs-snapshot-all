@@ -113,6 +113,13 @@ zfs_mail_host() {
     [ -n "$h" ] || h=$(hostname -f 2>/dev/null || hostname)
     case "$s" in ""|-|*[!A-Za-z0-9._-]*) printf '%s' "$h" ;; *) printf '%s %s' "$s" "${h%%.*}" ;; esac
 }
+# The sender's name stays dot-free ("<site> <short>" or "<short>"): a dot in a display name
+# makes it a quoted string ("zfs-backup pve2.x.net"), measured on a CI runner's long name.
+zfs_mail_sender() {
+    local h="${HOST:-}" s="${ZFS_ALERT_SITE:-}"
+    [ -n "$h" ] || h=$(hostname -f 2>/dev/null || hostname)
+    case "$s" in ""|-|*[!A-Za-z0-9._-]*) printf '%s' "${h%%.*}" ;; *) printf '%s %s' "$s" "${h%%.*}" ;; esac
+}
 
 # ---------------------------------------------------------------------------
 # U158 (Dabrowska pve0 2026-11-04): a single alert in the admin's words. The subject
@@ -203,7 +210,7 @@ alert_mail() {
     h=$(hostname -f 2>/dev/null || hostname)
     if [ -n "$sm" ]; then
         { printf 'From: zfs-backup %s <%s@%s>\nTo: %s\nSubject: %s\nMIME-Version: 1.0\nContent-Type: text/plain; charset=us-ascii\n\n' \
-              "$(zfs_mail_host)" "$(id -un 2>/dev/null || echo root)" "$h" "$2" "$1"; cat; } | "$sm" -t -oi
+              "$(zfs_mail_sender)" "$(id -un 2>/dev/null || echo root)" "$h" "$2" "$1"; cat; } | "$sm" -t -oi
     else
         mail -s "$1" "$2"
     fi

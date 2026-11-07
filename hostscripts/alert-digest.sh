@@ -1122,7 +1122,7 @@ relations_render() {
         timeout --foreground 300 "$zb" monitor --json > "$DG_RD/monitor.json" 2>/dev/null
     fi
     printf '%s\n' "$SKIP_ROWS" > "$DG_RD/skip.tsv"
-    DG_HOST="$HOST" DG_LABEL="$(zfs_mail_host)" DG_DAYS="$DIGEST_DAYS" DG_QUEUE="$PROCESSING" DG_QUIET="${QUIET:-0}" \
+    DG_HOST="$HOST" DG_LABEL="$(zfs_mail_host)" DG_SENDER="$(zfs_mail_sender)" DG_DAYS="$DIGEST_DAYS" DG_QUEUE="$PROCESSING" DG_QUIET="${QUIET:-0}" \
     DG_QUIET_WHEN="$QUIET_WHEN" DG_TO="${ZFS_ALERT_EMAIL:-root}" DG_FROM="$(id -un 2>/dev/null || echo root)@$HOST" \
     DG_LOGS="${CRON_LOGS# }" DG_WINDOW="${RUN_WINDOW:-}" DG_RD="$DG_RD" python3 - <<'PYEOF'
 import os, re, json, html, time, gzip, textwrap
@@ -1563,7 +1563,7 @@ tr.ds td{color:%(dim)s}td.o{text-align:left;white-space:normal}
 
 msg = EmailMessage()
 msg["Subject"] = subj
-msg["From"] = "zfs-backup %s <%s>" % (LABEL, E.get("DG_FROM", "root"))
+msg["From"] = "zfs-backup %s <%s>" % (E.get("DG_SENDER") or SHORT, E.get("DG_FROM", "root"))
 msg["To"] = E.get("DG_TO", "root")
 msg["Date"] = formatdate(localtime=True)
 msg.set_content(body)
