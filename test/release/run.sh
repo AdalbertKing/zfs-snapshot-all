@@ -69,8 +69,8 @@ devrefs="$( cd "$REL" && git ls-files -- '*.sh' '*.py' | while IFS= read -r f; d
                   || bad "release channel: shipped code names the development repository" "$(printf '%s\n' "$devrefs" | head -5)"
 
 # 4. the scrub: no lab/customer address or site name survives, and it did not over-reach
-left="$(grep -rIliE '192\.168\.(28|11)\.[0-9]|10\.9[89]\.0\.[0-9]|metropolis|site-a\.net|kancelaria|a-tassa|vsql2|lurk\.com\.pl' "$REL" --exclude-dir=.git || true)"
-[ -z "$left" ] && ok "scrub: no 192.168.28./192.168.11./10.98.0./10.99.0. address, no site or customer name, no author e-mail in the release" \
+left="$(grep -rIliE '192\.168\.(28|11)\.[0-9]|10\.9[89]\.0\.[0-9]|metropolis|site-a\.net|kancelaria|a-tassa|vsql2|lurk\.com\.pl|d(a|ą|Ą)browsk' "$REL" --exclude-dir=.git || true)"
+[ -z "$left" ] && ok "scrub: no 192.168.28./192.168.11./10.98.0./10.99.0. address, no site or customer name (also with Polish letters), no author e-mail in the release" \
                || bad "scrub: left in the release" "$left"
 if grep -qF '10.*|127.*|192.168.*|169.254.*)' "$REL/deploy.sh" && grep -qF '192.168.*' "$REL/tui/new-relation.sh"; then
     ok "scrub control: the private-range globs in the code (192.168.*) are untouched"
