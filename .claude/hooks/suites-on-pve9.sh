@@ -14,11 +14,12 @@ refuse() {
     echo "REFUSED (owner rule, .claude/hooks/suites-on-pve9.sh): $1 does not run on this Windows box. Run it on the pve9 clone (plink root@192.168.28.99 ...) or let CI run it. Here: bash -n, cut-out cases, impact.sh --refreeze / --refresh-status." >&2
     exit 2
 }
-if printf '%s' "$cmd" | grep -Eq 'test/impact\.sh' \
+RUN='(^|[;&|(][[:space:]]*)(timeout[[:space:]]+[0-9]+[[:space:]]+)?(bash[[:space:]]+)?(\./)?'
+if printf '%s' "$cmd" | grep -Eq "${RUN}test/impact\.sh" \
    && ! printf '%s' "$cmd" | grep -Eq 'test/impact\.sh[[:space:]]+--(refreeze|refresh-status|help)'; then
     refuse "test/impact.sh (suite list / --verify)"
 fi
-if printf '%s' "$cmd" | grep -Eq '(^|[;&|(][[:space:]]*)(timeout[[:space:]]+[0-9]+[[:space:]]+)?(bash[[:space:]]+)?(\./)?test/[^/[:space:]]+/run\.sh'; then
+if printf '%s' "$cmd" | grep -Eq "${RUN}test/[^/[:space:]]+/run\.sh"; then
     refuse "a test suite (test/<suite>/run.sh)"
 fi
 exit 0
