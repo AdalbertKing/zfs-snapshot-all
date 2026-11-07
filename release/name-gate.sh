@@ -16,10 +16,7 @@ set -uo pipefail
 
 FORBIDDEN='192\.168\.(28|11)\.[0-9]|10\.9[89]\.0\.[0-9]|metropolis|site-a\.net|kancelaria|a-tassa|vsql2|lurk\.com\.pl|dabrowsk'
 
-fold() {
-    sed -e 's/ą/a/g; s/ć/c/g; s/ę/e/g; s/ł/l/g; s/ń/n/g; s/ó/o/g; s/ś/s/g; s/ź/z/g; s/ż/z/g' \
-        -e 's/Ą/A/g; s/Ć/C/g; s/Ę/E/g; s/Ł/L/g; s/Ń/N/g; s/Ó/O/g; s/Ś/S/g; s/Ź/Z/g; s/Ż/Z/g' -- "$1"
-}
+fold() { cat -- "$1"; }   # negctl: no Polish-letter fold
 
 found=0
 # -I: text files only (binary files are left alone, as by the scrub itself).
