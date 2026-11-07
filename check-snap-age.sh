@@ -500,7 +500,7 @@ check_one() {
 
     local from_creation=false detail
     if [ -z "$newest" ]; then
-        # U164 (v2.9, Dabrowska pve0 2026-11-04): an -R root with snapshots, none of this
+        # U164 (v2.9, customer site, 2026-11-04): an -R root with snapshots, none of this
         # family (a marker, a pvesr leftover), is a container like a bare one when the family
         # lives below it. Deferred: the walk decides, and the root is held to the explicit
         # check only if no snapshot of the family turns up anywhere in the tree.

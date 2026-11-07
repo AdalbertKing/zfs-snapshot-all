@@ -349,7 +349,7 @@ for x in d.get("datasets", []):
     if n.count("/") == 1 and n.rsplit("/", 1)[1].lower() in ("backups", "backup", "kopie"): print(n)
 json.dump(info, open(sys.argv[1] + ".info", "w", encoding="utf-8"))
 json.dump(anyd, open(sys.argv[1] + ".any", "w", encoding="utf-8"))' "$TMPD/fs.all" | tr -d '\r' >"$TMPD/targets.tsv"
-    # U155 (Dąbrowska 2026-11-04: „mamy manager dysku, chcę nawigować po dysku, a nie pisać
+    # U155 (u klienta 2026-11-04: „mamy manager dysku, chcę nawigować po dysku, a nie pisać
     # ścieżki z palca”): krok otwiera od razu drzewo datasetów tego hosta. Kursor na celu, pod
     # którym są już kopie tych danych (U147), albo na celu relacji / <pula>/backups. Nowy cel:
     # Ins w drzewie, potem sama nazwa. Bez listy datasetów (list-datasets nie odpowiedział) --
@@ -692,7 +692,7 @@ sync_from_chain() {   # -> 0, gdy lustro/backup/kopia lokalna/migawki zdalne i k
     local r n c f e
     for r in ${B_ROOT[@]+"${B_ROOT[@]}"}; do
         while IFS=$'\t' read -r n c f e; do
-            # U138 (Dąbrowska 2026-11-01): korzeń `rpool/data` sam nie ma migawek, mają je dyski
+            # U138 (u klienta 2026-11-01): korzeń `rpool/data` sam nie ma migawek, mają je dyski
             # pod nim (repliki pvesr) -- liczą się też dzieci korzenia. Lustro jak dotąd: sam korzeń.
             if [ "$MODE" = sync ]; then [ "$n" = "$r" ] || continue
             else case "$n" in "$r"|"$r"/*) ;; *) continue ;; esac; fi
@@ -817,7 +817,7 @@ step_chain() {   # 0 = odpowiedź zapisana, 1 = wstecz
         CHAIN_ANS="$WT_OUT"; CHAIN_FOR="${B_ROOT[*]}"
         return 0
     fi
-    # U153 (właściciel 2026-11-04, Dąbrowska: „strasznie zagmatwany”, „nie wspominasz o pvesr”):
+    # U153 (właściciel 2026-11-04, u klienta: „strasznie zagmatwany”, „nie wspominasz o pvesr”):
     # najczęstsze źródło tych migawek -- replika pvesr -- nazwane wprost, odpowiedzi bez żargonu.
     wt --title "$(title 5 "$(T 'Migawki naszej rodziny już są na źródle')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
        --menu "$(Tv 'Na $HOST są już migawki naszej rodziny:\n$facts\n\nSkąd się tu wzięły? Najczęściej przynosi je replikacja Proxmox (pvesr)\nz drugiego węzła, rzadziej robi je inna relacja. Świeże (sprzed 1-2 godz.)\nznaczą, że ktoś je wciąż robi.\n\nPrzyjmuję: kopia bierze te migawki; na źródle nic nie tworzy ani nie kasuje.\nResztki: nikt ich już nie robi -- kopia robi własne; stare z czasem znikną.' '$HOST' "$(T 'źródle') $( [ -n "$HOST" ] && hostw || hostname -s)" '$facts' "$facts")" "$H" "$W" 2 \

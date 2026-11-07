@@ -69,14 +69,38 @@ devrefs="$( cd "$REL" && git ls-files -- '*.sh' '*.py' | while IFS= read -r f; d
                   || bad "release channel: shipped code names the development repository" "$(printf '%s\n' "$devrefs" | head -5)"
 
 # 4. the scrub: no lab/customer address or site name survives, and it did not over-reach
-left="$(grep -rIliE '192\.168\.(28|11)\.[0-9]|10\.9[89]\.0\.[0-9]|metropolis|site-a\.net|kancelaria|a-tassa|vsql2|lurk\.com\.pl' "$REL" --exclude-dir=.git || true)"
-[ -z "$left" ] && ok "scrub: no 192.168.28./192.168.11./10.98.0./10.99.0. address, no site or customer name, no author e-mail in the release" \
+left="$(bash "$REPO/release/name-gate.sh" "$REL" || true)"
+[ -z "$left" ] && ok "scrub: no 192.168.28./192.168.11./10.98.0./10.99.0. address, no site or customer name (also with Polish letters), no author e-mail in the release" \
                || bad "scrub: left in the release" "$left"
 if grep -qF '10.*|127.*|192.168.*|169.254.*)' "$REL/deploy.sh" && grep -qF '192.168.*' "$REL/tui/new-relation.sh"; then
     ok "scrub control: the private-range globs in the code (192.168.*) are untouched"
 else
     bad "scrub control: the scrub changed code it must not" "$(grep -n '169.254' "$REL/deploy.sh" | head -2)"
 fi
+# 4b. the name gate folds every Polish letter before matching (2026-11-07: the customer name
+# was in the code both as "Dabrowska" and "Dąbrowska"). Each fixture file spells one listed
+# name with a different diacritic, under both the C and a UTF-8 locale; a clean Polish file
+# and a binary file must not be listed.
+NG="$WORK/ng"; mkdir -p "$NG"
+printf '# u klienta DĄBROWSKA\n'   > "$NG/a.sh"
+printf 'host METRÓPOLIS\n'         > "$NG/o.txt"
+printf 'x kancełaria\n'            > "$NG/l.txt"
+printf 'x vśql2 y\n'               > "$NG/s.txt"
+printf 'x a-tąssa\n'               > "$NG/q.txt"
+printf 'zażółć gęślą jaźń\n'       > "$NG/clean.txt"
+printf 'dabrowska\0bin\n'          > "$NG/bin.dat"
+for loc in C C.UTF-8; do
+    got="$(LC_ALL=$loc bash "$REPO/release/name-gate.sh" "$NG" | sed "s|^$NG/||" | sort | tr '\n' ' ')"
+    if [ "$got" = "a.sh l.txt o.txt q.txt s.txt " ]; then
+        ok "name gate ($loc): each Polish-letter spelling of a listed name is refused; clean Polish text and binaries pass"
+    else
+        bad "name gate ($loc): wrong files listed" "got: '$got'" "want: 'a.sh l.txt o.txt q.txt s.txt '"
+    fi
+done
+LC_ALL=C bash "$REPO/release/name-gate.sh" "$NG" >/dev/null; rc1=$?
+rm -f "$NG"/[aloqs].*; LC_ALL=C bash "$REPO/release/name-gate.sh" "$NG" >/dev/null; rc0=$?
+[ "$rc1" = 1 ] && [ "$rc0" = 0 ] && ok "name gate: rc 1 when something is listed, rc 0 when nothing is" \
+                                  || bad "name gate: rc" "with hits rc=$rc1 (want 1)" "clean rc=$rc0 (want 0)"
 
 # 5. the release README and RELEASE-OF
 if grep -qF 'github.com/AdalbertKing/zfsbackup.git' "$REL/README.md" && ! grep -qF 'test/README.md' "$REL/README.md"; then

@@ -3,7 +3,7 @@
 <!-- frozen: snapsend.sh 100755 542342aab484a278d5070112b75075118d404e33 -->
 <!-- frozen: snapget.sh 100755 59106fcb69df5bba10b5382ea8f8e95f6b2fcf65 -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
-<!-- frozen: check-snap-age.sh 100755 5a0ea69903070daeb4b438728de258c90156916a -->
+<!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f99ef6e1660364ddc694985996ed113e2c4d3842 -->
 <!-- unfreeze: - -->
 
@@ -1350,6 +1350,11 @@ Owner-authorized refreezes:
   and the step plan counts the descendants' snapshots when a step is `-R`. Tests: scenarios S12
   (`-H` on a root with a child, pull and push) on pve9.
   twin: both `process_dataset` blocks changed in the same commit.
+- 2026-11-07 (check-snap-age.sh): **comment only -- no customer name in a published file.**
+  Owner direction (2026-11-07: the customer name in the public release repo breaks the rule
+  on customer data; "tak" to removing it from the comments now, before 1.1). Line 503: the
+  customer name and its host became "customer site". No code line moved; version unchanged.
+  twin: none -- check-snap-age.sh has no twin.
 
 ## How it is enforced
 

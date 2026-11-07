@@ -122,7 +122,7 @@ zfs_mail_sender() {
 }
 
 # ---------------------------------------------------------------------------
-# U158 (Dabrowska pve0 2026-11-04): a single alert in the admin's words. The subject
+# U158 (customer site, 2026-11-04): a single alert in the admin's words. The subject
 # was the job's internal label ("profile__relacja-X__lsrc_yearly stale (...)"), with
 # no sentence of what it means, and a monitor counting from the dataset's creation
 # could not be told from a real failure. Plain ASCII: these go out through mail -s

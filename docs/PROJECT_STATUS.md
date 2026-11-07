@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 7f130f110130ad69 -->
+<!-- status-covers-digest: de72317d2860fd8c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,17 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Nazwa klienta w publicznym repo wydań (2026-11-07, NIEWYDANE).** zfsbackup od wydania `b6f040f`
+  (2026-11-03) miał nazwę klienta w 13 komentarzach w 4 plikach; bramka w `release/publish.sh` jej
+  nie znała. Gałąź `fix/scrub-customer-name`: komentarze bez nazwy, a bramka
+  (`release/name-gate.sh`, wspólna dla `publish.sh` i test/release) sprowadza najpierw wszystkie
+  polskie litery do ASCII, więc łapie każdą pisownię nazwy z listy. test/release na pve9 26/0;
+  kontrola negatywna (bramka bez sprowadzania liter) 23/3, czerwone są tylko nowe przypadki 4b.
+  Wcześniejsza kontrola, z nazwą zostawioną tylko w `tui/new-relation.sh`: publish odmawia. Historii repo wydań to nie czyści; decyzja właściciela: po 1.1 oba repo
+  prywatne, nowe czyste repo publiczne. Audyt z tego dnia znalazł też do decyzji właściciela:
+  e-mail autora we wszystkich commitach wydań (metadane autora), imię i nazwisko w LICENSE/README
+  (`AUDYT-PUBLIKACJI-2026-10-27.md` A9: zamierzone; do potwierdzenia), adresy
+  10.0.0.x i 192.168.1.x w dokumentacji (niesprawdzone, czy prawdziwe).
 - **1.0.14 gotowe do wydania, NIEWYDANE (2026-11-07; czeka na „publikuj”).** Zawiera REV-191
   r3–r5 (#1129, #1131, #1133; REV-191 zatwierdzony i zamknięty, `docs/internal/reviews/closures/REV-20261107-191.md`) i test S13. Wpis w CHANGELOG.
   - **S13 (replika aktywna po pvesr, zadanie bez `-r`):** odbiór pvesr (`recv -F` strumienia `-R`) kasuje na celu
