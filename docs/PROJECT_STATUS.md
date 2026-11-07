@@ -52,6 +52,12 @@
     po migawkach niewykluczonych. Bez wykluczonej w środku zostaje jeden strumień `-I`.
     Wcześniej skopiowane migawki zostają na celu. S8 porównuje teraz pełną listę celu, bez
     filtra; nowy S9 sprawdza to samo dla wypychania (`snapsend.sh`).
+  - **REV-191 r3 (niewydane, czeka na recenzenta):** recenzent odrzucił ścieżkę `-r`. Kroki
+    planuje teraz `exclusion_step_plan` (lib-zfs-snap.sh) według createtxg. Końce kroków to
+    tylko migawki korzenia. Pod `-r` liczy się też wykluczona migawka, którą ma tylko dziecko
+    (w 1.0.13 przechodziła na cel w jednym `-R -I`). Czysty krok zostaje `-I`.
+    Testy S10 i S11; kontrola negatywna na starych silnikach daje 3 FAIL.
+    Replika A-TASSA (`-R` flat) tego przypadku nie ma.
   - **REV-190 r2:** `flags_opt_pairs` dzieli `flags` bez rozwijania nazw plików. `-E a*b` jest
     odrzucane także wtedy, gdy w katalogu roboczym leży plik `axb`.
 - **Lab na żywo po #1111 (2026-11-07, #1114; wydane w 1.0.13).** Na pve9
