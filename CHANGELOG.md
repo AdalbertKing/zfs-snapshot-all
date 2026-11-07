@@ -26,6 +26,12 @@ when they change how the tool is used.
   receive destroys the replica's own snapshot but leaves its bookmark. The next copy continues
   from that bookmark, as one increment. This was measured with real pvesr on 2026-11-07. A test now
   reproduces the effect (the snapshot destroyed, the bookmark kept); the engine did not change.
+- **Passive means the newest existing snapshot, not the current state.** The relation and replica
+  wizards say so in the passive choice window and in the plan; ESENCJA/ESSENTIALS and
+  JAK-TO-DZIALA/HOW-IT-WORKS say it too. A passive
+  copy or replica takes no snapshot itself. The target holds the state of the source's newest
+  snapshot, which may be old, and a dataset without snapshots is not copied. Only the mode with its
+  own snapshots copies the current state.
 
 ## [1.0.13] — 2026-11-07
 
