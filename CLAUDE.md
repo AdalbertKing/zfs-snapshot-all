@@ -157,7 +157,12 @@ exception for one night. One batch:
 2. **One branch per batch.** For each fix: Edit, `bash -n`, and the cut-out case here (seconds).
    Then push the branch and run **only the edited suite** on pve9:
    `./test/remote-suite.sh <suite> <branch>`. Without a ref it tests `origin/main`, not your
-   edit. Add its negative control, `./test/remote-suite.sh <suite> <parent-sha>`. The gencron
+   edit. Then the negative control, which is **the new test against the old code**. Running the
+   parent's suite does not count, because the parent does not have the new test (Reviewer,
+   PROTOCOL-V3-REVIEW-20261107 P5.2). Make a throwaway branch `<branch>-negctl` that reverts only
+   the code fix and keeps the test. Push it and run `./test/remote-suite.sh <suite> <branch>-negctl`.
+   The new case must fail for the intended defect. Record the baseline SHA, the case, the expected
+   failure and the observed failure, then delete the branch. The gencron
    suite `test/run.sh` is not a `test/<suite>/` directory, so it goes to CI. Nothing else runs
    by hand. The `impact.sh` list is what CI must show green.
 3. **Delegate while you work.** Reading goes to haiku (`repo-greper` / `Explore`). Typing
@@ -167,10 +172,13 @@ exception for one night. One batch:
    and merge on green. A hole found during this step goes on the next batch's list. It does not
    restart the step, unless it is data loss, a security hole, or a destructive guard.
 5. **One release per deployment**, on the Owner's "publikuj". Never one version per finding.
-6. **Reviewer:** Protocol V2 stays in force until the Reviewer accepts
-   `docs/project/PROTOCOL-V3-PROPOSAL.md` (batch REV, reproducible blocking findings, verdict
-   bound to content, evidence = exact-head CI + pve9 edited-suite run, two rounds then Owner,
-   approve+close in one PR, next batch while review runs). Check that file's `Status:` line.
+6. **Reviewer:** Protocol V2.2 stays in force. The Reviewer decided the V3 proposal in
+   `docs/project/PROTOCOL-V3-REVIEW-20261107.md`: accepted in principle with changes, P8
+   (approve and close in one PR) rejected. It becomes active only after the amendment PR
+   (PROTOCOL.md + reviews/README) is approved, merged and read back on `main`. Until then:
+   - a rejection of batch N is fixed under the same REV, not moved to N+1 (P9);
+   - in evidence, mark each suite EXECUTED PASS, SKIPPED / NOT IMPACTED or MANUAL / NOT RUN.
+     A skipped CI body is not a green test (P5.1).
 
 ## Which model -- delegation
 
