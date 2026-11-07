@@ -9137,7 +9137,7 @@ cmd_remove_replica() {
 }
 
 
-# U161 (Dabrowska 2026-11-04): a passive copy is fed by the pvesr replica, so its archive
+# U161 (customer site 2026-11-04): a passive copy is fed by the pvesr replica, so its archive
 # cannot be fresher than the replica's schedule. The template's 90m/150m on the hourly tier
 # made the archive "late" at every */2:00 replica. Interval of one pvesr schedule, in seconds:
 # */M -> M min, */N:MM -> N h, H:MM -> a day, none -> pvesr's default */15. Anything else
@@ -10033,7 +10033,7 @@ Taking over older jobs (a v4 config written manually): remove their sections fir
     if [ "$do_install" -ne 1 ]; then
         echo
         echo "This is a plan only -- nothing was installed."
-        # U162 (Dabrowska 2026-11-04): edit-relation reaches this plan through --replace and
+        # U162 (customer site 2026-11-04): edit-relation reaches this plan through --replace and
         # takes --yes, not --install -- the hint named an option the owner's command refused.
         if [ "$lb_replace" -eq 1 ]; then
             echo "To apply: repeat the same edit-relation command with --yes."
@@ -10205,7 +10205,7 @@ Taking over older jobs (a v4 config written manually): remove their sections fir
             # refuse. Nothing to rehearse yet -- the first cron run after the family appears copies it.
             elif [ "$lb_passive" -eq 1 ] && [ -z "$(local_newest_snapshot "$sr" "$seed_prefix" r)" ]; then
                 log "  passive, no '${seed_prefix}*' snapshot under $sr yet -- nothing to rehearse; the first cron run after the family appears copies it"
-            # Dabrowska 2026-11-04: an archive that keeps LONGER than its source (old daily/
+            # Customer site 2026-11-04: an archive that keeps LONGER than its source (old daily/
             # weekly history the replica no longer has) made the engine's -n exit 1 "by design";
             # the same history rule as activate-client (REV-146) -- only target-only snapshots
             # OLDER than the base are accepted, a newer one still fails.
@@ -12849,7 +12849,7 @@ snaponly_assert_source_free() {   # <name> <peer label> <dataset...>
 # collectors on one source could never prune each other's snapshots. It also made
 # one host carry two naming conventions, and every later step -- a passive copy of
 # the pvesr replica, its template, its monitors -- had to know the stamp and none
-# did (U140, Dabrowska 2026-11-01). Now the family is the plain tier prefix, and
+# did (U140, customer site 2026-11-01). Now the family is the plain tier prefix, and
 # the stamp is an explicit choice (--stamp-family -> FAMILY_STAMP=1) for a second
 # creator of the same family on one source.
 #
@@ -13358,7 +13358,7 @@ $PROBE_DETAIL"
     # relationship takes nothing and freezes nothing -- each tier's first snapshot is its
     # first cron run. Until 1.0.5 every tier was snapshotted here, one after another and
     # each with the guests' freeze: an edit of five tiers took over four minutes and froze
-    # a database VM on a customer host again and again (Dabrowska 2026-11-01).
+    # a database VM on a customer host again and again (2026-11-01).
     log "activate-client: each tier takes its first snapshot at its own cron time -- nothing was taken now"
 }
 
@@ -15967,7 +15967,7 @@ cmd_delete_relation() {
         echo "  4. copies    : KEPT on this host${copies:+ ($copies)} -- pass --destroy-copies to destroy them too"
     fi
     replica_restart_warning "$copies"
-    # U154 (Dabrowska 2026-11-04): deleting a relationship took its cron lines away while its
+    # U154 (customer site 2026-11-04): deleting a relationship took its cron lines away while its
     # first full copy (558G) kept running, unmentioned. A run of THIS relationship in flight
     # (an engine carrying -L <name>, the same probe pause-client uses) stops the delete: it
     # kills nothing on its own -- the operator waits for it or stops it, then repeats.
@@ -16069,7 +16069,7 @@ cmd_delete_relation() {
             done
         done
     fi
-    # A18 (Dabrowska 2026-11-06): the progress records of the deleted relationship's runs
+    # A18 (customer site 2026-11-06): the progress records of the deleted relationship's runs
     # (label = its name) outlived it, and one left at "running" by a copy cut short alarmed
     # "bez pulsu" days later. A run in progress refused the delete above, so whatever
     # carries this label now is history of a relationship that no longer exists.
@@ -23306,7 +23306,7 @@ Nothing was created."
 
 # The family answer on a RESUME (U141): asked by a refusal during activation, after the
 # record exists. Taken onto the record only before activation. The SAME answer again is
-# the "re-run the exact command" every stop prints (Dabrowska 2026-11-04: --own-snapshots,
+# the "re-run the exact command" every stop prints (customer site 2026-11-04: --own-snapshots,
 # then a missing --grant-remotely, then the same command refused); only the OPPOSITE
 # answer is a change, and refused.
 rux_record_family_answer() {   # <cpath> <name> <state> <own 0|1> <stamp 0|1>
