@@ -2120,6 +2120,39 @@ process_dataset() {
         send_cmd="zfs send $raw_send_flag $comp_send_flag $EXTRA_SEND_OPTS -I ${src_dataset}@${first_snap} $snapshot"
     fi
 
+    # -E AND A FIRST FULL -R STREAM (REV-20261107-191, round 4). Under atomic -r
+    # (and under -H) the first copy is `zfs send -R root@latest`, which carries
+    # every snapshot before @latest in the root AND in every descendant -- a
+    # child-only __replicate_ included. The stream may only name a root snapshot
+    # with no excluded snapshot at or before it in the subtree
+    # (exclusion_full_base); the step plan below then carries the rest. No such
+    # snapshot: refuse before any transfer -- never a stream that breaks -E.
+    if [[ "$common_snapshot" == "null" ]] && [ -z "$bookmark_base" ] \
+       && [ ${#EXCLUDE_SNAPS[@]} -gt 0 ] && [ ${#src_all[@]} -gt 0 ] \
+       && { [ "$RECURSIVE" -eq 1 ] || [ "$FULL_HISTORY_SEND" -eq 1 ]; }; then
+        local _base _brc
+        _base=$(exclusion_full_base "$src_dataset" "$latest_snap" "$remote_user" "$remote_host"); _brc=$?
+        if [ $_brc -ne 0 ]; then
+            if [ $_brc -eq 1 ]; then
+                log 0 "Could not list the snapshots under '$src_dataset' to place the -E exclusions -- not sending, rather than carrying an excluded snapshot"
+            else
+                log 0 "-E: the first copy is one -R stream, which carries every snapshot before the one it names, in '$src_dataset' and every descendant. Every eligible snapshot of '$src_dataset' has an excluded one at or before it there, so any such stream would carry it. Not sending. Remove the excluded snapshots older than the oldest eligible one, or send without -r/-H (-R flat steps each dataset on its own)."
+            fi
+            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
+            return 1
+        fi
+        if [ "$_base" != "$latest_snap" ]; then
+            log 1 "-E: first full stream from @${_base} (no excluded snapshot at or before it), then steps to @${latest_snap}"
+            transfer_data "${send_cmd% "$snapshot"} ${src_dataset}@${_base}" "$recv_cmd" "$remote_host" "$remote_user" || {
+                log 0 "Transfer failed (first copy, @${_base})"
+                abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
+                return 1
+            }
+            common_snapshot="$_base"
+            send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $EXTRA_SEND_OPTS -I ${src_dataset}@${_base} $snapshot"
+        fi
+    fi
+
     # -E AND -I (REV-20261107-191). `zfs send -I a b` carries EVERY snapshot
     # between a and b; filtering the list only chose the two ends, so an
     # excluded family (pvesr's __replicate_) inside the interval still reached

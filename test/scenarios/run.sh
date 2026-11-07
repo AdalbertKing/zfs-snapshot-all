@@ -520,6 +520,40 @@ check "the incremental push succeeds; root a b, child a b (no @skip_x)" "0:a b:a
       "$?:$(tl "$ROOT/s11bk/$S11"):$(tl "$ROOT/s11bk/$S11/ch")"
 
 # ============================================================================
+# S12. -E on the FIRST copy when it is one -R stream (REV-20261107-191, round 4):
+#      atomic -r and -H. `zfs send -R root@x` carries every snapshot before @x,
+#      descendants included; the first stream must start below the oldest
+#      excluded snapshot, or the run refuses before any transfer.
+# ============================================================================
+scenario "S12 -E on a first -R stream (-r, -H): no excluded snapshot, or no send" "first copy: snapget/snapsend -e -r -E, snapget -e -H -E, refusal"
+S12="$ROOT/s12src"
+mk "$S12"; mk "$S12/ch"
+zfs snapshot -r "$S12@a"; zfs snapshot "$S12/ch@skip_x"; zfs snapshot -r "$S12@b"
+"$SNAPGET" -v 1 -e -r -E skip "$S12" "$ROOT/s12r" >"$TMPD/s12.log" 2>&1
+check "pull -r: the first copy succeeds; root a b, child a b (no @skip_x) -- whole lists" "0:a b:a b" \
+      "$?:$(tl "$ROOT/s12r/$S12"):$(tl "$ROOT/s12r/$S12/ch")"
+"$SNAPSEND" -e -r -E skip "$S12" "$ROOT/s12p" >>"$TMPD/s12.log" 2>&1
+check "push -r: the first copy succeeds; root a b, child a b (no @skip_x) -- whole lists" "0:a b:a b" \
+      "$?:$(tl "$ROOT/s12p/$S12"):$(tl "$ROOT/s12p/$S12/ch")"
+# -H on a single dataset: its -R stream carries the root's own excluded history
+S12H="$ROOT/s12h"
+mk "$S12H"
+zfs snapshot "$S12H@a"; zfs snapshot "$S12H@skip_h"; zfs snapshot "$S12H@b"
+"$SNAPGET" -v 1 -e -H -E skip "$S12H" "$ROOT/s12hr" >>"$TMPD/s12.log" 2>&1
+check "pull -H: the first copy succeeds and holds a b, no @skip_h (whole list)" "0:a b" \
+      "$?:$(tl "$ROOT/s12hr/$S12H")"
+# an excluded snapshot older than every eligible root snapshot: no safe stream
+S12X="$ROOT/s12x"
+mk "$S12X"; mk "$S12X/ch"
+zfs snapshot "$S12X/ch@skip_0"; zfs snapshot -r "$S12X@a"
+"$SNAPGET" -v 1 -e -r -E skip "$S12X" "$ROOT/s12xr" >>"$TMPD/s12.log" 2>&1
+_r12=$?
+check "pull -r, no safe base: the run fails, and no @skip_0 reached any target" "1:0" \
+      "$([ $_r12 -ne 0 ] && echo 1 || echo 0):$(zfs list -H -o name -t snapshot -r "$ROOT/s12xr" 2>/dev/null | grep -c '@skip_0')"
+check "...and says why (the -R stream line in the log)" "1" \
+      "$([ "$(grep -c 'the first copy is one -R stream' "$TMPD/s12.log")" -ge 1 ] && echo 1 || echo 0)"
+
+# ============================================================================
 # S7. Hygiene after everything: no held snapshots, no leftover state.
 #     Contract: hold-tag.
 # ============================================================================

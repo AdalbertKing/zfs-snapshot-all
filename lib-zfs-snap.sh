@@ -3429,3 +3429,55 @@ exclusion_step_plan() {
             for (i = 1; i <= ns; i++) print P[i]
         }'
 }
+
+# EXCLUSION-SAFE BASE FOR A FIRST FULL -R STREAM (REV-20261107-191, round 4).
+# `zfs send -R root@x` carries every snapshot up to @x, in the root and in every
+# descendant -- the -E families included; there is no per-snapshot filter in a
+# replication stream. So the first full stream (atomic -r, or -H) may only name
+# a root snapshot that has NO excluded snapshot at or before it anywhere in the
+# subtree (createtxg, pool-wide; a tie counts as before). The rest of the way to
+# <latest> is then the ordinary step plan (exclusion_step_plan).
+# Prints <latest> when nothing excluded lies at or before it; else the newest
+# non-excluded root snapshot older than the oldest excluded one; prints nothing
+# and returns 3 when there is no such snapshot (the caller refuses to send).
+# rc 1 when the list could not be read.
+# Usage: exclusion_full_base <dataset> <latest> [user host]
+exclusion_full_base() {
+    local ds="$1" latest="$2" ruser="${3:-}" rhost="${4:-}" out res
+    if [ -n "$rhost" ]; then
+        out=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" \
+            "zfs list -H -p -o name,createtxg -t snapshot -r '$ds'") || return 1
+    else
+        out=$(zfs list -H -p -o name,createtxg -t snapshot -r "$ds") || return 1
+    fi
+    res=$(printf '%s\n' "$out" | awk -F'\t' -v root="$ds" -v l="$latest" \
+        -v xs="${EXCLUDE_SNAPS[*]}" '
+        BEGIN { nx = split(xs, X, " ") }
+        {
+            at = index($1, "@"); if (at == 0) next
+            d = substr($1, 1, at - 1); s = substr($1, at + 1)
+            n++; D[n] = d; S[n] = s; T[n] = $2 + 0
+            if (d == root && s == l) lt = T[n]
+        }
+        END {
+            if (lt == "") exit 0
+            mx = ""
+            for (i = 1; i <= n; i++) {
+                if (T[i] > lt) continue
+                for (k = 1; k <= nx; k++) if (index(S[i], X[k]) == 1) {
+                    if (mx == "" || T[i] < mx) mx = T[i]; break }
+            }
+            if (mx == "") { print l; exit 0 }
+            bt = ""; b = ""
+            for (i = 1; i <= n; i++) {
+                if (D[i] != root || T[i] >= mx) continue
+                x = 0
+                for (k = 1; k <= nx; k++) if (index(S[i], X[k]) == 1) { x = 1; break }
+                if (x) continue
+                if (bt == "" || T[i] > bt) { bt = T[i]; b = S[i] }
+            }
+            if (b != "") print b
+        }')
+    [ -n "$res" ] || return 3
+    printf '%s\n' "$res"
+}
