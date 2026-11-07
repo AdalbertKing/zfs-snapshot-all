@@ -470,6 +470,56 @@ for _s in __replicate_1 auto_2 __replicate_2 auto_3; do zfs snapshot "$S9@$_s"; 
 check "the incremental push succeeds and the target holds no excluded snapshot (whole list)" "0:auto_1 auto_2 auto_3" "$?:$(s9_list)"
 
 # ============================================================================
+# S10. -E under recursion (REV-20261107-191, round 3). -r is ONE -R stream from
+#      the root: every step endpoint must be a ROOT snapshot, and an excluded
+#      snapshot that only a CHILD has (pvesr's __replicate_ lives on the zvols)
+#      must not ride a -I. -R (flat) is one job per dataset, each with its own
+#      endpoints. The whole target list of root AND child is checked.
+# ============================================================================
+scenario "S10 -E under -r and -R: root endpoints only, child exclusions count" "snapget -e -r / -e -R -E, layout from the round-3 verdict"
+S10="$ROOT/s10src"
+mk "$S10"; mk "$S10/ch"
+tl() { zfs list -H -o name -t snapshot -s createtxg -d1 "$1" 2>/dev/null | sed 's/.*@//' | xargs; }
+zfs snapshot -r "$S10@a"
+"$SNAPGET" -v 1 -e -r -E skip "$S10" "$ROOT/s10r" >"$TMPD/s10.log" 2>&1
+_r1=$?
+"$SNAPGET" -v 1 -e -R -E skip "$S10" "$ROOT/s10f" >>"$TMPD/s10.log" 2>&1
+check "the first copies (-r and -R) succeed" "0:0" "$_r1:$?"
+# the verdict's layout (child-only @b, @skip on both) plus a clean step (child-only
+# @d between @c and @e) and a CHILD-ONLY excluded snapshot (@skip_ch)
+zfs snapshot "$S10/ch@b"; zfs snapshot -r "$S10@skip"; zfs snapshot -r "$S10@c"
+zfs snapshot "$S10/ch@d"; zfs snapshot -r "$S10@e"
+zfs snapshot "$S10/ch@skip_ch"; zfs snapshot -r "$S10@f"
+"$SNAPGET" -v 1 -e -r -E skip "$S10" "$ROOT/s10r" >>"$TMPD/s10.log" 2>&1
+check "-r: the run succeeds (no endpoint taken from a child-only name)" "0" "$?"
+check "-r: root target holds the root's eligible snapshots, nothing excluded" "a c e f" "$(tl "$ROOT/s10r/$S10")"
+check "-r: child target -- @d rides the clean -I step, no @skip/@skip_ch; @b sits in a step over @skip, so -i cannot carry it" \
+      "a c d e f" "$(tl "$ROOT/s10r/$S10/ch")"
+# only a child has an excluded snapshot inside the interval: the root's own list
+# shows nothing excluded, and a single -I -R would carry it
+zfs snapshot "$S10/ch@skip_only_child"; zfs snapshot -r "$S10@g"
+"$SNAPGET" -v 1 -e -r -E skip "$S10" "$ROOT/s10r" >>"$TMPD/s10.log" 2>&1
+check "-r: a child-only excluded snapshot does not reach the target" "0:a c d e f g" "$?:$(tl "$ROOT/s10r/$S10/ch")"
+"$SNAPGET" -v 1 -e -R -E skip "$S10" "$ROOT/s10f" >>"$TMPD/s10.log" 2>&1
+check "-R: the run succeeds" "0" "$?"
+check "-R: each dataset steps through its OWN snapshots (root)" "a c e f g" "$(tl "$ROOT/s10f/$S10")"
+check "-R: each dataset steps through its OWN snapshots (child keeps @b)" "a b c d e f g" "$(tl "$ROOT/s10f/$S10/ch")"
+
+# ============================================================================
+# S11. The push engine under -r, same contract.
+# ============================================================================
+scenario "S11 snapsend -e -r -E: a child-only excluded snapshot stays off the target" "push -r: root endpoints, child exclusions count"
+S11="$ROOT/s11src"
+mk "$S11"; mk "$S11/ch"
+zfs snapshot -r "$S11@a"
+"$SNAPSEND" -e -r -E skip "$S11" "$ROOT/s11bk" >"$TMPD/s11.log" 2>&1
+check "the first push succeeds" "0" "$?"
+zfs snapshot "$S11/ch@skip_x"; zfs snapshot "$S11/ch@m"; zfs snapshot -r "$S11@b"
+"$SNAPSEND" -e -r -E skip "$S11" "$ROOT/s11bk" >>"$TMPD/s11.log" 2>&1
+check "the incremental push succeeds; root a b, child a b (no @skip_x)" "0:a b:a b" \
+      "$?:$(tl "$ROOT/s11bk/$S11"):$(tl "$ROOT/s11bk/$S11/ch")"
+
+# ============================================================================
 # S7. Hygiene after everything: no held snapshots, no leftover state.
 #     Contract: hold-tag.
 # ============================================================================
