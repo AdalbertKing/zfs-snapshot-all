@@ -1770,6 +1770,14 @@ for _bad in '-E foo;touch>/tmp/rev190-proof' '-E foo|id' '-E $(id)' '-E foo&' '-
     check "REV190 flags='$_bad' is refused and no replica line is emitted" "1:0" \
           "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s\n' "$fo" | grep -c 'replica copy (pe)')"
 done
+# REV-190 r2: the verdict depended on the working directory -- '-E a*b' globbed to a
+# file named axb there and passed. The same refusal with such a file present.
+_g190=$(mktemp -d); : > "$_g190/axb"
+printf '[defaults]\n\thost_label = f\n[replica:pe]\n\tsource = tank/a\n\tdst = usb/rep\n\tschedule = 0 1 * * *\n\tpassive = yes\n\tflags = -E a*b\n' > "$FOR/c.conf"
+fo=$(cd "$_g190" && for_run); frc=$?
+rm -rf "$_g190"
+check "REV190 r2 flags='-E a*b' is refused even with a file named axb in the working directory" "1:0" \
+      "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s\n' "$fo" | grep -c 'replica copy (pe)')"
 printf '[defaults]\n\thost_label = f\n[replica:pe]\n\tsource = tank/a\n\tdst = usb/rep\n\tschedule = 0 1 * * *\n\tpassive = yes\n\tflags = -E autosnap_:x.1 -E __migration__\n' > "$FOR/c.conf"
 fo=$(for_run); frc=$?
 check "REV190 control: valid families render literally" "0:1" \
