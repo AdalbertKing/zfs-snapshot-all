@@ -22,9 +22,11 @@
 
 - **Nazwa klienta w publicznym repo wydań (2026-11-07, NIEWYDANE).** zfsbackup od wydania `b6f040f`
   (2026-11-03) miał nazwę klienta w 13 komentarzach w 4 plikach; bramka w `release/publish.sh` jej
-  nie znała. Gałąź `fix/scrub-customer-name`: komentarze bez nazwy, bramka zna ją także z „ą”
-  (test/release na pve9 23/0; kontrola negatywna z nazwą tylko w `tui/new-relation.sh`: publish
-  odmawia, 13/10). Historii repo wydań to nie czyści; decyzja właściciela: po 1.1 oba repo
+  nie znała. Gałąź `fix/scrub-customer-name`: komentarze bez nazwy, a bramka
+  (`release/name-gate.sh`, wspólna dla `publish.sh` i test/release) sprowadza najpierw wszystkie
+  polskie litery do ASCII, więc łapie każdą pisownię nazwy z listy. test/release na pve9 26/0;
+  kontrola negatywna (bramka bez sprowadzania liter) 23/3, czerwone są tylko nowe przypadki 4b.
+  Wcześniejsza kontrola, z nazwą zostawioną tylko w `tui/new-relation.sh`: publish odmawia. Historii repo wydań to nie czyści; decyzja właściciela: po 1.1 oba repo
   prywatne, nowe czyste repo publiczne. Audyt z tego dnia znalazł też do decyzji właściciela:
   e-mail autora we wszystkich commitach wydań (metadane autora), imię i nazwisko w LICENSE/README
   (`AUDYT-PUBLIKACJI-2026-10-27.md` A9: zamierzone; do potwierdzenia), adresy
