@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 542342aab484a278d5070112b75075118d404e33 -->
-<!-- frozen: snapget.sh 100755 59106fcb69df5bba10b5382ea8f8e95f6b2fcf65 -->
+<!-- frozen: snapsend.sh 100755 78402e3594fc98255f3d98a7c4c47401d315c64f -->
+<!-- frozen: snapget.sh 100755 129989aeaaad593c0af95298681e9424d7aaa231 -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f99ef6e1660364ddc694985996ed113e2c4d3842 -->
@@ -1355,6 +1355,15 @@ Owner-authorized refreezes:
   on customer data; "tak" to removing it from the comments now, before 1.1). Line 503: the
   customer name and its host became "customer site". No code line moved; version unchanged.
   twin: none -- check-snap-age.sh has no twin.
+- 2026-11-07 (snapsend.sh, snapget.sh): **-e -R over a subtree with no snapshot at all is
+  nothing to copy, not a failure.** Owner direction (2026-11-07, "1" to: split "no snapshots"
+  rc 0 from "nothing matches" rc 1), after the A-TASSA usb1 replica ended rc=1 on an empty
+  `rpool/data`. The all-scaffolding guard of 2026-08-21 stays; a member with no snapshot at
+  all is also counted in `ADOPT_EMPTY`, and when every member is such, the run logs "nothing
+  to copy (-e -R); not a failure" and exits 0. Only-excluded or foreign-family subtrees still
+  refuse. A missing source root is refused earlier ("Source dataset not found"), unchanged.
+  Tests: scenarios S14 (pull and push, both paths) on pve9; 67e pins the split in snapget.sh only.
+  twin: both engines changed in the same commit.
 
 ## How it is enforced
 

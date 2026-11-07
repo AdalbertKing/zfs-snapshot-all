@@ -601,6 +601,28 @@ check "control: without the bookmark the same run fails and the medium keeps its
       "$([ $? -ne 0 ] && echo 1 || echo 0):$(zfs list -H -t snapshot -o name -d1 "$ROOT/s13med/$S13" | grep -c '@rep_')"
 
 # ============================================================================
+# S14. -e -R over a subtree with NO snapshot at all (owner 2026-11-07, A-TASSA
+#      usb1: rpool/data held one container without snapshots and the whole
+#      replica ended rc=1). Nothing to copy is not a failure; snapshots that
+#      exist but none of them adoptable (all excluded) still are.
+# ============================================================================
+scenario "S14 -e -R: an empty subtree is nothing to copy (rc 0); only excluded snapshots still refuse" "pull and push: ADOPT_EMPTY vs the all-scaffolding guard"
+S14="$ROOT/s14src"
+mk "$S14"; mk "$S14/ch"
+"$SNAPGET" -e -M -R -E __replicate_ "$S14" "$ROOT/s14med" >"$TMPD/s14.log" 2>&1
+check "pull: root and child without snapshots -> rc 0, says nothing to copy" "0:1" \
+      "$?:$(grep -c 'nothing to copy (-e -R); not a failure' "$TMPD/s14.log")"
+"$SNAPSEND" -e -R -E __replicate_ "$S14" "$ROOT/s14bk" >>"$TMPD/s14.log" 2>&1
+check "push: the same subtree -> rc 0" "0" "$?"
+zfs snapshot "$S14/ch@__replicate_100-0_1__"
+"$SNAPGET" -e -M -R -E __replicate_ "$S14" "$ROOT/s14med" >>"$TMPD/s14.log" 2>&1
+check "pull: only an excluded snapshot in the subtree -> still refused" "1" "$([ $? -ne 0 ] && echo 1 || echo 0)"
+"$SNAPSEND" -e -R -E __replicate_ "$S14" "$ROOT/s14bk" >>"$TMPD/s14.log" 2>&1
+check "push: the same -> still refused" "1" "$([ $? -ne 0 ] && echo 1 || echo 0)"
+check "nothing reached either target" "0" \
+      "$(zfs list -H -t snapshot -o name -r "$ROOT/s14med" "$ROOT/s14bk" 2>/dev/null | grep -c .)"
+
+# ============================================================================
 # S7. Hygiene after everything: no held snapshots, no leftover state.
 #     Contract: hold-tag.
 # ============================================================================

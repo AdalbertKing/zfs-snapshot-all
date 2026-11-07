@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 2cd801cddbab132b -->
+<!-- status-covers-digest: 4946d6ca2b8de3d3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -31,7 +31,13 @@
   e-mail autora we wszystkich commitach wydań (metadane autora), imię i nazwisko w LICENSE/README
   (`AUDYT-PUBLIKACJI-2026-10-27.md` A9: zamierzone; do potwierdzenia), adresy
   10.0.0.x i 192.168.1.x w dokumentacji (niesprawdzone, czy prawdziwe).
-- **1.0.14 gotowe do wydania, NIEWYDANE (2026-11-07; czeka na „publikuj”).** Zawiera REV-191
+- **1.0.15 w przygotowaniu, NIEWYDANE (2026-11-07).** `-e -R` na poddrzewie bez żadnej migawki:
+  „nothing to copy”, rc 0 (dotąd rc 1). Migawki są, ale żadnej nie da się przejąć: nadal błąd. Oba
+  silniki; scenarios S14 na pve9 74/0, kontrola negatywna na starych silnikach 72/2 (oba punkty
+  S14). Polecenie właściciela po replice usb1 A-TASSA. Wpis w CHANGELOG, REFERENCJA/REFERENCE.
+- **1.0.14 wydane (2026-11-07 ~22:05; repo wydań zfsbackup 02c539c, z `main` 490d14cb).** Wersja
+  na pve9, pve9b, pve11, Metropolis 28.8/28.9, A-TASSA 0.10/0.11 (deploy rc=0, odczyt 22:19);
+  pve10 i Dąbrowska 11.10/11.11 nieodczytane (brak klucza / timeout). Zawiera REV-191
   r3–r5 (#1129, #1131, #1133; REV-191 zatwierdzony i zamknięty, `docs/internal/reviews/closures/REV-20261107-191.md`) i test S13. Wpis w CHANGELOG.
   - **S13 (replika aktywna po pvesr, zadanie bez `-r`):** odbiór pvesr (`recv -F` strumienia `-R`) kasuje na celu
     migawkę repliki, a jej zakładkę zostawia. Następna kopia idzie przyrostem z zakładki
@@ -45,8 +51,9 @@
     Silnik bez zmian. Raport wieku najnowszej migawki w kopii pasywnej: do następnej paczki.
   - **Replika usb1 A-TASSA (pve1, 2026-11-07 13:19-21:22, wersja 1.0.13):** `hdd/backups` i `hdd/data`
     skopiowane (status success w zfs-snapshot-stats.log); rc=1 z trzeciego źródła `rpool/data`, w którym
-    jest tylko CT 199 bez migawek (odmowa „found only scaffolding”, zgodna z projektem). Do czasu
-    zmiany konfiguracji (decyzja produkcyjna właściciela) każdy przebieg usb1 skończy się rc=1.
+    był tylko CT 199 bez migawek (odmowa „found only scaffolding”). Potem, za zgodą właściciela:
+    CT 199 usunięty (`pct destroy 199`); `rpool/data` zostaje w źródłach usb1 (na nim powstaną
+    nowe VM). Pusty `rpool/data` daje rc=1 do wydania 1.0.15 na pve1.
 - **1.0.13 wydane (2026-11-07 ~12:55; repo wydań zfsbackup e5fff9f, zbudowane z `main` c15e6f8b).**
   Weszły w nie wpisy z 2026-11-07 poniżej (#1111, #1114, #1117, #1118).
   - **Hosty po aktualizacji o 13:15:** e5fff9f, deploy rc 0, na pve9, pve9b, pve11, Metropolis

@@ -507,7 +507,7 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | Flag | Meaning |
 |---|---|
 | `-m <MESSAGE>` | Prefix for the new snapshot's name. Omitting it is legal but warned about, see below |
-| `-e` | Use the existing latest snapshot instead of creating a new one |
+| `-e` | Use the existing latest snapshot instead of creating a new one. A named dataset without snapshots fails the run. Under `-R` a member without snapshots is skipped; when the whole subtree has no snapshot at all, the run logs "nothing to copy" and ends rc 0, but when snapshots exist and none can be adopted (wrong family, all excluded by `-E`) the run fails |
 | `-E <PREFIX>` | Used with `-e`: never adopt a snapshot whose name starts with PREFIX as the newest/base, even when it is newer (the newest non-excluded snapshot wins). Repeatable. For passive pickups of a foreign system's snapshots. For a stream that carries children (`-r`, the first copy under `-H`) excluded snapshots are looked up in the whole subtree; when the first stream cannot start without carrying one, nothing is sent and the log says why |
 | `-t` | The second argument is the EXACT dataset to write, not a base to append the source name under. Used by restore, where the copy has to land back at its original path. Refused with several datasets, without a base, and with `-R` |
 | `-z` / `-Z` | Compress the stream with zstd (`-Z` is a synonym for `-z`). On by default against a remote target |

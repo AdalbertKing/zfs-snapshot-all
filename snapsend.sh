@@ -617,6 +617,8 @@ QUIESCE_SNAPPED=0
 # -R -e: how many expanded members were skipped as scaffolding (no family).
 # Read by the end-of-run aggregate guard; mirrored from snapget.sh 2026-09-07.
 ADOPT_SKIPPED=0
+# -R -e: of those, how many had no snapshot at all (owner 2026-11-07).
+ADOPT_EMPTY=0
 RECURSIVE=0
 FLAT_RECURSE=0
 # Exactly ONE recursion declaration per invocation (Stage 2.2, REV-054 A4).
@@ -1507,6 +1509,10 @@ process_dataset() {
                 # pull" -- and -e is documented forty lines into this file.
                 log 1 "No family on '$src_dataset' -- scaffolding under -R -e, skipped"
                 ADOPT_SKIPPED=$((ADOPT_SKIPPED+1))
+                # Owner 2026-11-07: a member with NO snapshot at all is counted apart.
+                # When every skipped member is like that, the subtree has nothing to
+                # copy -- not a misconfigured family -- and the run is not a failure.
+                ADOPT_EMPTY=$((ADOPT_EMPTY+1))
                 return 0
             fi
             log 0 "No source snapshots found"
@@ -2987,7 +2993,11 @@ else
     if [ ${#FAILED_DATASETS[@]} -gt 0 ]; then
         printf "%s\n" "${FAILED_DATASETS[@]}" >&2
         exit 1
-    elif [ $USE_EXISTING_SNAPSHOT -eq 1 ] && [ $FLAT_RECURSE -eq 1 ] && [ "$ADOPT_SKIPPED" -ge ${#DATASETS[@]} ]; then
+    elif [ $USE_EXISTING_SNAPSHOT -eq 1 ] && [ $FLAT_RECURSE -eq 1 ] && [ "$ADOPT_SKIPPED" -ge ${#DATASETS[@]} ] \
+         && [ "$ADOPT_EMPTY" -lt "$ADOPT_SKIPPED" ]; then
+        # Owner 2026-11-07: this refusal is for snapshots that exist but none of
+        # them is the family (wrong prefix, everything excluded). A subtree with no
+        # snapshot at all has nothing to copy; it takes the branch below.
         # -e over -R skipped EVERY member as scaffolding: the requested subtree
         # carries no matching family anywhere, so "success" would report an
         # adoption that never happened. The per-member skip is not an error;
@@ -2997,6 +3007,9 @@ else
         echo "No matching family anywhere under the requested root(s) -- nothing was adopted (-e -R found only scaffolding)" >&2
         exit 1
     else
+        if [ $USE_EXISTING_SNAPSHOT -eq 1 ] && [ $FLAT_RECURSE -eq 1 ] && [ "$ADOPT_EMPTY" -ge ${#DATASETS[@]} ]; then
+            echo "No snapshots anywhere under the requested root(s) -- nothing to copy (-e -R); not a failure" >&2
+        fi
         echo "All datasets processed successfully" >&2
         # Reviewer contract condition 6: a real transfer error OUTRANKS the
         # degradation, which is why this is decided last and only on the
