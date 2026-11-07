@@ -145,6 +145,33 @@ So:
 Reporting rule: report on completion, not per iteration. One message with the
 result, not a running commentary on which suite is at which line.
 
+### Fast mode -- one batch, start to finish (Owner, 2026-11-07)
+
+"Priorytet to szybkie dotarcie do celu": run only the required runs, no suites on Windows,
+delegate, cooperate with the reviewer faster. This is the default way of working, not an
+exception for one night. One batch:
+
+1. **Collect first.** Gather every defect from the deployment, the copy/replica runs, or the
+   lab scenario into one list in the session notes. Work around each one on the host by hand if
+   needed and keep going. Do not start a fix cycle per defect.
+2. **One branch per batch.** For each fix: Edit, `bash -n`, and the cut-out case here (seconds).
+   Then push the branch and run **only the edited suite** on pve9:
+   `./test/remote-suite.sh <suite> <branch>`. Without a ref it tests `origin/main`, not your
+   edit. Add its negative control, `./test/remote-suite.sh <suite> <parent-sha>`. The gencron
+   suite `test/run.sh` is not a `test/<suite>/` directory, so it goes to CI. Nothing else runs
+   by hand. The `impact.sh` list is what CI must show green.
+3. **Delegate while you work.** Reading goes to haiku (`repo-greper` / `Explore`). Typing
+   ≥150 lines goes to `simple-coder`. Prose gets `text-checker`, **once**, at the end.
+4. **Close once.** Write the response and PROJECT_STATUS, do the text-checker pass, commit,
+   then run `./test/ship.sh` (push, digest, `--verify` on pve9; it refuses a dirty tree). Open the PR, read exact-head CI once,
+   and merge on green. A hole found during this step goes on the next batch's list. It does not
+   restart the step, unless it is data loss, a security hole, or a destructive guard.
+5. **One release per deployment**, on the Owner's "publikuj". Never one version per finding.
+6. **Reviewer:** Protocol V2 stays in force until the Reviewer accepts
+   `docs/project/PROTOCOL-V3-PROPOSAL.md` (batch REV, reproducible blocking findings, verdict
+   bound to content, evidence = exact-head CI + pve9 edited-suite run, two rounds then Owner,
+   approve+close in one PR, next batch while review runs). Check that file's `Status:` line.
+
 ## Which model -- delegation
 
 **HARD GATE -- every session, every thread (Owner, 2026-10-20: cheaper plan, "konieczność

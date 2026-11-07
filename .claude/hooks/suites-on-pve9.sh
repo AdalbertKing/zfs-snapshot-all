@@ -7,7 +7,9 @@
 # --refresh-status (seconds, they write the index), anything sent over plink/ssh.
 # Exit 2 = the call is refused and the message goes back to the session.
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ;; *) exit 0 ;; esac
-cmd=$(python -c 'import sys,json; print(json.load(sys.stdin).get("tool_input",{}).get("command",""))' 2>/dev/null) || exit 0
+# Fail closed on the parser: without python the raw JSON is matched (the patterns still hit it).
+in=$(cat)
+cmd=$(printf '%s' "$in" | python -c 'import sys,json; print(json.load(sys.stdin).get("tool_input",{}).get("command",""))' 2>/dev/null) || cmd=$in
 [ -n "$cmd" ] || exit 0
 printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])(plink|ssh)[[:space:]]' && exit 0
 refuse() {
@@ -19,7 +21,8 @@ if printf '%s' "$cmd" | grep -Eq "${RUN}test/impact\.sh" \
    && ! printf '%s' "$cmd" | grep -Eq 'test/impact\.sh[[:space:]]+--(refreeze|refresh-status|help)'; then
     refuse "test/impact.sh (suite list / --verify)"
 fi
-if printf '%s' "$cmd" | grep -Eq "${RUN}test/[^/[:space:]]+/run\.sh"; then
+# test/<suite>/run.sh, the top-level gencron suite test/run.sh, and `cd test/<suite> && ./run.sh`.
+if printf '%s' "$cmd" | grep -Eq "${RUN}test/([^/[:space:]]+/)?run\.sh"    || printf '%s' "$cmd" | grep -Eq 'cd[[:space:]]+(\./)?test(/[^[:space:];&|]+)?[[:space:]]*(&&|;)[[:space:]]*(bash[[:space:]]+)?\./run\.sh'; then
     refuse "a test suite (test/<suite>/run.sh)"
 fi
 exit 0
