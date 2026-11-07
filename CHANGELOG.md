@@ -4,7 +4,7 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
-## [Unreleased]
+## [1.0.13] — 2026-11-07
 
 - **Which installation a mail is about.** A new setting, `alerts.site` (F10, or `zfs-backup.sh settings set
   alerts.site=Metropolis --yes`), names the installation. The subject of the daily summary and of an
