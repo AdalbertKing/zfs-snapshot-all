@@ -70,5 +70,19 @@
       "Bash(ssh * zpool *)",
       "Bash(ssh * zfs destroy *)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/suites-on-pve9.sh\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
   }
 }
