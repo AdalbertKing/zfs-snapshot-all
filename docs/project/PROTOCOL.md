@@ -155,7 +155,8 @@ because two rounds passed. Owner silence never approves.
 
 Approval and closure remain two ordered **published** boundaries (Principles 5 and 14). A
 closure's `closed-by` names an approval commit that is already published and reachable, whose
-reviewer header says `APPROVED`.
+reviewer header says `APPROVED`. The `reviewctl close` writer checks that header. `--verify`
+does not read it.
 
 `reviewctl` checks `closed-by` twice. The first check is against the candidate publication ref,
 like every SHA. The second is always against the canonical published `origin/main`
@@ -236,7 +237,7 @@ The protocol is amended in the course of the work. No separate redesign phase is
 
 ### Amendment log
 
-- V3.0, 2026-11-07, after the Reviewer's check of PR #1127, done in the same PR:
+- V3.0 revision 1, 2026-11-07, after the Reviewer's check of PR #1127, done in the same PR:
   - V3.8: `closed-by` is enforced against the published `origin/main`;
   - V3.5: items 6 (one evidence digest) and 7 (re-check only the delta);
   - V3.8: closure is automated as a second published commit;

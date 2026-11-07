@@ -155,7 +155,8 @@ exception for one night. One batch:
    lab scenario into one list in the session notes. Work around each one on the host by hand if
    needed and keep going. Do not start a fix cycle per defect.
 2. **One branch per batch.** For each fix: Edit, `bash -n`, and the cut-out case here (seconds).
-   Then push the branch and run **only the edited suite** on pve9:
+   After the collected fixes (not after each one), push the branch and run **only the edited
+   suite** on pve9:
    `./test/remote-suite.sh <suite> origin/<branch>`. Without a ref it tests `origin/main`, not your
    edit. Then the negative control, which is **the new test against the old code**. Running the
    parent's suite does not count, because the parent does not have the new test (Reviewer,
@@ -173,7 +174,8 @@ exception for one night. One batch:
    and merge on green. A material defect or evidence gap found in this batch's scope is fixed
    under the same REV, and the batch is finalised once. There is no suite rerun per edit, only
    one targeted validation after the collected fixes. Only unrelated, non-blocking observations
-   go to the next batch (PROTOCOL V3.3).
+   go to the next batch, as backlog notes (PROTOCOL V3.2). An independent finding gets a new
+   REV (V3.3).
 5. **One release per deployment**, on the Owner's "publikuj". Never one version per finding.
 6. **Reviewer: Protocol V3** (`docs/project/PROTOCOL.md`, section "V3 amendments"; active once
    its amendment PR is merged and read back on `main`). In practice:

@@ -242,6 +242,8 @@ if [ -n "$ORPHAN" ]; then
     [ "$got" = CLOSED ] \
         && ok "a published approval closed from a later PR's candidate ref -> CLOSED" \
         || bad "a published approval closed from a later PR's candidate ref -> CLOSED" "got=$got $(cat "$TMPD/pub.out")"
+else
+    bad "p6b-p6d: closure publication cases" "could not build an orphan commit"
 fi
 
 # `-` is the protocol's explicit "no commit yet". It must stay legal, or the
