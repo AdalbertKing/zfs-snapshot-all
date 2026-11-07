@@ -374,19 +374,23 @@ if [ -n "$CRON_LOGS" ]; then
         lbl = ""
         for (i = 5; i <= NF; i++) { if ($i ~ /^rc=/) break; lbl = lbl (lbl == "" ? "" : " ") $i }
         if (lbl == "") next
-        if ($3 == "BEGIN") { bt[lbl] = secs($1); next }
+        # A STACK of open starts per label, not one slot (lab, 2026-11-07): a second
+        # start of a line while the first holds the lock ends at once with rc 75, so
+        # an END belongs to the NEWEST open start. One slot let the skip take the real
+        # start of the real run and left that run with no duration. rc 75 is a skip, not a failure.
+        if ($3 == "BEGIN") { bt[lbl, ++sp[lbl]] = secs($1); next }
         rc = ($NF ~ /^rc=/) ? substr($NF,4) + 0 : 0
         n[lbl]++
-        if (rc != 0) f[lbl]++
+        if (rc != 0 && rc != 75) f[lbl]++
         # awk variables are global, so d survives the previous END line. Without
         # this reset a job whose BEGIN fell outside the window would inherit the
         # duration of whatever ran before it -- a wrong number that looks right.
         d = ""
-        if (lbl in bt) {
-            d = secs($1) - bt[lbl]; if (d < 0) d += 86400
+        if (sp[lbl] > 0) {
+            d = secs($1) - bt[lbl, sp[lbl]]; if (d < 0) d += 86400
             tot[lbl] += d; c[lbl]++
             if (d > mx[lbl]) mx[lbl] = d
-            delete bt[lbl]
+            delete bt[lbl, sp[lbl]]; sp[lbl]--
         }
         # THE NEWEST run, compared -- not the last line read. The logs are fed
         # live-file-first and rotated-after, so "last seen" is the END OF THE

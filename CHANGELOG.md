@@ -4,6 +4,18 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [Unreleased]
+
+- **The first copy of a replica carries the history.** A new mirror replica (`snapget.sh -e -M`)
+  used to start from the newest snapshot only, so the older ones never reached it. Its first copy
+  now sends the oldest eligible snapshot in full and then every later one up to the newest. A
+  replica made before this change keeps what it has; only "Start over on this disk" (F6, Enter, `e`) fills it in. `-i` and `-H` keep their
+  own rules.
+- **Runs and job statistics with overlapping runs.** A second start of the same line while the
+  first one still runs ends at once with rc 75; its end took the start time of the real run, so
+  that run showed no duration and the skip counted as a failure. Ends now pair with the newest
+  open start, and rc 75 is not a failure (job table, Runs, the digest).
+
 ## [1.0.12] — 2026-11-05
 
 - **apt 404 on a dependency** (first install on a Debian 11 source host): the 404 fallback of

@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 2afbc3d6aeefc30cc9406e9cfa6e73b310fa13b5 -->
-<!-- frozen: snapget.sh 100755 3e1b1458ab177de6a3ea7edf7598ca7cd33801de -->
+<!-- frozen: snapget.sh 100755 9670fb68337ea317b14b201ab560b6d71ab6f83a -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 5a0ea69903070daeb4b438728de258c90156916a -->
 <!-- frozen: lib-zfs-snap.sh 100644 4ef896cf1191f00f4226c41e1776a52249488119 -->
@@ -1318,6 +1318,14 @@ Owner-authorized refreezes:
     A21 (both engines, local side).
   twin: both changed identically (validate_snapshot, get_sorted_snapshots local branch, the
   recorded GUID at the send and its use at the proof).
+- 2026-11-07 (snapget.sh): **the first copy of a mirror carries the history.** Owner direction
+  (2026-11-07, "ok", on lab finding 6 -- the replica promised "the same as the collector" and the
+  first copy carried only the newest snapshot). With `-e -M` (passive replica) and no common
+  snapshot, no bookmark, no `-i`/`-H`, and more than one eligible snapshot, `process_dataset`
+  first sends the OLDEST eligible snapshot (after `-E`/`-m`) in full, then the existing
+  `-I oldest..newest`. Later runs are unchanged. Test: scenarios S8 (real ZFS), red against main
+  on pve9 (2 FAIL), green with the change (41/0).
+  twin: snapsend.sh has no `-M` -- a push copy is not a mirror -- so its `process_dataset` stays.
 
 ## How it is enforced
 

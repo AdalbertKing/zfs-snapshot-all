@@ -2090,6 +2090,31 @@ process_dataset() {
     log 4 "RAW REMOTE ZFS SEND COMMAND: $send_cmd"
     log 4 "RAW LOCAL ZFS RECV COMMAND: $recv_cmd"
 
+    # THE FIRST COPY OF A MIRROR CARRIES THE HISTORY (lab, 2026-11-07).
+    #
+    # -e -M is a passive replica: the medium mirrors the collector. Its first
+    # copy used to be a full send of the NEWEST snapshot, and every later run is
+    # `-I common..newest` -- forward only -- so every snapshot older than that
+    # first copy never reached the medium, while the replica promised "the same
+    # as the collector". The fix is the order, not a new stream: the OLDEST
+    # eligible snapshot (after -E/-m) in full, then the existing incremental from
+    # it, which -I fills with everything in between. A failure between the two
+    # steps leaves the oldest on the target; the next run finds it as the common
+    # snapshot and continues. -i (history = newest) and -H keep their own rules.
+    if [[ "$common_snapshot" == "null" ]] && [ -z "$bookmark_base" ] && [ "$MIRROR" -eq 1 ] \
+       && [ "$USE_EXISTING_SNAPSHOT" -eq 1 ] && [ "$SKIP_INTERMEDIATES" -eq 0 ] \
+       && [ "$FULL_HISTORY_SEND" -eq 0 ] && [ ${#src_snaps[@]} -gt 1 ]; then
+        local first_snap="${src_snaps[0]}"
+        log 1 "First copy of a mirror: @${first_snap} in full, then every snapshot up to @${latest_snap} (${#src_snaps[@]} eligible)"
+        transfer_data "zfs send $raw_send_flag $comp_send_flag $EXTRA_SEND_OPTS ${src_dataset}@${first_snap}" "$recv_cmd" "$remote_host" "$remote_user" || {
+            log 0 "Transfer failed (first copy, oldest snapshot @${first_snap})"
+            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
+            return 1
+        }
+        common_snapshot="$first_snap"
+        send_cmd="zfs send $raw_send_flag $comp_send_flag $EXTRA_SEND_OPTS -I ${src_dataset}@${first_snap} $snapshot"
+    fi
+
     log 1 "Starting transfer..."
     transfer_data "$send_cmd" "$recv_cmd" "$remote_host" "$remote_user" || {
         log 0 "Transfer failed"

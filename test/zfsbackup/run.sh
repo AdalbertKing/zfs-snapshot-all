@@ -13310,6 +13310,34 @@ if ! bash "$ZFSBACKUP" job-stats --json --runs=x >/dev/null 2>"$JS/err" && grep 
 else
     bad "jobstats --runs=x" "$(cat "$JS/err")"
 fi
+# OVERLAPPING RUNS OF ONE LINE (lab, 2026-11-07, pas1): a second start of the same label
+# while the first still holds the lock exits 75 at once, so its END comes FIRST. The
+# parser kept one BEGIN per label: the second BEGIN overwrote the first, END rc=75 took
+# it, and the real 2-minute run lost its start -- Runs showed no duration and the job
+# table counted the skip as a failure. Ends pair with the NEWEST open start; rc 75 is
+# a skip, not a failure. A start a reboot killed (rt 15, no END) stays under them and
+# must not read as a run in progress.
+cat > "$JS/ov.log" <<OVLOG
+$(rt 15) ZFS-JOB BEGIN pve10 hourly backup (rn-ov)
+$(rt 10) ZFS-JOB BEGIN pve10 hourly backup (rn-ov)
+$(rt 9) ZFS-JOB BEGIN pve10 hourly backup (rn-ov)
+$(rt 9) ZFS-JOB END pve10 hourly backup (rn-ov) rc=75
+$(rt 8) ZFS-JOB END pve10 hourly backup (rn-ov) rc=0
+OVLOG
+OVOUT=$( ( PATH="$JS/bin:$PATH" ZFS_CRON_LOGS="$JS/ov.log" bash "$ZFSBACKUP" job-stats --json --runs=2 ) 2>"$JS/err")
+got=$(printf '%s' "$OVOUT" | "$PY_OR_PYTHON" -c '
+import sys,json; d=json.load(sys.stdin)
+j=[x for x in d["jobs"] if x["label"] == "hourly backup (rn-ov)"][0]
+print(j["runs"], j["failures"], j["max_s"], j["last_s"], j["last_rc"])
+r=sorted((x["rc"], x["start"] != "" and x["start"] != "-", x["start"] == x["end"]) for x in d["runs"] if x["label"] == "hourly backup (rn-ov)")
+print(r)' 2>&1 | tr -d '\r')
+want="2 0 120 120 0
+[(0, True, False), (75, True, True)]"
+if [ "$got" = "$want" ]; then
+    ok "jobstats: overlapping runs of one label -- the lock skip (rc 75) pairs with its own start, the real run keeps its duration, a skip is not a failure, a killed start is not running"
+else
+    bad "jobstats: overlapping runs" "$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$got"))" "$(cat "$JS/err")"
+fi
 # A CONTROL CHARACTER IN AN ERROR LINE (pve10, 2026-10-29): ssh's "Connection reset by ...
 # port 22" reached the cron log with a trailing CR; job-stats put it raw into the JSON string,
 # json.load refused the whole document and the GUI showed "job-stats nie odpowiedział" on
