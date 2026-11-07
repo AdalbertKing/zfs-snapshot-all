@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 0d0d7e102ac4c8d4dd7d4cd685ec5a37f7e98f02 -->
-<!-- frozen: snapget.sh 100755 ae91448cd2221530cec20ee92dbf49c45dd0a5ed -->
+<!-- frozen: snapsend.sh 100755 7482ca0b5d92270a21aef78b2424da6cb3b2e668 -->
+<!-- frozen: snapget.sh 100755 b04e690ec89ea8be131891ab7e69d6697474dbf1 -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 5a0ea69903070daeb4b438728de258c90156916a -->
-<!-- frozen: lib-zfs-snap.sh 100644 725726884e31c8d0cffc5c996942157f5559d643 -->
+<!-- frozen: lib-zfs-snap.sh 100644 f99ef6e1660364ddc694985996ed113e2c4d3842 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -1334,6 +1334,14 @@ Owner-authorized refreezes:
   `-I`; a step over an excluded snapshot is `-i`. If the list cannot be read, nothing is sent.
   Both engines replace their name-based step loop with the plan.
   Tests: scenarios S10 (snapget `-r` and `-R`) and S11 (snapsend `-r`) on pve9.
+  twin: both `process_dataset` blocks changed in the same commit.
+- 2026-11-07 (lib-zfs-snap.sh, snapsend.sh, snapget.sh): **REV-20261107-191 round 4 -- `-E`
+  on a first full `-R` stream.** Reviewer verdict CHANGES-REQUIRED on 35769184. Under atomic
+  `-r` and under `-H`, the first copy is one `zfs send -R root@x` stream. It carries every
+  snapshot before `@x`, descendants included. New `exclusion_full_base` picks the newest root
+  snapshot with no excluded snapshot at or before it in the subtree (createtxg). The step plan
+  then carries the rest. If there is no such snapshot (or `@latest` is not on the root), the run refuses before any transfer.
+  Tests: scenarios S12 on pve9.
   twin: both `process_dataset` blocks changed in the same commit.
 
 ## How it is enforced
