@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 73db61f8e85586cb5dc5dfaf96caa4fe51385b2a -->
-<!-- frozen: snapget.sh 100755 2a21fc0e333ce52b3d6e66c65a23ba808f2b0d0b -->
+<!-- frozen: snapsend.sh 100755 0d0d7e102ac4c8d4dd7d4cd685ec5a37f7e98f02 -->
+<!-- frozen: snapget.sh 100755 ae91448cd2221530cec20ee92dbf49c45dd0a5ed -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 5a0ea69903070daeb4b438728de258c90156916a -->
-<!-- frozen: lib-zfs-snap.sh 100644 4ef896cf1191f00f4226c41e1776a52249488119 -->
+<!-- frozen: lib-zfs-snap.sh 100644 725726884e31c8d0cffc5c996942157f5559d643 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -1326,6 +1326,15 @@ Owner-authorized refreezes:
   `-I oldest..newest`. Later runs are unchanged. Test: scenarios S8 (real ZFS), red against main
   on pve9 (2 FAIL), green with the change (41/0).
   twin: snapsend.sh has no `-M` -- a push copy is not a mirror -- so its `process_dataset` stays.
+- 2026-11-07 (lib-zfs-snap.sh, snapsend.sh, snapget.sh): **REV-20261107-191 round 3 -- `-E`
+  steps under recursion.** Reviewer verdict CHANGES-REQUIRED on d37d5044 (the `-r` path).
+  New `exclusion_step_plan` in lib-zfs-snap.sh plans the `-E` steps by createtxg. Step
+  endpoints are the root's own non-excluded snapshots. Under `-r` the descendants' snapshots
+  are listed too, so an excluded snapshot that only a child has counts. A clean step stays
+  `-I`; a step over an excluded snapshot is `-i`. If the list cannot be read, nothing is sent.
+  Both engines replace their name-based step loop with the plan.
+  Tests: scenarios S10 (snapget `-r` and `-R`) and S11 (snapsend `-r`) on pve9.
+  twin: both `process_dataset` blocks changed in the same commit.
 
 ## How it is enforced
 

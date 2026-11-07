@@ -3366,3 +3366,66 @@ record_send_bookmark() {
             || log 1 "Warning: failed to refresh bookmark $full (non-fatal)"
     fi
 }
+
+# EXCLUSION STEP PLAN (REV-20261107-191, round 3). A single `-I common latest`
+# carries every snapshot between the two ends, the -E families included. This
+# plans the same interval as steps whose ENDPOINTS are the root dataset's own
+# snapshots that are not excluded -- a `zfs send -i root@x root@y` needs both
+# to exist on the root, so no endpoint is ever taken from a descendant's name.
+# Under -r (atomic, one -R stream) the descendants' snapshots are listed too,
+# and an excluded one there (pvesr's __replicate_ lives on the zvols, not on
+# their parent) counts as well. Order is createtxg: pool-wide, so the root's
+# snapshots and its descendants' compare. A step whose own interval holds an
+# excluded snapshot is `-i` (it carries the two ends only); a clean step stays
+# `-I`, so what -I carried there is still carried. A tie on createtxg counts
+# against the step (conservative: -i).
+# Prints "<-I|-i> <snapshot name>" per step, oldest first; prints NOTHING when
+# no excluded snapshot lies inside or the ends cannot be placed -- the caller
+# then keeps its single -I. rc 1 only when the list itself could not be read.
+# Usage: exclusion_step_plan <dataset> <common> <latest> <recursive 0|1> [user host]
+exclusion_step_plan() {
+    local ds="$1" common="$2" latest="$3" rec="$4" ruser="${5:-}" rhost="${6:-}"
+    local depth="-d 1" out
+    [ "$rec" -eq 1 ] && depth="-r"
+    if [ -n "$rhost" ]; then
+        out=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" \
+            "zfs list -H -p -o name,createtxg -t snapshot $depth '$ds'") || return 1
+    else
+        out=$(zfs list -H -p -o name,createtxg -t snapshot $depth "$ds") || return 1
+    fi
+    printf '%s\n' "$out" | awk -F'\t' -v root="$ds" -v c="$common" -v l="$latest" \
+        -v xs="${EXCLUDE_SNAPS[*]}" '
+        BEGIN { nx = split(xs, X, " ") }
+        {
+            at = index($1, "@"); if (at == 0) next
+            d = substr($1, 1, at - 1); s = substr($1, at + 1)
+            n++; D[n] = d; S[n] = s; T[n] = $2 + 0
+            if (d == root && s == c) ct = T[n]
+            if (d == root && s == l) lt = T[n]
+        }
+        END {
+            if (ct == "" || lt == "" || lt <= ct) exit 0
+            m = 0
+            for (i = 1; i <= n; i++) {
+                if (T[i] < ct || T[i] > lt) continue
+                if (D[i] == root && S[i] == c) continue
+                x = 0
+                for (k = 1; k <= nx; k++) if (index(S[i], X[k]) == 1) { x = 1; break }
+                if (!x && (D[i] != root || T[i] == ct)) continue
+                # excluded entries sort before an endpoint of the same createtxg
+                m++; K[m] = sprintf("%020d %d %s", T[i], x ? 0 : 1, S[i])
+            }
+            # insertion sort: the interval is short
+            for (i = 2; i <= m; i++) { v = K[i]; j = i - 1
+                while (j >= 1 && K[j] > v) { K[j + 1] = K[j]; j-- }
+                K[j + 1] = v }
+            seg = 0; hid = 0; ns = 0
+            for (i = 1; i <= m; i++) {
+                split(K[i], f, " ")
+                if (f[2] == 0) { seg = 1; hid++; continue }
+                ns++; P[ns] = (seg ? "-i" : "-I") " " f[3]; seg = 0; last = f[3]
+            }
+            if (hid == 0 || ns == 0 || last != l) exit 0
+            for (i = 1; i <= ns; i++) print P[i]
+        }'
+}
