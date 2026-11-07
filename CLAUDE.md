@@ -156,13 +156,13 @@ exception for one night. One batch:
    needed and keep going. Do not start a fix cycle per defect.
 2. **One branch per batch.** For each fix: Edit, `bash -n`, and the cut-out case here (seconds).
    Then push the branch and run **only the edited suite** on pve9:
-   `./test/remote-suite.sh <suite> <branch>`. Without a ref it tests `origin/main`, not your
+   `./test/remote-suite.sh <suite> origin/<branch>`. Without a ref it tests `origin/main`, not your
    edit. Then the negative control, which is **the new test against the old code**. Running the
    parent's suite does not count, because the parent does not have the new test (Reviewer,
    PROTOCOL-V3-REVIEW-20261107 P5.2). Make a throwaway branch `<branch>-negctl` that reverts only
-   the code fix and keeps the test. Push it and run `./test/remote-suite.sh <suite> <branch>-negctl`.
+   the code fix and keeps the test. Push it and run `./test/remote-suite.sh <suite> origin/<branch>-negctl`.
    The new case must fail for the intended defect. Record the baseline SHA, the case, the expected
-   failure and the observed failure, then delete the branch. The gencron
+   failure and the observed failure, then delete the branch. The top-level
    suite `test/run.sh` is not a `test/<suite>/` directory, so it goes to CI. Nothing else runs
    by hand. The `impact.sh` list is what CI must show green.
 3. **Delegate while you work.** Reading goes to haiku (`repo-greper` / `Explore`). Typing
