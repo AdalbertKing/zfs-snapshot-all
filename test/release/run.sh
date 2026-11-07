@@ -84,14 +84,14 @@ fi
 # file and a binary file must not be listed.
 NG="$WORK/ng"; mkdir -p "$NG"
 NL="$WORK/names.txt"
-printf '# synthetic test list\n\nwasowicz\nborowka\nplotek\nsniezka\nzrebak\n' > "$NL"
-printf '# u klienta WĄSOWICZ\n'    > "$NG/a.sh"
-printf 'host BORÓWKA\n'            > "$NG/o.txt"
-printf 'x Płotek\n'                > "$NG/l.txt"
-printf 'x Śnieżka y\n'             > "$NG/s.txt"
-printf 'x źrebak\n'                > "$NG/q.txt"
+printf '# synthetic test list\n\nkapelix\nborvax\nplutrix\nsmigrax\nzdzbrix\n' > "$NL"
+printf '# u klienta KĄPELIX\n'     > "$NG/a.sh"
+printf 'host BÓRVAX\n'             > "$NG/o.txt"
+printf 'x Płutrix\n'               > "$NG/l.txt"
+printf 'x Śmigrax y\n'             > "$NG/s.txt"
+printf 'x źdźbrix\n'               > "$NG/q.txt"
 printf 'zażółć gęślą jaźń\n'       > "$NG/clean.txt"
-printf 'Wasowicz\0bin\n'           > "$NG/bin.dat"
+printf 'Kapelix\0bin\n'            > "$NG/bin.dat"
 for loc in C C.UTF-8; do
     got="$(LC_ALL=$loc ZFS_NAME_DENYLIST="$NL" bash "$REPO/release/name-gate.sh" "$NG" | sed "s|^$NG/||" | sort | tr '\n' ' ')"
     if [ "$got" = "a.sh l.txt o.txt q.txt s.txt " ]; then
@@ -112,8 +112,11 @@ rm -f "$NG/ip.txt"
 ZFS_NAME_DENYLIST="$WORK/nonexistent" bash "$REPO/release/name-gate.sh" "$NG" >/dev/null 2>&1; rcx=$?
 printf '# only a comment\n\n' > "$WORK/empty-names.txt"
 ZFS_NAME_DENYLIST="$WORK/empty-names.txt" bash "$REPO/release/name-gate.sh" "$NG" >/dev/null 2>&1; rce=$?
-[ "$rcx" = 2 ] && [ "$rce" = 2 ] && ok "name gate: an unreadable or empty name list is an error (rc 2), not a pass" \
-                                  || bad "name gate: bad list" "missing rc=$rcx (want 2)" "empty rc=$rce (want 2)"
+printf 'kapelix\n(unclosed\n' > "$WORK/bad-names.txt"
+ZFS_NAME_DENYLIST="$WORK/bad-names.txt" bash "$REPO/release/name-gate.sh" "$NG" >/dev/null 2>&1; rcm=$?
+[ "$rcx" = 2 ] && [ "$rce" = 2 ] && [ "$rcm" = 2 ] \
+    && ok "name gate: an unreadable, empty or malformed name list is an error (rc 2), not a pass" \
+    || bad "name gate: bad list" "missing rc=$rcx (want 2)" "empty rc=$rce (want 2)" "malformed rc=$rcm (want 2)"
 LC_ALL=C ZFS_NAME_DENYLIST="$NL" bash "$REPO/release/name-gate.sh" "$NG" >/dev/null; rc1=$?
 rm -f "$NG"/[aloqs].*; LC_ALL=C ZFS_NAME_DENYLIST="$NL" bash "$REPO/release/name-gate.sh" "$NG" >/dev/null; rc0=$?
 [ "$rc1" = 1 ] && [ "$rc0" = 0 ] && ok "name gate: rc 1 when something is listed, rc 0 when nothing is" \
@@ -124,6 +127,14 @@ if [ "$rcp" -ne 0 ] && printf '%s' "$out" | grep -q 'needs the private name list
     ok "publish --push refuses without \$ZFS_NAME_DENYLIST, nothing written"
 else
     bad "publish --push without the name list" "rc=$rcp" "$out"
+fi
+# a malformed private list stops even a local (no --push) publication: rc 2 is not a pass
+h0=$(git -C "$REL" rev-parse HEAD)
+out="$(ZFS_NAME_DENYLIST="$WORK/bad-names.txt" bash "$REPO/release/publish.sh" HEAD "$REL" 2>&1)"; rcb=$?
+if [ "$rcb" -ne 0 ] && printf '%s' "$out" | grep -q 'name gate could not run' && [ "$(git -C "$REL" rev-parse HEAD)" = "$h0" ]; then
+    ok "publish stops when the name gate cannot run (malformed list), no release commit"
+else
+    bad "publish with a malformed name list" "rc=$rcb" "$out"
 fi
 # The later publish --push cases test other gates: they get the synthetic list, so this one passes.
 export ZFS_NAME_DENYLIST="$NL"

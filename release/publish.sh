@@ -101,7 +101,9 @@ printf '%s\n' "$rev" > "$tmp/RELEASE-OF"
 # Nothing the scrub is meant to remove may survive it (the private-range globs in the code,
 # 10.*|192.168.*, are not addresses and do not match these). The list and the Polish-letter
 # fold live in release/name-gate.sh, shared with test/release.
-left=$(bash "$dev/release/name-gate.sh" "$tmp" || true)
+# rc 2 (bad name list, grep failure) is not a pass: REV-20261107-192.
+gate_rc=0; left=$(bash "$dev/release/name-gate.sh" "$tmp") || gate_rc=$?
+[ "$gate_rc" -le 1 ] || die "the name gate could not run (rc $gate_rc, reason above) -- nothing published"
 [ -z "$left" ] || die "after the scrub these still carry lab/customer addresses or names: $left"
 
 # --- into the release checkout -------------------------------------------------------------

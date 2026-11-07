@@ -41,11 +41,19 @@ fold() {
         -e 's/Ą/A/g; s/Ć/C/g; s/Ę/E/g; s/Ł/L/g; s/Ń/N/g; s/Ó/O/g; s/Ś/S/g; s/Ź/Z/g; s/Ż/Z/g' -- "$1"
 }
 
+# A malformed pattern makes grep answer 2, which an `if` would read as "no match" -- every
+# file would pass. Probe the pattern once, and check grep's status for every file below.
+printf '' | grep -qiE -- "$FORBIDDEN"
+[ $? -eq 2 ] && { echo "name-gate: a pattern in the name list is not a valid extended regex" >&2; exit 2; }
+
 found=0
 # -I: text files only (binary files are left alone, as by the scrub itself).
 while IFS= read -r -d '' f; do
-    if fold "$f" | grep -qiE -- "$FORBIDDEN"; then
-        printf '%s\n' "$f"; found=1
-    fi
+    fold "$f" | grep -qiE -- "$FORBIDDEN"
+    case "${PIPESTATUS[1]}" in
+        0) printf '%s\n' "$f"; found=1 ;;
+        1) ;;
+        *) echo "name-gate: grep failed on $f" >&2; exit 2 ;;
+    esac
 done < <(grep -rIlZ --exclude-dir=.git '' "$1")
 exit "$found"

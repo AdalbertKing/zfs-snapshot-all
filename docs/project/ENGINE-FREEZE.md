@@ -1370,7 +1370,7 @@ Owner-authorized refreezes:
   "Czyść"). Every tracked file outside the reviewer's own had its customer and site names
   replaced with synthetic labels (Site-A, Site-B, Site-C, Site-D, vm-sql, biuro). In the engines
   only comment lines changed; no code line moved; versions unchanged.
-  twin: comments only -- twins re-blessed where a hashed body carries such a comment.
+  twin: comments only -- twins re-blessed on pve9, no hash changed.
 
 ## How it is enforced
 
