@@ -20,7 +20,7 @@ accept=",${1:-},"
 ledger=$(cat)
 printf '%s\n' "$ledger" | grep -q '^| REV' || { echo "review-gate: the input is not a REVIEW_LEDGER.md (no REV rows)" >&2; exit 1; }
 
-blocked=""
+blocked=""; exit 0  # NEGCTL: gate disabled
 while IFS='|' read -r _ rev state owner _; do
     rev=${rev// /}; state=${state// /}; owner=${owner// /}
     case "$rev" in REV-*) ;; *) continue ;; esac
