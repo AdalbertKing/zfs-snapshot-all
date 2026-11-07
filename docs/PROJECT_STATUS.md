@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 50ee102232593ec8 -->
+<!-- status-covers-digest: ba4028f6bd5d5c2b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -19,6 +19,19 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Paczka po 1.0.12 (2026-11-07, gałąź `fix/mirror-first-copy-history`; niewydane).** Z labu
+  „marudnego admina” na pve9. Pierwsza kopia pasywnej repliki (`snapget.sh -e -M`) wysyła
+  najstarszą kwalifikującą się migawkę w całości, potem `-I` do najnowszej -- dotąd replika
+  dostawała tylko najnowszą, a starsza historia nie docierała nigdy. Repliki zrobione wcześniej
+  (np. usb1 na A-TASSA) zostają bez starszej historii, dopóki ktoś nie wybierze „Zacznij od nowa” (F6, Enter, `e`).
+  Scenariusz S8 w `test/scenarios`; na `main` 2 FAIL, z poprawką 41/0 (pve9). `job-stats`:
+  drugi start tej samej linii pod blokadą kończy się od razu rc 75 i jego END zabierał start
+  prawdziwego biegu -- bieg bez czasu, pominięcie liczone jako błąd. Otwarte starty są stosem na
+  etykietę, END paruje z najnowszym, rc 75 nie jest błędem (tabela zadań, Przebiegi, digest --
+  bliźniak run-rows). Test w `test/zfsbackup`; na `main` FAIL (failures 1, czas 0/-1).
+- **1.0.12 wydane** (repo wydań zfsbackup 44cdd87, zbudowane z `main` 0d297020); poniższe wpisy
+  „niewydane, dołącza do 1.0.12” weszły w to wydanie.
 
 - **REV-20261106-189/190 (2026-11-06, gałąź `fix/rev-189-190`; niewydane, dołącza do 1.0.12).**
   Bramka nośnika: `attach` bez blokady albo bez zapisu przebiegu, który odczytany z powrotem wskazuje ten

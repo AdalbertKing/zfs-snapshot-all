@@ -30,6 +30,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SNAPSEND="${SNAPSEND:-$REPO/snapsend.sh}"
+SNAPGET="${SNAPGET:-$REPO/snapget.sh}"
 DELSNAPS="${DELSNAPS:-$REPO/delsnaps.sh}"
 GENCRON="${GENCRON:-$REPO/gen-cron.sh}"
 CHECKAGE="${CHECKAGE:-$REPO/check-snap-age.sh}"
@@ -408,6 +409,27 @@ sleep 1
 check "the next send still succeeds" "0" "$?"
 check "the target holds all three snapshots (incremental, not reseeded)" "3" \
       "$(count_of "$ROOT/s6bk/$S6")"
+
+# ============================================================================
+# S8. The first copy of a MIRROR carries the source's history (lab 2026-11-07).
+#     A passive replica (-e -M) used to start from the newest snapshot only;
+#     -I runs forward from there, so every older snapshot was never copied.
+# ============================================================================
+scenario "S8 the first copy of a mirror carries the source's history"          "passive pickup -e -M -E: oldest eligible in full, then -I to the newest"
+
+S8="$ROOT/s8src"
+mk "$S8"
+for _s in automated_daily_1 automated_daily_2 __replicate_100-0_1__ automated_daily_3 __replicate_100-0_2__; do
+    zfs snapshot "$S8@$_s"
+done
+"$SNAPGET" -e -M -E __replicate_ "$S8" "$ROOT/s8rep" >"$TMPD/s8.log" 2>&1
+check "the first mirror copy succeeds" "0" "$?"
+check "...and carries every automated snapshot, not just the newest"       "automated_daily_1 automated_daily_2 automated_daily_3"       "$(snaps_of "$ROOT/s8rep/$S8" | xargs -n1 | grep -v '^__replicate_' | xargs)"
+check "...ending at the newest NON-excluded snapshot" "automated_daily_3"       "$(zfs list -H -o name -t snapshot -s creation -d1 "$ROOT/s8rep/$S8" 2>/dev/null | tail -1 | sed 's/.*@//')"
+check "...with the source's GUID for the oldest" "$(guid_of "$S8@automated_daily_1")"       "$(guid_of "$ROOT/s8rep/$S8@automated_daily_1")"
+zfs snapshot "$S8@automated_daily_4"
+"$SNAPGET" -e -M -E __replicate_ "$S8" "$ROOT/s8rep" >>"$TMPD/s8.log" 2>&1
+check "the next run continues incrementally" "automated_daily_4"       "$(zfs list -H -o name -t snapshot -s creation -d1 "$ROOT/s8rep/$S8" 2>/dev/null | tail -1 | sed 's/.*@//')"
 
 # ============================================================================
 # S7. Hygiene after everything: no held snapshots, no leftover state.

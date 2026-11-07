@@ -17665,19 +17665,23 @@ cmd_job_stats() {
         lbl = ""
         for (i = 5; i <= NF; i++) { if ($i ~ /^rc=/) break; lbl = lbl (lbl == "" ? "" : " ") $i }
         if (lbl == "") next
-        if ($3 == "BEGIN") { bt[lbl] = secs($1); next }
+        # A STACK of open starts per label, not one slot (lab, 2026-11-07): a second
+        # start of a line while the first holds the lock ends at once with rc 75, so
+        # an END belongs to the NEWEST open start. One slot let the skip take the real
+        # start of the real run and left that run with no duration. rc 75 is a skip, not a failure.
+        if ($3 == "BEGIN") { bt[lbl, ++sp[lbl]] = secs($1); next }
         rc = ($NF ~ /^rc=/) ? substr($NF,4) + 0 : 0
         n[lbl]++
-        if (rc != 0) f[lbl]++
+        if (rc != 0 && rc != 75) f[lbl]++
         # awk variables are global, so d survives the previous END line. Without
         # this reset a job whose BEGIN fell outside the window would inherit the
         # duration of whatever ran before it -- a wrong number that looks right.
         d = ""
-        if (lbl in bt) {
-            d = secs($1) - bt[lbl]; if (d < 0) d += 86400
+        if (sp[lbl] > 0) {
+            d = secs($1) - bt[lbl, sp[lbl]]; if (d < 0) d += 86400
             tot[lbl] += d; c[lbl]++
             if (d > mx[lbl]) mx[lbl] = d
-            delete bt[lbl]
+            delete bt[lbl, sp[lbl]]; sp[lbl]--
         }
         # THE NEWEST run, compared -- not the last line read. The logs are fed
         # live-file-first and rotated-after, so "last seen" is the END OF THE
@@ -17775,7 +17779,9 @@ cmd_job_stats() {
                 | awk -F'\t' -v since="$(( $(date +%s) - runs_h * 3600 - 86400 ))" '$1 != "" && $3 + 0 >= since + 0 { print $1 "\t" $3 "\t" $2 }')
             rl_rows=$(zcat -f $logs 2>/dev/null | awk -v since="$rsince" '
     function label(   i, l) { l = ""; for (i = 5; i <= NF; i++) { if ($i ~ /^rc=/) break; l = l (l == "" ? "" : " ") $i } return l }
-    /ZFS-JOB BEGIN/ { l = label(); if (l != "") bt[l] = $1; next }
+    # Open starts are a STACK per label (the run-rows rule above, lab 2026-11-07): the
+    # lock skip (rc 75) of a second start ends first and must not take the start of the real run.
+    /ZFS-JOB BEGIN/ { l = label(); if (l != "") bt[l, ++sp[l]] = $1; next }
     /ZFS-JOB END/ {
         l = label(); rc = ($NF ~ /^rc=/) ? substr($NF,4) + 0 : 0
         if (l != "" && $1 >= since) {
@@ -17789,12 +17795,16 @@ cmd_job_stats() {
                 if (etxt == "") etxt = tail
                 sub(/^[0-9-]+ [0-9:]+ - /, "", etxt); gsub(/\t/, " ", etxt)
             }
-            printf "%s\t%s\t%s\t%d\t%s\n", l, (l in bt) ? bt[l] : "-", $1, rc, (etxt == "") ? "-" : substr(etxt, 1, 300)
+            printf "%s\t%s\t%s\t%d\t%s\n", l, (sp[l] > 0) ? bt[l, sp[l]] : "-", $1, rc, (etxt == "") ? "-" : substr(etxt, 1, 300)
         }
-        delete bt[l]; nb = 0; next
+        if (sp[l] > 0) { delete bt[l, sp[l]]; sp[l]-- }
+        if ($1 > lastend[l]) lastend[l] = $1
+        nb = 0; next
     }
     { if (nb < 400) buf[++nb] = $0 }
-    END { for (l in bt) if (bt[l] >= since) printf "%s\t%s\t-\t-1\t-\n", l, bt[l] }')
+    # In progress: the newest open start, and only when no END of its line came after it --
+    # a start a reboot killed stays on the stack and must not read as running for hours.
+    END { for (l in sp) if (sp[l] > 0 && bt[l, sp[l]] >= since && !(bt[l, sp[l]] < lastend[l])) printf "%s\t%s\t-\t-1\t-\n", l, bt[l, sp[l]] }')
         fi
     fi
     # Volume, the digest's way: `written` of every snapshot created since the
