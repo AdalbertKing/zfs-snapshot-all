@@ -133,9 +133,12 @@ So:
   "actions/runs?per_page=6"`, compare `head_sha`, move on;
 - **never block on the queue.** If GitHub has not scheduled the run, say so and
   keep working. A red check is information; a queued check is not;
-- `./test/impact.sh --verify` / `--refreeze` / `--refresh-status` are NOT suite
-  runs. They take seconds and they are the freeze and status-digest gates. Keep
-  them;
+- `./test/impact.sh --refreeze` / `--refresh-status` take seconds and write the
+  index: they run here. `./test/impact.sh` (the suite list) and `--verify` run on
+  the pve9 clone or in CI -- `--verify` did not finish in 5 minutes here. Owner,
+  2026-11-07, after this line had said "keep them" and it cost five minutes:
+  `.claude/hooks/suites-on-pve9.sh` (PreToolUse on Bash) now refuses a local
+  suite or `impact.sh` call on Windows;
 - when a negative control needs the same suite three times, that is a signal the
   suite needs a section selector, not a signal to run it three times.
 

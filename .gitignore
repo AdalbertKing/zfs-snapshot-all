@@ -87,6 +87,10 @@
 !.claude/
 !.claude/agents/
 !.claude/agents/**
+# .claude/hooks/ holds hooks the shared settings.json calls -- an owner rule that
+# a written sentence did not keep (suites-on-pve9.sh, 2026-11-07).
+!.claude/hooks/
+!.claude/hooks/**
 __pycache__/
 *.pyc
 !release/
