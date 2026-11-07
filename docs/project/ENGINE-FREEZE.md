@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 7482ca0b5d92270a21aef78b2424da6cb3b2e668 -->
-<!-- frozen: snapget.sh 100755 b04e690ec89ea8be131891ab7e69d6697474dbf1 -->
+<!-- frozen: snapsend.sh 100755 542342aab484a278d5070112b75075118d404e33 -->
+<!-- frozen: snapget.sh 100755 59106fcb69df5bba10b5382ea8f8e95f6b2fcf65 -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 5a0ea69903070daeb4b438728de258c90156916a -->
 <!-- frozen: lib-zfs-snap.sh 100644 f99ef6e1660364ddc694985996ed113e2c4d3842 -->
@@ -1342,6 +1342,13 @@ Owner-authorized refreezes:
   snapshot with no excluded snapshot at or before it in the subtree (createtxg). The step plan
   then carries the rest. If there is no such snapshot (or `@latest` is not on the root), the run refuses before any transfer.
   Tests: scenarios S12 on pve9.
+  twin: both `process_dataset` blocks changed in the same commit.
+- 2026-11-07 (snapsend.sh, snapget.sh): **REV-20261107-191 round 5 -- the steps after a `-H`
+  first stream stay `-R`.** Reviewer verdict CHANGES-REQUIRED on 8d767ffd. The step after the
+  safe base used `$recursive_send_flag`, which is `-R` only under `-r`. Under plain `-H` the
+  child therefore stayed at the base. The steps now carry `-R` whenever the first stream did,
+  and the step plan counts the descendants' snapshots when a step is `-R`. Tests: scenarios S12
+  (`-H` on a root with a child, pull and push) on pve9.
   twin: both `process_dataset` blocks changed in the same commit.
 
 ## How it is enforced

@@ -542,6 +542,19 @@ zfs snapshot "$S12H@a"; zfs snapshot "$S12H@skip_h"; zfs snapshot "$S12H@b"
 "$SNAPGET" -v 1 -e -H -E skip "$S12H" "$ROOT/s12hr" >>"$TMPD/s12.log" 2>&1
 check "pull -H: the first copy succeeds and holds a b, no @skip_h (whole list)" "0:a b" \
       "$?:$(tl "$ROOT/s12hr/$S12H")"
+# -H on a root WITH a child (round 5): the first stream is -R, so the steps after
+# the safe base must be -R too -- the child has to reach @b, same GUID as its source
+S12C="$ROOT/s12c"
+mk "$S12C"; mk "$S12C/ch"
+zfs snapshot -r "$S12C@a"; zfs snapshot "$S12C@skip_root"; zfs snapshot -r "$S12C@b"
+"$SNAPGET" -v 1 -e -H -E skip "$S12C" "$ROOT/s12cg" >>"$TMPD/s12.log" 2>&1
+check "pull -H, root with a child: root a b, child a b, no @skip_root -- whole lists" "0:a b:a b" \
+      "$?:$(tl "$ROOT/s12cg/$S12C"):$(tl "$ROOT/s12cg/$S12C/ch")"
+check "...the child's @b is the source's (GUID)" "$(guid_of "$S12C/ch@b")" "$(guid_of "$ROOT/s12cg/$S12C/ch@b")"
+"$SNAPSEND" -e -H -E skip "$S12C" "$ROOT/s12cs" >>"$TMPD/s12.log" 2>&1
+check "push -H, root with a child: root a b, child a b, no @skip_root -- whole lists" "0:a b:a b" \
+      "$?:$(tl "$ROOT/s12cs/$S12C"):$(tl "$ROOT/s12cs/$S12C/ch")"
+check "...the child's @b is the source's (GUID)" "$(guid_of "$S12C/ch@b")" "$(guid_of "$ROOT/s12cs/$S12C/ch@b")"
 # an excluded snapshot older than every eligible root snapshot: no safe stream
 S12X="$ROOT/s12x"
 mk "$S12X"; mk "$S12X/ch"

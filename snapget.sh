@@ -2130,7 +2130,10 @@ process_dataset() {
     if [[ "$common_snapshot" == "null" ]] && [ -z "$bookmark_base" ] \
        && [ ${#EXCLUDE_SNAPS[@]} -gt 0 ] && [ ${#src_all[@]} -gt 0 ] \
        && { [ "$RECURSIVE" -eq 1 ] || [ "$FULL_HISTORY_SEND" -eq 1 ]; }; then
-        local _base _brc
+        # Round 5: the stream was -R (-H included), so every follow-up step is -R
+        # too -- a root-only -I would leave the descendants at the base.
+        local _base _brc _rflag="$recursive_send_flag"
+        [ "$FULL_HISTORY_SEND" -eq 1 ] && _rflag="-R"
         _base=$(exclusion_full_base "$src_dataset" "$latest_snap" "$remote_user" "$remote_host"); _brc=$?
         if [ $_brc -ne 0 ]; then
             if [ $_brc -eq 1 ]; then
@@ -2149,7 +2152,7 @@ process_dataset() {
                 return 1
             }
             common_snapshot="$_base"
-            send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $EXTRA_SEND_OPTS -I ${src_dataset}@${_base} $snapshot"
+            send_cmd="zfs send $raw_send_flag $comp_send_flag $_rflag $EXTRA_SEND_OPTS -I ${src_dataset}@${_base} $snapshot"
         fi
     fi
 
@@ -2171,7 +2174,10 @@ process_dataset() {
         # in lib-zfs-snap.sh. A clean step stays -I, a step over an excluded
         # snapshot is -i.
         local _pre="${send_cmd%"$_iend"}" _plan _steps=() _fl _sn
-        _plan=$(exclusion_step_plan "$src_dataset" "$common_snapshot" "$latest_snap" "$RECURSIVE" "$remote_user" "$remote_host") || {
+        # an -R step (atomic -r, or the -H first copy above) carries the descendants:
+        # their excluded snapshots count too
+        local _prec="$RECURSIVE"; [[ " $_pre " == *" -R "* ]] && _prec=1
+        _plan=$(exclusion_step_plan "$src_dataset" "$common_snapshot" "$latest_snap" "$_prec" "$remote_user" "$remote_host") || {
             log 0 "Could not list the snapshots of '$src_dataset' to place the -E exclusions -- not sending, rather than carrying an excluded snapshot"
             abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
             return 1
