@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: ba4028f6bd5d5c2b -->
+<!-- status-covers-digest: 07501133854c5b2f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,7 +20,16 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **Paczka po 1.0.12 (2026-11-07, gałąź `fix/mirror-first-copy-history`; niewydane).** Z labu
+- **Lab na żywo po #1111 (2026-11-07, gałąź `fix/jobstats-last-run-skip`; niewydane).** Na pve9
+  przez GUI: nowa replika hist1 (pełna historia, lustro) -- pierwsza kopia przeniosła wszystkie 4
+  migawki źródła, GUID-y zgodne. Dwa nakładające się biegi: Przebiegi poprawne (OK 24 s, dwa
+  pominięcia). Wyszły trzy usterki tego samego miejsca: pominięcie i prawdziwy bieg kończące się
+  w tej samej minucie dawały „ostatni bieg” = pominięcie (0 s), szczegóły pisały „BŁĄD (rc=75)”,
+  a średnia wliczała pominięcia. Ostatni bieg porównywany do sekundy, pominięcia poza średnią i
+  maksimum (oba bliźniaki), szczegóły mówią „pominięty” (`rc_word` w TUI). Test „THE SAME
+  MINUTE” w `test/zfsbackup`; na `main` FAIL (ostatni rc 75, 0 s, średnia 19), z poprawką PASS;
+  w GUI na pve9: „last 24s / avg 25s / max 37s”, ostatni OK.
+- **Scalone w #1111, niewydane (2026-11-07, gałąź `fix/mirror-first-copy-history`).** Z labu
   „marudnego admina” na pve9. Pierwsza kopia pasywnej repliki (`snapget.sh -e -M`) wysyła
   najstarszą kwalifikującą się migawkę w całości, potem `-I` do najnowszej -- dotąd replika
   dostawała tylko najnowszą, a starsza historia nie docierała nigdy. Repliki zrobione wcześniej

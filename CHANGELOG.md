@@ -15,6 +15,10 @@ when they change how the tool is used.
   first one still runs ends at once with rc 75; its end took the start time of the real run, so
   that run showed no duration and the skip counted as a failure. Ends now pair with the newest
   open start, and rc 75 is not a failure (job table, Runs, the digest).
+- **Last run of a replica.** When a skip (rc 75) and the real run ended in the same minute, the
+  skip could be shown as the last run (0 s, and "ERROR (rc=75)" in the details). The last run is
+  now the one that ended later to the second; a skip does not count in the average or maximum
+  time; the details say "skipped" like the list.
 
 ## [1.0.12] — 2026-11-05
 
