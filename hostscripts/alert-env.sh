@@ -19,7 +19,7 @@ _E_STATE="${ZFS_ALERT_STATE_DIR:-}"
 # while the environment won for the five above, so the SAME config had two
 # precedence rules depending on which key you touched -- which is the kind of
 # thing that costs an hour when a test run quietly reads production settings.
-_E_DAYS="${ZFS_DIGEST_DAYS:-}"; _E_QUIET="${ZFS_DIGEST_QUIET:-}"
+_E_DAYS="${ZFS_DIGEST_DAYS:-}"; _E_QUIET="${ZFS_DIGEST_QUIET:-}"; _E_SITE="${ZFS_ALERT_SITE:-}"
 CONF="${ZFS_ALERT_CONF:-}"
 if [ -z "$CONF" ]; then
     # /etc first: /root is 0700, so a delegated service account (see
@@ -60,6 +60,7 @@ _v=$(_zs alerts errors);       [ -n "$_v" ] && ZFS_ALERT_MODE="$_v"
 _v=$(_zs alerts warnings);     [ -n "$_v" ] && ZFS_WARN_MODE="$_v"
 _v=$(_zs alerts all_ok_mail);  [ -n "$_v" ] && ZFS_DIGEST_QUIET="$_v"
 _v=$(_zs alerts stats_days);   [ -n "$_v" ] && ZFS_DIGEST_DAYS="$_v"
+_v=$(_zs alerts site);         [ -n "$_v" ] && ZFS_ALERT_SITE="$_v"
 _v=$(_zs capacity threshold);  [ -n "$_v" ] && ZFS_CAPACITY_THRESHOLD="$_v"
 # U35 bezpiecznik pojemności (capacity-guard.sh)
 _v=$(_zs capacity guard);          [ -n "$_v" ] && ZFS_GUARD="$_v"
@@ -98,9 +99,27 @@ _restore_env() {
     [ -n "$_E_STATE" ] && ZFS_ALERT_STATE_DIR="$_E_STATE"
     [ -n "$_E_DAYS" ]  && ZFS_DIGEST_DAYS="$_E_DAYS"
     [ -n "$_E_QUIET" ] && ZFS_DIGEST_QUIET="$_E_QUIET"
+    [ -n "$_E_SITE" ]  && ZFS_ALERT_SITE="$_E_SITE"
     return 0
 }
 _restore_env
+
+# WHICH INSTALLATION A MAIL IS ABOUT (owner 2026-11-07, six collectors to deploy): "pve2"
+# alone exists in several firms. alerts.site (F10) names the installation; the subject then
+# reads "<site> <host>". Unset (or "-"): the host's full name, never the bare short one.
+# Only letters, digits, . _ - reach a subject; anything else in the file is ignored.
+zfs_mail_host() {
+    local h="${HOST:-}" s="${ZFS_ALERT_SITE:-}"
+    [ -n "$h" ] || h=$(hostname -f 2>/dev/null || hostname)
+    case "$s" in ""|-|*[!A-Za-z0-9._-]*) printf '%s' "$h" ;; *) printf '%s %s' "$s" "${h%%.*}" ;; esac
+}
+# The sender's name stays dot-free ("<site> <short>" or "<short>"): a dot in a display name
+# makes it a quoted string ("zfs-backup pve2.x.net"), measured on a CI runner's long name.
+zfs_mail_sender() {
+    local h="${HOST:-}" s="${ZFS_ALERT_SITE:-}"
+    [ -n "$h" ] || h=$(hostname -f 2>/dev/null || hostname)
+    case "$s" in ""|-|*[!A-Za-z0-9._-]*) printf '%s' "${h%%.*}" ;; *) printf '%s %s' "$s" "${h%%.*}" ;; esac
+}
 
 # ---------------------------------------------------------------------------
 # U158 (Dabrowska pve0 2026-11-04): a single alert in the admin's words. The subject
@@ -191,7 +210,7 @@ alert_mail() {
     h=$(hostname -f 2>/dev/null || hostname)
     if [ -n "$sm" ]; then
         { printf 'From: zfs-backup %s <%s@%s>\nTo: %s\nSubject: %s\nMIME-Version: 1.0\nContent-Type: text/plain; charset=us-ascii\n\n' \
-              "${h%%.*}" "$(id -un 2>/dev/null || echo root)" "$h" "$2" "$1"; cat; } | "$sm" -t -oi
+              "$(zfs_mail_sender)" "$(id -un 2>/dev/null || echo root)" "$h" "$2" "$1"; cat; } | "$sm" -t -oi
     else
         mail -s "$1" "$2"
     fi

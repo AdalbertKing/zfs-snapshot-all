@@ -1180,6 +1180,7 @@ powyższe wartości domyślne. To, że środowisko wygrywa z plikiem, sprawia, �
 | `[alerts] warnings` | `ZFS_WARN_MODE` |
 | `[alerts] all_ok_mail` | `ZFS_DIGEST_QUIET` |
 | `[alerts] stats_days` | `ZFS_DIGEST_DAYS` |
+| `[alerts] site` | `ZFS_ALERT_SITE`: nazwa instalacji w temacie zbiorczego maila i maili alertów (`notify-fail.sh`, `notify-warn.sh`), `[ZFS] <site> <host>`, oraz w nazwie nadawcy, gdy host ma sendmail; brak albo `-` daje pełną nazwę hosta |
 | `[alerts] repeat_after` | `ZFS_ALERT_COOLDOWN` (liczba sekund albo `30m`, `4h`) |
 | `[capacity] threshold` | `ZFS_CAPACITY_THRESHOLD` |
 | `[capacity] guard`, `guard_at`, `guard_target`, `guard_min_keep` | `ZFS_GUARD*` (strażnik pojemności) |

@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 06786eb6b801f011 -->
+<!-- status-covers-digest: 43ec143c17df802a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,7 +20,12 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **REV-191 i REV-190 r2 (2026-11-07, gałąź `fix/rev-190-191`; niewydane).**
+- **Nazwa instalacji w temacie maili (2026-11-07, gałąź `feat/mail-site`; niewydane).** Prośba
+  właściciela: „pve2” jest w kilku firmach. Nowe ustawienie `alerts.site` (F10). Z nim temat
+  zbiorczego maila i maila alertu (tryb „od razu”) brzmi `[ZFS] Metropolis pve2 ...`, a nadawca
+  (gdy host ma sendmail) `zfs-backup Metropolis pve2`. Bez niego temat ma pełną nazwę hosta zamiast samego `pve2`.
+  Nazwy trzeba ustawić na każdym kolektorze; to zrobi właściciel albo ja za jego zgodą.
+- **REV-191 i REV-190 r2 (2026-11-07, scalone w #1117; niewydane).**
   - **REV-191:** `zfs send -I` niesie każdą migawkę między końcami przedziału. Przy `-E`
     wykluczona migawka (np. `__replicate_`) leżąca w środku trafiała na cel. Dotyczyło to
     pierwszej kopii z #1111 i każdego zwykłego przyrostu, w `snapget.sh` i `snapsend.sh`.

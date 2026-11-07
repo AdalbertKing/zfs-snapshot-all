@@ -1159,6 +1159,7 @@ the defaults above. The environment beating the file is what makes
 | `[alerts] warnings` | `ZFS_WARN_MODE` |
 | `[alerts] all_ok_mail` | `ZFS_DIGEST_QUIET` |
 | `[alerts] stats_days` | `ZFS_DIGEST_DAYS` |
+| `[alerts] site` | `ZFS_ALERT_SITE`: the installation's name in the subject of the daily summary and of the alert mails (`notify-fail.sh`, `notify-warn.sh`), `[ZFS] <site> <host>`, and in the sender's name where the host has a sendmail; unset or `-` gives the host's full name |
 | `[alerts] repeat_after` | `ZFS_ALERT_COOLDOWN` (a number of seconds, or `30m`, `4h`) |
 | `[capacity] threshold` | `ZFS_CAPACITY_THRESHOLD` |
 | `[capacity] guard`, `guard_at`, `guard_target`, `guard_min_keep` | `ZFS_GUARD*` (capacity guard) |
