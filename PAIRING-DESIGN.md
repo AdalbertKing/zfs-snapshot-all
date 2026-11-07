@@ -198,9 +198,9 @@ temu, co odpowie. Gdy nazwa jest zła, parowanie **się nie wywala — udaje si�
 z kimś innym**: przypina cudzy klucz hosta, a następny `--draft-config`
 wysyła tam klucz parowania.
 
-To nie jest teoria. Na metropolis `pve2` z pve1 nie ma wpisu w `/etc/hosts`,
+To nie jest teoria. Na site-a `pve2` z pve1 nie ma wpisu w `/etc/hosts`,
 więc resolver dokleja domenę wyszukiwania i `getent hosts pve2` odpowiada
-**czterema publicznymi adresami** niezwiązanego, prawdziwego `metropolis.net`.
+**czterema publicznymi adresami** niezwiązanego, prawdziwego `example.org`.
 
 `--pair` odrzuca teraz dwa odciski tej awarii:
 - nazwa rozwiązująca się na **więcej niż jeden adres** (peer ma jeden;
@@ -406,8 +406,8 @@ ssh -o StrictHostKeyChecking=accept-new -i id_ed25519_pve2 zfsbackup-pve1@pve2 \
 ```
 
 **Ale** `accept-new` przy pierwszym połączeniu to ten sam TOFU, który już raz zawiódł na
-metropolis (DNS dokleja domenę wyszukiwania, `pve2` rozwiązuje się na cztery publiczne adresy
-`metropolis.net` zamiast jednego). Fingerprint hosta pve2 dołączony do TEJ SAMEJ automatycznie
+site-a (DNS dokleja domenę wyszukiwania, `pve2` rozwiązuje się na cztery publiczne adresy
+`example.org` zamiast jednego). Fingerprint hosta pve2 dołączony do TEJ SAMEJ automatycznie
 ściąganej paczki nic nie chroni — atakujący pośrodku podstawiłby swój klucz i swój "zgodny"
 fingerprint naraz. **Zasada: fingerprint musi dotrzeć kanałem niezależnym od tego, który
 weryfikuje.**

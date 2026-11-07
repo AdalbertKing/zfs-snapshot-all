@@ -144,14 +144,14 @@ r=$(QM_FAIL=1 SUDO_USER=backup-test bash "$HELPER" freeze 100 >/dev/null 2>&1; e
 [ "$r" = 3 ] && ok "a failing qm freeze is reported, not swallowed" \
              || bad "a failing qm freeze is reported, not swallowed" "rc=$r, expected 3"
 
-# ---- writers: the vsql2 case ----------------------------------------------
+# ---- writers: the vm-sql case ----------------------------------------------
 #
 # qemu NEVER inspects individual VSS writer state (verified in qemu v7.2.0,
 # v8.2.0 and master: requester.cpp calls GatherWriterStatus but there is no
 # GetWriterStatus / VSS_WRITER_STATE anywhere in it), so this verb is the only
 # way to see writer state from the host.
 #
-# The fixture below is a REAL capture from vsql2, and it is the state left by a
+# The fixture below is a REAL capture from vm-sql, and it is the state left by a
 # SUCCESSFUL freeze -- measured 2026-07-31, writer [1] Stable immediately before
 # a manual fsfreeze-freeze/thaw and [10] Failed immediately after, same instance
 # id. An earlier version of this suite asserted that this same output means "a
@@ -192,7 +192,7 @@ esac
 # ---- writers: a LOCALISED guest -------------------------------------------
 #
 # vssadmin is translated. Captured live from VM 106 on pve1 (Polish Windows),
-# 2026-07-31, alongside an English capture from VM 106 on metropolis pve1 -- the
+# 2026-07-31, alongside an English capture from VM 106 on site-a pve1 -- the
 # labels differ, the structure and the [N] state numbers do not. The parser that
 # keyed on "Writer name:" / "State:" / "Last error:" reported total=0 here while
 # vssadmin had actually succeeded. Labels are written in ASCII below; the parser
@@ -236,7 +236,7 @@ esac
 # SQL Server logs 3197 "I/O is frozen on database X" and 3198 "I/O was resumed".
 # A balanced pair per database is the documented POSITIVE proof that the
 # application-level quiesce happened -- the thing `writers` cannot tell us.
-# Measured on vsql2 2026-07-31: balanced at every quiesce, including the nightly
+# Measured on vm-sql 2026-07-31: balanced at every quiesce, including the nightly
 # job (227/227 on MSSQLSERVER, 187/187 on MSSQL$SQL2019).
 cat > "$VSSOUT" <<'EOF'
 {
@@ -1091,7 +1091,7 @@ fi
 # Until now the only route to a quiesce grant was `--join --allow-quiesce`,
 # which grants a JOINING PEER. There was no route at all for this host's own
 # delegated account -- so a managed block carrying `quiesce = auto` could be
-# run by root and by nobody else, and `migrate-to-account` on metropolis pve1
+# run by root and by nobody else, and `migrate-to-account` on site-a pve1
 # refused to move it with no command able to unblock the refusal.
 #
 # The grant itself is the same function, already covered above. What is new is

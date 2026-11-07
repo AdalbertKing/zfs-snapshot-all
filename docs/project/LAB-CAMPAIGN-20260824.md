@@ -12,7 +12,7 @@ obserwacje. Wersja pakietu na starcie: `main@15c672c`.
 
 ## 0. Zasady i granice
 
-- **Produkcji nie tykamy.** pve1 i pve2 to hosty produkcyjne metropolis; lab
+- **Produkcji nie tykamy.** pve1 i pve2 to hosty produkcyjne site-a; lab
   dostaje wyłącznie własne drzewa (`hdd/lab1a`, `hdd/lab1b` na pve1,
   `hdd/lab2s` na pve2) i po jednej otagowanej linii crona. Każda zmiana
   crontaba udokumentowana diffem przed/po.

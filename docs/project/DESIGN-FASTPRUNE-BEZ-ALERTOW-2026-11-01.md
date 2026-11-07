@@ -16,7 +16,7 @@ Archiwum ma mieć szczeble dobowe, tygodniowe, miesięczne i roczne, więc źró
 TWORZYĆ. Ale na źródle każda z nich ma żyć tylko tyle, ile trzeba, żeby pvesr ją przeniósł,
 a kopia pasywna skopiowała do archiwum.
 
-Przypadek, na którym to wyszło: Dąbrowska 2026-11-01, kolektor pve0, źródło pve1
+Przypadek, na którym to wyszło: Site-B 2026-11-01, kolektor pve0, źródło pve1
 (.11.11, jedna pula `rpool`). Tam miejsca okazało się dość i właściciel zrobił zwykłą
 relację. Tryb ma być w GUI dla hostów, gdzie miejsca nie ma.
 

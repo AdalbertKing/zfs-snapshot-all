@@ -8,12 +8,12 @@ Ten dokument to tylko plan. Nic tu nie zostało wykonane poza odczytami (`--plan
 
 ## 0. Model i zasady
 
-- **Model:** jeden kolektor (B, na Metropolis pve2) robi i przycina migawki NA źródle (A, pve1) przez ssh
+- **Model:** jeden kolektor (B, na Site-A pve2) robi i przycina migawki NA źródle (A, pve1) przez ssh
   (relacje „migawki zdalne”). A nie ma własnych linii migawek ani retencji, tylko pakiet, konto relacji
   i linie hosta w cronie roota: `check-pool-capacity.sh` (codziennie), `capacity-guard.sh` (co 15 min),
   `growth-guard.sh` (co godzinę), `alert-digest.sh` (dzienny mail). Kopie danych A leżą na B
   (`hdd/backups/pve2/...`), często z repliki pvesr.
-- **Gdzie testujemy:** lab pve9, pve9b, pve10, pve11 bez pytania. Na Metropolis tylko labowy CT 990
+- **Gdzie testujemy:** lab pve9, pve9b, pve10, pve11 bez pytania. Na Site-A tylko labowy CT 990
   (`zfslab-pvesr`, 2 GB, pvesr 990-0 pve1 -> pve2 co 15 min) i tylko za zgodą na każdy krok, który
   zmienia hosty (decyzja właściciela 2026-10-16).
 - **Pul produkcyjnych nie zapełniamy nigdy.** Test pełnej puli robimy na małej puli labu: `replab`
@@ -114,7 +114,7 @@ ani ostrzeżenia. Bez configu byłby co godzinę alarm „strażnik przyrostu NI
 5. Strażnik na źródle (dowód L2): `growth-guard.sh --plan` na pve11: „Brak naszych datasetów”.
 6. Sprzątanie: usunąć dane, `settings set growth.alert=off --yes`.
 
-### T4. Przeniesienie gościa (Metropolis, labowy CT 990; każdy krok za zgodą)
+### T4. Przeniesienie gościa (Site-A, labowy CT 990; każdy krok za zgodą)
 
 1. Stan wyjściowy: CT 990 na pve1, `pvesr` 990-0 pve1 -> pve2 OK, linie pve2 dla `hdd/vm-disks` na pve1
    chodzą z rc 0.

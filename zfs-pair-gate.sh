@@ -161,7 +161,7 @@ GATE_LOG="${GATE_LOG:-/var/log/zfs-pair-gate.log}"
 # The whole thing runs in a SUBSHELL with stderr closed, and that placement is
 # the point: `printf >> file 2>/dev/null` does NOT hide a failure to open the
 # file, because the shell reports that itself, before printf exists, on the
-# shell's own stderr. Found live on metropolis pve2 2026-08-06 -- every single
+# shell's own stderr. Found live on site-a pve2 2026-08-06 -- every single
 # gated command answered with "/var/log/zfs-pair-gate.log: Permission denied"
 # on the caller's stderr, and snapget.sh puts the tail of stderr straight into
 # its alert mail. A logging detail would have become alert noise on every run.

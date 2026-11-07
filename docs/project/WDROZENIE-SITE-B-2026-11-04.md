@@ -1,4 +1,4 @@
-# Wdrożenie Dąbrowska 2026-11-04 -- przebieg, poprawki, wnioski
+# Wdrożenie Site-B 2026-11-04 -- przebieg, poprawki, wnioski
 
 Stan na: 2026-11-04 ok. 12:30 CET. Kolektor pve0 (192.168.11.10), źródło pve1 (192.168.11.11).
 Wersja na hostach: 1.0.9 (zfsbackup `f30fbc3`). Uwagi właściciela: `FINISZ-BACKLOG.md` U145-U160.
@@ -34,10 +34,10 @@ Zadania replikacji pvesr `100-0` i `106-0` (VM 100, VM 106) pve1 -> pve0 co 2 h,
 - „Dokąd”: nawigacja po drzewie zamiast pisania ścieżki; drzewo „toporne” -- wygląd F2 (U155, U156).
 - Maile: dzienny raport po relacjach z „DO ZROBIENIA”, pełna statystyka jako załącznik HTML, bez
   usuniętych relacji, wszystkie pule w nagłówku (U157, U160); alert prostym językiem (U158).
-- Zamrażanie vsql2: decyzja właściciela -- dobowe..roczne zamrażane (U150); do sprawdzenia po pierwszym
+- Zamrażanie vm-sql: decyzja właściciela -- dobowe..roczne zamrażane (U150); do sprawdzenia po pierwszym
   biegu dobowym (log `_crash_`, stan qemu-ga w VM 100).
 
-## 4. Do zrobienia po stronie wdrożenia (Dąbrowska)
+## 4. Do zrobienia po stronie wdrożenia (Site-B)
 
 - po pierwszym biegu kopii (12:52): czy archiwum ma `automated_hourly_2026-11-04_*`;
 - rano 05.11: pierwsze dobowe zamrożenie VM 100; czy UNKNOWN na `hdd/lxc` się powtarza;

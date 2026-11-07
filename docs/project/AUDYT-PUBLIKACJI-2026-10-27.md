@@ -25,18 +25,18 @@ testy miałyby iść do repo publicznego -- to pytanie nadal otwarte (§4).
 
 ## 2. Co ZOSTAJE po `scrub.sed` w pakiecie publicznym
 
-`scrub.sed` przepisuje 192.168.28.x, 192.168.11.x, 10.98.0.x i „Metropolis”. Poniższe przechodzi.
+`scrub.sed` przepisuje 192.168.28.x, 192.168.11.x, 10.98.0.x i „Site-A”. Poniższe przechodzi.
 **Uwaga: to już jest publiczne** -- `zfsbackup` od wydania v1.0 (2026-10-25) zawiera te same pliki
-(sprawdzone przez API: `hostscripts/alert-digest.sh` ma `kancelaria`, `snapget.sh` adres e-mail).
+(sprawdzone przez API: `hostscripts/alert-digest.sh` ma `biuro`, `snapget.sh` adres e-mail).
 Historii `zfsbackup` nie przepisujemy (hosty `ff-only`), więc podmiana działa od następnego wydania;
 stare commity zostają widoczne.
 
 | # | co | gdzie | ocena |
 |---|---|---|---|
-| A1 | `kancelaria`, `kancelaria.net` (klient) | `hostscripts/alert-digest.sh:151,298,488,963`; `docs/pl/PRZYKLADY-CONFIGU.md:65`, `docs/en/CONFIG-EXAMPLES.md:65` („wzorzec Kancelaria”) | **podmienić** |
-| A2 | `A-TASSA` / `a-tassa` (klient) | `zfs-backup.sh:7457`, `hostscripts/capacity-guard.sh:4` | **podmienić** |
-| A3 | `vsql2` (VM klienta) | `zfs-quiesce-helper.sh:58,70,96,442,518`, `snapget.sh:1187` | podmienić (np. „gość Windows z SQL Server”) |
-| A4 | `site-a.net` (wynik scrubu `metropolis.net`) | `deploy.sh:5918`, `tui/new-relation.sh:161` | podmienić na `example.org` -- reguła w `scrub.sed` |
+| A1 | `biuro`, `biuro.example` (klient) | `hostscripts/alert-digest.sh:151,298,488,963`; `docs/pl/PRZYKLADY-CONFIGU.md:65`, `docs/en/CONFIG-EXAMPLES.md:65` („wzorzec Biuro”) | **podmienić** |
+| A2 | `SITE-C` / `site-c` (klient) | `zfs-backup.sh:7457`, `hostscripts/capacity-guard.sh:4` | **podmienić** |
+| A3 | `vm-sql` (VM klienta) | `zfs-quiesce-helper.sh:58,70,96,442,518`, `snapget.sh:1187` | podmienić (np. „gość Windows z SQL Server”) |
+| A4 | `site-a.net` (wynik scrubu `example.org`) | `deploy.sh:5918`, `tui/new-relation.sh:161` | podmienić na `example.org` -- reguła w `scrub.sed` |
 | A5 | 10.99.0.x (adresy VPN) | `zfs-backup.sh:9921,13333,13334` | reguła w `scrub.sed` (np. → 203.0.113.) |
 | A6 | e-mail autora `lurk@lurk.com.pl` | `delsnaps.sh:5`, `snapget.sh:5`, `snapsend.sh:5` | **decyzja właściciela**: zostawić jako kontakt autora albo usunąć |
 | A7 | nazwy hostów labu `pve0/1/2/9/9b/10/11` w komentarzach („Measured … on pve9”) | kilkaset linii, głównie `zfs-backup.sh`, `deploy.sh`, `zfs-restore.sh`, `tui/zfs-tui.py` | zostawić: domyślne nazwy węzłów Proxmoxa, nic nie zdradzają |
@@ -44,17 +44,17 @@ stare commity zostają widoczne.
 | A9 | `Wojciech Król` (autorstwo) | `LICENSE`, README, `delsnaps.sh:4`, `tui/zfs-tui.py:2766` | zostaje (zamierzone) |
 | A10 | ucięty klucz publiczny `restrict ssh-ed25519 AAAAC3Nza…` | `docs/en/PAUSE-AND-DISABLE.md:265`, `docs/pl/PAUZA-I-BLOKADA.md:266` | zostawić: przykład bez treści klucza |
 
-Czyste: klucze prywatne, hasła, tokeny, odciski SHA256, ścieżki Windows (`D:\`, `C:\Users`), Sedina,
-Dąbrowska, wg1, OPNsense, NethServer. Adresy 10.0.0.x i 192.168.1.x / 192.168.5.x w `docs/pl|en`
+Czyste: klucze prywatne, hasła, tokeny, odciski SHA256, ścieżki Windows (`D:\`, `C:\Users`), Site-D,
+Site-B, wg1, OPNsense, NethServer. Adresy 10.0.0.x i 192.168.1.x / 192.168.5.x w `docs/pl|en`
 i w tutorialu to adresy przykładowe wybrane przy czystce dokumentacji -- zostają.
 
 ## 3. Plan podmiany (po akceptacji, osobna paczka)
 
-1. `release/scrub.sed`: dopisać reguły A4 (`site-a\.net` → `example.org`, po regule Metropolis)
+1. `release/scrub.sed`: dopisać reguły A4 (`site-a\.net` → `example.org`, po regule Site-A)
    i A5 (`10\.99\.0\.` → `203.0.113.`); w `publish.sh` i `test/release` rozszerzyć kontrolę
-   „nic nie zostało” o `kancelaria`, `a-tassa`, `vsql2`, `10.99.0.`, `site-a.net`.
-2. A1-A3 w źródle (komentarze i dwa przykłady w docs): nazwy neutralne („kancelaria” → „biuro”,
-   „A-TASSA” → „host z dużą dzienną zmianą”, „vsql2” → „gość z SQL Server”). Same komentarze,
+   „nic nie zostało” o `biuro`, `site-c`, `vm-sql`, `10.99.0.`, `site-a.net`.
+2. A1-A3 w źródle (komentarze i dwa przykłady w docs): nazwy neutralne („biuro” → „biuro”,
+   „SITE-C” → „host z dużą dzienną zmianą”, „vm-sql” → „gość z SQL Server”). Same komentarze,
    zero zmiany zachowania; idzie w repo dev, bo komentarze to pomiary, a nazwa klienta nic do nich
    nie wnosi. Dotyka `zfs-backup.sh`, `deploy.sh`, `tui/new-relation.sh` -- po scaleniu gałęzi `gui/*`,
    żeby nie było konfliktów.

@@ -72,7 +72,7 @@ I checked what would actually be disturbed, on all four hosts:
 - **`PROFILE_GFS` detection survives**, because it greps the *existing* config
   for `[template:standard_hourly]` carrying `prune_schedule`. Renaming what is
   newly emitted does not disturb what is already on disk, so pve0 stays pre-GFS
-  and metropolis pve1 stays GFS.
+  and site-a pve1 stays GFS.
 
 The cost is therefore confined to **newly enrolled clients**, whose emitted
 section would read `use_template = default__standard_hourly` instead of

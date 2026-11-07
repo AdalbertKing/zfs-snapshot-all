@@ -10,8 +10,8 @@ this state, and I am not proposing it as one.**
 
 | host | reported uncovered | of which genuine |
 |---|---|---|
-| metropolis pve1 | 16 | ~3 |
-| metropolis pve2 | 23 | ~4 |
+| site-a pve1 | 16 | ~3 |
+| site-a pve2 | 23 | ~4 |
 | 11.x pve0 | 43 | a handful |
 | 11.x pve1 | — | config would not parse, see §3 |
 
@@ -63,7 +63,7 @@ was run against workstation copies for that reason. See
 
 ~~**a. The configs do not live on the hosts.**~~ `/home/zfsbackup/zfs-snapshot-all`
 contains no `jobs.*.conf` on any host; the files live only in the private
-`cron-configs` repository on the workstation. Metropolis pve1 runs **8** live
+`cron-configs` repository on the workstation. Site-A pve1 runs **8** live
 `snapsend` jobs with no config file present anywhere on it.
 
 So `--reconcile` cannot be deployed as a per-host cron job the way I described

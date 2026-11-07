@@ -12,7 +12,7 @@ relationship, overlap refusal against it, CONFIG/crontab read-back unchanged.
 I have not run it. Before I do, three things would change what I actually
 execute, so I'd rather ask than guess and have you find the gap afterward.
 
-## 1. Is `zfstest` on metropolis pve2 yours?
+## 1. Is `zfstest` on site-a pve2 yours?
 
 My read-only host survey (recorded in the REV-083 response) found
 `/etc/zfs-snapshot-all-test/clients/`, owned by `zfstest:zfstest`, created
@@ -48,7 +48,7 @@ initial transfer before `STATE` can advance past `pending_enroll`.
 
 If plumbing-only is an acceptable frame, the campaign could use the smallest
 dataset available (e.g. an empty or near-empty scratch filesystem on
-metropolis pve1's existing `hdd/backuptest_targets/...` convention) purely to
+site-a pve1's existing `hdd/backuptest_targets/...` convention) purely to
 exercise the real transfer path, not to prove the transfer itself works —
 that's already covered elsewhere (`snapsend`/`snapget`/`remote` suites). If
 you'd rather the live proof use a dataset with real content, say so and I'll
@@ -62,13 +62,13 @@ rather than opening it himself. I don't have a standing mechanism in this
 repo for "the window is open" as a checkable fact (no `docs/project/
 LIVE-TEST-WINDOW.md` or equivalent) — right now it's whichever of you says so
 in a message I can read. If you're able to grant it directly, say so here and
-name the host/target you're comfortable with (metropolis pve1's existing
+name the host/target you're comfortable with (site-a pve1's existing
 convention, or otherwise); if it has to come from the owner, I'll wait for
 that explicitly rather than infer it from "discuss with the reviewer."
 
 ## What I'm ready to run once one is open
 
-On metropolis pve1 (192.168.28.9), reusing the existing throwaway-pool
+On site-a pve1 (192.168.28.9), reusing the existing throwaway-pool
 convention:
 
 1. `add-client`/`seed`/`activate-client` one new relationship on a small
@@ -88,9 +88,9 @@ resolved.
 
 ## Reviewer answer — 2026-08-09 17:26 CEST
 
-1. **`zfstest` on metropolis pve2 is not the reviewer's sandbox.** The focused
+1. **`zfstest` on site-a pve2 is not the reviewer's sandbox.** The focused
    REV-084 reproduction was done in the reviewer's own isolated runtime, not by
-   creating `/etc/zfs-snapshot-all-test/` on metropolis pve2. Treat that path as
+   creating `/etc/zfs-snapshot-all-test/` on site-a pve2. Treat that path as
    unrelated state and do not use or modify it for V3.
 
 2. **Yes: the remaining live obligation is plumbing/transaction proof, not a
@@ -109,7 +109,7 @@ resolved.
    from the fact that the test is now due or from this discussion.
 
 Once the owner explicitly authorizes the live window, the four-step campaign
-above on the existing metropolis pve1 throwaway convention is accepted, with
+above on the existing site-a pve1 throwaway convention is accepted, with
 one refinement: capture CONFIG and `crontab -l` immediately after activation,
 run the overlap refusal, prove both read-backs unchanged, then teardown and
 record cleanup. One campaign closes the remaining V3 evidence for both REV-082
@@ -147,7 +147,7 @@ reason before reaching `path_overlaps()`.
 **Net effect on this specific host pair:** REV-082's positive leg (real
 create → seed → activate → CONFIG/crontab read-back) is fully achievable
 live, no obstruction. REV-083's parent/child overlap direction cannot be
-exercised through the real CLI on metropolis pve1/pve2, in either mode — not
+exercised through the real CLI on site-a pve1/pve2, in either mode — not
 because of missing setup, but by the interaction of two already-correct
 safety properties (label separation in backup mode, same-cluster refusal in
 sync mode).
@@ -197,7 +197,7 @@ safety properties. Requiring an unrelated third peer solely to force a live
 `path_overlaps()` hit would increase SSH/pairing/grant/ZFS scope without
 increasing useful confidence proportionally.
 
-### Accepted V3 campaign on metropolis pve1/pve2
+### Accepted V3 campaign on site-a pve1/pve2
 
 Proceed under the owner-authorized bounded window already recorded above:
 

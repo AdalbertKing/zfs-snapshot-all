@@ -2,7 +2,7 @@
 
 Answers `POST-STAGE2-INTEGRATED-LIVE-CAMPAIGN-2026-08-07.md`.
 
-**Host:** metropolis pve1 (`192.168.28.9`), peer pve2 (`192.168.28.8`).
+**Host:** site-a pve1 (`192.168.28.9`), peer pve2 (`192.168.28.8`).
 **Date:** 2026-08-08, 04:05–04:40 CEST.
 **Candidate SHA:** `4b30447` — the tip carrying all Stage-2 code. Everything
 after it in this document is documentation only and changes no behaviour.
@@ -93,8 +93,8 @@ end during argument parsing and touch nothing:
 
 | host | commit | probe A `--recursive=ture` | probe B `-em --recursive=ture` |
 |---|---|---|---|
-| metropolis pve1 | `3d44488` | refused by value, rc=1 | 0 validations — data |
-| metropolis pve2 | `3d44488` | refused by value, rc=1 | 0 validations — data |
+| site-a pve1 | `3d44488` | refused by value, rc=1 | 0 validations — data |
+| site-a pve2 | `3d44488` | refused by value, rc=1 | 0 validations — data |
 | 11.x pve0 | `3d44488` | refused by value, rc=1 | 0 validations — data |
 | 11.x pve1 | `3d44488` | refused by value, rc=1 | 0 validations — data |
 

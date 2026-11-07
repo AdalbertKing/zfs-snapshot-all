@@ -9,7 +9,7 @@
 > jako **dowód inżynierski** z 2026-08-01; nie jest już instrukcją obsługi.
 
 Stan: **dowód inżynierski, nie instrukcja obsługi** (REV-20260801-020 F1).
-Spisany 2026-08-01 na podstawie suchego przebiegu na metropolis pve1;
+Spisany 2026-08-01 na podstawie suchego przebiegu na site-a pve1;
 rozdziały 2 i 3 zapisują to, co preflight **zmierzył** na żywym hoście.
 
 > **Operacyjną odpowiedzią BYŁA jedna komenda (już usunięta), nie ten dokument.**
@@ -70,7 +70,7 @@ migracja przepisałaby produkcję z nieaktualnego źródła. Stop, najpierw
 uzgodnić config.
 
 Host, na którym plik configu **nie istnieje**, nie przechodzi tej bramki z
-definicji — B nie da się wyprodukować. To dzisiejszy stan metropolis pve2,
+definicji — B nie da się wyprodukować. To dzisiejszy stan site-a pve2,
 patrz `docs/PROJECT_STATUS.md`.
 
 ### Bramka 2 — B i C mogą różnić się wyłącznie ścieżkami
@@ -92,7 +92,7 @@ zachowania — a tych dwóch nie wolno robić w jednym kroku.
 
 ## 3. Pięć brakujących zdolności
 
-Zmierzone na metropolis pve1, 2026-08-01, na żywym bloku 15 linii.
+Zmierzone na site-a pve1, 2026-08-01, na żywym bloku 15 linii.
 
 ### 3.1 Config leży tam, gdzie konto nie sięga
 

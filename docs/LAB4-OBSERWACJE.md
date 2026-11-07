@@ -1,7 +1,7 @@
 # LAB4 — obserwacje z wdrożenia i proponowane poprawki
 
 Rejestr narastający. Jedna pozycja = jedna obserwacja z **prawdziwego**
-przebiegu na metropolis, z propozycją (albo świadomą jej odmową).
+przebiegu na site-a, z propozycją (albo świadomą jej odmową).
 
 Konwencja statusu: **NAPRAWIONE** / **DO DECYZJI** / **ODRZUCONE** / **OBSERWACJA**.
 
@@ -249,7 +249,7 @@ kasuje plik w tym katalogu — oba są zapisem **do katalogu** i oba wymagają
 prawa zapisu. Na tym błędnym przekonaniu opiera się decyzja „not fatal to the
 join, deliberately", więc enrolment kończy się wyglądając na kompletny, a
 twardej bramy nie da się w ogóle założyć. Komentarz mówi, że ten sam objaw
-widziano na metropolis pve2 w 2026-08-06 — czyli powtórzył się, był ostrzegany,
+widziano na site-a pve2 w 2026-08-06 — czyli powtórzył się, był ostrzegany,
 a ostrzeżenie zaniżało wagę.
 
 Naprawione na żywo (`chown root:zfsbackup-<peer>` + `chmod 0775` na obu

@@ -241,7 +241,7 @@ fi
 # the directory is account-writable by design. Where it is not -- a
 # half-installed peer, a directory root re-created by hand -- enable must FAIL
 # LOUDLY and leave the marker in place, never report ACTIVE on a relationship
-# that is still disabled. Found live on metropolis pve2: with a root-owned
+# that is still disabled. Found live on site-a pve2: with a root-owned
 # directory the rm failed, and the branch below is what made that visible
 # instead of a false "enabled".
 # ---------------------------------------------------------------------------
@@ -302,7 +302,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Logging must never reach the CALLER's stderr. Found live on metropolis pve2
+# Logging must never reach the CALLER's stderr. Found live on site-a pve2
 # (2026-08-06): the gate runs as the delegated account, could not open the
 # root-owned /var/log file, and the SHELL reported that on stderr -- before
 # printf existed, so the `2>/dev/null` on the printf did nothing. snapget.sh
@@ -504,7 +504,7 @@ fi
 # ---------------------------------------------------------------------------
 # Phase 4's group sweep must not walk into the gate's relationship state.
 #
-# Found live on metropolis 2026-08-20, and this is the root cause under the
+# Found live on site-a 2026-08-20, and this is the root cause under the
 # symptom recorded earlier: `disable-client` kept failing with
 #     zfs-pair-gate: .../relationships/<label>/disabled.new: Permission denied
 # because Phase 4 ran `chgrp -R zfsalert /var/lib/zfs-snapshot-all` -- straight
@@ -596,7 +596,7 @@ esac
 #    authorized_keys to root:root, and sshd with StrictModes (the default)
 #    then refuses every key in the file -- the account loses its own host,
 #    including via keys unrelated to this relationship. Observed exactly that
-#    on metropolis pve2 (2026-08-06): after a correct rewrite, both keys were
+#    on site-a pve2 (2026-08-06): after a correct rewrite, both keys were
 #    refused with nothing in auth.log but "Connection closed [preauth]".
 #    Stubbed chown, because a test cannot own files as another user.
 AK="$AKD/owner"; printf '%s\n' "$KEY_B" > "$AK"

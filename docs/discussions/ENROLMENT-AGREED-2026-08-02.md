@@ -244,7 +244,7 @@ dotyczy danych, które ta relacja sama przyniosła.
 Stan zmierzony 2026-08-02 ok. 16:05 na klastrze 192.168.11.x:
 
 ```
-pve1 (192.168.11.11) — ZYWY vsql2, VM 100, 247 GB
+pve1 (192.168.11.11) — ZYWY vm-sql, VM 100, 247 GB
   rpool/data/vm-100-disk-0@automated_hourly_2026-08-02_16-01-01   16:01  <- tylko tu
   rpool/data/vm-100-disk-0@__replicate_100-0_1785679201__          16:00
 pve0 (192.168.11.10) — replika pvesr, ta sama nazwa, te same 247 GB
@@ -252,7 +252,7 @@ pve0 (192.168.11.10) — replika pvesr, ta sama nazwa, te same 247 GB
 ```
 
 `snapget.sh -r pve0:rpool/data/vm-100-disk-0` (sync, bez drugiego argumentu)
-celuje w **dysk żywego vsql2**. Strażnik samo-synchronizacji nie zadziała (dwa
+celuje w **dysk żywego vm-sql**. Strażnik samo-synchronizacji nie zadziała (dwa
 różne hosty), pula istnieje, wspólna baza **istnieje** (16:00) — a `snapget.sh`
 odbiera domyślnie z `zfs recv -F`, czyli cofnąłby bazę danych do 16:00 i skasował
 snapshot z 16:01.
@@ -294,7 +294,7 @@ drugim pisarzem do cudzego celu.
 
 Tryb **backup** wewnątrz klastra zostaje w pełni dozwolony i jest bezpieczny:
 pisze do własnej przestrzeni nazw pod targetem, gdzie pvesr nigdy nie zagląda.
-Dokładnie to robi dziś metropolia.
+Dokładnie to robi dziś site-a.
 
 ---
 
@@ -369,7 +369,7 @@ C-c nie kosztuje wtedy nic (nikt nie wpisuje adresu, który się nie zmienił),
 C-a i C-b to jedno pole, A i B nie robią nic nigdy.
 
 Pola `ENDPOINT_LAN_*` / `ENDPOINT_VPN_*` zostają jako **wewnętrzna zgodność** dla
-istniejących rekordów klientów (żeby aktualizacja nie wywróciła metropolii), ale
+istniejących rekordów klientów (żeby aktualizacja nie wywróciła site-a), ale
 znikają z interfejsu.
 
 ### Potwierdzenie zarzutu recenzenta o rolach
@@ -467,7 +467,7 @@ dokumentacyjna, bez zmian w kodzie produkcyjnym, zgodnie z żądaniem recenzji.
 Po testach z 30 lipca / 1 sierpnia zostały na produkcji dwa osady. Usunięte, z
 kopią zapasową przed każdym usunięciem.
 
-**metropolis pve1** — manifest peera `192.168.28.8.conf` po relacji, której na
+**site-a pve1** — manifest peera `192.168.28.8.conf` po relacji, której na
 pve2 już nie było (konta `zfsbackup-pve1` brak, datasetu `uxsrcB` brak).
 Sprzątnięte narzędziem projektu, nie `rm`-em: `deploy.sh --unpair
 --peer=192.168.28.8`. Zdjęło klucz relacji, przypięty klucz hosta, kopie konta,
@@ -550,7 +550,7 @@ pokazuje dwa diffy; a całość jest wersjonowana w prywatnym `zfs-cron-configs`
 2. **Prefiksy zastrzeżone: wszystkie trzy na `:2`** — `__replicate_`,
    `__migration__`, `vzdump` (zmiana wobec U6a, gdzie `__migration__` zostawał
    na `all`).
-3. **Istniejący klienci migrują się tylko na jawne `--force`.** Metropolia
+3. **Istniejący klienci migrują się tylko na jawne `--force`.** Site-A
    działa dalej bez zmian.
 
 ---

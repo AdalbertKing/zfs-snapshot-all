@@ -92,7 +92,7 @@ ignores 0555 for the owner), impact 21/21, graph `--verify` clean. The graph
 selects only those two suites — nothing sources the gate yet, so the blast
 radius really is that small; no campaign was run for that reason.
 
-Live checkpoint on metropolis (test plan §C), run WITHOUT the enrolment
+Live checkpoint on site-a (test plan §C), run WITHOUT the enrolment
 machinery on purpose: two throwaway accounts on pve2 with hand-written
 `command="/usr/local/sbin/zfs-pair-gate <label>",restrict` key lines, a
 scratch dataset with its own grants, and real pulls from pve1. That isolates
@@ -130,7 +130,7 @@ flagged by the graph (account-paths, delegation-verbs, notify-markers,
 ssh-flag-parity): none touched — no path, zfs verb, heredoc marker or ssh
 flag changed.
 
-**Live residue/lockout check** on metropolis pve2, on a throwaway account
+**Live residue/lockout check** on site-a pve2, on a throwaway account
 whose `authorized_keys` started in the pre-gate shape: an operator key plus a
 BARE relationship key, both working. Production pairing was deliberately not
 involved.
@@ -155,7 +155,7 @@ migrate; re-joining an old relationship migrates its key line in place, which
 is exactly what the live check exercised. A `--migrate-gate` verb would be
 speculative code with its own live-test cost and no current subject.
 
-## Step 3 + full campaign — live evidence (2026-08-06, metropolis)
+## Step 3 + full campaign — live evidence (2026-08-06, site-a)
 
 Two REAL relationships, both enrolled through the ordinary CLI, both gated
 automatically by `--join`: **ca** ← pve2 (`hdd/campsrc`) and **cb** ← a

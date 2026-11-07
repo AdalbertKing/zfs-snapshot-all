@@ -1245,7 +1245,7 @@ check "AG8: the no-work skip still skips" "1" "$rc"
                             || bad "AG8: ...and records the medium as proved current (.current)" "$(ls "$STATE")"
 SRC_TREE=""; SRC_SNAP=""; SRC_WRITTEN=""; POOL_GUID=11111111
 
-# RU. ONE REPLICA, ONE RUN AT A TIME (A11/A13, A-TASSA 2026-11-06). A live
+# RU. ONE REPLICA, ONE RUN AT A TIME (A11/A13, SITE-C 2026-11-06). A live
 # process holds the medium (its pid and start time in rep.running, as attach
 # writes them); every gate call here runs under a DIFFERENT parent.
 sleep 120 & RU_PID=$!

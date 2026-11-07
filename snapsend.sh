@@ -2108,7 +2108,7 @@ process_dataset() {
     # Under -r the DESCENDANTS are created by `zfs recv` out of the recursive
     # stream, not by this script, so they arrive carrying the source's own
     # canmount -- "on" for any ordinary dataset. The no-mount default (v2.54)
-    # therefore stopped at the leaf: measured on metropolis 2026-07-25, a source
+    # therefore stopped at the leaf: measured on site-a 2026-07-25, a source
     # child with canmount=on replicated with -r produced a MOUNTABLE child on
     # the backup host, while the same source under -R came out noauto. That is
     # exactly the shadow-mount hazard the default exists to prevent, and it is

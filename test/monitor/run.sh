@@ -423,7 +423,7 @@ else bad "S9 -R -S root not created yet" "rc=$rc $out"; fi
 add_snap tank/fresh/c "other_1" $((1 * H))                # any snapshot in the tree: a container again
 check "S8 a tree with any snapshot keeps the leniency for its bare root (child decides)" "0" "$(rc_of -R -S "$S2" tank/fresh other_ 2h 4h)"
 
-# S10 (U164, v2.9, Dabrowska pve0 2026-11-04): an -R root that HAS a snapshot, but none of the
+# S10 (U164, v2.9, Site-B pve0 2026-11-04): an -R root that HAS a snapshot, but none of the
 # family (a marker), above children that hold the family: a container. It used to be WAITING
 # from the start and, past warn, WARNING -- while every child was fresh.
 reset_world

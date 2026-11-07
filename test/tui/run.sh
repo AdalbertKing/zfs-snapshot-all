@@ -400,7 +400,7 @@ fi
 
 # NASTEPNY KROK relacji nieaktywnej = czasownik, ktory ja przyjmie: pending_enroll -> seed (activate
 # odmawia "not seeded yet"), migawki zdalne pending_enroll -> activate (nie maja seeda). Skucha 11
-# (A-TASSA): F3 radzilo "activate", ktore odmawia.
+# (SITE-C): F3 radzilo "activate", ktore odmawia.
 NSOUT="$("$PY" - "$TUI" <<'PYEOF'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("zt", sys.argv[1])
@@ -1226,7 +1226,7 @@ if hasE "$PRZS" 'Nadchodzący bieg' && ! hasE "$PRZS" '── Ten bieg'; then
 else
     bad "przebiegi: start kursora" "$(printf '%s\n' "$PRZS" | grep -E 'Ten bieg|Nadchodzący')"
 fi
-# A15 (A-TASSA 2026-11-06): okno wykonanych to 72 h (bylo 12 h), a bieg TRWAJACY (koniec "-", rc -1) stoi
+# A15 (SITE-C 2026-11-06): okno wykonanych to 72 h (bylo 12 h), a bieg TRWAJACY (koniec "-", rc -1) stoi
 # na liscie zawsze -- tez po F8 (schowane wykonane) i gdy ruszyl dawniej niz okno. Fikstura: zadanie a --
 # wykonany OK 30 h przed NOW (stare okno 12 h go gubilo); zadanie d -- ruszylo 40 h przed NOW, nie skonczone.
 PRW="$(mktemp)"
@@ -2484,7 +2484,7 @@ if hasE "$SO2" "^║ $KD +som +migawka +hourly: [^ ]+ +nadchodzący" && hasE "$S
 else
     bad "zadania: zadania snaponly" "$(printf '%s\n' "$SO2" | grep -E 'som')"
 fi
-# A17 (A-TASSA 2026-11-06): F4 Kopie dla relacji snaponly -- grupa 'pvesr' z korzeniami = dataset z zakresu
+# A17 (SITE-C 2026-11-06): F4 Kopie dla relacji snaponly -- grupa 'pvesr' z korzeniami = dataset z zakresu
 # zadania ("konto@host:hdd/solab" -> hdd/solab), TYLKO datasety z "pvesr": true w zfs-tree. Fikstura: korzen
 # i 'scratch' bez znacznika, dysk goscia ze znacznikiem. Kontrola: to samo drzewo bez znacznika -> brak wiersza
 # (wiec wiersz pochodzi ze znacznika, nie z samego prefiksu sciezki).
@@ -4172,7 +4172,7 @@ if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=hdd/backups/192.168.28.99/hd
 else
     bad "new-relation: kopia lokalna" "rc=$NRRC" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | head -12 | tr '\n' ';')"
 fi
-# U147/U155 (Dabrowska 2026-11-04): krok Dokad liczy, gdzie wyladuja kopie i czy pod ktoryms celem
+# U147/U155 (Site-B 2026-11-04): krok Dokad liczy, gdzie wyladuja kopie i czy pod ktoryms celem
 # leza juz kopie tych danych ze wspolna migawka -- tam stawia kursor i mowi PRZYROSTOWO, a przy
 # innym celu ostrzega. Dane: kopia zrodla pod hdd/arch (dodana do list-datasets), migawki z
 # atrapy zfs (NR_SNAPS). Enter bez ruszania kursora = proponowany cel -> --target=hdd/arch.
@@ -4633,7 +4633,7 @@ if has "$NROUT" " --profile=default " && has "$NROUT" " --local-user=zfsbackup "
 else
     bad "new-relation: niedopasowanie szablonu do konta" "$NROUT" "$(grep -F 'Szablon nie pasuje' "$NR/wt.log" | cut -c1-400)" "$(cat "$NR/err")"
 fi
-# SKUCHA 11 (A-TASSA 2026-11-04): porazka po zapisie rekordu = relacja wpol zalozona na dwoch
+# SKUCHA 11 (SITE-C 2026-11-04): porazka po zapisie rekordu = relacja wpol zalozona na dwoch
 # hostach. Okno mowi "zalozona do polowy (stan: ...)" i daje Wycofaj (delete-relation NAZWA --yes:
 # tu i na zrodle) albo Ponow (ta sama komenda, bez nowego planu). Kontrola: porazka bez rekordu --
 # stare "nie zostala zalozona", bez menu. Na main: zawsze "nie zostala zalozona", zadnego wyjscia.
@@ -4999,7 +4999,7 @@ if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=re
 else
     bad "replica: kreator, pasywna + harmonogram + B" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)" "$(cat "$RP/err")"
 fi
-# A8 (A-TASSA 2026-11-05): nowa replika na dysku, ktory juz jest w maszynie -- po instalacji pytanie
+# A8 (SITE-C 2026-11-05): nowa replika na dysku, ktory juz jest w maszynie -- po instalacji pytanie
 # 'Zacząć pierwszą kopię teraz?'; Tak = run-replicas --name=NAZWA w tle (setsid -f, wiec dziennik zb
 # dostaje wpis asynchronicznie). Atrapa zpool zalezy od ZP_MODE: imported (zpool list POOL rc 0),
 # slot (tylko w 'zpool import'), gone (dysk znika po instalacji repliki: zb.log ma '--install --yes').

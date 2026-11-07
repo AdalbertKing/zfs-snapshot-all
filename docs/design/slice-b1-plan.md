@@ -80,8 +80,8 @@ Measured on the fleet:
 
 | host | shape | `keep_*` templates |
 |---|---|---|
-| metropolis pve1 | GFS | 4 |
-| metropolis pve2 | GFS | 0 — uses its own template names |
+| site-a pve1 | GFS | 4 |
+| site-a pve2 | GFS | 0 — uses its own template names |
 | **11.x pve0** | **pre-GFS** | 0 |
 | 11.x pve1 | GFS | 0 |
 
@@ -125,8 +125,8 @@ templates any host actually uses.**
 
 | host | built-in templates DEFINED | of those, USED by a section |
 |---|---|---|
-| metropolis pve1 | `standard_hourly`, `keep_hourly`, `keep_daily`, `keep_weekly`, `keep_monthly` | **0** |
-| metropolis pve2 | none | **0** |
+| site-a pve1 | `standard_hourly`, `keep_hourly`, `keep_daily`, `keep_weekly`, `keep_monthly` | **0** |
+| site-a pve2 | none | **0** |
 | 11.x pve0 | `standard_hourly`, `standard_daily`, `standard_weekly`, `standard_monthly` | **0** |
 | 11.x pve1 | none | **0** |
 

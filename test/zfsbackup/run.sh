@@ -124,7 +124,7 @@ mkprof_add() {    # <target profile dir> <section header> <line>
 if [ -z "$ONLY_SECTION" ]; then
 
 # --- 1. client_name_valid ----------------------------------------------------
-for good in pve2 metropolis-pve1 client.1 a_b; do
+for good in pve2 site-a-pve1 client.1 a_b; do
     if client_name_valid "$good"; then ok "client_name_valid accepts '$good'"; else bad "client_name_valid accepts '$good'" "rejected"; fi
 done
 for bad_name in "" "pve2/x" "pve2 x" 'pve2;rm' "pve2\`id\`"; do
@@ -457,7 +457,7 @@ fi
 # with; a change to the shared definition would rename them all, and this is
 # where that shows.
 deploy_peer_label() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-'; }
-for host in pve2 192.168.28.8 "metropolis.example.com" "host with spaces"; do
+for host in pve2 192.168.28.8 "site-a.example.com" "host with spaces"; do
     want="$(deploy_peer_label "$host")"
     got="$(peer_label "$host")"
     if [ "$got" = "$want" ]; then
@@ -2097,7 +2097,7 @@ jc=$(printf '%s\n' '9 * * * * /home/zfsbackup/zfs-snapshot-all/delsnaps.sh "t/a"
 #
 # gen-cron.sh runs AS that account. The default config path is
 # $SCRIPT_DIR/jobs.<host>.conf, i.e. /root/scripts/... on a Proxmox host, and
-# /root is 0700 -- found on metropolis pve1, 2026-08-01. The install would have
+# /root is 0700 -- found on site-a pve1, 2026-08-01. The install would have
 # failed AFTER the preview was shown and accepted, which is the worst moment.
 RD="$WORK/readable"; mkdir -p "$RD/bin"
 # The stub answers for `runuser --user <u> -- test -r <file>`: readable only if
@@ -2133,7 +2133,7 @@ out=$( PATH="$RD/bin:$PATH" LOCAL_USER="" assert_config_readable_by_target "$RD/
 # /root/scripts/zfs-snapshot-all at all -- neither gen-cron.sh nor the
 # snapget.sh/delsnaps.sh the generated lines would name. deploy.sh
 # --backup-user provisions $HOME/zfs-snapshot-all for that reason. Found live on
-# metropolis pve1, 2026-08-01: the install failed AFTER the preview was
+# site-a pve1, 2026-08-01: the install failed AFTER the preview was
 # accepted, and only the crontab rollback kept it from being a mess.
 OWN="$WORK/owncheckout"; mkdir -p "$OWN/bin" "$OWN/home/zfs-snapshot-all"
 : > "$OWN/home/zfs-snapshot-all/gen-cron.sh"
@@ -2177,7 +2177,7 @@ fi
 # root-only. On a collector with a dedicated account that is fatal and nearly
 # invisible: gen-cron runs AS the account and reports "Permission denied" on a
 # config in a world-readable directory, several steps after whatever last
-# rewrote it. Found on metropolis pve1, 2026-08-01, after chmod'ing the file by
+# rewrote it. Found on site-a pve1, 2026-08-01, after chmod'ing the file by
 # hand twice and watching it go back to 600 both times.
 MODE="$WORK/mode"; mkdir -p "$MODE"
 printf '[dataset:a/b]\n\t# managed-by: zfs-backup.sh client=modetest\n\tnotify = x\n[dataset:keep/me]\n\t# managed-by: zfs-backup.sh client=modetest2\n\tnotify = y\n' > "$MODE/cfg.conf"
@@ -2208,7 +2208,7 @@ mode_after=$(stat -c %a "$MODE/cfg.conf")
 # which for a non-root target is $HOME/cron.log. deploy.sh's account stanza
 # listed only git-pull.log and zfs-snapshot-stats.log -- correct while the
 # account only ever ran git-pull and receive-side work, wrong the moment a
-# managed cron block can be installed FOR the account. Found on metropolis
+# managed cron block can be installed FOR the account. Found on site-a
 # pve1, 2026-08-01, while planning the migration of root's block: root's
 # equivalent log was 250 KB after one day. An unrotated log alerts nobody; it
 # just fills the filesystem months later.
@@ -2724,7 +2724,7 @@ else
     bad "clobber: a job on a DIFFERENT dataset is still a deletion, retention normalizer or not" "rc=$rc out=$out"
 fi
 
-# A5 (A-TASSA 2026-11-05): gen-cron spells out a basename two datasets share, so
+# A5 (SITE-C 2026-11-05): gen-cron spells out a basename two datasets share, so
 # an installed "(pve0-data)" job comes back as "(pve0-hdd-data)". The same job
 # under a new label is not a deletion -- and is said out loud.
 CLL="$WORK/clobber-label"; mkdir -p "$CLL/bin"; : > "$CLL/new.conf"
@@ -3211,7 +3211,7 @@ mds_ssh_stub   # restore for the next case
 # A test can be perfectly correct about a scenario that does not exist. These
 # two were.
 #
-# Measured on metropolis 2026-08-20: a pair whose SOURCE provably had no
+# Measured on site-a 2026-08-20: a pair whose SOURCE provably had no
 # manifest and no zfsbackup-<label> account still produced "the pairing
 # manifest is here, so the join completed".
 #
@@ -4537,7 +4537,7 @@ fi
 #
 # read_server_conf() unconditionally does CRON_CONFIG="" and only refills it
 # by sourcing $SERVER_CONF -- on a host with no server.conf (setup-server
-# never run with an explicit --config, exactly metropolis pve1's shape),
+# never run with an explicit --config, exactly site-a pve1's shape),
 # that reset is never undone. Both cmd_remove_client and cmd_activate_client
 # source the client's OWN record first (which carries CRON_CONFIG from the
 # client's own prior activation) and call read_server_conf AFTER -- so the
@@ -5212,7 +5212,7 @@ if grep -q "^OWN_SNAPSHOTS=1$" "$P53/clients/ownsnap.conf" && ! grep -q "OWN_SNA
 else
     bad "add-client: --own-snapshots record field" "with: $(cat "$P53/clients/ownsnap.conf" 2>&1)" "without: $(cat "$P53/clients/proftest2.conf" 2>&1)"
 fi
-# 3c. A RESUME with the family answer (Dabrowska 2026-11-04): the stop says "re-run the exact
+# 3c. A RESUME with the family answer (Site-B 2026-11-04): the stop says "re-run the exact
 # command", so the SAME answer already on the record passes (once, no second line); the
 # OTHER answer and an active relationship are refused; an empty record takes the answer.
 RFA="$P53/rfa.conf"; printf 'NAME=rfa\n' > "$RFA"
@@ -6519,7 +6519,7 @@ else
 fi
 
 # 63b. the record outranks server.conf. This is the rung whose ABSENCE was the
-#      2026-08-09 metropolis bug: read_server_conf blanked the recorded value and
+#      2026-08-09 site-a bug: read_server_conf blanked the recorded value and
 #      remove-client then read the client as "never activated".
 got=$(ctx adopt "" "" /recorded.conf "" CRON_CONFIG=/server.conf)
 if [ "$got" = "/recorded.conf|" ]; then
@@ -13661,7 +13661,7 @@ if [ "$got" = "[('tank/c', 'filesystem', 1, 100), ('tank/c/a', 'filesystem', 3, 
 else
     bad "zfstree: zfs-tree" "got=$got" "$ZTOUT" "$(cat "$ZT/zfs.argv" 2>/dev/null)" "$(cat "$ZT/err")"
 fi
-# A17 (A-TASSA 2026-11-06): a dataset holding a pvesr snapshot (@__replicate_) says so --
+# A17 (SITE-C 2026-11-06): a dataset holding a pvesr snapshot (@__replicate_) says so --
 # F4 lists a snapshot-only relation's pvesr copies by it, and nothing else under its roots.
 rm -f "$ZT/zfs.argv"
 ZTOUT=$(ZT_PVESR=1 zt_run zfs-tree --json tank/c)
@@ -13824,7 +13824,7 @@ if ps_run prepare-source withpkg --yes >"$PS/out" && grep -q 'already there: /ro
 else
     bad "preparesource: already there" "$(cat "$PS/out")" "$(cat "$PS/ssh.argv")"
 fi
-# FIRST INSTALL ON A-TASSA (2026-11-04): a fresh PVE source had no git, and the
+# FIRST INSTALL ON SITE-C (2026-11-04): a fresh PVE source had no git, and the
 # verb refused although it already had the root channel to install it. Now the
 # plan names apt-get, --yes runs it BEFORE the clone, a failed apt stops before
 # the clone, and a host with neither git nor apt-get is still refused.
@@ -13868,7 +13868,7 @@ if ! ps_run prepare-source nogitnoapt --yes >"$PS/out" && grep -q 'has no git an
 else
     bad "preparesource: no git no apt" "$(cat "$PS/err")" "$(cat "$PS/ssh.argv")"
 fi
-# OLD LAYOUT (A-TASSA): /root/scripts/zfs-snapshot-all holding old scripts and no
+# OLD LAYOUT (SITE-C): /root/scripts/zfs-snapshot-all holding old scripts and no
 # .git. git clone cannot go there; the verb refuses before ANY change (no apt,
 # no clone, no scp) and names the move; nothing is moved for the operator.
 rm -f "$PS/ssh.argv" "$PS/scp.argv" "$PS"/installed-* "$PS"/git-*
@@ -13983,7 +13983,7 @@ case "$(tail -1 "$AP/deploy.res")" in
     *)    bad "apt 404: deploy.sh apt_install_with_fallback" "$(cat "$AP/deploy.res")" ;;
 esac
 rm -rf "$AP"
-# apt 404 on a DEPENDENCY (A-TASSA pve0, 2026-11-05): git from the main archive
+# apt 404 on a DEPENDENCY (SITE-C pve0, 2026-11-05): git from the main archive
 # still pulled git-man from the security archive -- a 404 again, and the
 # wizard's prepare-source failed. The stub is apt as measured on pve1 that
 # night: plain git -> 404 for git-man and git; git=<main> alone -> 404 for
@@ -14461,7 +14461,7 @@ if [ "$(grep -c -- "--commit-scope='\$COLLECTOR_LABEL'\$aq\" 2>&1" "$ZFSBACKUP")
 else
     bad "delrel: a remote commit-scope without \$aq" "$(grep -n -- "--commit-scope='\$COLLECTOR_LABEL'\|rux_remote_commit_scope" "$ZFSBACKUP" | cut -c1-160)"
 fi
-# U154 (Dabrowska 2026-11-04): a run of the relationship in flight stops delete-relation
+# U154 (Site-B 2026-11-04): a run of the relationship in flight stops delete-relation
 # --yes before anything is touched (record kept, no zfs call); the plan names the run.
 # A fake pgrep answers for -L e; control: nothing running -> the plan has no such note.
 printf 'CLIENT_NAME=e\nSTATE=removed\nPEER_HOST=10.0.0.9\nACTIVE_ENDPOINT=10.0.0.9:22\nCLIENT_TARGET=tank/b\nMANAGED_DATASETS=tank/b/10.0.0.9/p/x\n' > "$DR/clients/e.conf"
@@ -14481,7 +14481,7 @@ if [ "$u154y" -ne 0 ] && printf '%s%s' "$U154Y" "$U154E" | grep -q "has a run in
 else
     bad "delrel U154: running run" "rc=$u154y" "$U154Y" "err: $U154E" "plan: $U154P" "control: $U154C" "zfs: $(cat "$DR/zfs154.calls")"
 fi
-# A18 (Dabrowska 2026-11-06): delete-relation's last step drops the progress records of
+# A18 (Site-B 2026-11-06): delete-relation's last step drops the progress records of
 # the deleted relationship (label = its name) -- one left "running" by a cut-short copy
 # alarmed "bez pulsu" two days later. Exactly that label: "e2" is another relationship.
 A18D="$DR/prog18"; mkdir -p "$A18D"
@@ -14974,7 +14974,7 @@ if [ "$r1" -ne 0 ] && printf '%s' "$out" | grep -q 'usage: prepare-media POOL DE
 else
     bad "prepare-media: refusals" "$out" "$out2"
 fi
-# A14 (A-TASSA 2026-11-06): a USB bridge reported 512/512 for a 4096-byte disk and
+# A14 (SITE-C 2026-11-06): a USB bridge reported 512/512 for a 4096-byte disk and
 # the pool came out ashift=9 -- every write a read-modify-write, 11 MB/s. The
 # medium is created ashift=12 whatever the bridge says. zpool is a stub that
 # records its arguments; nothing touches a disk. Needs any block device for the

@@ -15,7 +15,7 @@ z definicji, więc wyglądał jak legacy. Ten lab jest **żywym dowodem** popraw
 
 ## 0. Zasady i granice
 
-- **Produkcji nie tykamy.** pve1 i pve2 to hosty produkcyjne metropolis; lab
+- **Produkcji nie tykamy.** pve1 i pve2 to hosty produkcyjne site-a; lab
   dostaje wyłącznie własne drzewa (`hdd/lab1prod`, `hdd/lab2prod`). Każda
   zmiana crontaba udokumentowana diffem przed/po.
 - **Żadnych holdów poza drzewami labowymi** — `zfs hold` na datasecie

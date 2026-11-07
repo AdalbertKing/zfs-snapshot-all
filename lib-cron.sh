@@ -25,7 +25,7 @@
 # by every other writer being careful to copy what it did not recognise.
 #
 # That design has already cost this project twice: a crontab was wiped during a
-# live test (`$0` vs `BASH_SOURCE[0]`), and metropolis pve2 ran four minutes
+# live test (`$0` vs `BASH_SOURCE[0]`), and site-a pve2 ran four minutes
 # with no backup jobs when one writer's block came out before another's went in.
 # The six assertions in zfs-backup.sh (assert_target_block_not_clobbered,
 # assert_no_foreign_managed_block, assert_cron_config_matches_installed,
@@ -236,7 +236,7 @@ cron_lock_acquire() {   # <user>  -> 0 held, 1 refused (CRON_ERR set)
     # gets here first on a fresh host (deploy/activate-client take the
     # ACCOUNT's lock as root), leaving a 0644 root-owned file that then
     # permanently refuses the account's own crontab writes. Found live on
-    # metropolis pve1 2026-08-06: gen-cron --install as the account failed
+    # site-a pve1 2026-08-06: gen-cron --install as the account failed
     # with "could not open the lock file" after one root-side activate-client
     # had touched the same path. The shared-lock design already scopes WHO
     # shares through the setgid 2775 zfsalert directory; the file itself has

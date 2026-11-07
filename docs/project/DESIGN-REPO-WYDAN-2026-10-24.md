@@ -102,7 +102,7 @@ paczkami (wolniej, ale świadomie).
 3. Pierwsza publikacja; porównanie drzewa wydania z checkoutem dev (te same pliki z listy, te same bajty).
 4. **Lab** (pve9, pve9b, pve10, pve11; root i konta): przepięcie, potem jeden cykl godzinowej aktualizacji po
    kolejnej publikacji, `--version`, `rollback` w obrębie nowego repo, `prepare-source` na nowym źródle.
-5. **Produkcja** (6 instalacji: 4 checkouty roota i 2 konta `zfsbackup` na Metropolis): plan krok po kroku i
+5. **Produkcja** (6 instalacji: 4 checkouty roota i 2 konta `zfsbackup` na Site-A): plan krok po kroku i
    zgoda właściciela na każdy krok zmieniający hosty.
 6. Dopiero teraz właściciel przełącza repo dev na prywatne; sprawdzenie, że wszystkie instalacje dalej się
    aktualizują (`git-pull.log`, `--version`).

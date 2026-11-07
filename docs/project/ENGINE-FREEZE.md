@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 78402e3594fc98255f3d98a7c4c47401d315c64f -->
+<!-- frozen: snapsend.sh 100755 2ed93ceb4bb9aa0074ca245330ffbd13b9d658ae -->
 <!-- frozen: snapget.sh 100755 129989aeaaad593c0af95298681e9424d7aaa231 -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
-<!-- frozen: lib-zfs-snap.sh 100644 f99ef6e1660364ddc694985996ed113e2c4d3842 -->
+<!-- frozen: lib-zfs-snap.sh 100644 0931a38ee66d5ca2f4b77668cc5394c5cbeb8f78 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -791,7 +791,7 @@ Owner-authorized refreezes:
   named as such instead of guessed at (O12). **PRE-AUTHORISED** by the owner,
   in those words: *"Odblokuj silnik i napraw O12"* — the first entry on this
   list that was directed beforehand rather than reported afterwards.
-  Measured on metropolis the same day: the gate answered
+  Measured on site-a the same day: the gate answered
   `PAIR_DISABLED: relationship pve1 is disabled by administrator`, and the
   library reported *"exit 93 -- e.g. no 'zfs' in this account's PATH"*. It had
   the answer in hand and guessed a different one — the same family as the
@@ -1283,7 +1283,7 @@ Owner-authorized refreezes:
   twin: snapsend.sh <-> snapget.sh changed symmetrically; the helper lives in lib-zfs-snap.sh.
 - 2026-11-04 (check-snap-age.sh): **U164 -- an -R root with a foreign snapshot is a container.**
   Owner direction ("Proszę przejść do implementacji", the U161-U164 batch, 2026-11-04), found
-  on Dąbrowska pve0 the same day: the archive relation read "czeka" for hours because its -R
+  on Site-B pve0 the same day: the archive relation read "czeka" for hours because its -R
   root `rpool/data` carried one snapshot of another family (a chain marker), while every child
   held a fresh copy. v2.8 -> v2.9.
   - In -R mode, a root that has snapshots but none of the family is deferred: if the walk
@@ -1293,8 +1293,8 @@ Owner-authorized refreezes:
     S10 and its two controls).
   twin: none -- check-snap-age.sh is the only monitor engine.
 - 2026-11-05 (check-snap-age.sh, delsnaps.sh): **U149 -- the -R root check reads a
-  here-string.** Owner direction (2026-11-05, Dąbrowska alarm: "zdiagnozuj, zaproponuj
-  naprawę" and "naprawę błędów z dabrowskiej"). Under `set -o pipefail`,
+  here-string.** Owner direction (2026-11-05, Site-B alarm: "zdiagnozuj, zaproponuj
+  naprawę" and "naprawę błędów z site-b"). Under `set -o pipefail`,
   `printf '%s\n' "$list" | grep -qxF -- "$root"` returned 141 when grep -q left at the root's
   line while printf still wrote: a present root read as missing. Live: pve0 39 false UNKNOWN,
   pve2 delsnaps -R rc=1 with nothing pruned. check-snap-age v2.9 -> v2.10, delsnaps v1.30 ->
@@ -1357,13 +1357,20 @@ Owner-authorized refreezes:
   twin: none -- check-snap-age.sh has no twin.
 - 2026-11-07 (snapsend.sh, snapget.sh): **-e -R over a subtree with no snapshot at all is
   nothing to copy, not a failure.** Owner direction (2026-11-07, "1" to: split "no snapshots"
-  rc 0 from "nothing matches" rc 1), after the A-TASSA usb1 replica ended rc=1 on an empty
+  rc 0 from "nothing matches" rc 1), after the SITE-C usb1 replica ended rc=1 on an empty
   `rpool/data`. The all-scaffolding guard of 2026-08-21 stays; a member with no snapshot at
   all is also counted in `ADOPT_EMPTY`, and when every member is such, the run logs "nothing
   to copy (-e -R); not a failure" and exits 0. Only-excluded or foreign-family subtrees still
   refuse. A missing source root is refused earlier ("Source dataset not found"), unchanged.
   Tests: scenarios S14 (pull and push, both paths) on pve9; 67e pins the split in snapget.sh only.
   twin: both engines changed in the same commit.
+
+- 2026-11-07 (snapsend.sh, lib-zfs-snap.sh): **comments only -- no customer or site name in the
+  public tree (REV-20261107-192).** Owner direction (2026-11-07: the dev repository stays public,
+  "Czyść"). Every tracked file outside the reviewer's own had its customer and site names
+  replaced with synthetic labels (Site-A, Site-B, Site-C, Site-D, vm-sql, biuro). In the engines
+  only comment lines changed; no code line moved; versions unchanged.
+  twin: comments only -- twins re-blessed on pve9, no hash changed.
 
 ## How it is enforced
 

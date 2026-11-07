@@ -142,7 +142,7 @@ command returns, so a state that only counts progress would earn nothing.
   defect, not a policy question, and nothing guards it today -- the existing
   self-sync guard covers only bare `user@host` resolving to this host.
 
-  Measured on metropolis pve1 rather than argued, because my first description
+  Measured on site-a pve1 rather than argued, because my first description
   of the failure was wrong. `snapsend.sh -R hdd/nest-src hdd/nest-src/backup`:
 
   | run | result |

@@ -246,7 +246,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Structural pin, found live on metropolis 2026-08-20: the automated
+# 8. Structural pin, found live on site-a 2026-08-20: the automated
 #    --join-remotely ssh had no bound and inherited stdin. `--join` asks for
 #    scope acceptance and deliberately has no --yes, so driven from here it
 #    can never be answered -- the peer sat in `wchan=pipe_read stdin=pipe:`

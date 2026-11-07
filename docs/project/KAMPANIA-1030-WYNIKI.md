@@ -10,7 +10,7 @@ i najnowsze.”
 ## Jak
 
 - Lab zamiast produkcji: „pve1<pve2<>pve3” = pve9 (źródło) → **pve10** (kolektor) ↔ pve11
-  (lustro), pve9b drugie źródło (przez VPN 10.98.0.2). Metropolis nietknięte.
+  (lustro), pve9b drugie źródło (przez VPN 10.98.0.2). Site-A nietknięte.
 - Cały lab na jednej gałęzi labowej `lab/1004-1005` (PR #1004 + #1005 + poprawki tej kampanii,
   nigdy do main), `update-hold` na każdym hoście.
 - GUI sterowane przez tmux na pve10 (`/root/kamp/drv.sh`): każdy krok czeka na tekst okna i mierzy

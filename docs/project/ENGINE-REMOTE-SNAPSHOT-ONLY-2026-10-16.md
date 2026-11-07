@@ -65,7 +65,7 @@ przypina skrót `process_dataset` (`test/twins/twins.sha256`) i odmówiła już 
 
 ## Bramka
 
-Do sprawdzenia przed implementacją (lab Metropolis, krok 9 planu): czy bramka pary przepuszcza samo
+Do sprawdzenia przed implementacją (lab Site-A, krok 9 planu): czy bramka pary przepuszcza samo
 `zfs snapshot [-r] '<ds>@<name>'` z zakresu relacji. Przy zwykłym pobieraniu przepuszcza je, bo tak dziś powstaje
 migawka przed transferem. Spodziewam się tego samego.
 

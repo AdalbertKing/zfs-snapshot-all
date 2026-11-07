@@ -1,6 +1,6 @@
 # Lab: postawienie łańcucha i sprawdzenie go — komendy
 
-Dokładnie to, co uruchomiłem 2026-08-20 na metropolis, w kolejności, razem
+Dokładnie to, co uruchomiłem 2026-08-20 na site-a, w kolejności, razem
 z miejscami, w których narzędzie się **zatrzymuje i czeka na człowieka**.
 
 Łańcuch: `pve9 (192.168.28.99) → pve2 (192.168.28.8) → pve1 (192.168.28.9)`.

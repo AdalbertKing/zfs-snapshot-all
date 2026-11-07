@@ -235,14 +235,14 @@ purpose — emitting an ungated remote source prune is the exact REV-102 hazard)
 
 ### Owner Q4 confirmed on live ZFS (read-only), no widening
 
-`zfs allow` read on metropolis pve1 (192.168.28.9) as the real `zfsbackup` account
+`zfs allow` read on site-a pve1 (192.168.28.9) as the real `zfsbackup` account
 confirms `destroy` is already held on the source datasets — Q4 answered from real
 grant output, not assumption, and nothing needs widening. (Read-only; the
 auto-mode classifier permits `zfs list`/`zfs allow` reads.)
 
 ### Destructive live proof (source ages out / child + manual survive): DONE 2026-08-11
 
-Run on real ZFS on metropolis pve1 (192.168.28.9), outside auto mode (owner toggled
+Run on real ZFS on site-a pve1 (192.168.28.9), outside auto mode (owner toggled
 the permission mode; the destructive plink steps then executed). Throwaway lab
 `hdd/backuptest/rev102srclab` + `/child`, created and destroyed within the run:
 
@@ -364,7 +364,7 @@ previewed migration (step 5) is the only other way source policy is written.
 
 ### Live proof (remote-PULL half of step 4): DONE 2026-08-11
 
-Ran the emitted source-prune command on real ZFS across the metropolis pair, outside
+Ran the emitted source-prune command on real ZFS across the site-a pair, outside
 auto mode. Collector = pve1 (192.168.28.9); remote source = pve2 (192.168.28.8);
 throwaway `hdd/backuptest/rev102remote` + `/child`, delegated `snapshot,destroy` to
 `zfsbackup`, created and destroyed within the run. From pve1, as the delegated

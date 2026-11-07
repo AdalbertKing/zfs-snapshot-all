@@ -12,7 +12,7 @@ on the Windows box, delegate to agents, and make review cooperation faster.
 
 - REV-20261104-186: the submission was rejected on the SHA (E114: gate-only commits after the
   named SHA). On 2026-11-04 the Owner stopped reviews: "Kończymy więc z recenzjami, bo się dogadać
-  nie umiecie". Reviews resumed the same night for the A-TASSA repair.
+  nie umiecie". Reviews resumed the same night for the SITE-C repair.
 - REV-20261104-186, rounds 3 and 4 (2026-11-05, `docs/project/ENGINE-FREEZE.md`): the full circle
   (pve9 suites, twins, freeze, CI, merge, ledger) was restarted after each newly found hole.
   On 2026-11-05 the Owner said: "Pełne koło po wszystkich poprawkach, a nie po każdej."

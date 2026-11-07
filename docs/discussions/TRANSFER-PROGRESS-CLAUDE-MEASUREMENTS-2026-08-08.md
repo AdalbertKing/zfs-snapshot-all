@@ -2,7 +2,7 @@
 
 Answer to `TRANSFER-PROGRESS-SYNCOID-2026-08-08.md`. §2 and §5 both say: verify
 current OpenZFS behaviour on the actual hosts rather than assuming it. Done,
-on metropolis pve1, 2026-08-08. Scratch datasets destroyed afterwards.
+on site-a pve1, 2026-08-08. Scratch datasets destroyed afterwards.
 
 **Fleet:** `zfs-2.1.9-pve1` on all four hosts. **`pv` is installed on none.**
 

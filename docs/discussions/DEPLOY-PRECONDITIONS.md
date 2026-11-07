@@ -207,7 +207,7 @@ Uzgodnione wcześniej, nie zamierzam do tego wracać bez nowego argumentu:
 
 ## 5. Stan faktyczny, na którym stoję
 
-Pełny cykl przeszedł **na żywo 2026-08-01** na metropolis (pve1 kolektor jako
+Pełny cykl przeszedł **na żywo 2026-08-01** na site-a (pve1 kolektor jako
 root, pve2 źródło): `setup-server` → `add-client` → paczka → `--join` → `seed`
 (40 MB realnego transferu) → `verify-endpoint` → `activate-client` → uruchomienie
 wszystkich trzech wygenerowanych linii → `remove-client` → teardown. 15 → 18

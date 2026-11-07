@@ -82,7 +82,7 @@ For the hourly family, refusing costs almost nothing. For the daily family it
 costs the thing the tier exists to produce. For monthly, nothing even reports
 it.
 
-There is a host on this estate where the asymmetry is sharper still: on `vsql2`
+There is a host on this estate where the asymmetry is sharper still: on `vm-sql`
 our quiesce aborts SQL backups on ~400 databases. There, "crash-consistent
 instead of nothing" is not merely better than nothing -- it is better than the
 freeze.
@@ -122,7 +122,7 @@ that it worked. They receive the weaker thing, and they know it is weaker.
 | **host `.ini`** | the DEFAULT for this host when a tier says nothing |
 
 Same layering the target already uses: `server.conf DEFAULT_TARGET` as the
-default, an explicit per-relationship value as the override. It lets `vsql2`
+default, an explicit per-relationship value as the override. It lets `vm-sql`
 turn degradation on once for the host while pve1 keeps fail-closed, without
 touching a profile.
 

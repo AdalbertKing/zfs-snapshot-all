@@ -182,7 +182,7 @@ check "wrong mode: nothing was frozen" "0" "${#QUIESCE_FROZEN[@]}"
 
 # ---- the LOCAL path's privilege routing (2026-08-01) -----------------------
 #
-# Found live on metropolis pve1, minutes after the managed block moved from root
+# Found live on site-a pve1, minutes after the managed block moved from root
 # to the delegated account. `qm status` as a non-root user does not print
 # "stopped" -- it dies with "Unable to load access control list" and exit 21.
 # The old probe threw stderr away and matched the empty output against
@@ -518,7 +518,7 @@ check "thaw-fail: snapsend fails the run on it instead of logging and continuing
 
 # ---- REV-20260801-024: the window is a deadline, not a sequence -------------
 #
-# Measured on metropolis pve1: VM 106 (ostype win10) frozen 18:21:21, snapshot
+# Measured on site-a pve1: VM 106 (ostype win10) frozen 18:21:21, snapshot
 # 18:21:39. Eighteen seconds, sixteen of them one `pct exec 101 -- sync` running
 # AFTER the freeze. VSS drops a Windows freeze at about 10 s on its own, so the
 # snapshot was taken outside the window it claimed to be inside -- and every
@@ -1449,7 +1449,7 @@ esac
 
 # ---- a DISABLED pair gate is named, not guessed at -------------------------
 #
-# Measured on metropolis 2026-08-20: with the peer's gate disabled, the engine
+# Measured on site-a 2026-08-20: with the peer's gate disabled, the engine
 # was handed
 #     PAIR_DISABLED: relationship pve1 is disabled by administrator
 # and reported "exit 93 -- e.g. no 'zfs' in this account's PATH", plus a pool
