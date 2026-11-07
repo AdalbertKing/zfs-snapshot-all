@@ -108,8 +108,9 @@ yet`. The publisher must not report `published`, `submitted`, `routed`, or
 `handed off`, and the next actor is not required to inspect role branches or
 unmerged PRs. After required checks and review conditions pass, the publisher of
 a reviewer-owned artifact must complete merge/auto-merge when authorised or
-report the concrete merge blocker. This does not permit an implementer to bypass
-the required review of implementation code.
+report the concrete merge blocker. For implementation code the required review
+follows the merge (owner decision, PROTOCOL V3.13): the merge is the submission, and
+the reviewer's verdict gates publication through `release/publish.sh --push`.
 
 The GitHub branch-protection setting may lag this rule briefly while a signed-in
 settings session is arranged. That is a deployment gap, not an extension of the

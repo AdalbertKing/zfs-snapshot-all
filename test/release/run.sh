@@ -182,9 +182,10 @@ if printf '| REV | State |\n| REV-20990101-001 | CLOSED |\n| REV-20990101-002 | 
 else
     bad "gate: only APPROVED/CLOSED passes; input that is not a ledger fails closed" ""
 fi
-# publish.sh --push runs the gate on HEAD's own ledger BEFORE writing anything. REL has no
-# remote, so a gate that passes ends in a failed push -- either way nothing new is committed
-# when the gate refuses. Which branch applies follows from HEAD's ledger itself.
+# publish.sh --push runs the gate on HEAD's own ledger BEFORE writing anything: when the gate
+# refuses, REL gets no new commit. (When it passes, publish commits locally and the push then
+# fails, because REL has no remote; that branch is not asserted here.) HEAD's own ledger decides
+# which branch applies. The fixture cases above are what pin the gate itself.
 before="$(git -C "$REL" rev-parse HEAD)"
 out3="$(bash "$REPO/release/publish.sh" HEAD "$REL" --push 2>&1)"
 if git -C "$REPO" show HEAD:docs/internal/reviews/REVIEW_LEDGER.md | bash "$GATE" >/dev/null 2>&1; then
