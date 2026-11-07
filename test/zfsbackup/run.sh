@@ -7183,9 +7183,11 @@ done
 #      and an aggregate guard fails the run only when NOTHING in the whole
 #      expansion had a family. A plainly named dataset (no -R) keeps the hard
 #      error. Source-grep of the frozen file; the live proof is the chain's
-#      R2 running green.
+#      R2 running green. Owner 2026-11-07: when EVERY member had no snapshot at
+#      all (ADOPT_EMPTY), the subtree has nothing to copy -- rc 0 with a log line;
+#      the live proof of that split is scenarios S14.
 SG="$(dirname "$ZFSBACKUP")/snapget.sh"
-if grep -q 'scaffolding under -R -e, skipped' "$SG"    && grep -q 'ADOPT_SKIPPED' "$SG"    && grep -q 'No matching family anywhere under the requested root' "$SG"    && grep -q 'log 0 "No source snapshots found"' "$SG"; then
+if grep -q 'scaffolding under -R -e, skipped' "$SG"    && grep -q 'ADOPT_SKIPPED' "$SG"    && grep -q 'ADOPT_EMPTY' "$SG"    && grep -q 'nothing to copy (-e -R); not a failure' "$SG"    && grep -q 'No matching family anywhere under the requested root' "$SG"    && grep -q 'log 0 "No source snapshots found"' "$SG"; then
     ok "67e: snapget skips family-less expanded children under -e, roots still fail hard"
 else
     bad "67e: snapget skips family-less expanded children under -e, roots still fail hard"         "$(grep -c 'scaffolding, skipped' "$SG") skip / $(grep -c 'REQUESTED_ROOTS' "$SG") roots"
