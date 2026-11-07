@@ -179,8 +179,8 @@ exception for one night. One batch:
 5. **One release per deployment**, on the Owner's "publikuj". Never one version per finding.
    `publish.sh --push` refuses while any REV is `OPEN` or `IMPLEMENTED` (PROTOCOL V3.13). Pass
    `--accept-open-review=REV-...` only when the Owner names those REVs.
-6. **Reviewer: Protocol V3** (`docs/project/PROTOCOL.md`, section "V3 amendments"; active once
-   its amendment PR is merged and read back on `main`). In practice:
+6. **Reviewer: Protocol V3** (`docs/project/PROTOCOL.md`, section "V3 amendments"). ACTIVE since
+   2026-11-07: PR #1127, merge 632af1b5, read back on `main`. In practice:
    - one pass per batch;
    - each suite in the evidence marked with one of three statuses: `EXECUTED PASS`;
      `SKIPPED / NOT IMPACTED`; `MANUAL / NOT RUN`;

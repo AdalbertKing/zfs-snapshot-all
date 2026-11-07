@@ -1,10 +1,11 @@
 # REVIEW PROTOCOL V3
 ## Claude + Reviewer + Owner workflow
 
-Status: **V3 = V2.2 + the "V3 amendments" section below.** It is ACTIVE once the
-amendment PR that introduced it is merged and read back on `main`, and that PR is merged only after the Reviewer approves it
-(Reviewer decision `docs/project/PROTOCOL-V3-REVIEW-20261107.md`, instruction 3). Until that
-merge is read back on `main`, V2.2 applies.
+Status: **ACTIVE since 2026-11-07. V3 = V2.2 + the "V3 amendments" section below.**
+
+- The Reviewer accepted it in PR #1127 at `a5677ad94035f57e5a9d42da3361ee861fb9eefe`.
+- It was merged as `632af1b5f29d0d90ad80c1ed4c42131d3fc1c4f8`.
+- The fresh read-back on `main` confirmed that the reviewed SHA is reachable and that the V3 files are identical to the reviewed ones.
 
 Revision date: 2026-11-07 (V3); V2.2 2026-08-28
 Original V2 agreement: 2026-08-07
