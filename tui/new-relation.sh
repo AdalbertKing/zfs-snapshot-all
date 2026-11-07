@@ -180,7 +180,7 @@ PYEOF
     [ "$C_SSH" -eq 1 ] || [ -n "$C_ERR" ] || C_ERR="$(tail -1 "$TMPD/check.err" 2>/dev/null)"
 }
 # U56 (kampania 2026-10-21): "pve9" rozwiązało się na pve10 przez publiczny DNS
-# (search metropolis.net) na obce adresy w internecie, ssh czekało 10 s i padło bez słowa
+# (search example.org) na obce adresy w internecie, ssh czekało 10 s i padło bez słowa
 # dlaczego. Okno mówi, NA JAKI ADRES poszła nazwa, i ostrzega przed adresem spoza sieci.
 resolve_note() {   # -> "" dla IP; "nazwa -> adres [ostrzeżenie]" dla nazwy
     local ip
@@ -684,7 +684,7 @@ account_is_flat() {    # <konto: "" = root> -> 0, gdy żywa relacja NA TYM KONCI
 # (nie odróżni łańcucha od resztek tej samej relacji po eksport -> usuń -> import), więc
 # kreator mówi to wprost i poleca passive-flat; decyduje admin.
 sync_from_chain() {   # -> 0, gdy lustro/backup/kopia lokalna/migawki zdalne i koszyk ma już migawki naszej rodziny
-    # Kopia lokalna (2026-10-24, Metropolis pve2): kopiuje z repliki pvesr, której migawki robi
+    # Kopia lokalna (2026-10-24, Site-A pve2): kopiuje z repliki pvesr, której migawki robi
     # węzeł gościa -- to też łańcuch, tylko po tej samej stronie.
     # Migawki zdalne (U141, 2026-11-03): rodzina bez etykiety kolektora -- gdy na źródle już
     # jest, ktoś musi powiedzieć, kto ją robi (przejmuję resztki / osobna rodzina z etykietą).

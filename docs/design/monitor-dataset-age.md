@@ -34,7 +34,7 @@ Proxmox itself, and the hourly `automated_` job runs at :01. Between those two
 moments the dataset has snapshots, none matching, and the monitor calls it
 CRITICAL.
 
-Reproduced directly on scratch datasets (metropolis pve2, 2026-08-07):
+Reproduced directly on scratch datasets (site-a pve2, 2026-08-07):
 
 ```
 SKIP     dataset=.../fresh-novm    -- no snapshots at all

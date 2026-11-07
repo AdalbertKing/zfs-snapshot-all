@@ -230,7 +230,7 @@ RESTORE_ZFS_PERMS="${RESTORE_ZFS_PERMS:-receive,rollback,create,canmount,mountpo
 # owned differently: root:<the relationship's own account>, so that account,
 # and only it, can create or remove its disabled marker.
 #
-# The consequence was measured on metropolis 2026-08-20 and it is not small:
+# The consequence was measured on site-a 2026-08-20 and it is not small:
 # EVERY deploy.sh run re-broke the hard pause on every relationship on the host.
 # `disable-client` then failed with
 #     zfs-pair-gate: .../relationships/<label>/disabled.new: Permission denied
@@ -258,7 +258,7 @@ alert_dir_chgrp() {
 # transfer still succeeds -- so nothing alerts. What is lost is the
 # bookmark-backed incremental fallback: once the common-base SNAPSHOT is pruned
 # on the source, that pair can only recover with a full resend. Found live on
-# metropolis pve1, 2026-07-25.
+# site-a pve1, 2026-07-25.
 ZFS_PERMS="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount,bookmark"
 # ==============================================================================
 
@@ -838,7 +838,7 @@ fi
 #                the account owns rather than root)
 #
 # The second did not exist, and its absence was found the only way these things
-# ever are: `migrate-to-account` on metropolis pve1 (2026-08-01) refused to move
+# ever are: `migrate-to-account` on site-a pve1 (2026-08-01) refused to move
 # a block carrying `quiesce = auto` because the account had no grant, and there
 # was no command that could give it one. deploy.sh owns the privileged surface,
 # so the route belongs here rather than in the migration verb.
@@ -5426,7 +5426,7 @@ ALERT_GROUP="zfsalert"
 # deployment run the definition never executed and the call died with
 # "command not found", printed into the middle of a long deploy log and
 # carried on. Found 2026-08-20 by running deploy.sh --join for real on
-# metropolis pve2. No suite could catch it: the suites extract functions with
+# site-a pve2. No suite could catch it: the suites extract functions with
 # sed, so the definition is always present for them.
 #
 # What it cost: the repair below is what fixes a 0644 lock file locking a
@@ -6236,10 +6236,10 @@ is_private_addr() {
 # somebody else, pinning a stranger's host key and then sending the pairing key
 # out to them on the next --draft-config.
 #
-# This is not hypothetical. On metropolis, `pve2` from pve1 has no /etc/hosts
+# This is not hypothetical. On site-a, `pve2` from pve1 has no /etc/hosts
 # entry, so the resolver appends the search domain and `getent hosts pve2`
 # answers with FOUR public addresses belonging to the real, unrelated
-# metropolis.net. Nothing in the flow noticed: the fingerprint was printed with
+# example.org. Nothing in the flow noticed: the fingerprint was printed with
 # a "CONFIRM this" line and the script carried on.
 #
 # Two fingerprints of that failure, both refused:
@@ -6685,7 +6685,7 @@ EOF
         log "--join-remotely: delivering the bundle and running --join on $PEER_HOST over the pin just established..."
         # BOUNDED, and stdin CLOSED. `--join` asks for scope acceptance and
         # deliberately has no --yes; run from here it has no terminal, so the
-        # question can never be answered. Measured on metropolis 2026-08-20:
+        # question can never be answered. Measured on site-a 2026-08-20:
         # the peer sat in `wchan=pipe_read stdin=pipe:` for over six minutes,
         # silent, and would have sat there forever.
         #
@@ -6922,7 +6922,7 @@ install_pair_gate() {
     if [ "$account" != root ]; then
         chown "root:$account" "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null || :
         chmod 0775 "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null || :
-        # VERIFY, do not assume. Seen live on metropolis pve2 (2026-08-06) and
+        # VERIFY, do not assume. Seen live on site-a pve2 (2026-08-06) and
         # again on pve9 (2026-08-20): the chown did not take, the directory
         # kept the group it inherited from the parent's setgid bit, and
         # because this only warned the relationship came out of enrolment
@@ -6962,7 +6962,7 @@ install_pair_gate() {
 # hourly self-update runs a bare deploy.sh. So a fixed gate reached a host only
 # when someone re-ran --join by hand. Measured 2026-10-15: #547's scope fix
 # sat in the checkout on every lab host while the installed gate still dropped
-# a multi-dataset scope, until it was copied by hand; metropolis pve1/pve2
+# a multi-dataset scope, until it was copied by hand; site-a pve1/pve2
 # kept the old one. Owner decision the same evening: the update refreshes it.
 #
 # REFRESH, NEVER CREATE. No gate on the host means no relationship was ever
@@ -7067,7 +7067,7 @@ write_gated_key_line() {
     # its own host, including by keys that have nothing to do with this
     # relationship.
     #
-    # Found live on metropolis pve2, 2026-08-06, by the residue/lockout check
+    # Found live on site-a pve2, 2026-08-06, by the residue/lockout check
     # for this step: after a clean, correct rewrite, both the relationship key
     # AND the operator's own key stopped working, and auth.log said only
     # "Connection closed [preauth]". do_join happens to repair this a few
@@ -8171,7 +8171,7 @@ else
     # sourced, not executed, and git tracks it as 100644 -- chmod +x on it makes
     # the checkout permanently dirty with a mode change, and the hourly
     # `git pull --ff-only` this account runs then FAILS the first time that file
-    # changes upstream. Found on both metropolis accounts, inherited from the
+    # changes upstream. Found on both site-a accounts, inherited from the
     # old deploy_backup_user.sh.
     for f in snapsend.sh snapget.sh delsnaps.sh gen-cron.sh check-snap-age.sh deploy.sh; do
         [ -e "$ACCOUNT_REPO_DIR/$f" ] && chmod +x "$ACCOUNT_REPO_DIR/$f"

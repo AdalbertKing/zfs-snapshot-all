@@ -17,8 +17,8 @@ Zmierzone 2026-08-21 (`hostname -f`, `pvecm nodes`, `ip -o addr`):
 
 | host | adres | klaster | rola |
 |---|---|---|---|
-| **pve1** | 192.168.28.9 | metropolis (pve1+pve2) | **PRODUKCJA** |
-| **pve2** | 192.168.28.8 | metropolis (pve1+pve2) | **PRODUKCJA** |
+| **pve1** | 192.168.28.9 | site-a (pve1+pve2) | **PRODUKCJA** |
+| **pve2** | 192.168.28.8 | site-a (pve1+pve2) | **PRODUKCJA** |
 | **pve9** | 192.168.28.99 | brak (wolnostojący) | czysty lab |
 
 Klaster 192.168.11.x (pve0, pve1) jest za osobnym VPN-em bez trasy — zmierzone

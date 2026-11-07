@@ -46,7 +46,7 @@ Once an administrator deliberately customizes the native CONFIG beyond the prese
 
 Do not silently overwrite such manual policy with a later profile regeneration.
 
-## 3. Kancelaria is the canonical example of why this boundary matters
+## 3. Biuro is the canonical example of why this boundary matters
 
 Real deployment constraint: little local disk space.
 
@@ -191,7 +191,7 @@ profile manager continuously owns every installed policy forever
 
 The profile subsystem therefore needs only enough persistence to support a real operator action. Do not preserve bookkeeping with no product value.
 
-## 10. Kancelaria example as an explicit non-goal for high-level automation
+## 10. Biuro example as an explicit non-goal for high-level automation
 
 A site may intentionally create snapshots on one cadence but prune them locally faster than the logical protection policy would suggest, because cross-host synchronization preserves the longer history elsewhere.
 
@@ -218,7 +218,7 @@ Please respond narrowly with current-code/plan consequences:
 5. Can we kill profile-drift adoption/version workflow entirely and retain only optional provenance such as `generated-from=<name,digest>`?
 6. For a new source added later, is it simpler to ask/select a preset for that source at that time, rather than maintain a persistent global profile manager?
 7. Identify any architecture item from `PROFILE-RUNTIME-ARCHITECTURE-CHALLENGE-2026-08-09.md` that becomes unnecessary under this owner decision.
-8. Do not solve the Kancelaria pattern in high-level CLI. Confirm which CONFIG v4 examples/documentation are sufficient instead.
+8. Do not solve the Biuro pattern in high-level CLI. Confirm which CONFIG v4 examples/documentation are sufficient instead.
 
 ## 12. Direction to Claude + Reviewer
 

@@ -263,7 +263,7 @@ case "$CRON_ERR" in *"reading it back gave something else"*) ok "F2 ...named exa
 # ---- H. the shape the existing hosts already have ---------------------------
 #
 # Adoption must work on the crontabs that exist TODAY, markers and all:
-# metropolis pve1's root crontab is two loose lines followed by a
+# site-a pve1's root crontab is two loose lines followed by a
 # zfs-backup-host block whose BEGIN carries a descriptive tail.
 seed \
   '0 8 * * * /root/scripts/check-pool-capacity.sh 2>>/root/scripts/cron.log' \
@@ -736,7 +736,7 @@ else
 fi
 
 # ---- V. the lock FILE is shareable across the identities that share the ----
-# lock DIRECTORY (found live, metropolis pve1 2026-08-06) ----------------------
+# lock DIRECTORY (found live, site-a pve1 2026-08-06) ----------------------
 #
 # U fixed the lock PATH; this is the same failure one level down. The file is
 # created with the CALLER's umask, and root gets there first on a fresh host
@@ -861,7 +861,7 @@ case "$out" in
     *) bad "W3 a missing lock directory refuses and names deploy.sh" "$out" ;;
 esac
 
-# L1 (A5, A-TASSA 2026-11-05): two datasets of one relation with the same basename
+# L1 (A5, SITE-C 2026-11-05): two datasets of one relation with the same basename
 # (tank/data, pool2/data) both carry notify = r-data. The label spells out the path
 # for those two only; a unique label and a hand-written one stay as they were.
 cat > "$TMPD/l1.conf" <<'EOF'
@@ -889,7 +889,7 @@ case "$out" in
     *) bad "L1 a basename two datasets share is spelled out as the path" "$out" ;;
 esac
 
-# W6 (A6, A-TASSA 2026-11-05): the guard against a hand-built schedule counts only
+# W6 (A6, SITE-C 2026-11-05): the guard against a hand-built schedule counts only
 # lines that RUN. A crontab with no managed block whose snapsend lines are all
 # commented out installs; one live line still refuses (the control).
 W6T="$TMPD/w6-tabs"; mkdir -p "$W6T"; me6=$(id -un)
@@ -1652,7 +1652,7 @@ fo=$(for_run); frc=$?
 check "PLC7 control: the same section without passive freezes (-q on the snapget line)" "0:1" \
       "$frc:$(printf '%s\n' "$fo" | grep 'snapget\.sh' | grep -cE ' -q( |$)')"
 
-# MONITOR LINE UNDER CRON'S LIMIT (Metropolis pve2 -> pve1, 2026-10-25): one monitor group
+# MONITOR LINE UNDER CRON'S LIMIT (Site-A pve2 -> pve1, 2026-10-25): one monitor group
 # lists every member dataset on ONE check-snap-age line; with long paths (or a remote
 # group's ssh options) the line passed cron's 1000-byte command limit and crontab(1)
 # refused the whole install. gen-cron splits such a group over as many lines as it needs.

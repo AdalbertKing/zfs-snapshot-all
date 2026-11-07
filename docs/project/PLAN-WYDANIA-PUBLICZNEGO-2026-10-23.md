@@ -4,7 +4,7 @@
 
 - Repozytorium `AdalbertKing/zfs-snapshot-all` jest **publiczne**. Drzewo i historia (ponad 4000 commitów)
   zawierają dane infrastruktury i klientów: adresy sieci (192.168.28.x, 192.168.11.x, VPN 10.98.x; około 1000
-  trafień w około 150 plikach, w większości w `test/`), nazwy hostów i domen (`metropolis.net`, `kancelaria.net`,
+  trafień w około 150 plikach, w większości w `test/`), nazwy hostów i domen (`example.org`, `biuro.example`,
   `lurk.com.pl`), adres publiczny przekaźnika poczty, odcisk klucza hosta, prawdziwy dziennik crona pve2 z dwóch
   dni (`test/realshape/captures/`), opisy awarii u nazwanych klientów. Sekretów (kluczy prywatnych, haseł,
   tokenów) przegląd z 2026-10-23 nie znalazł. Sam kod nie ma na sztywno prawdziwego adresu ani hosta.

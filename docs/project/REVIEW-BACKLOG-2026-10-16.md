@@ -12,7 +12,7 @@ Przygotował: implementer (sesja Claude), na polecenie właściciela, 2026-10-16
   otwierający REV-146; **pozostałe 105 weszły poza REV.** Prowadził właściciel rundami testów
   (uwagi U/K/W/X/P) i poleceniami w czacie. Każdy PR przeszedł CI i bramki `impact.sh --verify` (status digest,
   zamrożenie, graf), a stan opisuje `docs/PROJECT_STATUS.md` (wpisy od góry są najnowsze).
-- **Produkcja (Metropolis pve1/pve2) i cały lab biegną na tym kodzie** -- godzinna samoaktualizacja ściąga `main`.
+- **Produkcja (Site-A pve1/pve2) i cały lab biegną na tym kodzie** -- godzinna samoaktualizacja ściąga `main`.
 
 Lista wszystkich PR-ów z datą, tytułem i plikami kodu jest w §8. Poniżej kolejność, w jakiej proponuję je przejrzeć:
 od największego ryzyka do najmniejszego.
@@ -393,8 +393,8 @@ Okna whiptail / curses. Logika jest w czasownikach z §3–5, GUI składa polece
 - #454, #456, #457 -- wpisy statusu; #472 -- `CLAUDE.md` (rozdział pracy na tańsze modele).
 - **#558 -- czeka na ciebie:** `docs/project/ENGINE-REMOTE-SNAPSHOT-ONLY-2026-10-16.md`, **prośba o recenzję wstępną
   zmiany `snapget.sh`** (opcja `-s`: migawka na źródle zdalnym bez transferu) dla projektu „jeden kolektor + pvesr”
-  (`DESIGN-JEDEN-KOLEKTOR-PVESR-2026-10-16.md`). **Lab tego projektu chodzi na produkcyjnym klastrze Metropolis**
-  (testowy CT 990, linie `# ZSA-LAB-PVESR`): `LAB-METROPOLIS-PVESR-PLAN-2026-10-16.md`.
+  (`DESIGN-JEDEN-KOLEKTOR-PVESR-2026-10-16.md`). **Lab tego projektu chodzi na produkcyjnym klastrze Site-A**
+  (testowy CT 990, linie `# ZSA-LAB-PVESR`): `LAB-SITE-A-PVESR-PLAN-2026-10-16.md`.
 
 ## 8. Proponowana kolejność pracy
 
@@ -520,7 +520,7 @@ Szczegóły każdego etapu (pomiary, kontrole negatywne, wyniki labu): `docs/PRO
 #555 2026-10-15 | gui: okno Przywroc z dysku (C2b) -- F9 na F6 | tui/* zfs-backup.sh
 #556 2026-10-15 | okna Przywroc: poprawki P1-P6 po testach wlasciciela | tui/* zfs-restore.sh
 #557 2026-10-15 | okno Przywroc: granica --at (P7); restore: mapa GUID po odzysku (P8) | tui/restore.sh zfs-restore.sh
-#558 2026-10-16 | docs: jeden kolektor + pvesr -- projekt, lab Metropolis, zgloszenie silnika snapget -s |
+#558 2026-10-16 | docs: jeden kolektor + pvesr -- projekt, lab Site-A, zgloszenie silnika snapget -s |
 ```
 
 (PR #532 nie istnieje w `main` -- numer zużyty na PR niescalony.)

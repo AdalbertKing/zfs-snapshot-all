@@ -1004,7 +1004,7 @@ it is not evidence, whatever the total says (R6).
 ### E23 — I reported an infrastructure fault from a probe the design never uses
 
 **Genesis.** Closing out the day's queue, I had listed as an open item:
-"metropolis: pve1 (28.9) does not accept pve9's key -- a leftover from an
+"site-a: pve1 (28.9) does not accept pve9's key -- a leftover from an
 earlier lab." It came from one command:
 
     pve9 $ ssh root@192.168.28.9        -> Permission denied (publickey)
@@ -1013,7 +1013,7 @@ I reported that to the owner twice, in two separate summaries, as an
 infrastructure problem awaiting attention.
 
 **It was not a problem at all.** The relationship between those two hosts is
-healthy and has been all along: pve9 PULLS from metropolis hourly, and the
+healthy and has been all along: pve9 PULLS from site-a hourly, and the
 backups were arriving on schedule the whole time I was calling the link broken --
 `automated_hourly_2026-08-29_17-51-01` had landed 47 minutes before I wrote it
 down again. Measured with the identity the job actually uses:
@@ -2174,10 +2174,10 @@ still open) as
 `printf '%s\n' "$out" | grep -qxF -- "$ds"` (delsnaps: `$all_datasets`, `$base_ds`), in scripts that set `set -o pipefail`.
 `grep -q` exits at the first match, the root's own line; if `printf` still has lines
 to write, it takes SIGPIPE (141) and pipefail returns 141 for the whole pipeline: a
-root that IS there reads as missing. On pve0 (Dąbrowska) that made 39 false UNKNOWN
+root that IS there reads as missing. On pve0 (Site-B) that made 39 false UNKNOWN
 ("monitor BROKEN") from 11-04 11:30 to 11-05 08:00 on `hdd/lxc`, `rpool/data` and
 `hdd/backups/pve1/rpool/data`;
-on metropolis pve2 the same in delsnaps (`-R hdd/vm-disks`, 11-05 04:30 rc=1,
+on site-a pve2 the same in delsnaps (`-R hdd/vm-disks`, 11-05 04:30 rc=1,
 nothing pruned). On 11-04, after two occurrences, U149 was parked as "observation,
 cause unknown" because a manual rerun gave 15/15 good.
 

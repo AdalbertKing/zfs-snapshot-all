@@ -127,11 +127,11 @@ $SSH "$PEER" "zfs list -H '$LROOT'" >/dev/null 2>&1 && { echo "refusing to run: 
 # level, and cleanup destroyed only the $TAG level under them -- so an invented
 # parent stayed behind, empty, for good.
 #
-# Never showed on metropolis, where both hosts already had both parents. It
+# Never showed on site-a, where both hosts already had both parents. It
 # showed the first time this ran from a host that did not: pve9, 2026-09-01,
 # left `hdd/backuptest_targets` behind after a 145/0 run. That is the same
 # family as the six trees the comment in cleanup() records being left on
-# metropolis pve1 -- the $TAG level was given an owner then, the parent it
+# site-a pve1 -- the $TAG level was given an owner then, the parent it
 # hangs from was not.
 #
 # Only ever removed when we invented it AND it comes back empty, so a parent
@@ -183,7 +183,7 @@ cleanup() {
     # Section H pulls in SYNC mode, which lands the peer's tree at the
     # IDENTICAL path on THIS host -- so $RROOT exists locally too, and nothing
     # here used to remove it. Every run since 2026-07-29 left one behind:
-    # six trees on metropolis pve1 by 2026-08-02, in the same pool that holds
+    # six trees on site-a pve1 by 2026-08-02, in the same pool that holds
     # production backups. The peer side was always cleaned; it was the mirror
     # of the peer path on the initiator that had no owner.
     for s in $(zfs list -H -o name -t snapshot -r "$RROOT" 2>/dev/null); do
@@ -326,7 +326,7 @@ stale_scratch() {   # <parent>
 }
 # Both parents must EXIST before a single case runs.
 #
-# The defaults are metropolis-shaped -- `hdd/backuptest_targets` is a dataset
+# The defaults are site-a-shaped -- `hdd/backuptest_targets` is a dataset
 # that happens to exist on pve1/pve2 and on no other host. Run this against the
 # 192.168.11.x cluster without --peer-parent and every local section passes
 # while all thirty-odd ssh cases fail, which reads exactly like a broken
@@ -340,7 +340,7 @@ zfs list -H "$LPARENT" >/dev/null 2>&1 || {
 $SSH "$PEER" "zfs list -H '$RPARENT'" >/dev/null 2>&1 || {
     echo "the peer scratch parent '$RPARENT' does not exist on $PEER (or the link is down)." >&2
     echo "Pass --peer-parent <existing dataset>. The default '$RPARENT' is the" >&2
-    echo "metropolis layout; the 192.168.11.x hosts use 'rpool'." >&2
+    echo "site-a layout; the 192.168.11.x hosts use 'rpool'." >&2
     echo "Without this check every ssh case fails and it looks like a code defect." >&2
     exit 2
 }

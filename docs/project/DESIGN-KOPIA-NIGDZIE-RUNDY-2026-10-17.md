@@ -4,7 +4,7 @@ Status: **projekt do przeczytania, nic nie kodowane.** Silnik jest zrobiony: `sn
 (REV-20261016-148, zamknięte). Ten dokument opisuje warstwę między silnikiem a GUI.
 
 Poprzedniki: `DESIGN-JEDEN-KOLEKTOR-PVESR-2026-10-16.md` (po co),
-`ENGINE-REMOTE-SNAPSHOT-ONLY-2026-10-16.md` (silnik), `LAB-METROPOLIS-PVESR-PLAN-2026-10-16.md`
+`ENGINE-REMOTE-SNAPSHOT-ONLY-2026-10-16.md` (silnik), `LAB-SITE-A-PVESR-PLAN-2026-10-16.md`
 (pomiary).
 
 ## Dwa warianty „tylko migawki” po wdrożeniu
@@ -118,7 +118,7 @@ progu.
 1. Runda 1 i runda 2 są od siebie niezależne. Runda 2 czeka tylko na pre-review recenzenta
    (plik zamrożony), więc najlepiej wysłać oba projekty do recenzenta naraz.
 2. GUI dopiero po rundzie 1 (potrzebuje `--mode=snaponly`).
-3. Produkcja (Metropolis) dopiero po rundzie 2, bo bez monitora nie ma alarmu po migracji.
+3. Produkcja (Site-A) dopiero po rundzie 2, bo bez monitora nie ma alarmu po migracji.
 
 ## Decyzje właściciela (2026-10-17)
 

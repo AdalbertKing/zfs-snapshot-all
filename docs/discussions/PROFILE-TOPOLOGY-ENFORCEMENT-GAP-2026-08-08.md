@@ -64,8 +64,8 @@ today and I have not checked". Checked:
 
 | host | `dst`/`src` inside a `[template:]` |
 |---|---|
-| metropolis pve1 | 0 |
-| metropolis pve2 | 0 |
+| site-a pve1 | 0 |
+| site-a pve2 | 0 |
 | 11.x pve0 | **1** |
 | 11.x pve1 | 0 |
 

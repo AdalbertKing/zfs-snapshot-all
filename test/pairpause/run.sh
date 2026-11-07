@@ -70,7 +70,7 @@ for script in "$SNAPGET" "$SNAPSEND"; do
     # ungated run fails LATER on a bogus dataset only where zfs is missing. On a
     # real host `zpool list` reports the unknown pool and the run ends rc=0, so
     # these six cases false-failed on every host while passing on the laptop.
-    # Measured 2026-08-08 on metropolis pve1: identical 12/6 at 643238a, i.e.
+    # Measured 2026-08-08 on site-a pve1: identical 12/6 at 643238a, i.e.
     # before Stage 2 touched anything, so it was the assertion and not the code.
     if ! echo "$out" | grep -q "SKIPPED: relationship"; then
         ok "$sname: an unpaused label is not gated (run proceeds past the gate and fails later, no SKIPPED)"
@@ -88,7 +88,7 @@ for script in "$SNAPGET" "$SNAPSEND"; do
     # ungated run fails LATER on a bogus dataset only where zfs is missing. On a
     # real host `zpool list` reports the unknown pool and the run ends rc=0, so
     # these six cases false-failed on every host while passing on the laptop.
-    # Measured 2026-08-08 on metropolis pve1: identical 12/6 at 643238a, i.e.
+    # Measured 2026-08-08 on site-a pve1: identical 12/6 at 643238a, i.e.
     # before Stage 2 touched anything, so it was the assertion and not the code.
     if ! echo "$out" | grep -q "SKIPPED: relationship"; then
         ok "$sname: a label-less run is NOT gated (documented logical-pause limitation)"
@@ -115,7 +115,7 @@ for script in "$SNAPGET" "$SNAPSEND"; do
     # ungated run fails LATER on a bogus dataset only where zfs is missing. On a
     # real host `zpool list` reports the unknown pool and the run ends rc=0, so
     # these six cases false-failed on every host while passing on the laptop.
-    # Measured 2026-08-08 on metropolis pve1: identical 12/6 at 643238a, i.e.
+    # Measured 2026-08-08 on site-a pve1: identical 12/6 at 643238a, i.e.
     # before Stage 2 touched anything, so it was the assertion and not the code.
     if ! echo "$out" | grep -q "SKIPPED: relationship"; then
         ok "$sname: -L '' means no label, not a gate"

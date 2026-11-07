@@ -8,8 +8,8 @@
 >
 > | host | config | generated | installed | only in cron | only in config |
 > |---|---|---|---|---|---|
-> | metropolis pve1 | `/etc/zfs-snapshot-all/jobs.pve1.v4.conf` | 15 | 15 | 0 | 0 |
-> | metropolis pve2 | `/etc/zfs-snapshot-all/jobs.pve2.v4.conf` | 11 | 11 | 0 | 0 |
+> | site-a pve1 | `/etc/zfs-snapshot-all/jobs.pve1.v4.conf` | 15 | 15 | 0 | 0 |
+> | site-a pve2 | `/etc/zfs-snapshot-all/jobs.pve2.v4.conf` | 11 | 11 | 0 | 0 |
 > | 11.x pve0 | `/etc/zfs-snapshot-all/jobs.pve0.v4.conf` | 31 | 31 | 0 | 0 |
 > | 11.x pve1 | `/etc/zfs-snapshot-all/jobs.11.11.v4.conf` | 7 | 7 | 0 | 0 |
 >
@@ -71,9 +71,9 @@ disagreement and was nothing of the sort.
 
 | host | stored config | generated | installed | only in cron | only in config | verdict |
 |---|---|---|---|---|---|---|
-| metropolis pve2 | `jobs.pve2.v4.conf` | 11 | 11 | 0 | 0 | **authoritative** |
+| site-a pve2 | `jobs.pve2.v4.conf` | 11 | 11 | 0 | 0 | **authoritative** |
 | 11.x pve1 | `jobs.11.11.v4.conf` | 7 | 7 | 0 | 0 | **authoritative** (after migration, below) |
-| metropolis pve1 | `jobs.pve1.v4.conf` | 15 | 15 | 4 | 4 | **NOT authoritative** |
+| site-a pve1 | `jobs.pve1.v4.conf` | 15 | 15 | 4 | 4 | **NOT authoritative** |
 | 11.x pve0 | `jobs.pve0.v4-po-migracji.conf` | 19 | 31 | 31 | 19 | **NOT authoritative** |
 
 ### 11.x pve1 — repaired
@@ -92,7 +92,7 @@ crontab was never affected; only the stored copy had been left behind by the
 fleet migration. After migration the generated job set matches the installed one
 exactly.
 
-### metropolis pve1 — the stored config is behind
+### site-a pve1 — the stored config is behind
 
 The live crontab carries reserved-snapshot keep-counts the stored config does
 not produce:
@@ -121,7 +121,7 @@ added later. That fix reached the host and never reached the stored config.
 ## What this means for F4
 
 The four-host truth-set REV-071 F4 asks for can be built honestly for **pve2 and
-11.x pve1** only. Building one for metropolis pve1 or pve0 would mean classifying
+11.x pve1** only. Building one for site-a pve1 or pve0 would mean classifying
 ZFS inventory against a config those hosts do not run — precisely what F3 exists
 to prevent, and the resulting counts would look complete while describing
 nothing.
@@ -177,8 +177,8 @@ host, and the generated and installed sets are *the same bytes*:
 
 | host | config (`sha256`, 16) | generated | installed | set `sha256` (16) | diff |
 |---|---|---|---|---|---|
-| metropolis pve1 | `jobs.pve1.v4.conf` `5c30a24d81a576fe` | 15 | 15 | `bfbd69cfa236fcb1` = `bfbd69cfa236fcb1` | rc=0, 0 bytes |
-| metropolis pve2 | `jobs.pve2.v4.conf` `8c4d23547b9a8fe1` | 11 | 11 | `03979d81a54ba6a8` = `03979d81a54ba6a8` | rc=0, 0 bytes |
+| site-a pve1 | `jobs.pve1.v4.conf` `5c30a24d81a576fe` | 15 | 15 | `bfbd69cfa236fcb1` = `bfbd69cfa236fcb1` | rc=0, 0 bytes |
+| site-a pve2 | `jobs.pve2.v4.conf` `8c4d23547b9a8fe1` | 11 | 11 | `03979d81a54ba6a8` = `03979d81a54ba6a8` | rc=0, 0 bytes |
 | 11.x pve0 | `jobs.pve0.v4.conf` `f795781418cc9b53` | 31 | 31 | `72e534b60fa3544c` = `72e534b60fa3544c` | rc=0, 0 bytes |
 | 11.x pve1 | `jobs.11.11.v4.conf` `4ddc96600fc6ea83` | 7 | 7 | `7bcf9b7e2daf7e74` = `7bcf9b7e2daf7e74` | rc=0, 0 bytes |
 

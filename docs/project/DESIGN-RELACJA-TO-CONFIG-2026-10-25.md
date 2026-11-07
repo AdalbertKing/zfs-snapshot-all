@@ -1,6 +1,6 @@
 # Relacja to config -- jeden zakres, jedno drzewo, jeden czasownik (projekt, 2026-10-25)
 
-Decyzja właściciela, 2026-10-25, po przejęciu Metropolis: „Relacja to config i to jest jedyne
+Decyzja właściciela, 2026-10-25, po przejęciu Site-A: „Relacja to config i to jest jedyne
 źródło prawdy, pochodną są crony. Nie ma tu filozofii.” oraz „To prosty kreator i proste okno.
 Nie może mieć tyle wariantów, ile wariantów mają relacje.”
 

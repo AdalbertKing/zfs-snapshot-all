@@ -571,7 +571,7 @@ check "...and says why (the -R stream line in the log)" "1" \
 #      gone from the source (owner 2026-11-07). On a pvesr TARGET, pvesr's
 #      `zfs recv -F` of its -R stream destroys every snapshot the guest's node
 #      does not have -- the replica's own one included -- and leaves bookmarks
-#      alone (measured that day on A-TASSA with real pvesr, PVE 7.4). The
+#      alone (measured that day on SITE-C with real pvesr, PVE 7.4). The
 #      replica line is `snapget.sh -m <prefix>` (gen-cron, keep set: no -M).
 # ============================================================================
 scenario "S13 active replica: next copy from the bookmark when its snapshot was destroyed on the source" "snapget -m: find_bookmark_base, -i #bookmark"
@@ -601,7 +601,7 @@ check "control: without the bookmark the same run fails and the medium keeps its
       "$([ $? -ne 0 ] && echo 1 || echo 0):$(zfs list -H -t snapshot -o name -d1 "$ROOT/s13med/$S13" | grep -c '@rep_')"
 
 # ============================================================================
-# S14. -e -R over a subtree with NO snapshot at all (owner 2026-11-07, A-TASSA
+# S14. -e -R over a subtree with NO snapshot at all (owner 2026-11-07, SITE-C
 #      usb1: rpool/data held one container without snapshots and the whole
 #      replica ended rc=1). Nothing to copy is not a failure; snapshots that
 #      exist but none of them adoptable (all excluded) still are.

@@ -464,7 +464,7 @@ CRON_LOG="${CRON_LOG:-/root/scripts/cron.log}"
 # very identity that owns what it installs. Worse, a single earlier root-side
 # run left a root-owned 0644 file there that the account could not open even
 # once, permanently. Hit live on pve0 2026-08-07 while covering its uncovered
-# guests, and the same shape lib-cron.sh already documents from metropolis
+# guests, and the same shape lib-cron.sh already documents from site-a
 # pve1 2026-08-06.
 #
 # No fallback to the old path if the shared directory is missing: lib-cron.sh
@@ -2742,7 +2742,7 @@ build_dataset() {
             [ "$BOOL_FIELD" -eq 1 ] && [ "$tier_mirror" -eq 0 ] && FOREIGN_SCOPES["$ds_path"]=1
             # A PASSIVE section adopts snapshots somebody else makes (passive = yes,
             # -e), so they are not ours to prune either: no inline prune of the
-            # source, only the monitor (2026-10-24, lab rehearsal of Metropolis pve2 --
+            # source, only the monitor (2026-10-24, lab rehearsal of Site-A pve2 --
             # a local copy of a pvesr replica rendered a GFS delsnaps on the replica).
             [ "$tier_mirror" -eq 1 ] || [ "$scope_passive" = yes ] || INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${rec_scope}${SEP}${pair_label}${SEP}${tier_gfs}")
             SCOPE_PATTERNS+=("${ds_path}${SEP}${pattern}")
@@ -4522,7 +4522,7 @@ emit_monitor() {
         # takes (1000 bytes per command): then the list is split over as many lines
         # as it needs, each with the same flags, thresholds and alerts. A remote
         # group carries its ssh options on every line, so three datasets of a
-        # snaponly relationship already reached 1001 bytes (Metropolis pve2 ->
+        # snaponly relationship already reached 1001 bytes (Site-A pve2 ->
         # pve1, 2026-10-25: add-source refused, config and cron restored).
         local -a chunk=() lines_out=()
         local t try line=""

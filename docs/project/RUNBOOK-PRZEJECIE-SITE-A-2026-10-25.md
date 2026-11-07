@@ -1,4 +1,4 @@
-# Runbook: przejęcie migawek Metropolis (pve1 28.9, pve2 28.8) -- 1.0
+# Runbook: przejęcie migawek Site-A (pve1 28.9, pve2 28.8) -- 1.0
 
 Stan wyjściowy (odczyt 2026-10-24, tylko do odczytu): oba hosty bez relacji; wszystkie zadania
 migawek w crontabie konta `zfsbackup`, blok gen-cron z `/etc/zfs-snapshot-all/jobs.pve1.v4.conf`

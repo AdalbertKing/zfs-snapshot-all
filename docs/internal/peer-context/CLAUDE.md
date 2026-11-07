@@ -451,7 +451,7 @@ to-peer: Delivered eb7cf115. Gates only, no execution, and no public grammar:
   last one refused as FULL replacement by name, never attempted as an increment).
   The design note is corrected per R-017 and its CLI block is explicitly marked
   illustrative rather than committed.
-  EVIDENCE CAVEAT, stated because it is not the usual host: the metropolis VPN
+  EVIDENCE CAVEAT, stated because it is not the usual host: the site-a VPN
   tunnel dropped mid-session, so pve1/pve2 (192.168.28.x) are unreachable from
   here. Suites ran on pve0 (192.168.11.10), same zfs-2.1.9-pve1, and the three are
   pure/text with a stubbed zfs -- no real ZFS is involved in any of them. restore

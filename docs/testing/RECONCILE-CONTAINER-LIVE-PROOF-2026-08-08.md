@@ -3,7 +3,7 @@
 REV-20260808-074 F1. The 41/41 suite proves the comparison logic against a
 stub; it does not prove the ZFS assumptions the stub stands in for. This does.
 
-**Host:** metropolis pve1 (`192.168.28.9`), `zfs-2.1.9-pve1`.
+**Host:** site-a pve1 (`192.168.28.9`), `zfs-2.1.9-pve1`.
 **Identity:** `--reconcile` run as `zfsbackup`; scratch datasets created and
 destroyed as root.
 **Reviewed implementation:** `99dd958`.

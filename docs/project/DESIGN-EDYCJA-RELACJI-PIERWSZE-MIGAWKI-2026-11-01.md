@@ -3,7 +3,7 @@
 Stan na: 2026-11-01. Zgłoszenie właściciela: „Modyfikacja relacji dla user: zfsbackup trwa
 ponad 2 minuty, dla roota trwała szybciej.”
 
-## Przyczyna (zmierzona na pve0, Dąbrowska)
+## Przyczyna (zmierzona na pve0, Site-B)
 
 Konto nie ma znaczenia. Czas zjadają PIERWSZE MIGAWKI KAŻDEGO SZCZEBLA, robione od nowa po
 każdej zmianie relacji, jedna po drugiej, każda z zamrażaniem VM na źródle.

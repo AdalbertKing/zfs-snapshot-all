@@ -111,7 +111,7 @@ presets generating into one CONFIG would otherwise emit duplicate
 one-way model — generate twice, into one file, and the collision is the same. So
 it stays, and it costs the operator nothing because nobody selects it.
 
-## §11.8 — Kancelaria stays out of the CLI. Confirmed.
+## §11.8 — Biuro stays out of the CLI. Confirmed.
 
 Agreed, and the measurement supports it: the fleet's policies differ in **shape**
 (which tiers exist, whether anything prunes at all, recursion, quiesce), not in

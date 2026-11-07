@@ -329,7 +329,7 @@ case "$verb" in
         # total=0 there. vssadmin had run fine, so the empty-output guard above
         # did not fire either: it reported "no writers" instead of "I could not
         # read this". Measured on two live guests, 2026-07-31: VM 106 on pve1
-        # (Polish) and VM 106 on metropolis pve1 (English).
+        # (Polish) and VM 106 on site-a pve1 (English).
         #
         # What is stable across locales is the STRUCTURE and the NUMBERS:
         #   - the writer name is the only single-quoted string in its block, and

@@ -46,7 +46,7 @@ mkdir -p "$WORK/bin"
 # `zfs list -H -o name -- <ds>`.
 cat > "$WORK/bin/zfs" <<'EOF'
 #!/bin/sh
-# Dabrowska 2026-11-04: `-o name,createtxg` answers LB_TXG ("name<TAB>txg" lines), for the
+# Site-B 2026-11-04: `-o name,createtxg` answers LB_TXG ("name<TAB>txg" lines), for the
 # rehearsal's history rule (probe_conflicts_are_history).
 case " $* " in *" name,createtxg "*) [ -n "${LB_TXG:-}" ] && printf '%b\n' "$LB_TXG"; exit 0 ;; esac
 # U138: `zfs list -t snapshot` answers LB_SNAPS (space-separated names), else nothing.
@@ -473,7 +473,7 @@ echo SEED >> "$WORK/order"
 echo "seed exploded" >&2
 exit 1
 EOF
-# Dabrowska 2026-11-04: the engine's -n on an archive that keeps longer than its source --
+# Site-B 2026-11-04: the engine's -n on an archive that keeps longer than its source --
 # PLAN with a base, and a "conflict" list of target-only snapshots (rc 1, by design).
 cat > "$WORK/seedbin/snapget-history" <<EOF
 #!/bin/sh
@@ -528,7 +528,7 @@ printf '%s' "$out" | grep -qi 'NOTHING installed' \
     && ok "slice2: the failed-seed refusal says plainly that nothing was installed" \
     || bad "slice2: the failed-seed refusal says plainly that nothing was installed" "$(printf '%s' "$out" | tail -2)"
 
-# ---- an archive that keeps LONGER than its source (Dabrowska 2026-11-04) -----------
+# ---- an archive that keeps LONGER than its source (Site-B 2026-11-04) -----------
 # The engine's -n lists every target-only snapshot and exits 1 "by design"; a snapshot
 # OLDER than the common base is history and installs; one NEWER than the base is
 # divergence and still refuses (control).
@@ -954,7 +954,7 @@ if [ "$r5off" = no ] && [ "$r5h" = -h24 ] && [ "$r5d" = -d7 ] \
 else
     bad "set-tiers: source off / method" "off=[$r5off] hourly=$r5h daily=$r5d" "$o5" "$(printf '%s' "$r5cron" | grep -E 'daily' | head -4)"
 fi
-# 0 AT THE SOURCE (owner 2026-10-26, A-TASSA): keep none of a tier there after the copy --
+# 0 AT THE SOURCE (owner 2026-10-26, SITE-C): keep none of a tier there after the copy --
 # allowed on the source only, and never on every source tier (no common base left).
 st_conf; o9=$(st_run --src-tier=daily --keep=0 --yes); r9s=$(st_f relation:sl daily.source_retain); r9cron=$(bash "$REPO/gen-cron.sh" -c "$ST/c.conf" 2>&1)
 st_conf; o10=$(st_run --tier=daily --keep=0 --yes); r10=$?
@@ -2304,7 +2304,7 @@ if [ "$pv_ts" -eq 0 ] && [ "$pv_tt" -ge 1 ] && [ "$pv_ks" -ge 1 ]; then
 else
     bad "local-backup --passive: no source delsnaps line" "passive: source=$pv_ts landing=$pv_tt; control: source=$pv_ks" "$(printf '%s\n' "$pv_t" | grep -E 'delsnaps' | head -4)"
 fi
-# U161 (Dabrowska 2026-11-04): a passive copy fed by a */2:00 pvesr replica gets archive
+# U161 (Site-B 2026-11-04): a passive copy fed by a */2:00 pvesr replica gets archive
 # thresholds of at least 2x/3x the interval -- hourly 90m/150m -> 4h/6h; the daily 30h/48h
 # already is, and stays. Controls: a guest whose disks are not under the source does not count
 # (template kept); without --passive nothing changes; an unreadable schedule keeps the template

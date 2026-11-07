@@ -783,7 +783,7 @@ REMOTE_PROBE_ERR=""   # ssh's own local stderr from the last probe_dataset
 #
 #     PAIR_DISABLED: relationship pve1 is disabled by administrator
 #
-# Measured on metropolis 2026-08-20: that sentence arrived, and this library
+# Measured on site-a 2026-08-20: that sentence arrived, and this library
 # reported "e.g. no 'zfs' in this account's PATH" -- it had the answer in hand
 # and guessed a different one. Same family as the exit-255 confusion the block
 # above exists to end: an administrative block and a broken deployment call for
@@ -1076,7 +1076,7 @@ warn_if_unrecursed_children() {
 # no amount of `zfs allow` grants CAP_SYS_ADMIN -- so a delegated account
 # bootstrapping a multi-level target path failed with
 #   cannot mount '<intermediate>': Insufficient privileges
-# even though it was allowed to create the dataset. Found live on metropolis
+# even though it was allowed to create the dataset. Found live on site-a
 # pve1 via `-X` on a middle dataset, which is precisely the case that asks for
 # an intermediate to be created and left empty.
 #
@@ -1807,7 +1807,7 @@ pool_health() {
         # The exit status is read, not discarded. Without it a peer whose gate
         # is DISABLED produced an empty answer that fell through to "UNKNOWN"
         # -- and check_pool_health MAILS on anything that is not ONLINE, so an
-        # administrative block raised a storage alarm. Measured on metropolis
+        # administrative block raised a storage alarm. Measured on site-a
         # 2026-08-20: "Pool 'hdd' on 192.168.28.99 is UNKNOWN" for a pool that
         # was perfectly healthy and simply not ours to ask about right then.
         # Only the code is needed here: stderr stays discarded so a chatty ssh
@@ -2059,7 +2059,7 @@ quiesce_guest_id() {
 #              `deploy.sh --backup-user=NAME --allow-quiesce`.
 #
 # The local path had only the first, and DEGRADED instead of failing when it was
-# unavailable. Found on metropolis pve1, 2026-08-01, minutes after the managed
+# unavailable. Found on site-a pve1, 2026-08-01, minutes after the managed
 # block moved from root to the account: `qm status` as a non-root user dies with
 # "Unable to load access control list" (exit 21), the old probe read that empty
 # output as "not running", and every guest was logged as stopped. The snapshots
@@ -2269,7 +2269,7 @@ quiesce_prepare() {
             # flush that did not happen is still a promise not kept.
             #
             # Done HERE, in the slow pass, precisely because it is the slow part:
-            # measured 16 s for one container on metropolis pve1.
+            # measured 16 s for one container on site-a pve1.
             if quiesce_do_freeze "$id" lxc; then
                 log 1 "Quiesce: flushed container $id (pct exec sync) -- ZFS cannot be frozen, so this is a flush, not a freeze"
             else
@@ -2286,7 +2286,7 @@ quiesce_prepare() {
 # ------------------------------------------------------------------------------
 # THE FREEZE WINDOW IS A DEADLINE, NOT A SEQUENCE (REV-20260801-024)
 #
-# Measured on metropolis pve1, 2026-08-01: VM 106 (ostype win10) frozen at
+# Measured on site-a pve1, 2026-08-01: VM 106 (ostype win10) frozen at
 # 18:21:21, snapshot at 18:21:39 -- EIGHTEEN SECONDS, of which 16 were one
 # `pct exec 101 -- sync`. VSS hard-limits a Windows freeze to ~10 s and releases
 # it on its own; the guest agent says so out loud ("couldn't hold writes:
@@ -2962,7 +2962,7 @@ pending_vms=" "
 # PASS 1. Everything slow, and nothing that freezes a VM.
 #
 # The local path learned this on 2026-08-01 (REV-20260801-024) and this copy
-# did not. A container flush measured SIXTEEN SECONDS on metropolis pve1, and
+# did not. A container flush measured SIXTEEN SECONDS on site-a pve1, and
 # doing it after a VM freeze puts the snapshot outside the ~10 s window VSS is
 # willing to hold. Running freeze/snapshot/thaw in ONE invocation kept network
 # latency out of the window -- it never kept `pct exec <id> -- sync` out of it.

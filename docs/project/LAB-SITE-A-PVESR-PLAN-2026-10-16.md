@@ -1,4 +1,4 @@
-# Lab klastrowy na Metropolis -- plan do zgody (2026-10-16)
+# Lab klastrowy na Site-A -- plan do zgody (2026-10-16)
 
 Cel: zmierzyć pułapki projektu „jeden kolektor + pvesr” (`DESIGN-JEDEN-KOLEKTOR-PVESR-2026-10-16.md`) na prawdziwym
 klastrze, **tylko na testowym gościu**. Prawdziwych gości (100, 101, 102, 103, 106, 107) ani maszyn labowych na pve2
@@ -120,7 +120,7 @@ Ryzyka etapu 4:
   (kopie przed zmianą: `/root/zfsbackup-crontab.before-lab-pvesr-20261016` na obu węzłach). Prefiks `zsalab_`
   (poza wzorcem `automated_` produkcyjnego przycinania `hdd/backups`). Dzienniki: `/home/zfsbackup/lab-pvesr.log`.
   Zbieranie stanu co 5 min przez ~95 min (sesja), kroki 5–7.
-- 2026-10-16 13:30–15:00 CEST (hosty Metropolis są w CEST) -- **kroki 5–7 zmierzone** (19 zrzutów co 5 min):
+- 2026-10-16 13:30–15:00 CEST (hosty Site-A są w CEST) -- **kroki 5–7 zmierzone** (19 zrzutów co 5 min):
   - blokady: **brak**; `pvesr` 990-0 FailCount 0 / OK w 19/19 zrzutach, mimo kopii na B o tych samych minutach co
     synchronizacja. Silnik już omija blokadę na datasecie replikowanym przez Proxmox
     („Not holding … replicated by Proxmox VE (pvesr)”) -- pułapka 2 z projektu jest zamknięta w kodzie;

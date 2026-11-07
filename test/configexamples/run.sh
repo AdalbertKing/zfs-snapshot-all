@@ -118,7 +118,7 @@ assert_absent "$r" 'tank/scratch" -q|-q [a-z]+ "tank/scratch'                   
 # short-local-long-store: short local self-prune vs long store retention.
 r="$(render "$EXAMPLES/short-local-long-store.conf")"
 assert_has "$r" 'delsnaps\.sh "tank/akta" "automated_hourly" -H48'               'short-local/local-keep-48'
-assert_has "$r" 'delsnaps\.sh -R "backup/kancelaria" "automated_daily" -D90'     'short-local/store-keep-90'
+assert_has "$r" 'delsnaps\.sh -R "backup/biuro" "automated_daily" -D90'     'short-local/store-keep-90'
 
 # manual-prune: recursive store prune, monitor-only carrier (no dup prune), bookmarks.
 r="$(render "$EXAMPLES/manual-prune.conf")"

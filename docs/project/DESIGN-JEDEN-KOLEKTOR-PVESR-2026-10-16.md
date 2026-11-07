@@ -2,7 +2,7 @@
 
 Status: **PROJEKT, nic nie kodowane.** Pomysł właściciela z 2026-10-16; ocena i warianty: sesja implementera.
 
-## 1. Dziś (zmierzone na Metropolis, 2026-10-16, tylko odczyt)
+## 1. Dziś (zmierzone na Site-A, 2026-10-16, tylko odczyt)
 
 | host | co robi nasz pakiet | skąd |
 |---|---|---|
@@ -87,7 +87,7 @@ Jeśli brak migawek na A podczas awarii B jest nie do przyjęcia, to zostają dw
    nie -- zgłoszenie do recenzenta (zmiana w `snapget.sh`).
 4. Odmowa prune na datasecie-celu `pvesr` (generator).
 5. Kampania na labie klastrowym (blokady, opóźnienie, przełączenie gościa, B wyłączony).
-6. Migracja Metropolis: dopiero po labie, za zgodą właściciela.
+6. Migracja Site-A: dopiero po labie, za zgodą właściciela.
 
 ## 7. Pytania do właściciela
 
@@ -103,6 +103,6 @@ Jeśli brak migawek na A podczas awarii B jest nie do przyjęcia, to zostają dw
 2. **Gość przeszedł na B -> relacja się zatrzymuje** (pomija bieg + alarm). Migawki na celu replikacji idącej w drugą
    stronę zakłócają klaster. Wykrywanie do ustalenia: węzeł, na którym Proxmox trzyma konfigurację gościa, albo kierunek
    `pvesr`.
-3. **Lab klastrowy: zgoda, tylko dla datasetów labowych, na klastrze Metropolis (pve1/pve2)** -- testowy gość /
+3. **Lab klastrowy: zgoda, tylko dla datasetów labowych, na klastrze Site-A (pve1/pve2)** -- testowy gość /
    testowe datasety obok produkcji; prawdziwych gości nie ruszamy. Hosty produkcyjne: plan krok po kroku i zgoda
    na każdy krok zmieniający hosty.

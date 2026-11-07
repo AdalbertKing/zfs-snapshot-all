@@ -45,9 +45,9 @@ when they change how the tool is used.
 ## [1.0.13] — 2026-11-07
 
 - **Which installation a mail is about.** A new setting, `alerts.site` (F10, or `zfs-backup.sh settings set
-  alerts.site=Metropolis --yes`), names the installation. The subject of the daily summary and of an
-  alert mail (immediate mode) then reads `[ZFS] Metropolis pve2 ...`; with a sendmail, the sender reads
-  `zfs-backup Metropolis pve2`.
+  alerts.site=Site-A --yes`), names the installation. The subject of the daily summary and of an
+  alert mail (immediate mode) then reads `[ZFS] Site-A pve2 ...`; with a sendmail, the sender reads
+  `zfs-backup Site-A pve2`.
   Without it the subject carries the host's full name (`pve2.example.net`) rather than the bare `pve2`,
   which several firms can have.
 - **The first copy of a replica carries the history.** A new mirror replica (`snapget.sh -e -M`)

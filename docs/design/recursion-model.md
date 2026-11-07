@@ -228,7 +228,7 @@ Consequences:
 ### 5.2 Compatibility and migration
 
 Live configs carrying `-r`/`-R` in `flags`: **one** — `pve1` (192.168.11.11),
-`[dataset:rpool/data] flags = -r -v 3`. `pve0`, metropolis `pve1` and metropolis
+`[dataset:rpool/data] flags = -r -v 3`. `pve0`, site-a `pve1` and site-a
 `pve2` carry none.
 
 That makes a hard cut-over cheap. The open question for the reviewer is whether

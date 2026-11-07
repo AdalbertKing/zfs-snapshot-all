@@ -22,7 +22,7 @@ This file does **not** duplicate review state. Current REV ownership/status rema
 
 Goal: close the current safety/evidence boundary before adding more Stage 5 behavior.
 
-The bounded metropolis pve1/pve2 campaign was executed on 2026-08-09. See REV-20260809-086 response for the full transcript.
+The bounded site-a pve1/pve2 campaign was executed on 2026-08-09. See REV-20260809-086 response for the full transcript.
 
 1. Real `add-client -> seed -> activate-client` for one throwaway relationship (`v3proofA`).
 2. Confirmed `STATE=active`; captured canonical CONFIG and the managed `crontab -l` block verbatim.
@@ -489,7 +489,7 @@ document all six required expert examples:
 
 - independent hourly/daily retention without forcing GFS — `examples/independent-tiers.conf`;
 - quiesce only on selected datasets — `examples/selective-quiesce.conf`;
-- intentionally shorter local retention than store/replicated history (Kancelaria pattern) — `examples/short-local-long-store.conf`;
+- intentionally shorter local retention than store/replicated history (Biuro pattern) — `examples/short-local-long-store.conf`;
 - manual prune schedules/patterns (incl. monitor-only carrier + bookmark prune) — `examples/manual-prune.conf`;
 - safe CONFIG validation and preview — the `gen-cron.sh -c` → diff → `--install` workflow;
 - deliberate manual customization after preset generation — grounded in the Phase 3 reactivation-preserves-policy guarantee.

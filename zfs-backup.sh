@@ -972,7 +972,7 @@ ensure_alias_known_hosts() {
     # failed", which reads like a missing or wrong key rather than a permission
     # problem on a file that is right there.
     #
-    # Found live on metropolis pve1, 2026-08-01. deploy.sh --pair gets the other
+    # Found live on site-a pve1, 2026-08-01. deploy.sh --pair gets the other
     # two files right (key and known_hosts are both account-owned); only this
     # one, generated later by this wrapper, was left behind.
     #
@@ -4183,7 +4183,7 @@ assert_no_foreign_managed_block() {   # <config whose render is about to be inst
 # gen-cron.sh runs AS the dedicated account, so that account has to be able to
 # READ the config. The default location used to be $SCRIPT_DIR/jobs.<host>.conf,
 # which on a Proxmox host means /root/scripts/... -- and /root is 0700. Found on
-# metropolis pve1, 2026-08-01: the account could not open the file at all, so
+# site-a pve1, 2026-08-01: the account could not open the file at all, so
 # --local-user with the default path would have failed at install time, after
 # the preview had already been shown and accepted. Since 2026-08-17 the default
 # is /etc/zfs-snapshot-all (default_cron_config), but a RECORDED path can still
@@ -5534,7 +5534,7 @@ sync_narrow_legacy_grants() {   # <user> <this client> <landing>...
 #
 # It used to be $SCRIPT_DIR/jobs.<host>.conf, which fails twice over: on a
 # Proxmox host $SCRIPT_DIR is under /root (0700 -- the account cannot read it;
-# found live on metropolis pve1, 2026-08-01), and it puts operator state INSIDE
+# found live on site-a pve1, 2026-08-01), and it puts operator state INSIDE
 # the git checkout that hourly self-updates (found live 2026-08-17, lab3: a
 # fresh RUX install wrote its config next to the code it came from).
 # LAB6-F2 (2026-08-21): the default names the ACCOUNT, not just the host.
@@ -6133,7 +6133,7 @@ cron_context_resolve() {   # <policy> <explicit-config> <explicit-user> <recorde
     # The ACCOUNT first, and the order is load-bearing: the adoption step below
     # reads THIS account's crontab. Resolve it second and adoption would read
     # root's while installing into the account's -- which is the 2026-08-01
-    # metropolis failure, where teardown looked at root's block while the
+    # site-a failure, where teardown looked at root's block while the
     # client's lines were in the account's.
     if [ -n "$x_user" ]; then
         # A literal "root" is an ANSWER, not an absence. Internally root is the
@@ -6257,7 +6257,7 @@ gencron_as_target() {   # <args...>
     # account's own paths into the lines it emits, since it derives REPO_DIR
     # from where it lives.
     #
-    # Found live on metropolis pve1, 2026-08-01: the install failed here, after
+    # Found live on site-a pve1, 2026-08-01: the install failed here, after
     # the preview had been accepted, and only the crontab rollback kept it from
     # being a mess.
     local account_gencron="$home/zfs-snapshot-all/gen-cron.sh"
@@ -6274,7 +6274,7 @@ gencron_as_target() {   # <args...>
     # contain spaces" assumption, and the preview would then have validated a
     # different file from the one installed.
     # REPO_DIR is pinned for the same reason as the other four, and its absence
-    # here is what broke metropolis pve2 (2026-08-01). gen-cron.sh normally
+    # here is what broke site-a pve2 (2026-08-01). gen-cron.sh normally
     # DERIVES it from where it lives -- the account's own checkout, which is
     # right -- but a config carrying an explicit `[defaults] repo_dir` beats the
     # derivation, and a config rebuilt from root's crontab carries root's path
@@ -6361,7 +6361,7 @@ runuser_can() {   # <user> -> 0 this process can act as <user>
 # Every script the proposed block would RUN must be reachable by the account
 # that will run it.
 #
-# Nothing checked this until 2026-08-01, and metropolis pve2 is what it costs.
+# Nothing checked this until 2026-08-01, and site-a pve2 is what it costs.
 # Its config -- rebuilt by cron2conf.sh from the live crontab, and therefore
 # faithfully carrying root's paths as EXPLICIT `[defaults] repo_dir` -- rendered
 # an account block naming /root/scripts/zfs-snapshot-all/*.sh. /root is 0700, so
@@ -6468,7 +6468,7 @@ quiesce_whitelist_warn() {
 
 assert_block_runnable_by() {   # <account> <block file>
     local acct="$1" blk="$2" p unreachable=""
-    # A1 (2026-08-21): written after the 2026-08-01 metropolis pve2 incident
+    # A1 (2026-08-21): written after the 2026-08-01 site-a pve2 incident
     # (config rebuilt by cron2conf carried a root repo_dir; /root is 0700; every
     # block line exited 126 and still reported rc=0 because the cron idiom ends
     # in `rm -f "$e"`) -- and then NEVER CALLED, for over two weeks, while
@@ -6678,7 +6678,7 @@ atomic_replace_and_install() {
     fi
     # The config the collector account reads must stay readable by it. mktemp
     # made the working copy 0600 and the swap would carry that mode onto the
-    # real file -- found live on metropolis pve1: gen-cron, running as the
+    # real file -- found live on site-a pve1: gen-cron, running as the
     # account, got "Permission denied" on a config in a world-readable
     # directory.
     chmod 0644 "$workfile" 2>/dev/null || :
@@ -6885,7 +6885,7 @@ local_backup_section_marker() {   # <file> <exact header> -> "<kind>=<value>" or
 # only the caller knows what it is about to emit.
 #
 # REV-20260811-098 stays: a section scope may name SEVERAL datasets
-# comma-separated ([prune:a,b,c] -- metropolis pve2 has such sections), so each
+# comma-separated ([prune:a,b,c] -- site-a pve2 has such sections), so each
 # member is evaluated independently. Treating the comma-joined string as one
 # path would miss an overlap with every member but the accidental prefix.
 # WHERE THE LINK CAP COMES FROM, in one place that can be read on its own.
@@ -9233,7 +9233,7 @@ cmd_local_backup() {
             --exclude-family=*) check_family_list local-backup "${a#*=}"; lb_exfam="${lb_exfam:+$lb_exfam,}${a#*=}" ;;
             # W17: an encrypted source copied encrypted (-w), first copy included.
             --raw)       lb_raw=1 ;;
-            # --passive (2026-10-24, Metropolis pve2): the copy ADOPTS snapshots somebody
+            # --passive (2026-10-24, Site-A pve2): the copy ADOPTS snapshots somebody
             # else makes on the source -- a Proxmox pvesr replica, whose snapshots belong
             # to the guest's own node -- and creates and prunes nothing there (-e).
             # Target retention is the profile's, as for any copy.
@@ -9587,7 +9587,7 @@ cmd_local_backup() {
     fi
     # --recursive (flat or atomic) makes each SOURCE a recursive claim too: its snapshot,
     # prune and monitor walk the children. Checked flat only, an old per-child section
-    # under the new root passed (measured, lab rehearsal of the Metropolis takeover
+    # under the new root passed (measured, lab rehearsal of the Site-A takeover
     # 2026-10-24: a snapshot relationship on hdd/mt next to the v4 file's
     # [dataset:hdd/mt/vm-106-disk-0] ... -- every child got two snapshot jobs and two
     # retentions on the same family).
@@ -10999,7 +10999,7 @@ fetch_committed_scope() {
         # fails, and then RESUMES PAST IT: re-running it from state
         # 'pending_enroll' does not retry the join, it goes straight to this
         # fetch. The operator was then sent to look at --draft-scope on a peer
-        # that had never accepted the package at all. Measured on metropolis
+        # that had never accepted the package at all. Measured on site-a
         # 2026-08-20: the resume log was two lines, with zero join attempts.
         #
         # THE FIRST ATTEMPT AT THIS USED A DISCRIMINATOR THAT DOES NOT
@@ -11410,7 +11410,7 @@ resolve_mode_datasets() {
         # A snaponly relationship's list was seeded from REQUESTED_DATASETS (the record's
         # roots) by the loader, so a non-empty list does not mean "already resolved": its
         # sections need the scope's recursion. Skipping here re-rendered every root as
-        # 'recursive = no' with no children (Metropolis pve2 -> pve1, 2026-10-25: a template
+        # 'recursive = no' with no children (Site-A pve2 -> pve1, 2026-10-25: a template
         # change in the GUI stopped the snapshots of every VM disk). scope_root_is_ours
         # below still keeps the resolution inside what this relationship requested.
         [ -z "${PEER_SAVED_DATASETS:-}" ] \
@@ -11884,7 +11884,7 @@ cmd_seed() {
         #
         # The GFS ladder prunes on 'automated_', which matches both, so the seed
         # is retained and aged like any other snapshot rather than living
-        # forever outside retention. Verified live on metropolis 2026-08-20:
+        # forever outside retention. Verified live on site-a 2026-08-20:
         # after enrolment the monitor returned rc=0 with no hourly snapshot yet.
         # shellcheck disable=SC2086
         # LAB6-F4 (2026-08-21, live): the seed was the one ACTIVE act left on a
@@ -12061,7 +12061,7 @@ cmd_final_catchup() {
         #
         # The GFS ladder prunes on 'automated_', which matches both, so the seed
         # is retained and aged like any other snapshot rather than living
-        # forever outside retention. Verified live on metropolis 2026-08-20:
+        # forever outside retention. Verified live on site-a 2026-08-20:
         # after enrolment the monitor returned rc=0 with no hourly snapshot yet.
         # shellcheck disable=SC2086
         # LAB6-F4 (2026-08-21, live): the seed was the one ACTIVE act left on a
@@ -12746,7 +12746,7 @@ snaponly_collector_tag() {
 
 # A minute that is not a multiple of five (F5): pvesr and most hand-made
 # schedules start on those, and a snapshot of the same dataset in the same second
-# made pvesr miss a cycle (measured on Metropolis, 2026-10-16 18:30).
+# made pvesr miss a cycle (measured on Site-A, 2026-10-16 18:30).
 snaponly_minute() {   # <minute 0-59> -> the same, moved off a multiple of 5
     local m=$(( $1 % 60 ))
     [ $(( m % 5 )) -eq 0 ] && m=$(( (m + 1) % 60 ))
@@ -14692,7 +14692,7 @@ cmd_pause_client() {
     # RETENTION IS NOW INSIDE THE PAUSE, AND THIS LINE HAD TO CHANGE WITH IT.
     #
     # It used to read "NOT covered: retention ... delsnaps lines carry no '-L'
-    # and keep pruning on schedule", which was true and measured on metropolis
+    # and keep pruning on schedule", which was true and measured on site-a
     # 2026-08-20. On the owner's direction delsnaps.sh gained -L and the
     # generator now emits it on all four prune shapes, so the sentence became
     # the exact inverse of the code -- REV-20260829-124 F2. An operator reading
@@ -15175,7 +15175,7 @@ cmd_monitor() {
 
     local worst_rank=0 worst=OK first=1 seen=0
     [ "$as_json" -eq 1 ] && printf '{"checked_epoch":%s,"monitors":[' "$(date +%s)"
-    # IN PARALLEL (2026-10-25, Metropolis pve2: 22 monitor lines, 8 of them over ssh to
+    # IN PARALLEL (2026-10-25, Site-A pve2: 22 monitor lines, 8 of them over ssh to
     # pve1, took 26 s one after another, and the GUI's refresh waits for this verb). Each
     # check runs in the background (at most 8 at once) into its own file; the report is
     # printed afterwards in the cron order, with the same fields as before.
@@ -16912,7 +16912,7 @@ relation_copy_sources() {
 # key|built-in default|kind|applies to|help (Polish -- shown in the window)
 SETTINGS_REGISTRY='gui.language|en|enum:en,pl|-|język okien GUI (en, pl); komunikaty poleceń zostają po angielsku
 alerts.email|root|email|-|kto dostaje maile o kopiach
-alerts.site|-|name|-|nazwa instalacji (firmy) w temacie maili, np. Metropolis -> "[ZFS] Metropolis pve2 ..."; "-" = pełna nazwa hosta
+alerts.site|-|name|-|nazwa instalacji (firmy) w temacie maili, np. Site-A -> "[ZFS] Site-A pve2 ..."; "-" = pełna nazwa hosta
 alerts.errors|daily|enum:daily,immediate|-|błędy: zbiorczo raz na dobę albo od razu
 alerts.warnings|daily|enum:daily,immediate|-|ostrzeżenia: zbiorczo raz na dobę albo od razu
 alerts.repeat_after|4h|dur|-|tryb "od razu": ten sam alert znowu po tym czasie
@@ -21249,7 +21249,7 @@ cmd_status() {
     [ -r "$mpath" ] && record_load manifest "$mpath"
     local host port; read -r host port <<< "$(active_endpoint_host_port 2>/dev/null || echo "? ?")"
     local LOAD_HOST="$host" LOAD_PORT="$port"
-    # The peer's own view, asked out loud (2026-08-20, measured on metropolis).
+    # The peer's own view, asked out loud (2026-08-20, measured on site-a).
     # Until this existed, a relationship the peer was refusing outright showed
     # only PAUSED_LOCAL -- together with a sentence promising that unlabeled
     # manual runs are NOT blocked, which was false at exactly that moment. The
@@ -21513,7 +21513,7 @@ cmd_test() {
 # root-only. On a collector with a dedicated account that is fatal and almost
 # invisible: gen-cron runs AS the account and gets "Permission denied" on a
 # config in a world-readable directory, several steps after whatever last
-# rewrote it. Found on metropolis pve1, 2026-08-01, after chmod'ing the file by
+# rewrote it. Found on site-a pve1, 2026-08-01, after chmod'ing the file by
 # hand twice and watching it go back.
 mv_preserving_mode() {   # <tmp> <destination>
     local tmp="$1" dest="$2" mode=""
@@ -22217,7 +22217,7 @@ cmd_remove_client() {
     # reset is never undone, so the CRON_CONFIG this client actually recorded
     # at activation is silently replaced with an empty string, and the branch
     # below reads it as "never activated" and skips cron cleanup entirely.
-    # Live-found 2026-08-09 (metropolis pve1, REV-082/083/085 live proof):
+    # Live-found 2026-08-09 (site-a pve1, REV-082/083/085 live proof):
     # remove-client warned "no managed dataset list on file (client was never
     # activated?)" for a client that plainly HAD been. Captured here, before
     # the reset, and restored after it -- same defect and same fix shape as
@@ -22228,7 +22228,7 @@ cmd_remove_client() {
     # silently targets ROOT -- on a collector with a dedicated account that
     # means reading the wrong crontab, comparing against the wrong '# Source:',
     # and, if the comparison had passed, rewriting the wrong user's jobs.
-    # Found live on metropolis pve1, 2026-08-01: teardown refused because it was
+    # Found live on site-a pve1, 2026-08-01: teardown refused because it was
     # looking at root's block while the client's lines were in the account's.
     # assert_cron_config_matches_installed caught it, which is the third time
     # today a guard turned a defect into a message instead of an incident.
@@ -22698,7 +22698,7 @@ rux_remote_plan() {
             # confirmed -- and resuming does NOT retry the join, it goes on to
             # the scope fetch. Saying "seed -> activate" here promised a
             # continuation that cannot happen while the peer has not accepted
-            # the package. Measured on metropolis 2026-08-20.
+            # the package. Measured on site-a 2026-08-20.
             echo "  stages that would run:         ${_sd}activate, BUT ONLY once the join is complete on the peer"
             echo "  note:                          re-running this command does NOT retry the join. If it fell back to"
             echo "                                 manual, finish it on the peer first (deploy.sh --join=<the .tgz>)."

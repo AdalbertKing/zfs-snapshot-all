@@ -1877,7 +1877,7 @@
 "odbicie kolektora (fabryczne)": "collector mirror (factory)",
 "odblokowane urządzenie /dev/mapper/$MAPPED zostaje otwarte -- najpierw odmontowanie (potem: cryptsetup close $MAPPED)": "the unlocked device /dev/mapper/$MAPPED stays open -- unmount first (then: cryptsetup close $MAPPED)",
 "odczyt %s ": "read %s ",
-"odwzorowanie produkcji metropolis: cztery rodziny, kazda z wlasna retencja": "reproduces metropolis production: four families, each its own retention",
+"odwzorowanie produkcji site-a: cztery rodziny, kazda z wlasna retencja": "reproduces site-a production: four families, each its own retention",
 "odzysk": "restore",
 "odzysk może nadpisać albo dołożyć dane -- nic się nie zmieni, dopóki nie wybierzesz WYKONAJ": "restore may overwrite or add data -- nothing changes until you choose EXECUTE",
 "odłączony": "disconnected",

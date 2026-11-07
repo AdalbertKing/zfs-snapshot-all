@@ -1,6 +1,6 @@
 # Kampania wdrożeniowa 2026-08-20 — macierz sześciu kształtów
 
-Inwentarz komend i znalezisk z przejścia całej macierzy wdrożeń na metropolis:
+Inwentarz komend i znalezisk z przejścia całej macierzy wdrożeń na site-a:
 jedno- i dwuserwerowe, konto root i delegowane, tryb backup i sync, z jawnym
 `--target` i bez, z automatycznym joinem przez SSH i z ręcznym.
 

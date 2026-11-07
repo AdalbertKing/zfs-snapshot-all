@@ -15,8 +15,8 @@ UNCOVERED**:
 
 | host | guest volumes | exist | reported uncovered |
 |---|---|---|---|
-| metropolis pve1 | 6 | 6 | **0** |
-| metropolis pve2 | 1 | 1 | **0** |
+| site-a pve1 | 6 | 6 | **0** |
+| site-a pve2 | 1 | 1 | **0** |
 | 11.x pve0 | 9 | 9 | **0** |
 | 11.x pve1 | 3 | 3 | **0** |
 
@@ -31,8 +31,8 @@ instead of guest configs.
 
 | host | uncovered | received | system | of the uncovered: containers | scratch/test | genuine |
 |---|---|---|---|---|---|---|
-| metropolis pve1 | 16 | 0 | 1 | 2 | 13 | **1** |
-| metropolis pve2 | 12 | 11 | 1 | 2 | 7 | **3** |
+| site-a pve1 | 16 | 0 | 1 | 2 | 13 | **1** |
+| site-a pve2 | 12 | 11 | 1 | 2 | 7 | **3** |
 | 11.x pve0 | 28 | 7 | 2 | 2 | 19 | **7** |
 | 11.x pve1 | 16 | 0 | 2 | 2 | 14 | **0** |
 
@@ -41,7 +41,7 @@ from 16/23/43 to 16/12/28.
 
 ### Class: container datasets (8 fleet-wide, 2 per host)
 
-`hdd/vm-disks` and `rpool/data` on the metropolis hosts, `hdd/lxc` / `rpool/lxc`
+`hdd/vm-disks` and `rpool/data` on the site-a hosts, `hdd/lxc` / `rpool/lxc`
 and equivalents elsewhere. These are the Proxmox storage parents whose
 **children are all covered**; the parent holds no data of its own.
 
@@ -71,13 +71,13 @@ store, a Samba share, VM files — with no send job. I am not asserting they
 *should* be backed up; I am asserting nothing backs them up and nobody has said
 that is intended.
 
-**metropolis pve2 — 3.** `hdd/vm-disks/subvol-101-disk-0`,
+**site-a pve2 — 3.** `hdd/vm-disks/subvol-101-disk-0`,
 `subvol-101-disk-1`, `vm-102-disk-0`. Guests 101 and 102 do **not** run on pve2
 (`pct list`/`qm list` show only 103), so these are either pvesr replication
 targets or leftovers from a migration. Either way pve2 holds guest data that no
 job on pve2 protects.
 
-**metropolis pve1 — 1.** `hdd/backups`. Written by the *peer's* config, not
+**site-a pve1 — 1.** `hdd/backups`. Written by the *peer's* config, not
 pve1's — the documented limit: an inbound push is declared in the sending host's
 config, which this host does not have.
 
@@ -118,15 +118,15 @@ Re-run on all four hosts once the suppression landed.
 
 | host | uncovered before | after | suppressed as containers |
 |---|---|---|---|
-| metropolis pve1 | 16 | 15 | `rpool/data` |
-| metropolis pve2 | 12 | 11 | `rpool/data` |
+| site-a pve1 | 16 | 15 | `rpool/data` |
+| site-a pve2 | 12 | 11 | `rpool/data` |
 | 11.x pve0 | 28 | 26 | `hdd/lxc`, `rpool/data` |
 | 11.x pve1 | 16 | 16 | — none |
 
 **Four suppressed, not the eight I predicted, and the shortfall is the guard
 working rather than the rule failing.**
 
-`hdd/vm-disks` stayed a finding on both metropolis hosts because it has children
+`hdd/vm-disks` stayed a finding on both site-a hosts because it has children
 that are **not** covered — `subvol-101-disk-0`, `subvol-101-disk-1` and
 `vm-102-disk-0` on pve2. Suppressing it would have hidden exactly the three
 genuine findings section 2 identified. Guard 1 ("every child must be covered")

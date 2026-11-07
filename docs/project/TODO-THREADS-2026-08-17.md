@@ -21,12 +21,12 @@ jeden wątek do podjęcia; kolejność wg wagi ustalonej w rozmowie.
    znanym torem. Z natury dwukrokowa — `--grant-remotely` nie ma tu czego
    podpisać przed wyborem. Forma `--source=HOST: --mode=sync` = „zdublowany
    serwer backupu jedną komendą" (generalizacja pve9).
-3. **vsql2: natywny backup SQL w gościu** — SQL Agent (usługi już są:
+3. **vm-sql: natywny backup SQL w gościu** — SQL Agent (usługi już są:
    `SQLSERVERAGENT`, `SQLAgent$SQL2019`) + `BACKUP DATABASE` w pętli albo
    skrypty Ola Hallengrena; pliki na dysk w `rpool/data`, dalej niesie je nasz
    łańcuch. Przed startem: pomiar łącznego rozmiaru baz (FULL co noc vs
    FULL+DIFF). Werdykt VSS (strukturalny: ~9 s freeze przy ~200 bazach vs
-   limit ~10 s Windows) w `infra_vsql2_vss_sqlwriter` — `quiesce = no` na
+   limit ~10 s Windows) w `infra_vm-sql_vss_sqlwriter` — `quiesce = no` na
    11.11 ma się stać DECYZJĄ (poprawić komentarz w configu), czeka na
    potwierdzenie właściciela.
 4. **`clean_all`** — skrypt sprzątający pozostałości testowe; taksonomia
@@ -61,7 +61,7 @@ jeden wątek do podjęcia; kolejność wg wagi ustalonej w rozmowie.
   czysty adres tej samej polityki, bez zmiany zachowania.
 
 - **„Przeglądaj kopię” — podgląd migawki tylko do odczytu i kopiowanie plików w `mc`**
-  (pomysł właściciela po awarii w Metropolis, zapisane 2026-10-17 „na razie do todo”).
+  (pomysł właściciela po awarii w Site-A, zapisane 2026-10-17 „na razie do todo”).
   Montowanie tam, gdzie działa GUI (dla relacji jednohostowej to źródło). W GUI obok
   „Przywróć”: wybór punktu -> montaż -> `mc` w tym katalogu -> wyjście odmontowuje.
   - LXC/dataset plikowy: `mount -t zfs pula/ds@migawka /mnt/...` (z natury tylko do

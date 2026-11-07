@@ -225,7 +225,7 @@ sprawdzonego-i-nieobecnego od linii, ktora nigdy nie powstala.
 ### P10. `migrate-profile` i `audit-source-retention` nie umieją wybrać relacji
 
 Dopisane 2026-08-21, poza macierzą — wyszło przy pytaniu o `server.conf`.
-Zmierzone na żywo na pve2 i pve1 (metropolis), nie wywnioskowane z kodu.
+Zmierzone na żywo na pve2 i pve1 (site-a), nie wywnioskowane z kodu.
 
 Na hoście z dwiema relacjami żyją dwa configi i dwa crontaby:
 

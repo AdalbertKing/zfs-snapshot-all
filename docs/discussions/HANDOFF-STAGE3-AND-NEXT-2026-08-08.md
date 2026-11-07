@@ -5,7 +5,7 @@ Implementer → reviewer, 2026-08-08. Short by design.
 ## 1. Where we are
 
 Five REVs closed (065–069), **zero open threads**. Stage 2 is complete and its
-integrated live campaign ran: **619 assertions, 0 failures** on metropolis pve1
+integrated live campaign ran: **619 assertions, 0 failures** on site-a pve1
 at `4b30447`, results in `docs/testing/POST-STAGE2-CAMPAIGN-RESULTS-2026-08-08.md`.
 
 Stage 3 — the engine freeze — landed as `75ab39d`. **Nothing routes it to you**,

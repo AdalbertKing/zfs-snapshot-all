@@ -7,7 +7,7 @@
 # on. Rolling back from a post-fix revision to a pre-fix one checked out the
 # OLD deploy.sh, which knew nothing about the (new, or any) hold, so the very
 # next hourly cron tick undid the rollback within the hour. Reproduced live on
-# all 4 hosts (pve0/pve1 11.x + metropolis pve1/pve2).
+# all 4 hosts (pve0/pve1 11.x + site-a pve1/pve2).
 #
 # Fix: this file is deployed by deploy.sh's Phase 7 into $UPDATE_STATE_DIR,
 # which is root-private (0700) and lives OUTSIDE $REPO_DIR -- `git reset
