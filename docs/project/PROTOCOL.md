@@ -235,8 +235,30 @@ The protocol is amended in the course of the work. No separate redesign phase is
 4. A protocol-only amendment does not create a lifecycle REV and does not change the FSM or the
    ledger, unless it exposes product or release risk.
 
+## V3.13 Merge on green, the Reviewer's verdict before the release (Owner decision, 2026-11-07)
+
+The Reviewer's check of PR #1127 (F1) asked that an implementation be merged only after the
+Reviewer's verdict. The Owner decided otherwise, within Owner authority over merge and release
+(V3.7).
+
+- An implementation PR is merged into dev `main` on green exact-head CI. As in V2, that merge
+  plus the response and the regenerated ledger on `main` is the **submission**. An open PR is
+  still not a submission.
+- `main` is development state. Hosts receive only the release repository. The Reviewer's
+  verdict is therefore required before **publication**: `release/publish.sh --push` runs
+  `release/review-gate.sh` on the ledger of the revision being released. It refuses while any
+  REV there is `OPEN` or `IMPLEMENTED`, and it names each one. `APPROVED` and `CLOSED` pass.
+- Only the Owner may publish over an open review, by naming each REV in
+  `--accept-open-review=REV-...,REV-...`. That is explicit Owner risk acceptance. The release
+  commit records it, one `accepted:` line per REV. The Implementer passes the flag only on the
+  Owner's explicit word for those REVs.
+- A rejection after the merge is fixed under the same REV (V3.9). V3.3 decides what blocks the
+  batch. The release stays gated until the verdict.
+
 ### Amendment log
 
+- V3.0 revision 2, 2026-11-07: V3.13. The Owner decided F1's merge timing: merge on green,
+  with the Reviewer's verdict gating publication (`release/review-gate.sh`).
 - V3.0 revision 1, 2026-11-07, after the Reviewer's check of PR #1127, done in the same PR:
   - V3.8: `closed-by` is enforced against the published `origin/main`;
   - V3.5: items 6 (one evidence digest) and 7 (re-check only the delta);

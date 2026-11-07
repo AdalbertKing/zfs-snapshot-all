@@ -62,7 +62,7 @@ Normal workflow:
 1. Use a branch and Pull Request rather than committing directly to `main`.
 2. One problem or review per branch and Pull Request.
 3. One commit must contain one logical change. Do not combine an implementation, unrelated cleanup, fixture refresh, and documentation rewrite in one commit.
-4. Do not merge your own implementation merely because its tests pass. The reviewer must inspect it.
+4. An implementation is merged into dev `main` on green exact-head CI; that merge is the submission, and the reviewer must inspect it. The reviewer's verdict gates **publication**: `release/publish.sh --push` refuses while any REV is `OPEN` or `IMPLEMENTED`, unless the owner names it (PROTOCOL V3.13, owner decision 2026-11-07).
 5. Production should normally use a stable release tag or pinned commit. `main` is ordinarily development state, not an automatic release channel.
 6. Never rewrite published history or force-push a shared branch without the owner's explicit instruction.
 

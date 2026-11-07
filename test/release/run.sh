@@ -147,6 +147,59 @@ else
     bad "publish.sh mentions a force push" "$(grep -nE -- '--force|push -f' "$REPO/release/publish.sh")"
 fi
 
+# The Reviewer's gate in front of a pushed release (PROTOCOL V3.13, Owner 2026-11-07):
+# merge into dev main on green CI, the Reviewer's verdict before publication.
+GATE="$REPO/release/review-gate.sh"
+LED='| REV | State | Owner | Implementation | Reviewed | Response | Next |
+| REV-20990101-001 | CLOSED | - | a | a | r | - |
+| REV-20990101-002 | APPROVED | Reviewer | b | b | r | close |
+| REV-20990101-003 | OPEN | Claude | c | c | r | implement |
+| REV-20990101-004 | IMPLEMENTED | Reviewer | d | - | r | review |'
+gate() { printf '%s\n' "$LED" | bash "$GATE" "$@" > "$WORK/gate.out" 2>&1; }
+if ! gate && grep -q 'REV-20990101-003(OPEN|Claude)' "$WORK/gate.out" && grep -q 'REV-20990101-004(IMPLEMENTED|Reviewer)' "$WORK/gate.out"; then
+    ok "gate: OPEN and IMPLEMENTED reviews refuse a release and are named"
+else
+    bad "gate: OPEN and IMPLEMENTED reviews refuse a release and are named" "$(cat "$WORK/gate.out")"
+fi
+if ! gate REV-20990101-003 && grep -q 'REV-20990101-004' "$WORK/gate.out"; then
+    ok "gate: accepting one open review does not let the other through"
+else
+    bad "gate: accepting one open review does not let the other through" "$(cat "$WORK/gate.out")"
+fi
+if gate REV-20990101-003,REV-20990101-004 && [ "$(grep -c '^accepted: ' "$WORK/gate.out")" -eq 2 ]; then
+    ok "gate: the Owner's named acceptance of every open review passes, one 'accepted:' line each"
+else
+    bad "gate: the Owner's named acceptance of every open review passes" "$(cat "$WORK/gate.out")"
+fi
+if ! gate REV-20990101-00 && ! gate REV-20990101-0033,REV-20990101-004; then
+    ok "gate: an acceptance list matches whole REV ids only (no prefix match)"
+else
+    bad "gate: an acceptance list matches whole REV ids only" "$(cat "$WORK/gate.out")"
+fi
+if printf '| REV | State |\n| REV-20990101-001 | CLOSED |\n| REV-20990101-002 | APPROVED |\n' | bash "$GATE" >/dev/null 2>&1 \
+   && ! echo 'not a ledger' | bash "$GATE" >/dev/null 2>&1; then
+    ok "gate: only APPROVED/CLOSED passes; input that is not a ledger fails closed"
+else
+    bad "gate: only APPROVED/CLOSED passes; input that is not a ledger fails closed" ""
+fi
+# publish.sh --push runs the gate on HEAD's own ledger BEFORE writing anything. REL has no
+# remote, so a gate that passes ends in a failed push -- either way nothing new is committed
+# when the gate refuses. Which branch applies follows from HEAD's ledger itself.
+before="$(git -C "$REL" rev-parse HEAD)"
+out3="$(bash "$REPO/release/publish.sh" HEAD "$REL" --push 2>&1)"
+if git -C "$REPO" show HEAD:docs/internal/reviews/REVIEW_LEDGER.md | bash "$GATE" >/dev/null 2>&1; then
+    ok "publish --push: HEAD's ledger has a verdict for every review (gate not exercised here)"
+elif printf '%s\n' "$out3" | grep -q "Reviewer's gate refused" && [ "$(git -C "$REL" rev-parse HEAD)" = "$before" ]; then
+    ok "publish --push: an open review in HEAD's ledger refuses before anything is written"
+else
+    bad "publish --push: an open review in HEAD's ledger refuses before anything is written" "$out3"
+fi
+if bash "$REPO/release/publish.sh" HEAD "$REL" --bogus >/dev/null 2>&1; then
+    bad "publish: an unknown option is refused" ""
+else
+    ok "publish: an unknown option is refused"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

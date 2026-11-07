@@ -169,6 +169,9 @@ Never infer the active review from chat memory, the largest REV number,
   with no second discussion when nothing changed (V3.8).
 - **Rejection of batch N:** fixed under the same REV. Parallel work only if it is
   dependency-independent, permitted by the active plan, and does not assume acceptance (V3.9).
+- **Merge and release:** an implementation is merged on green CI, and that merge is the submission.
+  `release/publish.sh --push` refuses while any REV is `OPEN` or `IMPLEMENTED`, unless the Owner names it
+  in `--accept-open-review` (V3.13).
 - **Handoff line:** `REV-... IMPLEMENTED @ <sha>, PR #n, CI <run-url>` is a notification only.
   Verdict PR titles say `approve` / `reject` and the REV (V3.10).
 - **Delegation to cheaper agents** is a duty for both sides. Every response and verdict ends with
