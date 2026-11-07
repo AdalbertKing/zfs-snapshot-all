@@ -206,6 +206,21 @@ expect "an unfetchable reviewed-implementation is refused too" $R FAILED
 world p6; review $R APPROVED $sha2; respond $R IMPLEMENTED $sha2; closure $R $NOSUCH
 expect "an unfetchable closed-by is refused" $R FAILED
 
+# Protocol V3 (Reviewer decision 2026-11-07, P8 rejected): approval and closure stay
+# two PUBLISHED boundaries. A closure whose closed-by is a real commit that exists
+# only in a local clone -- e.g. an approval and a closure written in one unmerged PR --
+# must not close the thread. p6 pins a nonexistent SHA; this pins the real-but-
+# unpublished one, which `git cat-file -e` would pass.
+if [ -n "$ORPHAN" ]; then
+    world p6b; review $R APPROVED $sha2; respond $R IMPLEMENTED $sha2; closure $R "$ORPHAN"
+    expect "a real but unpublished closed-by is refused (two published boundaries)" $R FAILED
+    msg="$(REVIEWCTL_REPO="$W" "$CTL" --generate 2>&1)"
+    case "$msg" in
+      *"$R"*closed-by*"$ORPHAN"*) ok "the refusal names the REV, closed-by and the SHA" ;;
+      *) bad "the refusal names the REV, closed-by and the SHA" "$msg" ;;
+    esac
+fi
+
 # `-` is the protocol's explicit "no commit yet". It must stay legal, or the
 # very first review of any thread becomes unrepresentable.
 world p7; review $R CHANGES-REQUIRED -

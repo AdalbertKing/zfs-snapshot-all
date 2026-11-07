@@ -25,7 +25,7 @@ At the start of every scheduled or manually-started work cycle, and **before say
 3. Every row whose derived state is `OPEN` and owner is `Claude` is an actionable reviewer handoff. Open the matching `docs/internal/reviews/REV-YYYYMMDD-NNN.md` and continue that REV from the reviewer's current requirements.
 4. `IMPLEMENTED -> Reviewer` means the submitted SHA is waiting for review. `APPROVED -> Reviewer` means closure is the reviewer's move. Do not continue modifying that submitted acceptance boundary behind its SHA merely because the implementer cycle is still running. `CLOSED` needs no implementer action.
 5. If there is no `OPEN | Claude` work and no earlier gate/submission whose current Reviewer ownership blocks functional expansion, read `docs/project/ACTIVE-WORK-PLAN.md` and any current explicit Owner sequencing note, then start the next dependency-ready planned item without waiting for a new Owner message.
-6. While Reviewer owns a submitted functional boundary, only dependency-independent work explicitly permitted by the active plan may proceed; do not jump to a later functional phase to fill the wait.
+6. While Reviewer owns a submitted functional boundary, only dependency-independent work explicitly permitted by the active plan may proceed, and it may not assume that the pending boundary will be accepted (PROTOCOL V3.9). That includes preparing the next batch on another branch. A rejection of that boundary is fixed under the same REV and response, not moved to the next batch. Do not jump to a later functional phase to fill the wait.
 7. Never claim "no reviewer work" while the fresh ledger contains an `OPEN | Claude` row, and never claim "nothing to do" without also checking the active product sequence when review routing is clear.
 
 A rejection/follow-up normally does **not** edit Claude's response file: the Reviewer advances the reviewer-owned `reviewed-implementation`/verdict fact, which deterministically changes the ledger from `IMPLEMENTED -> Reviewer` to `OPEN -> Claude`. Therefore an older response may still say `response-status: IMPLEMENTED`, may describe previous remaining work, or may contain an earlier request for reviewer input. **The fresh ledger plus the current reviewer file wins for pickup.** Claude updates the same response file only after producing the next implementation/evidence SHA.
@@ -172,13 +172,16 @@ exception for one night. One batch:
    and merge on green. A hole found during this step goes on the next batch's list. It does not
    restart the step, unless it is data loss, a security hole, or a destructive guard.
 5. **One release per deployment**, on the Owner's "publikuj". Never one version per finding.
-6. **Reviewer:** Protocol V2.2 stays in force. The Reviewer decided the V3 proposal in
-   `docs/project/PROTOCOL-V3-REVIEW-20261107.md`: accepted in principle with changes, P8
-   (approve and close in one PR) rejected. It becomes active only after the amendment PR
-   (PROTOCOL.md + reviews/README) is approved, merged and read back on `main`. Until then:
-   - a rejection of batch N is fixed under the same REV, not moved to N+1 (P9);
-   - in evidence, mark each suite EXECUTED PASS, SKIPPED / NOT IMPACTED or MANUAL / NOT RUN.
-     A skipped CI body is not a green test (P5.1).
+6. **Reviewer: Protocol V3** (`docs/project/PROTOCOL.md`, section "V3 amendments"; active once
+   its amendment PR is merged and read back on `main`). In practice:
+   - one pass per batch;
+   - evidence marked EXECUTED PASS / SKIPPED / NOT IMPACTED / MANUAL / NOT RUN;
+   - a rejection is fixed under the same REV;
+   - approval and closure stay two published boundaries;
+   - each submission ends with the handoff line `REV-... IMPLEMENTED @ <sha>, PR #n, CI <run-url>`
+     and the delegation split line (V3.10, V3.11).
+
+   Protocol changes are made during the work, as V3.n amendments (V3.12).
 
 ## Which model -- delegation
 

@@ -146,14 +146,22 @@ jobs:
             echo "run=1" >> "$GITHUB_OUTPUT"; echo "${{ matrix.suite }} is impacted -> run"
           else
             echo "run=0" >> "$GITHUB_OUTPUT"; echo "${{ matrix.suite }} not impacted by this diff -> skip body (reports green)"
+            # Protocol V3 P5.1: a skipped body is not an executed test -- say so in the record.
+            echo "${{ matrix.suite }}: SKIPPED / NOT IMPACTED" >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=SKIPPED / NOT IMPACTED::${{ matrix.suite }}"
           fi
       - name: Run
         if: steps.gate.outputs.run == '1'
         run: |
+          rc=0
           case "${{ matrix.suite }}" in
-            gencron) ./test/run.sh ;;
-            *)       "./test/${{ matrix.suite }}/run.sh" ;;
+            gencron) ./test/run.sh || rc=$? ;;
+            *)       "./test/${{ matrix.suite }}/run.sh" || rc=$? ;;
           esac
+          if [ "$rc" -eq 0 ]; then st="EXECUTED PASS"; else st="EXECUTED FAIL (rc=$rc)"; fi
+          echo "${{ matrix.suite }}: $st" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=$st::${{ matrix.suite }}"
+          exit "$rc"
 
   privileged-reminder:
     name: what this workflow did NOT run
@@ -165,11 +173,11 @@ jobs:
       - name: List the obligations no green tick here can satisfy
         run: |
           echo "This workflow runs only the suites that need nothing but bash."
-          echo "A green result does NOT cover:"
+          echo "A green result does NOT cover (MANUAL / NOT RUN here):"
           echo
           ./test/impact.sh --all 2>/dev/null \
             | sed -n '/SUITES TO RUN/,$p' \
-            | grep -E 'needs (root|a SECOND host)' || true
+            | grep -E 'needs (root|a SECOND host|git)' || true
           echo
           echo "...nor the manual obligations (nonroot-account, force-full,"
           echo "deploy-check-only, monitor-live). Those are run by hand on a"
