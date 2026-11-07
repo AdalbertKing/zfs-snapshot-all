@@ -567,6 +567,40 @@ check "...and says why (the -R stream line in the log)" "1" \
       "$([ "$(grep -c 'the first copy is one -R stream' "$TMPD/s12.log")" -ge 1 ] && echo 1 || echo 0)"
 
 # ============================================================================
+# S13. An ACTIVE replica continues from its BOOKMARK when its own snapshot is
+#      gone from the source (owner 2026-11-07). On a pvesr TARGET, pvesr's
+#      `zfs recv -F` of its -R stream destroys every snapshot the guest's node
+#      does not have -- the replica's own one included -- and leaves bookmarks
+#      alone (measured that day on A-TASSA with real pvesr, PVE 7.4). The
+#      replica line is `snapget.sh -m <prefix>` (gen-cron, keep set: no -M).
+# ============================================================================
+scenario "S13 active replica: next copy from the bookmark when its snapshot was destroyed on the source" "snapget -m: find_bookmark_base, -i #bookmark"
+S13="$ROOT/s13src"
+mk "$S13"
+"$SNAPGET" -v 1 -m rep_ "$S13" "$ROOT/s13med" >"$TMPD/s13.log" 2>&1
+check "month 1: the first copy succeeds and a bookmark is left on the source" "0:1" \
+      "$?:$(zfs list -H -t bookmark -o name -d1 "$S13" 2>/dev/null | grep -c '#tgt-')"
+# what pvesr's receive does to the replica's snapshot: gone; a newer foreign one appears
+for _s in $(zfs list -H -t snapshot -o name -d1 "$S13" | grep '@rep_'); do zfs destroy "$_s"; done
+zfs snapshot "$S13@__replicate_100-0_1__"
+sleep 1
+"$SNAPGET" -v 1 -m rep_ "$S13" "$ROOT/s13med" >>"$TMPD/s13.log" 2>&1
+_r13=$?
+_new13="$(zfs list -H -t snapshot -o name -s createtxg -d1 "$S13" | grep '@rep_' | tail -1)"
+check "month 2: with no common snapshot the copy succeeds from the bookmark; the medium holds 2 of its own" "0:2" \
+      "$_r13:$(zfs list -H -t snapshot -o name -d1 "$ROOT/s13med/$S13" | grep -c '@rep_')"
+check "...its newest is the source's (GUID)" "$(guid_of "$_new13")" "$(guid_of "$ROOT/s13med/$S13@${_new13#*@}")"
+check "...it took the bookmark path (log line)" "1" \
+      "$([ "$(grep -c 'a bookmark still anchors an incremental' "$TMPD/s13.log")" -ge 1 ] && echo 1 || echo 0)"
+# control: the bookmark is what carries it -- without it, the run refuses
+for _s in $(zfs list -H -t snapshot -o name -d1 "$S13" | grep '@rep_'); do zfs destroy "$_s"; done
+for _b in $(zfs list -H -t bookmark -o name -d1 "$S13"); do zfs destroy "$_b"; done
+sleep 1
+"$SNAPGET" -v 1 -m rep_ "$S13" "$ROOT/s13med" >>"$TMPD/s13.log" 2>&1
+check "control: without the bookmark the same run fails and the medium keeps its 2" "1:2" \
+      "$([ $? -ne 0 ] && echo 1 || echo 0):$(zfs list -H -t snapshot -o name -d1 "$ROOT/s13med/$S13" | grep -c '@rep_')"
+
+# ============================================================================
 # S7. Hygiene after everything: no held snapshots, no leftover state.
 #     Contract: hold-tag.
 # ============================================================================

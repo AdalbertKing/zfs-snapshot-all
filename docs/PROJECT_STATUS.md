@@ -20,6 +20,14 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **1.0.14 gotowe do wydania, NIEWYDANE (2026-11-07; czeka na „publikuj”).** Zawiera REV-191
+  r3–r5 (#1129, #1131, #1133; REV-191 zatwierdzony i zamknięty, `docs/internal/reviews/closures/REV-20261107-191.md`) i test S13. Wpis w CHANGELOG.
+  - **S13 (replika aktywna po pvesr, zadanie bez `-r`):** odbiór pvesr (`recv -F` strumienia `-R`) kasuje na celu
+    migawkę repliki, a jej zakładkę zostawia. Następna kopia idzie przyrostem z zakładki
+    (`find_bookmark_base`, `snapget.sh`; tylko bez `-r`). Silnik się nie zmienił; dodano test S13, który odtwarza skutek pvesr (`zfs destroy` migawki repliki), bez samego pvesr. Zmierzone
+    2026-11-07 na A-TASSA na prawdziwym pvesr (PVE 7.4, zfs 2.1.9). Użyto tymczasowej VM 9990
+    i zadania 9990-0 pve0->pve1; trzy „miesiące” na `hdd/bmlab/med`, zawartość i GUID zgodne,
+    pvesr FailCount 0. Wszystko sprzątnięte. S13 na pve9: 69/0; kontrola bez zakładki odmawia.
 - **1.0.13 wydane (2026-11-07 ~12:55; repo wydań zfsbackup e5fff9f, zbudowane z `main` c15e6f8b).**
   Weszły w nie wpisy z 2026-11-07 poniżej (#1111, #1114, #1117, #1118).
   - **Hosty po aktualizacji o 13:15:** e5fff9f, deploy rc 0, na pve9, pve9b, pve11, Metropolis
@@ -52,18 +60,18 @@
     po migawkach niewykluczonych. Bez wykluczonej w środku zostaje jeden strumień `-I`.
     Wcześniej skopiowane migawki zostają na celu. S8 porównuje teraz pełną listę celu, bez
     filtra; nowy S9 sprawdza to samo dla wypychania (`snapsend.sh`).
-  - **REV-191 r3 (niewydane; odrzucone przez recenzenta, poprawione w r4):** recenzent odrzucił ścieżkę `-r`. Kroki
+  - **REV-191 r3 (w 1.0.14, niewydane; odrzucone, poprawione w r4):** recenzent odrzucił ścieżkę `-r`. Kroki
     planuje teraz `exclusion_step_plan` (lib-zfs-snap.sh) według createtxg. Końce kroków to
     tylko migawki korzenia. Pod `-r` liczy się też wykluczona migawka, którą ma tylko dziecko
     (w 1.0.13 przechodziła na cel w jednym `-R -I`). Czysty krok zostaje `-I`.
     Testy S10 i S11; kontrola negatywna na starych silnikach daje 3 FAIL.
     Replika A-TASSA (`-R` flat) tego przypadku nie ma.
-  - **REV-191 r4 (niewydane; odrzucone przez recenzenta, poprawione w r5):** pierwsza kopia przy `-r` i `-H` to jeden
+  - **REV-191 r4 (w 1.0.14, niewydane; odrzucone, poprawione w r5):** pierwsza kopia przy `-r` i `-H` to jeden
     strumień `-R`, który niesie wszystkie migawki sprzed tej, którą nazywa, razem z dziećmi.
     Teraz zaczyna się od najnowszej migawki korzenia, przed którą w całym drzewie nie ma
     wykluczonej (`exclusion_full_base`); resztę niesie plan kroków. Gdy takiej migawki nie ma,
     przebieg odmawia przed wysyłką. Test S12; kontrola negatywna daje 5 FAIL.
-  - **REV-191 r5 (niewydane; do weryfikacji przez recenzenta po scaleniu):** przy samym `-H`
+  - **REV-191 r5 (w 1.0.14, niewydane; zatwierdzone i zamknięte przez recenzenta):** przy samym `-H`
     kroki po bezpiecznej bazie szły bez `-R`, więc dziecko zostawało na bazie, a przebieg kończył
     się rc 0. Teraz kroki idą z `-R`, gdy pierwszy strumień był `-R`. Test S12 (`-H` na korzeniu
     z dzieckiem, pull i push, GUID `@b` dziecka); kontrola negatywna daje 4 FAIL.

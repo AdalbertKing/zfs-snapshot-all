@@ -4,6 +4,29 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [1.0.14] — 2026-11-07
+
+- **Excluded families stay excluded under `-r` and `-H`.** 1.0.13 kept `-E` families out of an
+  incremental on a single dataset. Three cases still let them through:
+  - An atomic recursive job (`-e -r -E`) checked only the root's own snapshots. An excluded
+    snapshot that only a child has (pvesr's `__replicate_` on a guest disk) still went in the
+    single `-R -I` stream.
+  - The first copy under `-r` or `-H` is one `zfs send -R` stream. It carries every snapshot before
+    the one it names, children included.
+  - After such a first copy under plain `-H`, the following steps went without `-R`. The children
+    then stayed at the starting snapshot, and the run still reported success.
+
+  Now, for a stream that carries children (`-r`, or the first copy under `-H`), the engines plan the interval
+  over the whole subtree, by creation order. The first stream
+  starts at the newest root snapshot with no excluded snapshot at or before it, and every later
+  step carries `-R` when that first stream did. When no such starting snapshot exists, the run
+  sends nothing and says why. The engines' `-R` option (one job per dataset) is unchanged.
+- **An active replica after pvesr.** For a replica job without `-r`, on a disk that Proxmox VE
+  replicates to this node, pvesr's
+  receive destroys the replica's own snapshot but leaves its bookmark. The next copy continues
+  from that bookmark, as one increment. This was measured with real pvesr on 2026-11-07. A test now
+  reproduces the effect (the snapshot destroyed, the bookmark kept); the engine did not change.
+
 ## [1.0.13] — 2026-11-07
 
 - **Which installation a mail is about.** A new setting, `alerts.site` (F10, or `zfs-backup.sh settings set
