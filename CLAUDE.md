@@ -166,7 +166,8 @@ exception for one night. One batch:
    suite `test/run.sh` is not a `test/<suite>/` directory, so it goes to CI. Nothing else runs
    by hand. The `impact.sh` list is what CI must show green.
 3. **Delegate while you work.** Reading goes to haiku (`repo-greper` / `Explore`). Typing
-   ≥150 lines goes to `simple-coder`. Prose gets `text-checker`, **once**, at the end.
+   ≥150 lines goes to `simple-coder`. Prose gets `text-checker` before its commit. In a batch that is once, on the batch's final prose,
+   not after each fix.
 4. **Close once.** Write the response and PROJECT_STATUS, do the text-checker pass, commit,
    then run `./test/ship.sh` (push, digest, `--verify` on pve9; it refuses a dirty tree). Open the PR, read exact-head CI once,
    and merge on green. A hole found during this step goes on the next batch's list. It does not
@@ -175,7 +176,8 @@ exception for one night. One batch:
 6. **Reviewer: Protocol V3** (`docs/project/PROTOCOL.md`, section "V3 amendments"; active once
    its amendment PR is merged and read back on `main`). In practice:
    - one pass per batch;
-   - evidence marked EXECUTED PASS / SKIPPED / NOT IMPACTED / MANUAL / NOT RUN;
+   - each suite in the evidence marked with one of three statuses: `EXECUTED PASS`;
+     `SKIPPED / NOT IMPACTED`; `MANUAL / NOT RUN`;
    - a rejection is fixed under the same REV;
    - approval and closure stay two published boundaries;
    - each submission ends with the handoff line `REV-... IMPLEMENTED @ <sha>, PR #n, CI <run-url>`

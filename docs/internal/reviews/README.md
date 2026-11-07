@@ -150,16 +150,21 @@ Never infer the active review from chat memory, the largest REV number,
 - **Batch:** one coherent contract, one submission SHA, one response per REV. The Reviewer lists
   every finding known at verdict time in one pass (V3.1).
 - **Blocking findings:** a reproducer (expected vs actual) or `file:line` + invariant + mechanism.
-  Anything else is a backlog note that does not reopen the REV (V3.2).
-- **Rejection of the current submission:** only for a regression in the submitted behaviour,
-  invalid evidence or a missing control, a safety or release blocker, or a material correctness
-  failure. Unrelated findings get a new REV (V3.3).
+  Missing mandatory real-host, ZFS, account, security or destructive-path evidence may block,
+  as a specific unmet obligation. Only observations with no demonstrated contract, release or
+  safety impact are backlog notes, and they do not reopen the REV (V3.2).
+- **Rejection of the current submission:** possible for a regression in the submitted
+  behaviour, invalid evidence, a missing negative control, a safety or release blocker, or
+  another material backup-correctness or compatibility failure, even if it was not listed in
+  round one. Unrelated findings get a new REV (V3.3).
 - **Verdict:** binds to the implementation SHA and its demonstrated behaviour. Evidence-bearing
-  dependencies are checked against the candidate tree. Gate-only commits need exact-head CI (V3.4).
-- **Evidence statuses:** `EXECUTED PASS` / `SKIPPED / NOT IMPACTED` / `MANUAL / NOT RUN`.
+  dependencies are checked against the candidate tree. Gate-only commits avoid a new review only if they preserve the
+  demonstrated behaviour, carry auditable intentional-diff evidence and pass exact-head CI (V3.4).
+- **Evidence statuses** (three): `EXECUTED PASS`; `SKIPPED / NOT IMPACTED`; `MANUAL / NOT RUN`.
   Negative control = new test on old code. No suite on the Implementer's Windows box (V3.5).
 - **Approval and closure** stay two published boundaries (V3.8).
-- **Rejection of batch N:** fixed under the same REV. Parallel work only if dependency-independent (V3.9).
+- **Rejection of batch N:** fixed under the same REV. Parallel work only if it is
+  dependency-independent, permitted by the active plan, and does not assume acceptance (V3.9).
 - **Handoff line:** `REV-... IMPLEMENTED @ <sha>, PR #n, CI <run-url>` is a notification only.
   Verdict PR titles say `approve` / `reject` and the REV (V3.10).
 - **Delegation to cheaper agents** is a duty for both sides. Every response and verdict ends with

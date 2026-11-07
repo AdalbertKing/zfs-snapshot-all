@@ -1,8 +1,8 @@
 # REVIEW PROTOCOL V3
 ## Claude + Reviewer + Owner workflow
 
-Status: **V3 = V2.2 + the "V3 amendments" section below.** It is ACTIVE from the merge of the
-amendment PR that introduced it, and that PR is merged only after the Reviewer approves it
+Status: **V3 = V2.2 + the "V3 amendments" section below.** It is ACTIVE once the
+amendment PR that introduced it is merged and read back on `main`, and that PR is merged only after the Reviewer approves it
 (Reviewer decision `docs/project/PROTOCOL-V3-REVIEW-20261107.md`, instruction 3). Until that
 merge is read back on `main`, V2.2 applies.
 
@@ -86,7 +86,7 @@ incidental merge SHA. Later unrelated commits do not invalidate it.
 - Gate-only commits (re-freeze, twin bless, pinning) do not force a new review **only if** they
   preserve the demonstrated behaviour, carry auditable intentional-diff evidence, and pass the
   applicable CI on the exact resulting head.
-- Regenerating `PROJECT_STATUS.md` or the ledger does not by itself reopen a verdict.
+- An unrelated regeneration of `PROJECT_STATUS.md` or the ledger does not by itself reopen a verdict.
 
 ## V3.5 Evidence (decision P5)
 
@@ -94,14 +94,19 @@ incidental merge SHA. Later unrelated commits do not invalidate it.
    test host, only the edited suite and its negative control. The `impact.sh` list is what CI
    must show.
 2. **Three statuses, never mixed.** Every mapped suite or obligation in a response is one of:
-   - `EXECUTED PASS`, a body that ran;
+   - `EXECUTED PASS`, a body that ran and passed (a body that ran and failed is
+     `EXECUTED FAIL`, a red check, not evidence);
    - `SKIPPED / NOT IMPACTED`, a CI body skipped by the impact gate;
    - `MANUAL / NOT RUN`, root, ZFS, second-host or manual obligations.
 
-   A skipped body is never described as an executed green test. CI writes the first two
-   statuses into each job's summary and as a notice. The `privileged-reminder` job lists the
-   `MANUAL / NOT RUN` suites. Missing lab, delegated-account, live or destructive-safety
-   evidence is recorded as open risk, not as proof.
+   A skipped body still shows as a green check. It is never described as an executed test.
+   Each CI suite job writes its `EXECUTED ...` or `SKIPPED / NOT IMPACTED` status into its job
+   summary and as a notice. The `privileged-reminder` job prints the `impact.sh --all` lines for
+   suites that need root, a second host or a git checkout, plus a fixed list of manual
+   obligations. That list is not authoritative. `test/impact.sh` for the diff names the manual
+   obligations, `project-status` included. Required lab, delegated-account, live and
+   destructive-safety evidence remains required where applicable. If it is mandatory and
+   missing, it may block (V3.2). Otherwise its absence is recorded as open risk, not as proof.
 3. **Negative control = the new discriminating test against the old behaviour.** The old
    implementation runs with the new test, and the test fails for the intended defect. Running
    the parent's own suite, which lacks the new test, is not a negative control. State the
@@ -135,8 +140,10 @@ because two rounds passed. Owner silence never approves.
 
 Approval and closure remain two ordered **published** boundaries (Principles 5 and 14). A
 closure's `closed-by` names an approval commit that is already published and reachable, whose
-reviewer header says `APPROVED`. `reviewctl` refuses a `closed-by` that is not on the published
-branch. Speed comes from scripting the sequence (approval PR, merge, read-back; then closure
+reviewer header says `APPROVED`. `reviewctl` refuses a `closed-by` that is not reachable from its
+publication ref: `origin/main` by default, `HEAD` under `REVIEWCTL_PUBREF=HEAD` in `impact.sh
+--verify`. That local check does not by itself gate `main` (Principle 14). The published
+read-back on `main` is the proof. Speed comes from scripting the sequence (approval PR, merge, read-back; then closure
 PR, check, merge, read-back), not from collapsing it.
 
 ## V3.9 Work while the Reviewer owns a boundary (decision P9)
@@ -153,7 +160,8 @@ feature or release steps cannot leapfrog a rejected contract.
 
 ## V3.10 Handoff notification (decision P10)
 
-Each submission ends with one line for the Owner to relay:
+Each submission ends with one convenience line (the Owner relays it where the Reviewer has no
+other channel):
 `REV-... IMPLEMENTED @ <sha>, PR #n, CI <run-url>`
 
 Verdict PR titles say `approve` or `reject` and the REV number. This is a notification only.
@@ -934,7 +942,7 @@ Do not combine the required change with opportunistic refactoring, renaming, cle
 
 ## Delegation
 
-V3.11 makes this a duty for both sides, with a split line on every response and verdict. Lead models delegate bounded mechanical work to subagents, cheaper models or deterministic tooling: searches, inventories, test execution, fixture comparison, log extraction, dependency extraction and candidate-test generation are normal examples.
+V3.11 makes this a duty for both sides, with a split line on every response and verdict. Lead models delegate bounded mechanical work to subagents, cheaper models or deterministic tooling: searches, inventories, test execution (on the lab host or in CI, never on the Implementer's Windows box), fixture comparison, log extraction, dependency extraction and candidate-test generation are normal examples.
 
 Delegate execution, not responsibility. The Implementer Lead remains accountable for code/evidence produced by delegated workers. The Reviewer Lead remains accountable for review conclusions and personally verifies load-bearing evidence. High-reasoning lead judgment remains required for architecture, contract changes, ambiguous failures, review verdicts, security/destructive risk and Owner escalation.
 
