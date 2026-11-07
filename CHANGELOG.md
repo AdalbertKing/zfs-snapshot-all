@@ -4,6 +4,15 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [1.0.15] — 2026-11-07
+
+- **A passive source with no snapshot at all is no longer a failed run.** Under `-e -R` (a
+  passive replica with `recursive = yes`, a passive copy with `recursive = flat`), a subtree with no snapshot anywhere has
+  nothing to copy. The run now says so on stderr, which the job log keeps ("nothing to copy") and ends rc 0. Before, it
+  ended rc 1, so one empty source, such as a pool's `data` dataset holding only a container
+  without snapshots, failed the whole replica. A subtree whose snapshots exist but none can be
+  adopted (another family, or all excluded by `-E`) still fails, as before, and so does an empty subtree under atomic `-r`. Both engines.
+
 ## [1.0.14] — 2026-11-07
 
 - **Excluded families stay excluded under `-r` and `-H`.** 1.0.13 kept `-E` families out of an

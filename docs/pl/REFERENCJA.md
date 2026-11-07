@@ -512,7 +512,7 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | Flaga | Znaczenie |
 |---|---|
 | `-m <KOMUNIKAT>` | Prefiks nazwy nowej migawki. Pominięcie jest dozwolone, ale ostrzegane, patrz niżej |
-| `-e` | Użyj istniejącej najnowszej migawki zamiast tworzyć nową |
+| `-e` | Użyj istniejącej najnowszej migawki zamiast tworzyć nową. Wskazany dataset bez migawek kończy przebieg błędem. Przy `-R` element bez migawek jest pomijany; gdy w całym poddrzewie nie ma żadnej migawki, przebieg zapisuje w logu „nothing to copy” i kończy się rc 0, a gdy migawki są, ale żadnej nie da się przejąć (inna rodzina, wszystkie wykluczone przez `-E`), przebieg kończy się błędem |
 | `-E <PREFIKS>` | Z `-e`: nigdy nie przyjmuj za najnowszą/bazę migawki, której nazwa zaczyna się od PREFIKS, nawet gdy jest nowsza (wygrywa najnowsza niewykluczona). Powtarzalne. Do biernego podbierania migawek obcego systemu. Przy strumieniu niosącym potomków (`-r`, pierwsza kopia przy `-H`) wykluczone migawki są szukane w całym poddrzewie; gdy pierwszego strumienia nie da się zacząć bez wykluczonej migawki, nic nie jest wysyłane, a log mówi dlaczego |
 | `-t` | Drugi argument to DOKŁADNY dataset do zapisu, a nie baza, pod którą dopisuje się nazwę źródła. Używane przez odzysk, gdzie kopia musi wrócić na swoją oryginalną ścieżkę. Odmowa przy kilku datasetach, bez bazy i z `-R` |
 | `-z` / `-Z` | Kompresuj strumień zstd (`-Z` to synonim `-z`). Domyślnie włączone wobec zdalnego celu |
