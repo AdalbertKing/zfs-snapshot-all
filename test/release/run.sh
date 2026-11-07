@@ -125,6 +125,8 @@ if [ "$rcp" -ne 0 ] && printf '%s' "$out" | grep -q 'needs the private name list
 else
     bad "publish --push without the name list" "rc=$rcp" "$out"
 fi
+# The later publish --push cases test other gates: they get the synthetic list, so this one passes.
+export ZFS_NAME_DENYLIST="$NL"
 
 # 5. the release README and RELEASE-OF
 if grep -qF 'github.com/AdalbertKing/zfsbackup.git' "$REL/README.md" && ! grep -qF 'test/README.md' "$REL/README.md"; then
