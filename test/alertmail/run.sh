@@ -766,6 +766,31 @@ PYREL
                 bad "notify-fail U158: alert in the admin's words" "$_na" "control: $_nb"
             fi
 
+            # ALERTS.SITE (owner 2026-11-07): "pve2" exists in several firms, so the subject
+            # names the installation. With site = Metropolis: "[ZFS] Metropolis <short host>"
+            # in the digest and in a single alert, and in the sender's name. Control: no
+            # site -> the host's FULL name, not the bare short one it used to be.
+            printf '[alerts]\nsite = Metropolis\n' > "$hb_dir/site.ini"
+            rm -f "$hb_dir/q.processing" "$hb_dir/bin/sm.eml"; _relq
+            PATH="$hb_dir/bin:$PATH" SETTINGS_FILE="$hb_dir/site.ini" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_rl" ZFS_DIGEST_LAYOUT=relacje \
+            ZFS_SENDMAIL="$hb_dir/bin/sm" ZFS_DIGEST_ZB="$hb_dir/bin/zb" bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _sd=$(python3 -c 'import sys,email,email.policy;m=email.message_from_binary_file(open(sys.argv[1],"rb"),policy=email.policy.default);print("SUBJECT:",m["Subject"]);print("FROM:",m["From"])' "$hb_dir/bin/sm.eml" 2>&1)
+            rm -rf "$hb_dir/nst" "$hb_dir/bin/sm.eml"
+            PATH="$hb_dir/bin:$PATH" SETTINGS_FILE="$hb_dir/site.ini" ZFS_ALERT_MODE=immediate ZFS_ALERT_STATE_DIR="$hb_dir/nst" ZFS_SENDMAIL="$hb_dir/bin/sm" \
+            bash "$hb_dir/notify-fail.sh" "h profile__relacja-migawki-x__lsrc_yearly stale (d)" "CRITICAL dataset=d pattern=automated_yearly newest=automated_yearly_2025-01-01_00-00-01 age=9000h" >/dev/null 2>&1
+            _sn=$(cat "$hb_dir/bin/sm.eml" 2>/dev/null)
+            _fq=$(hostname -f 2>/dev/null || hostname)
+            if printf '%s' "$_sd" | grep -qE '^SUBJECT: \[ZFS\] Metropolis [^ .]+ [^ ]+: 2 z 3 relacji wymaga uwagi' \
+               && printf '%s' "$_sd" | grep -q '^FROM: zfs-backup Metropolis ' \
+               && printf '%s' "$_sn" | grep -qE '^Subject: \[ZFS\] Metropolis [^ .]+: migawki-x -- ' \
+               && printf '%s' "$_sn" | grep -q '^From: zfs-backup Metropolis ' \
+               && printf '%s' "$_rm" | grep -qF "SUBJECT: [ZFS] $_fq " \
+               && printf '%s' "$_na" | grep -qF "Subject: [ZFS] $_fq: "; then
+                ok "alerts.site: digest and single alert say '[ZFS] Metropolis <host>' and so does the sender; without it, the full host name"
+            else
+                bad "alerts.site in the subject" "digest: $_sd" "alert: $(printf '%s' "$_sn" | head -3)" "no site: $(printf '%s' "$_rm" | head -1) / $(printf '%s' "$_na" | grep '^Subject')" "hostname -f: $_fq"
+            fi
+
             # THE OTHER CRON FORMAT, and this one shipped broken.
             #
             # v11 looked for zfs-job.sh "<label>", which is what a host

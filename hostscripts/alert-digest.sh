@@ -973,11 +973,11 @@ if [ -n "$LIVE_LABELS" ]; then
 fi
 if [ -n "$STATE_BAD" ]; then VERDICT="UWAGA"; else VERDICT="OK"; fi
 
-SUBJ="[ZFS] $HOST $TODAY STAN: $VERDICT -- $N_ALERT alert / $N_WARN warn"
+SUBJ="[ZFS] $(zfs_mail_host) $TODAY STAN: $VERDICT -- $N_ALERT alert / $N_WARN warn"
 # A quiet report is not a findings mail and must not look like one in a mailbox
 # sorted by subject: "0 alert / 0 warn" reads as a verdict that was reached by
 # measuring something, which is the one thing this mail did not do.
-[ "$QUIET" = "1" ] && SUBJ="[ZFS] $HOST $TODAY -- cisza, kanal sprawny (raport okresowy)"
+[ "$QUIET" = "1" ] && SUBJ="[ZFS] $(zfs_mail_host) $TODAY -- cisza, kanal sprawny (raport okresowy)"
 
 # The job-table mail (the layout before U160). Kept whole: it is what goes out when the
 # relations mail cannot be built (no python3, no temp dir, a renderer error) -- this mail
@@ -1122,7 +1122,7 @@ relations_render() {
         timeout --foreground 300 "$zb" monitor --json > "$DG_RD/monitor.json" 2>/dev/null
     fi
     printf '%s\n' "$SKIP_ROWS" > "$DG_RD/skip.tsv"
-    DG_HOST="$HOST" DG_DAYS="$DIGEST_DAYS" DG_QUEUE="$PROCESSING" DG_QUIET="${QUIET:-0}" \
+    DG_HOST="$HOST" DG_LABEL="$(zfs_mail_host)" DG_DAYS="$DIGEST_DAYS" DG_QUEUE="$PROCESSING" DG_QUIET="${QUIET:-0}" \
     DG_QUIET_WHEN="$QUIET_WHEN" DG_TO="${ZFS_ALERT_EMAIL:-root}" DG_FROM="$(id -un 2>/dev/null || echo root)@$HOST" \
     DG_LOGS="${CRON_LOGS# }" DG_WINDOW="${RUN_WINDOW:-}" DG_RD="$DG_RD" python3 - <<'PYEOF'
 import os, re, json, html, time, gzip, textwrap
@@ -1133,6 +1133,8 @@ E = os.environ
 RD = E["DG_RD"]
 HOST = E.get("DG_HOST", "?")
 SHORT = HOST.split(".")[0]
+# alerts.site (zfs_mail_host): "<site> <host>", or the full host name -- what the reader sees
+LABEL = E.get("DG_LABEL") or HOST
 DAYS = int(E.get("DG_DAYS") or 7)
 NOW = time.localtime()
 
@@ -1440,20 +1442,20 @@ K = sum(1 for x in order if x["rank"] >= 5)
 pool_bad = [p for p in pools if p[1] != "ONLINE" or int(re.sub(r"\D", "", p[2]) or 0) >= 80]
 day = time.strftime("%d.%m", NOW)
 if K == 0 and not pool_bad:
-    subj = u"[ZFS] %s %s: OK, %d %s" % (SHORT, day, N, plural(N, "relacja", "relacje", "relacji"))
+    subj = u"[ZFS] %s %s: OK, %d %s" % (LABEL, day, N, plural(N, "relacja", "relacje", "relacji"))
 else:
     parts = []
     if K:
         parts.append(u"%d z %d relacji wymaga uwagi" % (K, N))
     for p in pool_bad:
         parts.append("pula %s %s %s" % (p[0], p[1], p[2]))
-    subj = u"[ZFS] %s %s: %s" % (SHORT, day, ", ".join(parts))
+    subj = u"[ZFS] %s %s: %s" % (LABEL, day, ", ".join(parts))
 if E.get("DG_QUIET") == "1":
     subj += u" (raport okresowy)"
 
 # --- text body, 78 columns ---
 out = []
-out.append(u"%s  %s   pule: %s" % (SHORT, time.strftime("%Y-%m-%d %H:%M", NOW),
+out.append(u"%s  %s   pule: %s" % (LABEL, time.strftime("%Y-%m-%d %H:%M", NOW),
            "   ".join("%s %s %s" % tuple(p) for p in pools) or "brak"))
 out.append("")
 w = min(max([len(x["name"]) for x in order] + [7]), 30)
@@ -1556,12 +1558,12 @@ tr.err td{color:%(err)s;background:%(errbg)s}tr.warn td,p.warn{color:%(warn)s}tr
 tr.ds td{color:%(dim)s}td.o{text-align:left;white-space:normal}
 </style></head><body><h1>%(t)s<span class="sum">pule: %(p)s</span></h1>%(r)s
 <p class="dim">okno: %(win)s (%(d)d dni); logi: %(logs)s</p></body></html>""" % dict(
-    C, t=h(u"%s -- statystyka biegów" % SHORT), p=h("   ".join("%s %s %s" % tuple(p) for p in pools)),
+    C, t=h(u"%s -- statystyka biegów" % LABEL), p=h("   ".join("%s %s %s" % tuple(p) for p in pools)),
     r="\n".join(rows), win=h(E.get("DG_WINDOW") or "-"), d=DAYS, logs=h(E.get("DG_LOGS") or "-"))
 
 msg = EmailMessage()
 msg["Subject"] = subj
-msg["From"] = "zfs-backup %s <%s>" % (SHORT, E.get("DG_FROM", "root"))
+msg["From"] = "zfs-backup %s <%s>" % (LABEL, E.get("DG_FROM", "root"))
 msg["To"] = E.get("DG_TO", "root")
 msg["Date"] = formatdate(localtime=True)
 msg.set_content(body)

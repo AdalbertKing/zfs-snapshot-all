@@ -16912,6 +16912,7 @@ relation_copy_sources() {
 # key|built-in default|kind|applies to|help (Polish -- shown in the window)
 SETTINGS_REGISTRY='gui.language|en|enum:en,pl|-|język okien GUI (en, pl); komunikaty poleceń zostają po angielsku
 alerts.email|root|email|-|kto dostaje maile o kopiach
+alerts.site|-|name|-|nazwa instalacji (firmy) w temacie maili, np. Metropolis -> "[ZFS] Metropolis pve2 ..."; "-" = pełna nazwa hosta
 alerts.errors|daily|enum:daily,immediate|-|błędy: zbiorczo raz na dobę albo od razu
 alerts.warnings|daily|enum:daily,immediate|-|ostrzeżenia: zbiorczo raz na dobę albo od razu
 alerts.repeat_after|4h|dur|-|tryb "od razu": ten sam alert znowu po tym czasie
@@ -17002,6 +17003,9 @@ settings_validate() {   # <key> <value> -> 0, or the reason on stdout and rc 1
             lo=$(printf '%s' "$kind" | cut -d: -f2); hi=$(printf '%s' "$kind" | cut -d: -f3)
             case "$v" in *[!0-9]*) ;; *) [ "$v" -ge "$lo" ] && [ "$v" -le "$hi" ] && return 0 ;; esac
             echo "'$v' -- a number from $lo to $hi"; return 1 ;;
+        name)
+            case "$v" in -) return 0 ;; [A-Za-z0-9]*) case "$v" in *[!A-Za-z0-9._-]*) ;; *) [ ${#v} -le 32 ] && return 0 ;; esac ;; esac
+            echo "'$v' -- a name: letters, digits, . _ - (up to 32, no spaces), or - for none"; return 1 ;;
         profile)
             [ -r "$(profile_file "$v")" ] && return 0
             echo "'$v' -- no such template (list: zfs-backup.sh list-profiles)"; return 1 ;;
