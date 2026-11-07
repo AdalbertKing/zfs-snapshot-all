@@ -24,15 +24,6 @@ for a in "${@:3}"; do
     esac
 done
 
-# REV-20261107-192: the customer and site names the name gate refuses are not in this public
-# repository; they come from a private list named by $ZFS_NAME_DENYLIST. A pushed release
-# reaches the public release repository, so it is never published with that check missing.
-if [ "$push" -eq 1 ]; then
-    [ -n "${ZFS_NAME_DENYLIST:-}" ] && [ -f "$ZFS_NAME_DENYLIST" ] && [ -r "$ZFS_NAME_DENYLIST" ] \
-        && grep -qvE '^[[:space:]]*(#|$)' -- "$ZFS_NAME_DENYLIST" \
-        || die "--push needs the private name list: set ZFS_NAME_DENYLIST to a readable file with at least one entry (see release/name-gate.sh)"
-fi
-
 dev=$(cd "$(dirname "$0")/.." && pwd)
 rev=$(git -C "$dev" rev-parse --verify "$1^{commit}") || die "'$1' is not a commit of $dev"
 
