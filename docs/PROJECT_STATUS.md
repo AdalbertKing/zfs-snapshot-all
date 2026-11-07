@@ -31,6 +31,11 @@
   e-mail autora we wszystkich commitach wydań (metadane autora), imię i nazwisko w LICENSE/README
   (`AUDYT-PUBLIKACJI-2026-10-27.md` A9: zamierzone; do potwierdzenia), adresy
   10.0.0.x i 192.168.1.x w dokumentacji (niesprawdzone, czy prawdziwe).
+- **REV-20261107-192 (prywatność, 2026-11-07; odpowiedź IMPLEMENTED, czeka na recenzenta):** lista
+  nazw klientów wyjęta z publicznego repo (`$ZFS_NAME_DENYLIST`, prywatne repo configów); `publish.sh
+  --push` bez niej odmawia, zła lista = rc 2. Drzewo dev oczyszczone z nazw klientów (etykiety Site-A..D),
+  poza 9 plikami recenzenta. Historia nieprzepisana; repo dev zostaje publiczne (właściciel). Publikacja:
+  `ZFS_NAME_DENYLIST=<prywatna lista> bash release/publish.sh ...`.
 - **1.0.15 w przygotowaniu, NIEWYDANE (2026-11-07).** `-e -R` na poddrzewie bez żadnej migawki:
   „nothing to copy”, rc 0 (dotąd rc 1). Migawki są, ale żadnej nie da się przejąć: nadal błąd. Oba
   silniki; scenarios S14 na pve9 74/0, kontrola negatywna na starych silnikach 72/2 (oba punkty
