@@ -31,12 +31,16 @@
   e-mail autora we wszystkich commitach wydań (metadane autora), imię i nazwisko w LICENSE/README
   (`AUDYT-PUBLIKACJI-2026-10-27.md` A9: zamierzone; do potwierdzenia), adresy
   10.0.0.x i 192.168.1.x w dokumentacji (niesprawdzone, czy prawdziwe).
-- **REV-20261107-192 (prywatność, 2026-11-07; odpowiedź IMPLEMENTED, czeka na recenzenta):** lista
+- **REV-20261107-192 (prywatność, 2026-11-07; zatwierdzony i zamknięty przez recenzenta, PR #1142):** lista
   nazw klientów wyjęta z publicznego repo (`$ZFS_NAME_DENYLIST`, prywatne repo configów); `publish.sh
-  --push` bez niej odmawia, zła lista = rc 2. Drzewo dev oczyszczone z nazw klientów (etykiety Site-A..D),
-  poza 9 plikami recenzenta. Historia nieprzepisana; repo dev zostaje publiczne (właściciel). Publikacja:
+  --push` bez niej odmawia; zła lista: bramka rc 2, publish się zatrzymuje. Drzewo dev oczyszczone z nazw klientów (etykiety Site-A..D);
+  pliki recenzenta wyczyścił recenzent. Historia nieprzepisana; repo dev zostaje publiczne (właściciel). Publikacja:
   `ZFS_NAME_DENYLIST=<prywatna lista> bash release/publish.sh ...`.
-- **1.0.15 w przygotowaniu, NIEWYDANE (2026-11-07).** `-e -R` na poddrzewie bez żadnej migawki:
+- **1.0.15 wydane (2026-11-08 ~02:22; repo wydań zfsbackup a793cc7, z `main` 277074dd).** Wersja
+  na pve9, pve9b, pve11 (aktualizacja ręczna 02:25), Site-A 28.8/28.9 i SITE-C 0.10/0.11 (cron 03:15;
+  deploy rc=0, odczyt 03:19; data w CHANGELOG 2026-11-07 = dzień zbudowania). Nieodczytane: pve10 (odrzuca klucz roota), Site-B 11.10/11.11 (timeout).
+  Pierwsze wydanie z prywatną listą nazw (bramka na wydaniu: 0 trafień). Zawiera:
+  `-e -R` na poddrzewie bez żadnej migawki:
   „nothing to copy”, rc 0 (dotąd rc 1). Migawki są, ale żadnej nie da się przejąć: nadal błąd. Oba
   silniki; scenarios S14 na pve9 74/0, kontrola negatywna na starych silnikach 72/2 (oba punkty
   S14). Polecenie właściciela po replice usb1 SITE-C. Wpis w CHANGELOG, REFERENCJA/REFERENCE.
@@ -58,7 +62,8 @@
     skopiowane (status success w zfs-snapshot-stats.log); rc=1 z trzeciego źródła `rpool/data`, w którym
     był tylko CT 199 bez migawek (odmowa „found only scaffolding”). Potem, za zgodą właściciela:
     CT 199 usunięty (`pct destroy 199`); `rpool/data` zostaje w źródłach usb1 (na nim powstaną
-    nowe VM). Pusty `rpool/data` daje rc=1 do wydania 1.0.15 na pve1.
+    nowe VM). Pusty `rpool/data` dawał rc=1; od 1.0.15 (pve1 na a793cc7 od 03:15 2026-11-08) ma dać rc 0 --
+    niesprawdzone do najbliższego przebiegu usb1.
 - **1.0.13 wydane (2026-11-07 ~12:55; repo wydań zfsbackup e5fff9f, zbudowane z `main` c15e6f8b).**
   Weszły w nie wpisy z 2026-11-07 poniżej (#1111, #1114, #1117, #1118).
   - **Hosty po aktualizacji o 13:15:** e5fff9f, deploy rc 0, na pve9, pve9b, pve11, Site-A
