@@ -320,6 +320,7 @@
 "%s (%s, wolne %s)": "%s (%s, free %s)",
 "język okien GUI (en, pl); komunikaty poleceń zostają po angielsku": "GUI window language (en, pl); command output stays in English",
 "kto dostaje maile o kopiach": "who gets the mails about copies",
+"nazwa instalacji (firmy) w temacie maili, np. Site-A -> \"[ZFS] Site-A pve2 ...\"; \"-\" = pełna nazwa hosta": "installation (company) name in the mail subject, e.g. Site-A -> \"[ZFS] Site-A pve2 ...\"; \"-\" = full host name",
 "błędy: zbiorczo raz na dobę albo od razu": "errors: one daily digest or immediately",
 "ostrzeżenia: zbiorczo raz na dobę albo od razu": "warnings: one daily digest or immediately",
 "tryb \"od razu\": ten sam alert znowu po tym czasie": "\"immediately\" mode: the same alert again after this time",

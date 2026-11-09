@@ -1825,6 +1825,7 @@
 "nazwa $HOST -> $ip": "name $HOST -> $ip",
 "nazwa $HOST -> $ip  (ADRES PUBLICZNY, spoza sieci lokalnej! sprawdź DNS / dopisz $HOST do /etc/hosts)": "name $HOST -> $ip  (PUBLIC ADDRESS, outside the local network! check DNS / add $HOST to /etc/hosts)",
 "nazwa $HOST się nie rozwiązuje (DNS ani /etc/hosts)": "name $HOST does not resolve (DNS or /etc/hosts)",
+"nazwa instalacji (firmy) w temacie maili, np. Site-A -> \"[ZFS] Site-A pve2 ...\"; \"-\" = pełna nazwa hosta": "installation (company) name in the mail subject, e.g. Site-A -> \"[ZFS] Site-A pve2 ...\"; \"-\" = full host name",
 "nazwa musi być inna niż baza (fabrycznego szablonu nie nadpiszemy)": "The name must be different from the database (we will not overwrite the default template)",
 "nazwa nowego szablonu jest wymagana": "the name of the new template is required",
 "nazwa: tylko litery, cyfry, kropka, podkreślnik, myślnik": "name: only letters, digits, dot, underscore, hyphen",
