@@ -67,6 +67,9 @@ fi
 # repliki; plan ją wtedy odnawia (install-media-trigger --install), jak brakującą.
 RULE_HERE=no; grep -qs 'Managed by zfs-backup.sh install-media-trigger' "$RULES" && RULE_HERE=yes
 [ "$RULE_HERE" = yes ] && ! grep -qs 'run-replicas --on-insert' "$RULES" && RULE_HERE=old
+# Reguła do 1.0.15 była łamana na dwie linie (odwrotny ukośnik na końcu); systemd-udevd 247
+# ją odrzucał, więc włożenie dysku nic nie uruchamiało (pve1, 2026-11-09). Taka też jest "stara".
+[ "$RULE_HERE" = yes ] && grep -qs '[\\]$' "$RULES" && RULE_HERE=old
 
 # Lądowiska relacji na tym kolektorze (managed_datasets z status --json): replika,
 # której źródło je obejmuje, ma domyślnie NIE robić własnych migawek (uwaga 20).

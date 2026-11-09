@@ -5142,6 +5142,23 @@ if [ "$RPRC" -eq 0 ] && grep -qF 'reguła udev ZOSTANIE ODNOWIONA' "$RP/wt.log" 
 else
     bad "replica: odnowienie reguly" "rc=$RPRC" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
 fi
+# (4c): regula do 1.0.15 -- z --on-insert, ale lamana odwrotnym ukosnikiem na dwie linie;
+#       systemd-udevd 247 ja odrzucal (pve1, 2026-11-09). Tez "stara": plan ja ODNAWIA.
+printf '# Managed by zfs-backup.sh install-media-trigger\nACTION=="add", ENV{ID_FS_TYPE}=="zfs_member", \\\n  RUN+="x run-replicas --on-insert --device=%%k"\n' > "$RP/rules"
+RPOUT=$(rp_run "0${T}usb4
+0${T}own
+0${T}mirror
+0${T}removable
+0${T}repl
+0${T}0 22 * * *
+0${T}
+0${T}
+" RP_TREE='goto:hdd/data,space,enter'); RPRC=$?
+if [ "$RPRC" -eq 0 ] && grep -qF 'reguła udev ZOSTANIE ODNOWIONA' "$RP/wt.log" && grep -q '^install-media-trigger --install$' "$RP/zb.log"; then
+    ok "replica: regula lamana na dwie linie (do 1.0.15, odrzucana przez udev) jest odnawiana"
+else
+    bad "replica: odnowienie reguly lamanej" "rc=$RPRC" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
+fi
 # (5) "Sformatuj nowy nosnik" (uwaga 7): bez pytan o nazwe i baze -- pula <host>-<replika>,
 #     baza replica; plan z przyciskiem "Sformatuj (KASUJE dysk)" i --defaultno; ID z
 #     prepare-media trafia do --media-guid.

@@ -4,14 +4,15 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
-## Unreleased
+## [1.0.16] — 2026-11-09
 
 - **The udev rule from `install-media-trigger` is now valid.** It was written as two physical
-  lines joined by a trailing backslash; systemd-udevd 247 (PVE 7) read it as one line with the
+  lines joined by a trailing backslash; systemd-udevd 247 (pve1, PVE 7.4) read it as one line with the
   backslash inside, logged `Invalid key/value pair, ignoring`, and dropped the rule, so
   plugging in a disk never started `run-replicas --on-insert`. The rule is one line now.
   **Re-run `install-media-trigger --install` on every host that installed the trigger:** it
-  rewrites the rule file unconditionally.
+  rewrites the rule file unconditionally. The replica wizard (GUI) treats such a two-line rule
+  as old and renews it in its plan, as it does a rule without `--on-insert`.
 - **USB disks get a deep queue at every attach.** A disk behind `usb-storage` comes up with
   `nr_requests=2`, and `zfs recv` onto it wrote 10 MB/s; with 128 it wrote 65 MB/s (WD My
   Passport 2 TB, OpenZFS 2.1.11). The setting is lost at every unplug, so the media gate raises
