@@ -4,6 +4,12 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [Unreleased]
+
+- **A ZFS disk whose pool name and GUID cannot be read starts no replica on insertion**
+  (REV-20261109-193). In 1.0.17 such a disk ran every on-insert replica; now the insertion is
+  logged and nothing runs. Runs by schedule or by hand are unchanged.
+
 ## [1.0.17] — 2026-11-09
 
 - **The GUI title bar shows the package version** (`zfs-snapshot-all 1.0.17`), read from the first

@@ -14880,6 +14880,16 @@ if [ "$rr_m" = "f-insert m-insert |0" ] && [ "$rr_n" = "f-insert n-insert |0" ] 
 else
     bad "runreplicas: --on-insert pool filter" "m=[$rr_m] n=[$rr_n] new=[$rr_new] bench=[$rr_bench]" "$(cat "$RR/poolout")"
 fi
+# REV-20261109-193 F1: a ZFS disk whose pool name AND GUID blkid cannot read ran EVERY
+# on-insert replica (the filter was skipped). Now nothing runs, rc 0, one log line. Half an
+# identity still filters: GUID 222 alone runs m (GUID list) and f (no medium), not n (by name).
+rr_none="$(rr_pool '' '')"; rr_none_log="$(cat "$RR/poolout")"; rr_half="$(rr_pool '' 222)"
+if [ "$rr_none" = "|0" ] && printf '%s' "$rr_none_log" | grep -q 'read neither its pool name nor its GUID' \
+   && [ "$rr_half" = "f-insert m-insert |0" ]; then
+    ok "runreplicas: --on-insert with an unreadable pool identity runs no replica (rc 0, logged); a GUID alone still selects by GUID (REV-193)"
+else
+    bad "runreplicas: --on-insert unknown identity (REV-193)" "none=[$rr_none] half=[$rr_half]" "$rr_none_log"
+fi
 rr_badname="$(REPLICA_INSERT_WAIT=0 bash -c "source '$ZFSBACKUP'; cmd_run_replicas --config='$RR/c.conf' --on-insert --device='../x y'" 2>&1; echo "rc=$?")"
 case "$rr_badname" in *"expected a kernel device name"*rc=[1-9]*) ok "runreplicas: --device with a path or space is refused" ;;
     *) bad "runreplicas: --device validation" "$rr_badname" ;; esac

@@ -7155,6 +7155,14 @@ cmd_run_replicas() {
             ins_label="$(blkid -o value -s LABEL "$dp" 2>/dev/null)"
             ins_guid="$(blkid -o value -s UUID "$dp" 2>/dev/null)"
             [ -n "$ins_label$ins_guid" ] && ins_known=1
+            # REV-20261109-193 F1: a ZFS disk whose pool name and GUID cannot be read is not
+            # proven to be ANY replica's medium. Before, ins_known=0 skipped the filter and
+            # every on-insert replica ran. Now nothing runs: one log line, no gate, no job
+            # record, no alert. A run without --device (by hand, or by schedule) is unchanged.
+            if [ "$ins_known" -eq 0 ]; then
+                log "run-replicas: $dp is a ZFS disk, but blkid read neither its pool name nor its GUID -- running no replica (re-plug it, or run the replica by hand)"
+                return 0
+            fi
         fi
     fi
     local block rc=0 n=0 notmine=0
