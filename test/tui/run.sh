@@ -6260,12 +6260,7 @@ print("WIDE", u"kasowanie przy pełnej puli: wł. · alarm przyrostu: wył." in 
 print("NARROW", u"pełnej puli" not in zt.top_bar(x, 70, 0, False, 0), len(zt.top_bar(x, 70, 0, False, 0)) <= 70)
 w = zt.top_bar(x, 200, 0, False, 0)
 print("CREDIT", u"by Wojciech Król (Adalbert King)" in w and u"pełnej puli" in w and len(w) <= 200, u"Król" not in zt.top_bar(x, 80, 0, False, 0))
-cl = os.path.join(d, "CHANGELOG.md"); open(cl, "w").write("# Changelog
-
-intro [1.2] text
-## [9.8.7] - 2026
-## [9.8.6]
-")
+cl = os.path.join(d, "CHANGELOG.md"); open(cl, "w").write("# Changelog\n\nintro [1.2] text\n## [9.8.7] - 2026\n## [9.8.6]\n")
 zt._PKG_VERSION[:] = [zt.pkg_version(cl)]
 print("VER", zt.pkg_version(cl), zt.top_bar(x, 80, 0, False, 0).startswith(" zfs-snapshot-all 9.8.7 "), zt.pkg_version(os.path.join(d, "brak.md")) == "")
 PYEOF
