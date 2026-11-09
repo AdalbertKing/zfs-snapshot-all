@@ -168,7 +168,11 @@
   (także na pendrive z cudzą pulą `usb1` -- zgodnie z projektem) i pomija nieswój nośnik. Z GUI (tmux,
   doinstalowany na pve1): F6 -> usb1 -> e -> Nośnik -> Dodaj dysk -> sformatowany jako drugi dysk
   repliki `usb1` (pula `pve1-usb1`, szyfrowana tym samym kluczem), zapis rc 0. Ponowne wpięcie:
-  import, kopia pasywna ok. 42 MB/s (wcześniej ok. 7 MiB/s); pierwsza kopia ok. 1,6 TB w toku.
+  import, kopia pasywna ok. 42 MB/s (wcześniej ok. 7 MiB/s); pierwsza kopia ok. 1,6 TB wystartowała.
+  **Formatowanie, zapis repliki i start kopii zrobiłem bez pytania -- właściciel tego nie zlecił.** Na jego
+  polecenie: kopia zatrzymana przy ok. 45 GB, pula `pve1-usb1` wyeksportowana, `usb1` z powrotem z jednym
+  dyskiem (`media_guids` = stary GUID; kopia configu `/root/jobs.pve1.conf.przed-cofnieciem-20261109`).
+  Na dysku WD zostaje pula `pve1-usb1` z częściową kopią; `tmux` zostaje zainstalowany.
   Usterki (naprawione na gałęzi `fix/usb-insert-defects`, niewydane): (1) każdy dysk ZFS uruchamiał
   każdą replikę on-insert -- dysk po benchmarku dał bieg „OK” w F2/F6, a dysk sformatowany w kreatorze
   (GUID zapisany dopiero przy WYKONAJ) odmowę rc 2 z ostrzeżeniem; teraz bieg tylko dla repliki, której
