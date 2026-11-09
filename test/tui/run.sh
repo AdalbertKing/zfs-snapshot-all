@@ -7293,7 +7293,7 @@ t_pl="$(ZFS_TUI_LANG=pl WHIPTAIL=true bash -c '. "$1/tui/wt-lib.sh"; T Dalej; T 
 t_en="$(env -u ZFS_TUI_LANG SETTINGS_FILE=/nonexistent WHIPTAIL=true bash -c '. "$1/tui/wt-lib.sh"; T Dalej; T "Nowa relacja -- krok %s z %s: %s" 1 6 X; T "tekst bez wpisu"' x "$REPO")"
 t_set="$(env -u ZFS_TUI_LANG SETTINGS_FILE="$LGS/settings.ini" WHIPTAIL=true bash -c '. "$1/tui/wt-lib.sh"; T Wstecz' x "$REPO")"
 rm -rf "$LGS"
-if [ "$(printf '%s\n' "$lc_out" | grep -c '^ok ')" -eq 2 ] \
+if [ "$(printf '%s\n' "$lc_out" | grep -c '^ok ')" -eq 3 ] \
    && has "$bar_pl" '3Relacje' && has "$bar_pl" '12Wyjście' \
    && has "$bar_en" '3Relations' && has "$bar_en" '12Quit' && ! has "$bar_en" 'Relacje' \
    && has "$bar_set" '3Relacje' \

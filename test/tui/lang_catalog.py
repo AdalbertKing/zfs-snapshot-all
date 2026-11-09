@@ -42,3 +42,11 @@ for fn in sorted(os.listdir(tui)):
                 missing.append("%s %r" % (fn, k[:60]))
 print("ok every-wrapped-literal-has-an-entry" if not missing
       else "bad every-wrapped-literal-has-an-entry %s" % "; ".join(missing[:10]))
+
+# Host settings window: the help column comes from SETTINGS_REGISTRY in zfs-backup.sh
+# (key|default|kind|applies|help, help in Polish). 2026-11-09, pve1: alerts.site had no
+# entry and showed Polish in the English window.
+reg = re.search(r"SETTINGS_REGISTRY='(.*?)'\n", open(os.path.join(repo, "zfs-backup.sh"), encoding="utf-8").read(), re.S)
+nohelp = [f[0] for f in (l.split("|", 4) for l in (reg.group(1).splitlines() if reg else [])) if len(f) == 5 and f[4] not in cat]
+print("ok every-setting-help-has-an-entry" if reg and not nohelp
+      else "bad every-setting-help-has-an-entry %s" % (", ".join(nohelp) if reg else "no SETTINGS_REGISTRY"))
