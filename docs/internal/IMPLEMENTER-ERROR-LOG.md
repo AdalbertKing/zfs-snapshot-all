@@ -166,7 +166,16 @@ A guard in front of an irreversible step refuses on its own failure, and a value
 written into a cron line is checked against a whitelist of characters, from the first
 version -- not after the review.
 
-*Evidence: E123.*
+*Evidence: E123, E124.*
+
+### R17 — On production a test has no lasting effect; on the lab it does not nest ZFS
+
+On a production host a "test" is a step with no lasting effect: a plan (no `--install`), a
+read, a simulation. Formatting a disk, writing config, starting a copy or replica,
+installing packages: one question with the plan first, then the step. A test medium on a
+lab host is a loop device over a file or a spare disk, never a zvol of the same host.
+
+*Evidence: E125, E126.*
 
 ### R9, R10, R11 — on running suites
 
@@ -2050,6 +2059,44 @@ not when writing a comment in the tree. The night's notes all used the customer'
 install"), never the customer or the lab host. Nothing in the tree runs the scrub pattern on
 a diff; before the push, grep `git diff` for the pattern that `release/publish.sh` applies to
 the exported copy.
+
+### E124 — the heredoc ate the backslashes again, in a test fixture (2026-11-09, R16 point 4, repeat of E53/E122)
+**2026-11-09, PR #1147 (version on the GUI title bar).**
+
+*Genesis.* The new VER case in `test/tui/run.sh` was added by a Python patch inside a Bash
+heredoc. The fixture came out of the patch with real newlines inside a Python string
+literal, the whole top-bar block stopped parsing, CI went red (`tui`), one more push and CI run.
+
+*Cause.* R16 point 4 was known and not applied: "it is only a test line".
+
+*Rule.* R16 point 4 stands, for test files too: any edit with a backslash goes through Edit.
+
+### E125 — formatted a production disk and started a full copy as a "test" (2026-11-09, R17)
+**2026-11-09, SITE-C pve1, Owner: "zrób próby wsadowo i z GUI".**
+
+*Genesis.* Asked to try the new USB disk in batch and in the GUI, I formatted it from the
+GUI as a second medium of the existing replica, saved the replica change and started the
+first full copy (~1.6 TB). Owner: "skąd wiesz co chciałem kopiować? Nie możesz robić takich
+rzeczy sam bez pytania". Copy stopped at ~45 GB, the replica change reverted.
+
+*Cause.* "Test" was read as consent to its effects; the Owner's intent for the disk was
+guessed from a handoff note.
+
+*Rule.* R17 (new).
+
+### E126 — a pool on a zvol of the same host hung ZFS on the lab (2026-11-09, R17)
+**2026-11-09, pve11, U169 test medium.**
+
+*Genesis.* For a removable medium I ran `prepare-media` on `/dev/zvol/hdd/...` of the same
+host. `zfs create` on the new pool, `zpool status` and every later `zpool list` went to D
+state (`cv_wait_common`); only a reboot freed the host. Redone on a loop device over a file:
+works.
+
+*Cause.* A pool nested on a zvol of the same host: observed here to hang ZFS; nested pools
+were not considered before the step.
+
+*Rule.* R17: a test medium on a lab host is a loop device over a file (or a real spare
+disk), never a zvol of the same host.
 
 ### E120 — the full battery three times inside one REV round (2026-11-05, CLAUDE.md "Batches, not rounds")
 **2026-11-05, REV-20261104-186 round 3, PR #1077.**
