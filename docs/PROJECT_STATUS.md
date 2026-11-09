@@ -165,8 +165,8 @@
     `test/tui/lang_catalog.py` (every-setting-help-has-an-entry) sprawdza opisy wszystkich ustawień.
   - PR #1157: w oknie ustawień hosta nazwy ustawień wielkimi literami (właściciel chciał
     pogrubienia, a whiptail go nie ma).
-  - Backlog paczki GUI: U166-U171 (F2: kolejność i grupowanie, projekt zaakceptowany; F4 przy
-    trwającej kopii; przerwany bieg widoczny jako „running” (U167); tekst o kluczu; pliki stanu po usunięciu repliki). U172/U173: strażnik
+  - Backlog paczki GUI: U166-U171, U174 (F2: kolejność i grupowanie, projekt zaakceptowany; F4 przy
+    trwającej kopii; przerwany bieg widoczny jako „running” (U167); tekst o kluczu; pliki stanu po usunięciu repliki); U174: F6 przy trwającej kopii. U172/U173: strażnik
     przyrostu dla relacji „tylko migawki na źródle” liczony z kolektora, bez crona na źródle.
 - **1.0.17 wydane (2026-11-09 ~20:00; repo wydań zfsbackup 68ac8d3, z `main` f3e90e63, PR #1147).**
   Na SITE-C pve1 i pve0 ręczna aktualizacja (`update-control.sh --self-update`, rc 0; root i konto
