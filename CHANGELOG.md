@@ -4,6 +4,24 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## Unreleased
+
+- **The udev rule from `install-media-trigger` is now valid.** It was written as two physical
+  lines joined by a trailing backslash; systemd-udevd 247 (PVE 7) read it as one line with the
+  backslash inside, logged `Invalid key/value pair, ignoring`, and dropped the rule, so
+  plugging in a disk never started `run-replicas --on-insert`. The rule is one line now.
+  **Re-run `install-media-trigger --install` on every host that installed the trigger:** it
+  rewrites the rule file unconditionally.
+- **USB disks get a deep queue at every attach.** A disk behind `usb-storage` comes up with
+  `nr_requests=2`, and `zfs recv` onto it wrote 10 MB/s; with 128 it wrote 65 MB/s (WD My
+  Passport 2 TB, OpenZFS 2.1.11). The setting is lost at every unplug, so the media gate raises
+  `nr_requests` to 128 on every USB whole disk below that, just before `zpool import`
+  (never lowered, non-USB disks untouched, silent when sysfs is read-only). `prepare-media`
+  does the same before `zpool create`.
+- **`prepare-media` warns when a USB bridge hides the sector size.** If the kernel's
+  `physical_block_size` is smaller than what `smartctl -i` (or `-d sat`) reports, the plan says so.
+  The pool is created `ashift=12` regardless, as before.
+
 ## [1.0.15] — 2026-11-07
 
 - **A passive source with no snapshot at all is no longer a failed run.** Under `-e -R` (a
