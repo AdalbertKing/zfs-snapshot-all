@@ -4544,7 +4544,8 @@ SOUT=$( export NR_DIR="$SD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-s
         bash "$REPO/tui/settings.sh" ) 2>"$SD/err" </dev/null
 SMENU="$(grep -F -- '--menu' "$SD/wt.log" | head -1)"
 SPROF="$(grep -F -- '--title ~ new_relation.template ~' "$SD/wt.log" | head -1)"
-if has "$SMENU" ' ~ #_new_relation ~   ~ ' && hasE "$SMENU" 'email +root  \(zfs-alert.conf\) +kto dostaje maile' \
+if has "$SMENU" ' ~ #_new_relation ~   ~ ' && hasE "$SMENU" 'EMAIL +root  \(zfs-alert.conf\) +kto dostaje maile' \
+   && has "$SMENU" ' ~ alerts.email ~ ' \
    && has "$SPROF" '--menu' && has "$SPROF" '--default-item ~ default ~' && has "$SPROF" ' ~ d7h24 ~ ' && has "$SPROF" ' ~ moj ~ ' \
    && ! has "$SPROF" 'relacja-x' && ! has "$SPROF" 'src-H24D3' && ! has "$SPROF" '--inputbox' \
    && grep -qx 'settings set new_relation.template=d7h24 --yes' "$SD/argv"; then
