@@ -89,6 +89,35 @@ json_escape() {
 }
 
 # ------------------------------------------------------------------------------
+# USB block queue depth. Measured 2026-11-09 on pve1 (WD My Passport 2 TB, OpenZFS
+# 2.1.11, PVE 7.4): a disk behind usb-storage (not uas) comes up with
+# queue_depth=1 and nr_requests=2, so ZFS's 8K writes are not merged and zfs recv
+# wrote 10 MB/s; `echo 128 > /sys/block/sdX/queue/nr_requests` made it 65 MB/s
+# live (mq-deadline). The setting is lost at every unplug, so it is applied at
+# every attach (zfs-media-gate.sh) and when a medium is prepared (zfs-backup.sh
+# prepare-media). Only ever RAISED, only on USB-transport whole disks, and a no-op
+# (never an error) when sysfs is read-only or the disk is not USB.
+# One definition, here, because two programs use it. It prints one line per disk
+# raised ("sdb nr_requests 2 -> 128") and leaves the logging to the caller.
+# MEDIA_SYS_BLOCK is the sysfs root, overridable for tests.
+MEDIA_USB_NR_REQUESTS=128
+usb_queue_raise() {   # [whole-disk name ...]
+    local sysblock="${MEDIA_SYS_BLOCK:-/sys/block}" d name cur only=" $* "
+    for d in "$sysblock"/*; do
+        [ -f "$d/queue/nr_requests" ] || continue
+        name="${d##*/}"
+        [ "$#" -eq 0 ] || case "$only" in *" $name "*) ;; *) continue ;; esac
+        case "$(readlink -f "$d" 2>/dev/null)" in */usb[0-9]*) ;; *) continue ;; esac   # USB transport only
+        cur=$(cat "$d/queue/nr_requests" 2>/dev/null) || continue
+        case "$cur" in ''|*[!0-9]*) continue ;; esac
+        [ "$cur" -lt "$MEDIA_USB_NR_REQUESTS" ] || continue
+        { printf '%s\n' "$MEDIA_USB_NR_REQUESTS" > "$d/queue/nr_requests"; } 2>/dev/null || continue
+        echo "$name nr_requests $cur -> $(cat "$d/queue/nr_requests" 2>/dev/null)"
+    done
+    return 0
+}
+
+# ------------------------------------------------------------------------------
 # The server-side config once written by `zfs-backup.sh setup-server` (removed
 # 2026-10-20, U39 -- the wizard and F10 record these facts now) and still READ by
 # every later command, so a host that has one keeps working. KEY=VALUE, read as

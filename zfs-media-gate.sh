@@ -42,6 +42,18 @@ set -uo pipefail
 
 VERSION='v1.1'
 
+# Shared helpers (usb_queue_raise). The WHOLE library is sourced, from this file's own
+# real directory -- the way zfs-backup.sh finds its LIBCOMMON -- so a gate invoked as
+# $SCRIPT_DIR/zfs-media-gate.sh from cron or udev finds it next to itself. It defines
+# nothing the gate also defines (checked 2026-11-09: warn/die/json_escape/read_server_conf/
+# SERVER_CONF/CLIENTS_DIR/PEER_*/record_get/record_load..., against the gate's say/emit/
+# record_snap_for/record_write); the gate's own definitions below come later and would win
+# anyway. Missing is fatal with rc 2, the gate's "a human is needed", not a silent skip.
+_GATE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+[ -r "$_GATE_DIR/lib-backup-common.sh" ] || { echo "zfs-media-gate: cannot read $_GATE_DIR/lib-backup-common.sh -- the checkout is incomplete" >&2; exit 2; }
+# shellcheck disable=SC1090
+source "$_GATE_DIR/lib-backup-common.sh"
+
 usage() {
     cat >&2 <<'EOF'
 Usage: zfs-media-gate.sh <attach|detach|status|age> <pool> <label> [--dataset D] [--dir DIR]...
@@ -179,31 +191,6 @@ emit() {
         >> "$STATS" 2>/dev/null || true
 }
 imported() { zpool list -H -o name "$POOL" >/dev/null 2>&1; }
-
-# USB block queue depth, raised at every attach (the setting dies with the unplug).
-# Measured 2026-11-09 on pve1 (WD My Passport 2 TB, OpenZFS 2.1.11, PVE 7.4): a disk
-# behind usb-storage (not uas) gets queue_depth=1 / nr_requests=2, ZFS's 8K writes
-# are not merged and zfs recv wrote 10 MB/s; nr_requests=128 made it 65 MB/s live.
-# SCOPE: every USB-transport whole disk whose nr_requests is below the constant --
-# before the import nobody knows which disk carries the pool, and raising a queue
-# on another USB disk is harmless. Only raised, never lowered; non-USB disks are
-# not touched; a read-only sysfs is a silent no-op. Same function and constant as
-# zfs-backup.sh (prepare-media); this file sources nothing, so it is repeated here.
-MEDIA_USB_NR_REQUESTS=128
-usb_queue_raise() {
-    local sysblock="${MEDIA_SYS_BLOCK:-/sys/block}" d name cur
-    for d in "$sysblock"/*; do
-        [ -f "$d/queue/nr_requests" ] || continue
-        name="${d##*/}"
-        case "$(readlink -f "$d" 2>/dev/null)" in */usb[0-9]*) ;; *) continue ;; esac
-        cur=$(cat "$d/queue/nr_requests" 2>/dev/null) || continue
-        case "$cur" in ''|*[!0-9]*) continue ;; esac
-        [ "$cur" -lt "$MEDIA_USB_NR_REQUESTS" ] || continue
-        { printf '%s\n' "$MEDIA_USB_NR_REQUESTS" > "$d/queue/nr_requests"; } 2>/dev/null || continue
-        say "USB disk $name: nr_requests $cur -> $(cat "$d/queue/nr_requests" 2>/dev/null) (usb-storage default is 2; lost at every unplug, so set at every attach)"
-    done
-    return 0
-}
 
 # HOW LONG AN EXPORT MAY TAKE BEFORE IT IS CALLED STUCK.
 #
@@ -708,8 +695,12 @@ EOF
 
 
     # Before the import, so the first reads of the pool are not made at nr_requests=2.
-    # Not best-effort-with-a-hidden-failure: it can only say "raised" or stay silent.
-    usb_queue_raise
+    # usb_queue_raise (lib-backup-common.sh) scopes itself to USB whole disks below the
+    # target depth -- before the import nobody knows which disk carries the pool. It can
+    # only say "raised" or stay silent.
+    while IFS= read -r _qd; do
+        say "USB disk $_qd (usb-storage default is 2; lost at every unplug, so set at every attach)"
+    done < <(usb_queue_raise)
     if ! zpool import ${IMPORT_DIRS[@]+"${IMPORT_DIRS[@]}"} "${IMPORT_ID:-$POOL}" 2>/dev/null; then
         last="never"; [ -r "$SEEN" ] && last="$(cat "$SEEN" 2>/dev/null)"
         say "SKIPPED: medium '$POOL' for '$LABEL' is not here (last seen: $last). Nothing was run and nothing is wrong -- plug it in and the next run catches up."

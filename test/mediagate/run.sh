@@ -1352,7 +1352,7 @@ case "$(readlink -f "$FS/block/sdb" 2>/dev/null)" in
     check "USBQ3: a USB disk at nr_requests=1 is raised too" "128" "$(cat "$FS/dev/pci0/usb3/3-1/sdd/queue/nr_requests")"
     check "USBQ4: a non-USB disk is NOT touched" "2" "$(cat "$FS/dev/pci0/ata1/sda/queue/nr_requests")"
     check "USBQ5: a USB disk already deeper than 128 is NOT lowered" "256" "$(cat "$FS/dev/pci0/usb2/2-2/sdc/queue/nr_requests")"
-    has "USB disk sdb: nr_requests 2 -> 128" "$out" && ok "USBQ6: the raise is logged" || bad "USBQ6: the raise is logged" "$out"
+    has "USB disk sdb nr_requests 2 -> 128" "$out" && ok "USBQ6: the raise is logged" || bad "USBQ6: the raise is logged" "$out"
     # ordering: the log line comes before the import's own "imported" bookkeeping
     check "USBQ7: the medium was imported after the raise" "rotpool" "$(cat "$IMPORTED_LOG")"
     rm -f "$STATE"/rep.running "$STATE"/rep.imported-by-us
@@ -1360,12 +1360,14 @@ case "$(readlink -f "$FS/block/sdb" 2>/dev/null)" in
     out="$(MEDIA_SYS_BLOCK="$TMPD/no-such-sysfs" g attach rotpool rep)"; rc=$?
     check "USBQ8: no sysfs at all is a no-op, the gate carries on (absent medium = 1, not a crash)" "1" "$rc"
     has "nr_requests" "$out" && bad "USBQ9: nothing about nr_requests is logged without sysfs" "$out" || ok "USBQ9: nothing about nr_requests is logged without sysfs"
-    # both programs carry the same constant
-    gv=$(sed -n 's/^MEDIA_USB_NR_REQUESTS=//p' "$GATE" | head -1); bv=$(sed -n 's/^MEDIA_USB_NR_REQUESTS=//p' "$REPO/zfs-backup.sh" | head -1)
-    check "USBQ10: the gate and zfs-backup.sh (prepare-media) use the same queue constant" "$gv" "$bv"
     ;;
 *) echo "SKIP USBQ: this host cannot make symlinks into a fake /sys/block" ;;
 esac
+# the gate sources lib-backup-common.sh from its own directory; without it: rc 2, said plainly
+mkdir -p "$TMPD/nolib" && cp "$GATE" "$TMPD/nolib/zfs-media-gate.sh"
+out="$(PATH="$BIN:$PATH" MEDIA_STATE_DIR="$STATE" bash "$TMPD/nolib/zfs-media-gate.sh" status rotpool rep 2>&1)"; rc=$?
+check "USBQ10: a gate without lib-backup-common.sh beside it refuses with rc 2" "2" "$rc"
+has "cannot read" "$out" && has "lib-backup-common.sh" "$out" && ok "USBQ11: ...and names the missing library" || bad "USBQ11: ...and names the missing library" "$out"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

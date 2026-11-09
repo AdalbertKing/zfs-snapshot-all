@@ -17,7 +17,8 @@ when they change how the tool is used.
   Passport 2 TB, OpenZFS 2.1.11). The setting is lost at every unplug, so the media gate raises
   `nr_requests` to 128 on every USB whole disk below that, just before `zpool import`
   (never lowered, non-USB disks untouched, silent when sysfs is read-only). `prepare-media`
-  does the same before `zpool create`.
+  does the same before `zpool create`. One shared function in `lib-backup-common.sh`; the gate now
+  sources that library from its own directory (it is deployed beside it) and exits 2 if it is missing.
 - **`prepare-media` warns when a USB bridge hides the sector size.** If the kernel's
   `physical_block_size` is smaller than what `smartctl -i` (or `-d sat`) reports, the plan says so.
   The pool is created `ashift=12` regardless, as before.

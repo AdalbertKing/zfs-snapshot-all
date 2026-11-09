@@ -8223,33 +8223,6 @@ media_disk_in_use() {   # <device> -> reason on stdout, rc 0 = in use
     return 1
 }
 
-# USB block queue depth. Measured 2026-11-09 on pve1 (WD My Passport 2 TB, OpenZFS
-# 2.1.11, PVE 7.4): a disk behind usb-storage (not uas) comes up with
-# queue_depth=1 and nr_requests=2, so ZFS's 8K writes are not merged and zfs recv
-# wrote 10 MB/s; `echo 128 > /sys/block/sdX/queue/nr_requests` made it 65 MB/s
-# live (mq-deadline). The setting is lost at every unplug, so it is applied at
-# every attach. Only ever RAISED, only on USB-transport whole disks, and a no-op
-# (never an error) when sysfs is read-only or the disk is not USB.
-# zfs-media-gate.sh carries the same value for the attach path (it is a
-# standalone program and sources nothing) -- keep the two in step; the mediagate
-# suite pins both.
-MEDIA_USB_NR_REQUESTS=128
-usb_queue_raise() {   # [whole-disk name ...] ; prints one line per disk raised
-    local sysblock="${MEDIA_SYS_BLOCK:-/sys/block}" d name cur only=" $* "
-    for d in "$sysblock"/*; do
-        [ -f "$d/queue/nr_requests" ] || continue
-        name="${d##*/}"
-        [ "$#" -eq 0 ] || case "$only" in *" $name "*) ;; *) continue ;; esac
-        case "$(readlink -f "$d" 2>/dev/null)" in */usb[0-9]*) ;; *) continue ;; esac   # USB transport only
-        cur=$(cat "$d/queue/nr_requests" 2>/dev/null) || continue
-        case "$cur" in ''|*[!0-9]*) continue ;; esac
-        [ "$cur" -lt "$MEDIA_USB_NR_REQUESTS" ] || continue
-        { printf '%s\n' "$MEDIA_USB_NR_REQUESTS" > "$d/queue/nr_requests"; } 2>/dev/null || continue
-        echo "$name nr_requests $cur -> $(cat "$d/queue/nr_requests" 2>/dev/null)"
-    done
-    return 0
-}
-
 # What the drive says its physical sector is, against what the kernel was told.
 # A USB bridge that reports 512 for a 4096-byte disk is how a pool came out
 # ashift=9 (random 4K writes misaligned by 512 B: 57 IOPS against 2093 aligned,

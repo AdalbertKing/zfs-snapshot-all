@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 6722f3794fcee19d -->
+<!-- status-covers-digest: 2fd16de68c58fae8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -161,7 +161,7 @@
   Kierunek właściciela po pomiarze na pve1 (WD My Passport 2 TB, OpenZFS 2.1.11, PVE 7.4). (1) `zfs-media-gate.sh`
   przed `zpool import` podnosi `nr_requests` do 128 na każdym dysku USB poniżej tej wartości (`usb-storage` daje 2,
   `zfs recv` 10 MB/s, po zmianie 65 MB/s; ustawienie ginie przy odpięciu); nie obniża, nie rusza dysków nie-USB,
-  przy sysfs tylko do odczytu nic nie robi. `prepare-media` robi to samo przed `zpool create`. (2) Plan `prepare-media`
+  przy sysfs tylko do odczytu nic nie robi. `prepare-media` robi to samo przed `zpool create`. Jedna funkcja `usb_queue_raise` w `lib-backup-common.sh`; gate ładuje tę bibliotekę z własnego katalogu (kończy rc 2, gdy jej brak). (2) Plan `prepare-media`
   ostrzega, gdy `physical_block_size` jądra jest mniejszy niż fizyczny sektor z `smartctl -i` (potem `-d sat`);
   `ashift=12` był już wymuszony (A14). (3) Reguła udev z `install-media-trigger` była zapisana jako dwie linie ze
   znakiem `\` na końcu; udevd 247 złożył ją błędnie (`Invalid key/value pair, ignoring`), więc `--on-insert` nie
