@@ -6,6 +6,8 @@ when they change how the tool is used.
 
 ## [1.0.17] — 2026-11-09
 
+- **The GUI title bar shows the package version** (`zfs-snapshot-all 1.0.17`), read from the first
+  version heading of this file shipped next to the program; no doubt about which release is running.
 - **The replica wizard recognises the broken udev rule as installed on hosts.** 1.0.16 looked for
   a backslash at the end of a line; on pve1 the rule written up to 1.0.15 was one line with the
   backslash in the middle (`... zfs_member", \  RUN+=...`). Any backslash outside a comment now marks
