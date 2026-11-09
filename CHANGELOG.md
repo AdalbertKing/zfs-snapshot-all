@@ -14,7 +14,8 @@ when they change how the tool is used.
   the rule as old, and the plan renews it.
 - **Connecting a disk starts only the replicas whose medium it is.** The on-insert run reads the
   disk's pool (name and GUID, from `blkid`) and runs a replica only when the GUID is one of its
-  disks, or, for a replica without a GUID list, when the pool name matches. Before, any ZFS disk
+  disks, or, for a replica without a GUID list, when the pool name matches. A disk whose name and GUID `blkid` cannot read runs every
+  on-insert replica, as before. Before, any ZFS disk
   ran every on-insert replica. Measured on pve1, 2026-11-09: a benchmark disk produced a replica
   run that skipped and showed as "Last run OK"; a disk just formatted by the wizard, whose GUID
   is saved only at EXECUTE, was refused with rc 2 and an alert. A run by schedule or by hand is

@@ -157,7 +157,15 @@
   nie ma (żywy GUID nadal ma pierwszeństwo). A21: brak datasetu celu przy pierwszej kopii to pusta
   lista, nie „Could not list ... failure” (lokalna gałąź `get_sorted_snapshots`, jak zdalna).
   Test A20 wycięty: na gałęzi przechodzi, na `main` pada; A21 w suicie snapsend (CI, ZFS).
-- **Niewydane (2026-11-09):** kreator repliki uznawał za aktualną regułę udev w postaci zastanej na
+- **1.0.17 wydane (2026-11-09 ~20:00; repo wydań zfsbackup 68ac8d3, z `main` f3e90e63, PR #1147).**
+  Na SITE-C pve1 i pve0 ręczna aktualizacja (`update-control.sh --self-update`, rc 0; root i konto
+  zfsbackup na pve1 = 68ac8d3); reszta flot z crona o :15. Zawartość: wpięcie dysku uruchamia tylko
+  replikę, do której dysk należy (nazwa i GUID puli z blkid); reguła udev z
+  `systemd-run --collect`; okno formatowania bez linii „plan only”; kreator rozpoznaje regułę z
+  ukośnikiem w środku (opis niżej); pasek tytułu GUI pokazuje wersję pakietu (pierwszy nagłówek
+  CHANGELOG.md; na pve1 sprawdzone: „zfs-snapshot-all 1.0.17”). Reguła udev na pve1 nadal bez
+  `--collect` -- odnowi ją kreator przy nowej replice uruchamianej po wpięciu dysku (właściciel robi ją sam w GUI).
+- **Wydane w 1.0.17 (wyżej):** kreator repliki uznawał za aktualną regułę udev w postaci zastanej na
   pve1 (jedna linia z odwrotnym ukośnikiem w środku, przed `RUN+=`); 1.0.16 szukał ukośnika tylko na
   końcu linii. Teraz każdy ukośnik poza komentarzem = reguła stara, plan ją odnawia. Test tui (4c)
   na tej postaci; wycięta logika: na `main` „yes”, na gałęzi „old”, poprawna reguła „yes”.
@@ -173,7 +181,7 @@
   polecenie: kopia zatrzymana przy ok. 45 GB, pula `pve1-usb1` wyeksportowana, `usb1` z powrotem z jednym
   dyskiem (`media_guids` = stary GUID; kopia configu `/root/jobs.pve1.conf.przed-cofnieciem-20261109`).
   Na dysku WD zostaje pula `pve1-usb1` z częściową kopią; `tmux` zostaje zainstalowany.
-  Usterki (naprawione na gałęzi `fix/usb-insert-defects`, niewydane): (1) każdy dysk ZFS uruchamiał
+  Usterki (naprawione w 1.0.17, PR #1147): (1) każdy dysk ZFS uruchamiał
   każdą replikę on-insert -- dysk po benchmarku dał bieg „OK” w F2/F6, a dysk sformatowany w kreatorze
   (GUID zapisany dopiero przy WYKONAJ) odmowę rc 2 z ostrzeżeniem; teraz bieg tylko dla repliki, której
   nośnikiem jest dysk (GUID, inaczej nazwa puli). (2) Nieudana jednostka `zfs-replica-insert-<dev>`
