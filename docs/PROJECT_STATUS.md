@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 383c1ad0c6a2ad47 -->
+<!-- status-covers-digest: f977da3fd199de75 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -157,6 +157,17 @@
   nie ma (żywy GUID nadal ma pierwszeństwo). A21: brak datasetu celu przy pierwszej kopii to pusta
   lista, nie „Could not list ... failure” (lokalna gałąź `get_sorted_snapshots`, jak zdalna).
   Test A20 wycięty: na gałęzi przechodzi, na `main` pada; A21 w suicie snapsend (CI, ZFS).
+- **Niewydane po 1.0.17 (2026-11-09):**
+  - REV-20261109-193 F1 (gałąź `fix/rev-193`): dysk ZFS, którego `blkid` nie odczyta ani
+    nazwy, ani GUID puli, przy wpięciu nie uruchamia żadnej repliki (1.0.17 uruchamiał
+    wszystkie). Test w suicie zfsbackup; na żywo z prawdziwym dyskiem nie sprawdzone.
+  - PR #1155: angielski opis ustawienia `site` w oknie ustawień hosta (był po polsku); test
+    `test/tui/lang_catalog.py` (every-setting-help-has-an-entry) sprawdza opisy wszystkich ustawień.
+  - PR #1157: w oknie ustawień hosta nazwy ustawień wielkimi literami (właściciel chciał
+    pogrubienia, a whiptail go nie ma).
+  - Backlog paczki GUI: U166-U171 (F2: kolejność i grupowanie, projekt zaakceptowany; F4 przy
+    trwającej kopii; przerwany bieg widoczny jako „running” (U167); tekst o kluczu; pliki stanu po usunięciu repliki). U172/U173: strażnik
+    przyrostu dla relacji „tylko migawki na źródle” liczony z kolektora, bez crona na źródle.
 - **1.0.17 wydane (2026-11-09 ~20:00; repo wydań zfsbackup 68ac8d3, z `main` f3e90e63, PR #1147).**
   Na SITE-C pve1 i pve0 ręczna aktualizacja (`update-control.sh --self-update`, rc 0; root i konto
   zfsbackup na pve1 = 68ac8d3); reszta flot z crona o :15. Zawartość: wpięcie dysku uruchamia tylko

@@ -225,8 +225,8 @@ polecenie raz jeszcze i sprawdź, że
 Po włożeniu dysku i zwłoce (`replica.insert_wait`, domyślnie 60 s) ruszają tylko repliki,
 których nośnikiem jest ten dysk: po GUID puli, gdy replika ma listę dysków, inaczej po nazwie
 puli (reguła podaje urządzenie, `blkid` czyta z niego pulę; gdy nie odczyta ani nazwy, ani
-GUID, nie rusza żadna replika, a w logu jest o tym jedna linia -- od 1.0.18). Inny dysk ZFS (np. dopiero
-co sformatowany, zanim kreator zapisze jego GUID) nie uruchamia niczego i nie daje alarmu;
+GUID, nie rusza żadna replika, a w logu jest o tym jedna linia -- od następnego wydania po 1.0.17). Inny dysk ZFS (np. dopiero
+co sformatowany, zanim kreator zapisze jego GUID) nie uruchamia repliki, która ma listę dysków (GUID), i nie daje alarmu;
 w logu zostaje po jednej linii na pominiętą replikę. Reguła wywołuje `systemd-run --collect`, więc nieudany bieg nie
 blokuje następnych włożeń. Regułę bez `--collect` kreator repliki odnawia w planie.
 
