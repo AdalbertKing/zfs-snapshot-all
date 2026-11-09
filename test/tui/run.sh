@@ -5142,9 +5142,11 @@ if [ "$RPRC" -eq 0 ] && grep -qF 'reguła udev ZOSTANIE ODNOWIONA' "$RP/wt.log" 
 else
     bad "replica: odnowienie reguly" "rc=$RPRC" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
 fi
-# (4c): regula do 1.0.15 -- z --on-insert, ale lamana odwrotnym ukosnikiem na dwie linie;
-#       systemd-udevd 247 ja odrzucal (pve1, 2026-11-09). Tez "stara": plan ja ODNAWIA.
-printf '# Managed by zfs-backup.sh install-media-trigger\nACTION=="add", ENV{ID_FS_TYPE}=="zfs_member", \\\n  RUN+="x run-replicas --on-insert --device=%%k"\n' > "$RP/rules"
+# (4c): regula do 1.0.15 -- z --on-insert, ale z odwrotnym ukosnikiem przed RUN+=. Na pve1
+#       (2026-11-09) byla to JEDNA linia '... zfs_member", \  RUN+="..."' i systemd-udevd 247
+#       ja odrzucal. Dokladnie ta postac (ukosnik w srodku linii, nie na koncu) -- tez "stara",
+#       plan ja ODNAWIA. Komentarz z ukosnikiem nie moze jej udawac (pierwsza linia).
+printf '# Managed by zfs-backup.sh install-media-trigger \\ comment\nACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", \\  RUN+="x run-replicas --on-insert --device=%%k"\n' > "$RP/rules"
 RPOUT=$(rp_run "0${T}usb4
 0${T}own
 0${T}mirror

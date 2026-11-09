@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 0af471f888ee401b -->
+<!-- status-covers-digest: 00c1436681b7e872 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -157,7 +157,16 @@
   nie ma (żywy GUID nadal ma pierwszeństwo). A21: brak datasetu celu przy pierwszej kopii to pusta
   lista, nie „Could not list ... failure” (lokalna gałąź `get_sorted_snapshots`, jak zdalna).
   Test A20 wycięty: na gałęzi przechodzi, na `main` pada; A21 w suicie snapsend (CI, ZFS).
-- **1.0.16: dysk USB -- kolejka, ostrzeżenie o sektorze, reguła udev (2026-11-09, PR #1145).**
+- **Niewydane (2026-11-09):** kreator repliki uznawał za aktualną regułę udev w postaci zastanej na
+  pve1 (jedna linia z odwrotnym ukośnikiem w środku, przed `RUN+=`); 1.0.16 szukał ukośnika tylko na
+  końcu linii. Teraz każdy ukośnik poza komentarzem = reguła stara, plan ją odnawia. Test tui (4c)
+  na tej postaci; wycięta logika: na `main` „yes”, na gałęzi „old”, poprawna reguła „yes”.
+- **1.0.16 wydane (2026-11-09 ~18:50; repo wydań zfsbackup de88f84, z `main` 21d1b676): dysk USB --
+  kolejka, ostrzeżenie o sektorze, reguła udev (PR #1145).** Wersja na SITE-C pve1/pve0 (aktualizacja
+  ręczna, deploy rc 0). Na pve1 reguła zainstalowana od nowa (`install-media-trigger --install`):
+  jedna linia, `udevadm test` czyta ją bez „Invalid”. pve0 nie ma reguły ani repliki. Lab i Site-A
+  dostaną wersję z crona o :15 (laby 28.x były w tej chwili nieosiągalne z tego komputera). Na żywo
+  niesprawdzone: odpięcie i wpięcie dysku (podniesienie `nr_requests`, start `run-replicas`).
   Kierunek właściciela po pomiarze na pve1 (WD My Passport 2 TB, OpenZFS 2.1.11, PVE 7.4). (1) `zfs-media-gate.sh`
   przed `zpool import` podnosi `nr_requests` do 128 na każdym dysku USB poniżej tej wartości (`usb-storage` daje 2,
   `zfs recv` 10 MB/s, po zmianie 65 MB/s; ustawienie ginie przy odpięciu); nie obniża, nie rusza dysków nie-USB,

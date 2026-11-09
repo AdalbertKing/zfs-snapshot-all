@@ -4,6 +4,13 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## Unreleased
+
+- **The replica wizard recognises the broken udev rule as installed on hosts.** 1.0.16 looked for
+  a backslash at the end of a line; on pve1 the rule written up to 1.0.15 was one line with the
+  backslash in the middle (`... zfs_member", \  RUN+=...`). Any backslash outside a comment now marks
+  the rule as old, and the plan renews it.
+
 ## [1.0.16] — 2026-11-09
 
 - **The udev rule from `install-media-trigger` is now valid.** It was written as two physical
