@@ -8223,6 +8223,52 @@ media_disk_in_use() {   # <device> -> reason on stdout, rc 0 = in use
     return 1
 }
 
+# USB block queue depth. Measured 2026-11-09 on pve1 (WD My Passport 2 TB, OpenZFS
+# 2.1.11, PVE 7.4): a disk behind usb-storage (not uas) comes up with
+# queue_depth=1 and nr_requests=2, so ZFS's 8K writes are not merged and zfs recv
+# wrote 10 MB/s; `echo 128 > /sys/block/sdX/queue/nr_requests` made it 65 MB/s
+# live (mq-deadline). The setting is lost at every unplug, so it is applied at
+# every attach. Only ever RAISED, only on USB-transport whole disks, and a no-op
+# (never an error) when sysfs is read-only or the disk is not USB.
+# zfs-media-gate.sh carries the same value for the attach path (it is a
+# standalone program and sources nothing) -- keep the two in step; the mediagate
+# suite pins both.
+MEDIA_USB_NR_REQUESTS=128
+usb_queue_raise() {   # [whole-disk name ...] ; prints one line per disk raised
+    local sysblock="${MEDIA_SYS_BLOCK:-/sys/block}" d name cur only=" $* "
+    for d in "$sysblock"/*; do
+        [ -f "$d/queue/nr_requests" ] || continue
+        name="${d##*/}"
+        [ "$#" -eq 0 ] || case "$only" in *" $name "*) ;; *) continue ;; esac
+        case "$(readlink -f "$d" 2>/dev/null)" in */usb[0-9]*) ;; *) continue ;; esac   # USB transport only
+        cur=$(cat "$d/queue/nr_requests" 2>/dev/null) || continue
+        case "$cur" in ''|*[!0-9]*) continue ;; esac
+        [ "$cur" -lt "$MEDIA_USB_NR_REQUESTS" ] || continue
+        { printf '%s\n' "$MEDIA_USB_NR_REQUESTS" > "$d/queue/nr_requests"; } 2>/dev/null || continue
+        echo "$name nr_requests $cur -> $(cat "$d/queue/nr_requests" 2>/dev/null)"
+    done
+    return 0
+}
+
+# What the drive says its physical sector is, against what the kernel was told.
+# A USB bridge that reports 512 for a 4096-byte disk is how a pool came out
+# ashift=9 (random 4K writes misaligned by 512 B: 57 IOPS against 2093 aligned,
+# fio, pve1 2026-11-09). smartctl is optional -- no smartctl, no line, no error.
+media_sector_warning() {   # <whole-disk device>
+    local dev; dev=$(readlink -f "$1" 2>/dev/null) || dev="$1"
+    command -v smartctl >/dev/null 2>&1 || return 0
+    local name="${dev##*/}" kpbs dpbs
+    kpbs=$(cat "${MEDIA_SYS_BLOCK:-/sys/block}/$name/queue/physical_block_size" 2>/dev/null)
+    case "$kpbs" in ''|*[!0-9]*) return 0 ;; esac
+    dpbs=$(smartctl -i "$dev" 2>/dev/null | sed -n 's/^Sector Sizes\{0,1\}:.* \([0-9][0-9]*\) bytes physical.*/\1/p;s/^Sector Size:  *\([0-9][0-9]*\) bytes logical\/physical.*/\1/p' | head -1)
+    [ -n "$dpbs" ] || dpbs=$(smartctl -d sat -i "$dev" 2>/dev/null | sed -n 's/^Sector Sizes\{0,1\}:.* \([0-9][0-9]*\) bytes physical.*/\1/p;s/^Sector Size:  *\([0-9][0-9]*\) bytes logical\/physical.*/\1/p' | head -1)
+    case "$dpbs" in ''|*[!0-9]*) return 0 ;; esac
+    if [ "$dpbs" -gt "$kpbs" ]; then
+        echo "  WARNING:  the kernel sees physical sectors of $kpbs B, the drive reports $dpbs B (smartctl) -- a USB bridge is hiding the real size. ashift=12 below is what keeps the pool aligned."
+    fi
+    return 0
+}
+
 cmd_prepare_media() {
     local pool="" dev="" base="replica" yes=0 list=0 enc=0 a
     for a in "$@"; do
@@ -8264,6 +8310,7 @@ cmd_prepare_media() {
     local real; real=$(readlink -f "$dev")
     echo "PLAN (prepare-media):"
     echo "  disk:     $dev  ($real, $(lsblk -dn -o SIZE,MODEL "$real" 2>/dev/null | sed 's/  */ /g'))"
+    media_sector_warning "$real"
     lsblk -nr -o NAME,FSTYPE,LABEL "$real" 2>/dev/null | awk 'NF > 1 {print "  WIPED:    " $1 " holds " $2 (NF > 2 ? " (" $3 ")" : "")}'
     echo "  1. zpool create -f -m none -o ashift=12 -o failmode=continue -O compression=zstd $pool $dev   -- EVERYTHING on the disk is erased"
     # W19(b) (owner 2026-10-11, "ma byc proste" 2026-10-13): the medium encrypted with a
@@ -8291,6 +8338,10 @@ cmd_prepare_media() {
     # compression=zstd (W19, owner 2026-10-11): what the replica receives with zfs send -c
     # keeps its own compression; this is for everything written there otherwise, and so
     # the pool says plainly what it is.
+    # The same queue depth the gate applies at every attach, so the first writes
+    # (and the marker dataset) are not made at nr_requests=2 either.
+    local _qd _qpk; _qpk=$(lsblk -nr -o PKNAME "$real" 2>/dev/null | head -1)
+    usb_queue_raise "${_qpk:-${real##*/}}" | while IFS= read -r _qd; do log "prepare-media: USB queue depth raised -- $_qd"; done
     zpool create -f -m none -o ashift=12 -o failmode=continue -O compression=zstd "$pool" "$dev" || die "prepare-media: zpool create failed (see above). Nothing else was done."
     if [ "$enc" -eq 1 ]; then
         if [ "$keynew" -eq 1 ]; then
@@ -8360,8 +8411,14 @@ cmd_install_media_trigger() {
 # --no-block is not optional. udev serialises device events, so a rule that waits
 # for a backup would stall every other device on this machine for the length of
 # the transfer.
-ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", \\
-  RUN+="$(command -v systemd-run) --no-block --unit=zfs-replica-insert-%k --setenv=HOME=/root $SCRIPT_DIR/zfs-backup.sh run-replicas --on-insert --device=%k --config=$config"
+#
+# ONE LINE, no line continuation. Measured 2026-11-09 on pve1 (PVE 7.4,
+# systemd 247): the continued form (a trailing backslash after the zfs_member
+# match) arrived in udevd with the backslash still in the middle of one line,
+# before RUN+=, and systemd-udevd logged "90-zfs-replica.rules:10 Invalid key/value pair,
+# ignoring" -- the whole rule dropped, so on-insert never fired. A rule that is
+# one physical line cannot be joined wrongly.
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", RUN+="$(command -v systemd-run) --no-block --unit=zfs-replica-insert-%k --setenv=HOME=/root $SCRIPT_DIR/zfs-backup.sh run-replicas --on-insert --device=%k --config=$config"
 EOF
 )"
     echo ">>> rule to be written to $rules:"

@@ -14808,6 +14808,36 @@ if grep -q 'run-replicas --on-insert --device=%k --config=' "$ZFSBACKUP"; then
 else
     bad "runreplicas: udev rule without --on-insert --device=%k"
 fi
+# The rule as WRITTEN, not as grepped from the source (owner 2026-11-09, pve1): the old
+# generator wrote `ENV{ID_FS_TYPE}=="zfs_member", \` + newline + `  RUN+=...`; systemd 247
+# joined it as `..., \  RUN+="..."` and udevd logged "90-zfs-replica.rules:10 Invalid
+# key/value pair, ignoring" -- on-insert never fired. The rule must be one physical
+# line with no backslash at all, and a stale rule is rewritten by a second --install.
+UR="$WORK/udevrule"; rm -rf "$UR"; mkdir -p "$UR/bin"
+printf '#!/bin/sh\nexit 0\n' > "$UR/bin/systemd-run"; chmod +x "$UR/bin/systemd-run"
+printf '[replica:a]\n\tdst = r/x\n' > "$UR/c.conf"
+printf '# Managed by zfs-backup.sh install-media-trigger -- do not hand-edit.\nACTION=="add", ENV{ID_FS_TYPE}=="zfs_member", \\\n  RUN+="/old"\n' > "$UR/r.rules"
+ur_out=$( ( export PATH="$UR/bin:$PATH"; source "$ZFSBACKUP"
+            cron_target_user() { echo root; }
+            cron_context_resolve() { CRON_CTX_FILE="$UR/c.conf"; }
+            udevadm() { :; }
+            cmd_install_media_trigger --install --rules="$UR/r.rules" --config="$UR/c.conf" ) 2>&1 )
+ur_act=$(grep -v '^#' "$UR/r.rules" | grep -v '^$')
+if [ "$(printf '%s\n' "$ur_act" | wc -l)" -eq 1 ] \
+   && ! grep -q '\\' "$UR/r.rules" \
+   && printf '%s' "$ur_act" | grep -q '^ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", RUN+="[^"]*systemd-run --no-block .*run-replicas --on-insert --device=%k --config=' \
+   && ! grep -q '/old' "$UR/r.rules"; then
+    ok "installmedia: the written udev rule is ONE line, no backslash anywhere, and --install rewrites a stale rule"
+else
+    bad "installmedia: udev rule shape" "$(cat "$UR/r.rules")" "$ur_out"
+fi
+if command -v udevadm >/dev/null 2>&1 && udevadm verify --help >/dev/null 2>&1; then
+    if udevadm verify "$UR/r.rules" >/dev/null 2>&1; then ok "installmedia: udevadm verify accepts the written rule"
+    else bad "installmedia: udevadm verify" "$(udevadm verify "$UR/r.rules" 2>&1)"; fi
+else
+    echo "SKIP installmedia udevadm verify: not available on this host"
+fi
+rm -rf "$UR"
 # U52 (owner 2026-10-21, "oj, nie ten kabel"): --on-insert waits first, then runs
 # only if the device that fired the rule is still there and still a ZFS member.
 # The wait is [replica] insert_wait, never below 60 s.
@@ -14996,6 +15026,62 @@ if [ -n "$PMBD" ]; then
 else
     echo "SKIP prepare-media ashift: no block device on this host"
 fi
+# Owner direction 2026-11-09 (pve1, WD My Passport 2 TB): (1) the plan warns when the
+# kernel's physical_block_size is smaller than what smartctl reports (plain, then
+# -d sat); (2) the USB queue is raised before zpool create. Fake sysfs + stub smartctl.
+FSB="$PMD/sys"; mkdir -p "$FSB/block" "$PMD/bin"
+for spec in "sda:pci0/ata1:2" "sdb:pci0/usb2/2-1:2" "sdd:pci0/usb3/3-1:2"; do
+    n="${spec%%:*}"; rest="${spec#*:}"; path="${rest%%:*}"; v="${rest##*:}"
+    mkdir -p "$FSB/dev/$path/$n/queue"; echo "$v" > "$FSB/dev/$path/$n/queue/nr_requests"; echo 512 > "$FSB/dev/$path/$n/queue/physical_block_size"
+    ln -s "$FSB/dev/$path/$n" "$FSB/block/$n" 2>/dev/null
+done
+cat > "$PMD/bin/smartctl" <<'SM'
+#!/bin/sh
+# plain smartctl fails on a USB bridge; -d sat answers (the pve1 case). SM_PHYS picks the answer.
+case "$*" in *"-d sat"*) echo "Sector Sizes:     512 bytes logical, ${SM_PHYS:-4096} bytes physical"; exit 0 ;; esac
+echo "Smartctl open device: /dev/sdb failed: Unknown USB bridge"; exit 1
+SM
+chmod +x "$PMD/bin/smartctl"
+w1=$( ( export PATH="$PMD/bin:$PATH" MEDIA_SYS_BLOCK="$FSB/block"; source "$ZFSBACKUP"; media_sector_warning /dev/sdb ) 2>&1 )
+w2=$( ( export PATH="$PMD/bin:$PATH" MEDIA_SYS_BLOCK="$FSB/block" SM_PHYS=512; source "$ZFSBACKUP"; media_sector_warning /dev/sdb ) 2>&1 ); r2=$?
+w3=$( ( export PATH="$PMD/bin:$PATH" MEDIA_SYS_BLOCK="$FSB/block"; source "$ZFSBACKUP"
+        command() { if [ "$1" = -v ] && [ "$2" = smartctl ]; then return 1; fi; builtin command "$@"; }
+        media_sector_warning /dev/sdb; echo "rc=$?" ) 2>&1 )
+if printf '%s' "$w1" | grep -q 'WARNING:.*kernel sees physical sectors of 512 B, the drive reports 4096 B' \
+   && [ -z "$w2" ] && [ "$r2" -eq 0 ] && [ "$w3" = "rc=0" ]; then
+    ok "prepare-media: warns when the drive's physical sector (smartctl, -d sat fallback) exceeds the kernel's; silent when equal or without smartctl, never fails"
+else
+    bad "prepare-media: sector warning" "warn=[$w1]" "equal=[$w2] rc=$r2" "nosmart=[$w3]"
+fi
+case "$(readlink -f "$FSB/block/sdb" 2>/dev/null)" in
+*/usb2/*)
+    q1=$( ( export MEDIA_SYS_BLOCK="$FSB/block"; source "$ZFSBACKUP"; usb_queue_raise sdb ) 2>&1 )
+    if [ "$(cat "$FSB/dev/pci0/usb2/2-1/sdb/queue/nr_requests")" = 128 ] \
+       && [ "$(cat "$FSB/dev/pci0/usb3/3-1/sdd/queue/nr_requests")" = 2 ] \
+       && [ "$(cat "$FSB/dev/pci0/ata1/sda/queue/nr_requests")" = 2 ] \
+       && [ "$q1" = "sdb nr_requests 2 -> 128" ]; then
+        ok "prepare-media: usb_queue_raise raises only the named USB disk (not another USB disk, not SATA)"
+    else
+        bad "prepare-media: usb_queue_raise scoping" "$q1"
+    fi
+    echo 2 > "$FSB/dev/pci0/usb2/2-1/sdb/queue/nr_requests"
+    if [ -n "$PMBD" ]; then
+        out=$( ( export MEDIA_SYS_BLOCK="$FSB/block"
+                 source "$ZFSBACKUP"
+                 media_disk_in_use() { return 1; }
+                 lsblk() { case "$*" in *PKNAME*) echo sdb ;; esac; }
+                 zpool() { echo "queue=$(cat "$FSB/dev/pci0/usb2/2-1/sdb/queue/nr_requests")" >> "$PMD/order.log"; return 1; }
+                 MEDIA_KEY_DIR="$PMD/keys"
+                 cmd_prepare_media pm2 "$PMBD" --yes ) 2>&1 )
+        if grep -q '^queue=128$' "$PMD/order.log" 2>/dev/null && printf '%s' "$out" | grep -q 'USB queue depth raised -- sdb nr_requests 2 -> 128'; then
+            ok "prepare-media: the USB queue is already 128 when zpool create runs, and the raise is logged"
+        else
+            bad "prepare-media: queue before zpool create" "$(cat "$PMD/order.log" 2>/dev/null)" "$out"
+        fi
+    fi
+    ;;
+*) echo "SKIP prepare-media USB queue: this host cannot make symlinks into a fake /sys/block" ;;
+esac
 rm -rf "$PMD"
 fi   # --- koniec sekcji runreplicas ---
 
