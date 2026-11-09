@@ -135,4 +135,4 @@ with them, which is the failure REVIEW PROTOCOL V2 exists to remove.
 | REV-20261106-190 | CLOSED | - | d37d50445cec3fa83b83b5b301b96c9abd9cf13e | d37d50445cec3fa83b83b5b301b96c9abd9cf13e | responses/REV-20261106-190.md | - |
 | REV-20261107-191 | CLOSED | - | e30f27c33a99e4a349226d676e44b7824dac7fe1 | e30f27c33a99e4a349226d676e44b7824dac7fe1 | responses/REV-20261107-191.md | - |
 | REV-20261107-192 | CLOSED | - | a3bdca65883fd6f475d2941dfa0b9a1651a2bdb1 | a3bdca65883fd6f475d2941dfa0b9a1651a2bdb1 | responses/REV-20261107-192.md | - |
-| REV-20261109-193 | APPROVED | Reviewer | d0a40f51bc4d70c69341d79e571868ba02c7ae5a | d0a40f51bc4d70c69341d79e571868ba02c7ae5a | responses/REV-20261109-193.md | write the closure artifact |
+| REV-20261109-193 | CLOSED | - | d0a40f51bc4d70c69341d79e571868ba02c7ae5a | d0a40f51bc4d70c69341d79e571868ba02c7ae5a | responses/REV-20261109-193.md | - |
