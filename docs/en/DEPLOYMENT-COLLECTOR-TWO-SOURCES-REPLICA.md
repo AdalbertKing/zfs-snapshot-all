@@ -228,7 +228,7 @@ run the command once more and check that
 After a disk is connected and the delay has passed (`replica.insert_wait`, 60 s by default),
 only the replicas whose medium this disk is start: by pool GUID when the replica lists its
 disks, otherwise by pool name (the rule passes the device and `blkid` reads its pool; when it
-reads nothing, every on-insert replica starts, as before).
+reads neither the name nor the GUID, no replica starts and one log line says so -- since 1.0.18).
 Another ZFS disk (for example one just formatted, before the wizard saves its GUID) starts
 nothing and raises no alert; the log keeps one line per replica skipped. The rule calls `systemd-run --collect`,
 so a failed run does not block later connections. The replica wizard renews a rule without
