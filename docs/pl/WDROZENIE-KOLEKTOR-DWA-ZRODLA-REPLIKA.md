@@ -158,7 +158,7 @@ polecenie. Lista wolnych dysków:
 ```
 
 Bez `--yes` polecenie tylko pokazuje plan (co zostanie skasowane). Z `--yes`
-**kasuje cały dysk**, zakłada pulę (`failmode=continue`, kompresja `zstd`, bez
+**kasuje cały dysk**, zakłada pulę (`ashift=12`, `failmode=continue`, kompresja `zstd`, bez
 punktu montowania), tworzy dataset bazowy (domyślnie `replica`; zmienisz go
 przez `--base=`) i eksportuje pulę, więc dysk można od razu wypiąć:
 
@@ -167,6 +167,17 @@ przez `--base=`) i eksportuje pulę, więc dysk można od razu wypiąć:
 ```
 
 Taka pula pasuje do `--dst=repl/replica` z następnej sekcji.
+
+Plan ostrzega, gdy jądro widzi mniejszy sektor fizyczny niż podaje dysk (`smartctl`).
+Tak robi część mostków USB (512 B zamiast 4096 B); `ashift=12` i tak trzyma pulę w
+wyrównaniu.
+
+**Dysk USB: kolejka.** Dysk za sterownikiem `usb-storage` startuje z `nr_requests=2`;
+zapisy ZFS nie są wtedy scalane i replika pisze ok. 10 MB/s (zmierzone 2026-11-09,
+WD My Passport 2 TB). Dlatego bramka przed każdym importem puli, a `prepare-media` przed
+założeniem puli, podnoszą `nr_requests` dysków USB do 128 (ten sam dysk: 57–65 MB/s).
+Ustawienie ginie po odłączeniu dysku, więc jest powtarzane przy każdym podłączeniu.
+Nigdy nie jest obniżane, a dysków innych niż USB nie dotyka.
 
 Dwa dyski rotacyjne dostają **tę samą nazwę puli** i różne GUID-y. Bramka
 rozpoznaje nośnik po GUID-zie, nie po nazwie, więc rotacja działa, a dwa dyski
@@ -204,6 +215,12 @@ Opcjonalnie, **nie domyślnie**, wyzwalacz po podłączeniu dysku:
 ```bash
 ./zfs-backup.sh install-media-trigger --install
 ```
+
+Do 1.0.15 ta reguła udev była zapisywana z łamaniem linii, a `systemd-udevd` ją
+odrzucał („Invalid key/value pair”): wyzwalacz po podłączeniu nie działał. Od 1.0.16
+reguła ma jedną linię, a `--install` nadpisuje starą. Po aktualizacji uruchom
+polecenie raz jeszcze i sprawdź, że
+`journalctl -u systemd-udevd | grep 90-zfs-replica` nie pokazuje „Invalid”.
 
 ## 6. Scenariusz A: co ląduje w configu
 

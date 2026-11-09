@@ -1330,6 +1330,45 @@ else
 fi
 POOLS="hdd"; IMPORTABLE=""
 
+# ---------------------------------------------------------------------------
+# USB queue depth at every attach (owner direction 2026-11-09, pve1 measurement:
+# usb-storage disk nr_requests=2 -> zfs recv 10 MB/s; 128 -> 65 MB/s).
+# A fake /sys/block: sdb and sdd are USB (the real device path has a usbN
+# component), sdc is USB but already deep, sda is SATA. The gate must raise ONLY
+# the shallow USB disks, before the import, and must not fail when sysfs is absent.
+# ---------------------------------------------------------------------------
+FS="$TMPD/sys"; mkdir -p "$FS/block"
+for spec in "sda:pci0/ata1:2" "sdb:pci0/usb2/2-1:2" "sdc:pci0/usb2/2-2:256" "sdd:pci0/usb3/3-1:1"; do
+    n="${spec%%:*}"; rest="${spec#*:}"; path="${rest%%:*}"; v="${rest##*:}"
+    mkdir -p "$FS/dev/$path/$n/queue"; echo "$v" > "$FS/dev/$path/$n/queue/nr_requests"
+    ln -s "$FS/dev/$path/$n" "$FS/block/$n" 2>/dev/null
+done
+case "$(readlink -f "$FS/block/sdb" 2>/dev/null)" in
+*/usb2/*)
+    POOLS="hdd"; IMPORTABLE="rotpool"; DATASETS="hdd rotpool rotpool/replica"; : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
+    out="$(MEDIA_SYS_BLOCK="$FS/block" g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+    check "USBQ1: attach with a shallow USB disk still succeeds" "0" "$rc"
+    check "USBQ2: a USB disk at nr_requests=2 is raised to 128 before the import" "128" "$(cat "$FS/dev/pci0/usb2/2-1/sdb/queue/nr_requests")"
+    check "USBQ3: a USB disk at nr_requests=1 is raised too" "128" "$(cat "$FS/dev/pci0/usb3/3-1/sdd/queue/nr_requests")"
+    check "USBQ4: a non-USB disk is NOT touched" "2" "$(cat "$FS/dev/pci0/ata1/sda/queue/nr_requests")"
+    check "USBQ5: a USB disk already deeper than 128 is NOT lowered" "256" "$(cat "$FS/dev/pci0/usb2/2-2/sdc/queue/nr_requests")"
+    has "USB disk sdb nr_requests 2 -> 128" "$out" && ok "USBQ6: the raise is logged" || bad "USBQ6: the raise is logged" "$out"
+    # ordering: the log line comes before the import's own "imported" bookkeeping
+    check "USBQ7: the medium was imported after the raise" "rotpool" "$(cat "$IMPORTED_LOG")"
+    rm -f "$STATE"/rep.running "$STATE"/rep.imported-by-us
+    POOLS="hdd"; IMPORTABLE=""; DATASETS="hdd"
+    out="$(MEDIA_SYS_BLOCK="$TMPD/no-such-sysfs" g attach rotpool rep)"; rc=$?
+    check "USBQ8: no sysfs at all is a no-op, the gate carries on (absent medium = 1, not a crash)" "1" "$rc"
+    has "nr_requests" "$out" && bad "USBQ9: nothing about nr_requests is logged without sysfs" "$out" || ok "USBQ9: nothing about nr_requests is logged without sysfs"
+    ;;
+*) echo "SKIP USBQ: this host cannot make symlinks into a fake /sys/block" ;;
+esac
+# the gate sources lib-backup-common.sh from its own directory; without it: rc 2, said plainly
+mkdir -p "$TMPD/nolib" && cp "$GATE" "$TMPD/nolib/zfs-media-gate.sh"
+out="$(PATH="$BIN:$PATH" MEDIA_STATE_DIR="$STATE" bash "$TMPD/nolib/zfs-media-gate.sh" status rotpool rep 2>&1)"; rc=$?
+check "USBQ10: a gate without lib-backup-common.sh beside it refuses with rc 2" "2" "$rc"
+has "cannot read" "$out" && has "lib-backup-common.sh" "$out" && ok "USBQ11: ...and names the missing library" || bad "USBQ11: ...and names the missing library" "$out"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

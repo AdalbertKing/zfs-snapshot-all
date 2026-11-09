@@ -42,6 +42,18 @@ set -uo pipefail
 
 VERSION='v1.1'
 
+# Shared helpers (usb_queue_raise). The WHOLE library is sourced, from this file's own
+# real directory -- the way zfs-backup.sh finds its LIBCOMMON -- so a gate invoked as
+# $SCRIPT_DIR/zfs-media-gate.sh from cron or udev finds it next to itself. It defines
+# nothing the gate also defines (checked 2026-11-09: warn/die/json_escape/read_server_conf/
+# SERVER_CONF/CLIENTS_DIR/PEER_*/record_get/record_load..., against the gate's say/emit/
+# record_snap_for/record_write); the gate's own definitions below come later and would win
+# anyway. Missing is fatal with rc 2, the gate's "a human is needed", not a silent skip.
+_GATE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+[ -r "$_GATE_DIR/lib-backup-common.sh" ] || { echo "zfs-media-gate: cannot read $_GATE_DIR/lib-backup-common.sh -- the checkout is incomplete" >&2; exit 2; }
+# shellcheck disable=SC1090
+source "$_GATE_DIR/lib-backup-common.sh"
+
 usage() {
     cat >&2 <<'EOF'
 Usage: zfs-media-gate.sh <attach|detach|status|age> <pool> <label> [--dataset D] [--dir DIR]...
@@ -682,6 +694,13 @@ EOF
     fi
 
 
+    # Before the import, so the first reads of the pool are not made at nr_requests=2.
+    # usb_queue_raise (lib-backup-common.sh) scopes itself to USB whole disks below the
+    # target depth -- before the import nobody knows which disk carries the pool. It can
+    # only say "raised" or stay silent.
+    while IFS= read -r _qd; do
+        say "USB disk $_qd (usb-storage default is 2; lost at every unplug, so set at every attach)"
+    done < <(usb_queue_raise)
     if ! zpool import ${IMPORT_DIRS[@]+"${IMPORT_DIRS[@]}"} "${IMPORT_ID:-$POOL}" 2>/dev/null; then
         last="never"; [ -r "$SEEN" ] && last="$(cat "$SEEN" 2>/dev/null)"
         say "SKIPPED: medium '$POOL' for '$LABEL' is not here (last seen: $last). Nothing was run and nothing is wrong -- plug it in and the next run catches up."

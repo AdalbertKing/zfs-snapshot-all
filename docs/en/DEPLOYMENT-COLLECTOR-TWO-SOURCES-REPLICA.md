@@ -162,7 +162,7 @@ creates it. The list of free disks:
 ```
 
 Without `--yes` the command only shows the plan (what will be erased). With `--yes`
-it **erases the whole disk**, creates the pool (`failmode=continue`, `zstd`
+it **erases the whole disk**, creates the pool (`ashift=12`, `failmode=continue`, `zstd`
 compression, no mountpoint), creates the base dataset (`replica` by default; change
 it with `--base=`) and exports the pool, so the disk can be unplugged right away:
 
@@ -171,6 +171,17 @@ it with `--base=`) and exports the pool, so the disk can be unplugged right away
 ```
 
 Such a pool fits `--dst=repl/replica` from the next section.
+
+The plan warns when the kernel sees a smaller physical sector than the drive reports
+(`smartctl`). Some USB bridges do that (512 B instead of 4096 B); `ashift=12` keeps the
+pool aligned regardless.
+
+**USB disk: the queue.** A disk behind the `usb-storage` driver comes up with
+`nr_requests=2`; ZFS writes are then not merged and a replica writes about 10 MB/s
+(measured 2026-11-09, WD My Passport 2 TB). So the gate, before every pool import, and
+`prepare-media`, before it creates the pool, raise `nr_requests` of USB disks to 128 (the
+same disk: 57-65 MB/s). The setting is lost when the disk is unplugged, so it is applied
+at every connection. It is never lowered, and disks other than USB are not touched.
 
 Two rotating disks get **the same pool name** and different GUIDs. The gate
 recognises the medium by GUID, not by name, so rotation works, and two disks
@@ -207,6 +218,12 @@ Optionally, **not by default**, a trigger when a disk is connected:
 ```bash
 ./zfs-backup.sh install-media-trigger --install
 ```
+
+Up to 1.0.15 this udev rule was written with a line continuation, and `systemd-udevd`
+rejected it ("Invalid key/value pair"): the trigger on connection never fired. From
+1.0.16 the rule is one line, and `--install` overwrites the old one. After the update,
+run the command once more and check that
+`journalctl -u systemd-udevd | grep 90-zfs-replica` shows no "Invalid".
 
 ## 6. Scenario A: what lands in the config
 

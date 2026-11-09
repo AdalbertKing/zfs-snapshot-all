@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: aea96d13682063b8 -->
+<!-- status-covers-digest: 0af471f888ee401b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -157,6 +157,19 @@
   nie ma (żywy GUID nadal ma pierwszeństwo). A21: brak datasetu celu przy pierwszej kopii to pusta
   lista, nie „Could not list ... failure” (lokalna gałąź `get_sorted_snapshots`, jak zdalna).
   Test A20 wycięty: na gałęzi przechodzi, na `main` pada; A21 w suicie snapsend (CI, ZFS).
+- **1.0.16: dysk USB -- kolejka, ostrzeżenie o sektorze, reguła udev (2026-11-09, PR #1145).**
+  Kierunek właściciela po pomiarze na pve1 (WD My Passport 2 TB, OpenZFS 2.1.11, PVE 7.4). (1) `zfs-media-gate.sh`
+  przed `zpool import` podnosi `nr_requests` do 128 na każdym dysku USB poniżej tej wartości (`usb-storage` daje 2,
+  `zfs recv` 10 MB/s, po zmianie 65 MB/s; ustawienie ginie przy odpięciu); nie obniża, nie rusza dysków nie-USB,
+  przy sysfs tylko do odczytu nic nie robi. `prepare-media` robi to samo przed `zpool create`. Jedna funkcja `usb_queue_raise` w `lib-backup-common.sh`; gate ładuje tę bibliotekę z własnego katalogu (kończy rc 2, gdy jej brak). (2) Plan `prepare-media`
+  ostrzega, gdy `physical_block_size` jądra jest mniejszy niż fizyczny sektor z `smartctl -i` (potem `-d sat`);
+  `ashift=12` był już wymuszony (A14). (3) Reguła udev z `install-media-trigger` była zapisana jako dwie linie ze
+  znakiem `\` na końcu; udevd 247 złożył ją błędnie (`Invalid key/value pair, ignoring`), więc `--on-insert` nie
+  startował. Teraz jedna linia; ponowne `install-media-trigger --install` nadpisuje plik bezwarunkowo.
+  (4) Kreator repliki (GUI) uznaje regułę łamaną na dwie linie za starą i odnawia ją w planie.
+  Opis w WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA / DEPLOYMENT-COLLECTOR-TWO-SOURCES-REPLICA.
+  Testy: mediagate (USBQ1-11), zfsbackup (reguła, ostrzeżenie, kolejka w prepare-media), tui (4c). Na żywo niesprawdzone:
+  efekt na dysku po odpięciu i ponownym wpięciu oraz `udevadm verify` na hoście.
 - **Paczka 1.0.12 (2026-11-06, gałąź `fix/batch-1.0.12`, PR #1104; niewydane).** Usterki z wdrożenia 1.0.11
   na SITE-C (A3-A19) i z Site-B (A18, A19). Jedna replika = jeden bieg naraz (`zfs-media-gate.sh`:
   znacznik `<etykieta>.running` z PID i czasem startu procesu; drugi bieg kończy rc 75 z komunikatem „already running since …”, jego
