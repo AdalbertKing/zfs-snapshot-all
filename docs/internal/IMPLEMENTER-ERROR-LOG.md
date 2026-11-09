@@ -2098,6 +2098,20 @@ were not considered before the step.
 *Rule.* R17: a test medium on a lab host is a loop device over a file (or a real spare
 disk), never a zvol of the same host.
 
+### E127 — Tab+Enter on the delete window removed a replica (2026-11-09, R14, repeat)
+**2026-11-09, pve11 lab, GUI scenario, replica `lab1`.**
+
+*Genesis.* To back out of "Delete replica lab1 -- are you sure?" I sent Tab then Enter
+without reading the focus. The window opens with Back focused; Tab moved it to EXECUTE,
+and the replica was removed during its first copy. Earlier the same evening the same
+blind Tab+Enter had answered a Yes/No window the wrong way.
+
+*Cause.* R14 was known and not applied: two earlier windows "worked" with Tab+Enter, and
+that habit was carried onto a window with a different default.
+
+*Rule.* R14, unchanged: Esc out of a destructive window; `capture-pane -e` before Enter.
+A repeat under an existing rule, so it is evidence for R14, not a new rule.
+
 ### E120 — the full battery three times inside one REV round (2026-11-05, CLAUDE.md "Batches, not rounds")
 **2026-11-05, REV-20261104-186 round 3, PR #1077.**
 
