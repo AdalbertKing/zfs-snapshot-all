@@ -7102,7 +7102,7 @@ insert_wait() {
     printf '%s' "$w"
 }
 cmd_run_replicas() {
-    local config="" only="" oninsert=0 inner=0 device="" a
+    local config="" only="" oninsert=0 inner=0 device="" a ins_label="" ins_guid="" ins_known=0
     for a in "$@"; do
         case "$a" in
             --config=*) config="${a#*=}" ;;
@@ -7146,9 +7146,18 @@ cmd_run_replicas() {
                 log "run-replicas: $dp is no longer a ZFS disk (TYPE='${fst:-?}') -- doing nothing"
                 return 0
             fi
+            # Which pool the inserted disk carries (blkid: LABEL = pool name, UUID = pool
+            # GUID). Only the replicas whose medium this is run below. Measured on pve1
+            # 2026-11-09: every other ZFS disk fired every on-insert replica -- a benchmark
+            # disk produced a replica "run" that skipped and was shown as "Last run OK", and
+            # a disk just formatted by the wizard (its GUID not saved until EXECUTE) was
+            # refused with rc 2 and an alert.
+            ins_label="$(blkid -o value -s LABEL "$dp" 2>/dev/null)"
+            ins_guid="$(blkid -o value -s UUID "$dp" 2>/dev/null)"
+            [ -n "$ins_label$ins_guid" ] && ins_known=1
         fi
     fi
-    local block rc=0 n=0
+    local block rc=0 n=0 notmine=0
     # --replica-full: the full commands, never the short `run-replicas --inner`
     # form a long line gets in the crontab (W11) -- that would call itself.
     block="$(gencron_as_target -c "$config" --replica-full)" \
@@ -7179,6 +7188,25 @@ EOF
             "#on-insert "*) [ "$oninsert" -eq 0 ] && [ -n "$_lbl" ] && case "$_sched_labels" in *"|$_lbl|"*) continue ;; esac ;;
             *)              [ "$oninsert" -eq 1 ] && continue ;;
         esac
+        # On insertion: is the inserted disk this replica's medium? By pool GUID when the
+        # replica lists its disks (--guids), otherwise by pool name. Not its medium = not
+        # run at all: no gate, no job record, no alert. A run by schedule or by hand is
+        # unchanged -- there the gate still refuses a wrong disk loudly.
+        if [ "$oninsert" -eq 1 ] && [ "$ins_known" -eq 1 ]; then
+            local _mpool _mguids
+            _mpool=$(printf '%s' "$line" | sed -n -E 's/.*zfs-media-gate\.sh attach "?([^" ]+)"? .*/\1/p' | head -1)
+            _mguids=$(printf '%s' "$line" | sed -n -E 's/.*zfs-media-gate\.sh attach [^;]* --guids "?([0-9,]+)"?.*/\1/p' | head -1)
+            if [ -n "$_mpool" ]; then
+                if [ -n "$_mguids" ]; then
+                    case ",$_mguids," in *",$ins_guid,"*) ;; *)
+                        log "run-replicas: $device carries pool '${ins_label:-?}' (GUID ${ins_guid:-?}), not a disk of replica '${_lbl:-?}' (GUIDs $_mguids) -- not run"
+                        notmine=$((notmine+1)); continue ;; esac
+                elif [ "$ins_label" != "$_mpool" ]; then
+                    log "run-replicas: $device carries pool '${ins_label:-?}', replica '${_lbl:-?}' uses pool '$_mpool' -- not run"
+                    notmine=$((notmine+1)); continue
+                fi
+            fi
+        fi
         n=$((n+1))
         if [ "$inner" -eq 1 ]; then
             local _c="$line"
@@ -7211,7 +7239,7 @@ EOF
     if [ "$n" -eq 0 ] && [ -n "$only" ]; then
         die "run-replicas: no replica '$only' in $config"
     fi
-    [ "$n" -gt 0 ] || log "run-replicas: no [replica:] sections in $config -- nothing to run"
+    [ "$n" -gt 0 ] || [ "$notmine" -gt 0 ] || log "run-replicas: no [replica:] sections in $config -- nothing to run"
     return "$rc"
 }
 
@@ -8378,12 +8406,17 @@ cmd_install_media_trigger() {
 # Managed by zfs-backup.sh install-media-trigger -- do not hand-edit.
 #
 # Fires when a disk carrying a ZFS label appears. It does NOT know which replica
-# the disk belongs to and does not need to: run-replicas tries them all and every
-# medium that is not present skips quietly.
+# the disk belongs to and does not need to: run-replicas reads the disk's pool
+# (name and GUID) and runs only the replicas whose medium it is.
 #
 # --no-block is not optional. udev serialises device events, so a rule that waits
 # for a backup would stall every other device on this machine for the length of
 # the transfer.
+#
+# --collect: the transient unit is removed even when the run fails. Without it a
+# failed run left zfs-replica-insert-<dev> loaded as "failed", and every later
+# insertion of a disk under the same kernel name was refused by systemd-run
+# ("Unit ... already exists") -- measured on pve1 2026-11-09.
 #
 # ONE LINE, no line continuation. Measured 2026-11-09 on pve1 (PVE 7.4,
 # systemd 247): the continued form (a trailing backslash after the zfs_member
@@ -8391,7 +8424,7 @@ cmd_install_media_trigger() {
 # before RUN+=, and systemd-udevd logged "90-zfs-replica.rules:10 Invalid key/value pair,
 # ignoring" -- the whole rule dropped, so on-insert never fired. A rule that is
 # one physical line cannot be joined wrongly.
-ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", RUN+="$(command -v systemd-run) --no-block --unit=zfs-replica-insert-%k --setenv=HOME=/root $SCRIPT_DIR/zfs-backup.sh run-replicas --on-insert --device=%k --config=$config"
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", RUN+="$(command -v systemd-run) --no-block --collect --unit=zfs-replica-insert-%k --setenv=HOME=/root $SCRIPT_DIR/zfs-backup.sh run-replicas --on-insert --device=%k --config=$config"
 EOF
 )"
     echo ">>> rule to be written to $rules:"

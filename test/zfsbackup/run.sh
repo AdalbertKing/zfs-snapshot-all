@@ -14825,7 +14825,7 @@ ur_out=$( ( export PATH="$UR/bin:$PATH"; source "$ZFSBACKUP"
 ur_act=$(grep -v '^#' "$UR/r.rules" | grep -v '^$')
 if [ "$(printf '%s\n' "$ur_act" | wc -l)" -eq 1 ] \
    && ! grep -q '\\' "$UR/r.rules" \
-   && printf '%s' "$ur_act" | grep -q '^ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", RUN+="[^"]*systemd-run --no-block .*run-replicas --on-insert --device=%k --config=' \
+   && printf '%s' "$ur_act" | grep -q '^ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", RUN+="[^"]*systemd-run --no-block --collect .*run-replicas --on-insert --device=%k --config=' \
    && ! grep -q '/old' "$UR/r.rules"; then
     ok "installmedia: the written udev rule is ONE line, no backslash anywhere, and --install rewrites a stale rule"
 else
@@ -14854,6 +14854,31 @@ if [ "$rr_gone" = "|0" ] && [ "$rr_other" = "|0" ] && [ "$rr_here" = "a-insert b
     ok "runreplicas: --on-insert --device: pulled before the wait ends or no longer ZFS = nothing runs (rc 0); still there = the on-insert replicas run"
 else
     bad "runreplicas: --on-insert --device" "gone=[$rr_gone] other=[$rr_other] here=[$rr_here]" "$(cat "$RR/devout")"
+fi
+# pve1 2026-11-09: an on-insert run ran EVERY on-insert replica for ANY ZFS disk -- a
+# benchmark disk produced a replica "run" shown as "Last run OK", and a disk just formatted
+# by the wizard (GUID not saved yet) was refused with rc 2 and an alert. Now only the
+# replicas whose medium the disk is run: by pool GUID when the replica lists GUIDs,
+# otherwise by pool name. blkid: LABEL = pool name, UUID = pool GUID.
+cat > "$RR/block3" <<EOF
+# BEGIN zfs-backup-managed
+#on-insert echo m-insert >> $RR/ran; : zfs-media-gate.sh attach mpool m --dataset mpool/replica --guids 111,222 # zfs-job.sh "h replica copy (m)" --log=x
+#on-insert echo n-insert >> $RR/ran; : zfs-media-gate.sh attach npool n --dataset npool/replica # zfs-job.sh "h replica copy (n)" --log=x
+#on-insert echo f-insert >> $RR/ran # zfs-job.sh "h replica copy (f)" --log=x
+# END zfs-backup-managed
+EOF
+rr_pool() {  # $1 = pool name (LABEL), $2 = pool GUID (UUID); prints what ran, then rc
+    : > "$RR/dev/sdz1"; : > "$RR/ran"
+    REPLICA_INSERT_WAIT=0 REPLICA_DEV_DIR="$RR/dev" bash -c "source '$ZFSBACKUP'; blkid() { case \"\$*\" in *TYPE*) echo zfs_member ;; *LABEL*) echo '$1' ;; *UUID*) echo '$2' ;; esac; }; cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE='$RR/c.conf'; }; gencron_as_target() { cat '$RR/block3'; }; cmd_run_replicas --config='$RR/c.conf' --on-insert --device=sdz1" >"$RR/poolout" 2>&1
+    local rc=$?
+    printf '%s|%s' "$(sort "$RR/ran" | tr '\n' ' ')" "$rc"
+}
+rr_m="$(rr_pool mpool 222)"; rr_n="$(rr_pool npool 999)"; rr_new="$(rr_pool mpool 999)"; rr_bench="$(rr_pool bench_usb 555)"
+if [ "$rr_m" = "f-insert m-insert |0" ] && [ "$rr_n" = "f-insert n-insert |0" ] \
+   && [ "$rr_new" = "f-insert |0" ] && [ "$rr_bench" = "f-insert |0" ] && grep -q 'not a disk of replica' "$RR/poolout" ; then
+    ok "runreplicas: --on-insert runs only the replicas whose medium the disk is (GUID list, else pool name); a disk with the right name but an unknown GUID runs nothing, rc 0"
+else
+    bad "runreplicas: --on-insert pool filter" "m=[$rr_m] n=[$rr_n] new=[$rr_new] bench=[$rr_bench]" "$(cat "$RR/poolout")"
 fi
 rr_badname="$(REPLICA_INSERT_WAIT=0 bash -c "source '$ZFSBACKUP'; cmd_run_replicas --config='$RR/c.conf' --on-insert --device='../x y'" 2>&1; echo "rc=$?")"
 case "$rr_badname" in *"expected a kernel device name"*rc=[1-9]*) ok "runreplicas: --device with a path or space is refused" ;;

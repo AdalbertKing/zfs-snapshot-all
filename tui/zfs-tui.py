@@ -3211,6 +3211,32 @@ def guard_label(states):
     return _(u"kasowanie przy pełnej puli: %s · alarm przyrostu: %s") % (pl.get(cap, u"?"), pl.get(gro, u"?"))
 
 
+_PKG_VERSION = []
+
+
+def pkg_version(changelog=None):
+    """Wersja pakietu = pierwszy nagłówek '## [x.y.z]' w CHANGELOG.md obok programu
+    (właściciel 2026-11-09: na pasku ma być widać, na czym pracujemy). Brak pliku
+    albo nagłówka -> '' i pasek wygląda jak dawniej."""
+    if changelog is None and _PKG_VERSION:
+        return _PKG_VERSION[0]
+    path = changelog or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                     "CHANGELOG.md")
+    ver = ""
+    try:
+        with io.open(path, encoding="utf-8") as f:
+            for ln in f:
+                m = re.match(r"##\s*\[(\d+(?:\.\d+)+)\]", ln)
+                if m:
+                    ver = m.group(1)
+                    break
+    except (IOError, OSError):
+        pass
+    if changelog is None:
+        _PKG_VERSION.append(ver)
+    return ver
+
+
 def top_bar(data, width, now, ascii_only, err_count):
     host = (data.jobs or {}).get("host") or "(host?)"
     ip = getattr(data, "host_ip", None)
@@ -3218,7 +3244,8 @@ def top_bar(data, width, now, ascii_only, err_count):
     accounts = sorted({j.get("account", "") for j in jobs} |
                       {u.get("account", "") for u in (data.jobs or {}).get("unreadable", [])})
     acct = ", ".join(a for a in accounts if a) or _("(brak bloku)")
-    left = " zfs-snapshot-all"
+    ver = pkg_version()
+    left = " zfs-snapshot-all" + (" " + ver if ver else "")
     mid = _("%s%s | konto %s%s") % (host, (" " + ip) if ip else "", acct,
                                   _(u"   ! bez odpowiedzi: %d") % err_count if err_count else "")
     right = _(u"odczyt %s ") % time.strftime("%H:%M:%S", time.localtime(data.read_at or now))

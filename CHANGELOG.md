@@ -4,12 +4,26 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
-## Unreleased
+## [1.0.17] — 2026-11-09
 
+- **The GUI title bar shows the package version** (`zfs-snapshot-all 1.0.17`), read from the first
+  version heading of this file shipped next to the program; no doubt about which release is running.
 - **The replica wizard recognises the broken udev rule as installed on hosts.** 1.0.16 looked for
   a backslash at the end of a line; on pve1 the rule written up to 1.0.15 was one line with the
   backslash in the middle (`... zfs_member", \  RUN+=...`). Any backslash outside a comment now marks
   the rule as old, and the plan renews it.
+- **Connecting a disk starts only the replicas whose medium it is.** The on-insert run reads the
+  disk's pool (name and GUID, from `blkid`) and runs a replica only when the GUID is one of its
+  disks, or, for a replica without a GUID list, when the pool name matches. Before, any ZFS disk
+  ran every on-insert replica. Measured on pve1, 2026-11-09: a benchmark disk produced a replica
+  run that skipped and showed as "Last run OK"; a disk just formatted by the wizard, whose GUID
+  is saved only at EXECUTE, was refused with rc 2 and an alert. A run by schedule or by hand is
+  unchanged: the gate still refuses a wrong disk loudly.
+- **A failed on-insert run no longer blocks the next connection.** The udev rule now calls
+  `systemd-run --collect`. Without it the failed transient unit stayed loaded, and systemd-run
+  refused every later connection of a disk with the same kernel name ("Unit ... already
+  exists") until a reboot or `systemctl reset-failed`. Re-run `install-media-trigger --install`,
+  or let the replica wizard renew the rule: it treats a rule without `--collect` as old.
 
 ## [1.0.16] — 2026-11-09
 

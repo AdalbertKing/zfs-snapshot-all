@@ -222,6 +222,14 @@ reguła ma jedną linię, a `--install` nadpisuje starą. Po aktualizacji urucho
 polecenie raz jeszcze i sprawdź, że
 `journalctl -u systemd-udevd | grep 90-zfs-replica` nie pokazuje „Invalid”.
 
+Po włożeniu dysku i zwłoce (`replica.insert_wait`, domyślnie 60 s) ruszają tylko repliki,
+których nośnikiem jest ten dysk: po GUID puli, gdy replika ma listę dysków, inaczej po nazwie
+puli (reguła podaje urządzenie, `blkid` czyta z niego pulę; gdy nic nie odczyta, ruszają
+wszystkie repliki „po włożeniu”, jak dotąd). Inny dysk ZFS (np. dopiero
+co sformatowany, zanim kreator zapisze jego GUID) nie uruchamia niczego i nie daje alarmu;
+w logu zostaje po jednej linii na pominiętą replikę. Reguła wywołuje `systemd-run --collect`, więc nieudany bieg nie
+blokuje następnych włożeń. Regułę bez `--collect` kreator repliki odnawia w planie.
+
 ## 6. Scenariusz A: co ląduje w configu
 
 Relację zapisuje narzędzie — nie piszesz tego ręcznie. Jeden blok

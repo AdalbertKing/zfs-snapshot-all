@@ -5091,7 +5091,7 @@ fi
 #      --on-insert=no, bez zakladania reguly, plan mowi "tylko wg harmonogramu". Zadna
 #      replika nie rusza juz po wlozeniu -> plan ZDEJMUJE regule (wlasciciel 2026-10-18:
 #      "skoro mozemy wlaczac, chcemy moc wylaczyc").
-printf '# Managed by zfs-backup.sh install-media-trigger\nRUN+="x run-replicas --on-insert --config=y"\n' > "$RP/rules"
+printf '# Managed by zfs-backup.sh install-media-trigger\nRUN+="x --collect run-replicas --on-insert --config=y"\n' > "$RP/rules"
 RPOUT=$(rp_run "0${T}usb4
 0${T}own
 0${T}mirror
@@ -5146,7 +5146,8 @@ fi
 #       (2026-11-09) byla to JEDNA linia '... zfs_member", \  RUN+="..."' i systemd-udevd 247
 #       ja odrzucal. Dokladnie ta postac (ukosnik w srodku linii, nie na koncu) -- tez "stara",
 #       plan ja ODNAWIA. Komentarz z ukosnikiem nie moze jej udawac (pierwsza linia).
-printf '# Managed by zfs-backup.sh install-media-trigger \\ comment\nACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", \\  RUN+="x run-replicas --on-insert --device=%%k"\n' > "$RP/rules"
+#       Fixture ma --collect, wiec odnowienie wymusza tu sam ukosnik.
+printf '# Managed by zfs-backup.sh install-media-trigger \\ comment\nACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", \\  RUN+="x --collect run-replicas --on-insert --device=%%k"\n' > "$RP/rules"
 RPOUT=$(rp_run "0${T}usb4
 0${T}own
 0${T}mirror
@@ -5160,6 +5161,24 @@ if [ "$RPRC" -eq 0 ] && grep -qF 'reguła udev ZOSTANIE ODNOWIONA' "$RP/wt.log" 
     ok "replica: regula lamana na dwie linie (do 1.0.15, odrzucana przez udev) jest odnawiana"
 else
     bad "replica: odnowienie reguly lamanej" "rc=$RPRC" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
+fi
+# (4d): regula 1.0.16 -- jedna linia, --on-insert, ale BEZ systemd-run --collect: nieudany bieg
+#       zostawial jednostke "failed" i blokowal kazde nastepne wlozenie (pve1, 2026-11-09).
+#       Tez "stara": plan ja ODNAWIA.
+printf '# Managed by zfs-backup.sh install-media-trigger\nACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", RUN+="x --no-block run-replicas --on-insert --device=%%k"\n' > "$RP/rules"
+RPOUT=$(rp_run "0${T}usb4
+0${T}own
+0${T}mirror
+0${T}removable
+0${T}repl
+0${T}0 22 * * *
+0${T}
+0${T}
+" RP_TREE='goto:hdd/data,space,enter'); RPRC=$?
+if [ "$RPRC" -eq 0 ] && grep -qF 'reguła udev ZOSTANIE ODNOWIONA' "$RP/wt.log" && grep -q '^install-media-trigger --install$' "$RP/zb.log"; then
+    ok "replica: regula bez --collect (1.0.16) jest odnawiana"
+else
+    bad "replica: odnowienie reguly bez --collect" "rc=$RPRC" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
 fi
 # (5) "Sformatuj nowy nosnik" (uwaga 7): bez pytan o nazwe i baze -- pula <host>-<replika>,
 #     baza replica; plan z przyciskiem "Sformatuj (KASUJE dysk)" i --defaultno; ID z
@@ -6241,9 +6260,12 @@ print("WIDE", u"kasowanie przy pełnej puli: wł. · alarm przyrostu: wył." in 
 print("NARROW", u"pełnej puli" not in zt.top_bar(x, 70, 0, False, 0), len(zt.top_bar(x, 70, 0, False, 0)) <= 70)
 w = zt.top_bar(x, 200, 0, False, 0)
 print("CREDIT", u"by Wojciech Król (Adalbert King)" in w and u"pełnej puli" in w and len(w) <= 200, u"Król" not in zt.top_bar(x, 80, 0, False, 0))
+cl = os.path.join(d, "CHANGELOG.md"); open(cl, "w").write("# Changelog\n\nintro [1.2] text\n## [9.8.7] - 2026\n## [9.8.6]\n")
+zt._PKG_VERSION[:] = [zt.pkg_version(cl)]
+print("VER", zt.pkg_version(cl), zt.top_bar(x, 80, 0, False, 0).startswith(" zfs-snapshot-all 9.8.7 "), zt.pkg_version(os.path.join(d, "brak.md")) == "")
 PYEOF
 )"
-if has "$GT" "A ('on', 'on')" && has "$GT" "B ('off', 'off')" && has "$GT" "C ('off', 'off')" && has "$GT" 'WIDE True' && has "$GT" 'NARROW True True' && has "$GT" 'CREDIT True True'; then
+if has "$GT" "A ('on', 'on')" && has "$GT" "B ('off', 'off')" && has "$GT" "C ('off', 'off')" && has "$GT" 'WIDE True' && has "$GT" 'NARROW True True' && has "$GT" 'CREDIT True True' && has "$GT" 'VER 9.8.7 True True'; then
     ok "pasek: stan straznikow hosta -- F10 przed starym conf, F10 wyl. wygrywa z conf wl., brak plikow = wyl.; waski pasek pomija; autor tylko przy zapasie miejsca"
 else
     bad "pasek: stan straznikow" "$GT"

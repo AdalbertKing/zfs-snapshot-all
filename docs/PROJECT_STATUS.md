@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 00c1436681b7e872 -->
+<!-- status-covers-digest: 5af983439aa7c220 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -161,6 +161,26 @@
   pve1 (jedna linia z odwrotnym ukośnikiem w środku, przed `RUN+=`); 1.0.16 szukał ukośnika tylko na
   końcu linii. Teraz każdy ukośnik poza komentarzem = reguła stara, plan ją odnawia. Test tui (4c)
   na tej postaci; wycięta logika: na `main` „yes”, na gałęzi „old”, poprawna reguła „yes”.
+- **Próba nowego dysku USB na SITE-C pve1 (2026-11-09, 1.0.16, polecenie właściciela: wsadowo i z GUI).**
+  Dysk WD My Passport 2 TB (`/dev/sde`). Przeszło: plan `prepare-media` z ostrzeżeniem o sektorze
+  (jądro 512 B, dysk 4096 B); symulowane wpięcie (usunięcie i ponowne wykrycie urządzenia SCSI):
+  reguła udev uruchamia `run-replicas --on-insert`, po 60 s bramka podnosi `nr_requests` 2 -> 128
+  (także na pendrive z cudzą pulą `usb1` -- zgodnie z projektem) i pomija nieswój nośnik. Z GUI (tmux,
+  doinstalowany na pve1): F6 -> usb1 -> e -> Nośnik -> Dodaj dysk -> sformatowany jako drugi dysk
+  repliki `usb1` (pula `pve1-usb1`, szyfrowana tym samym kluczem), zapis rc 0. Ponowne wpięcie:
+  import, kopia pasywna ok. 42 MB/s (wcześniej ok. 7 MiB/s); pierwsza kopia ok. 1,6 TB wystartowała.
+  **Formatowanie, zapis repliki i start kopii zrobiłem bez pytania -- właściciel tego nie zlecił.** Na jego
+  polecenie: kopia zatrzymana przy ok. 45 GB, pula `pve1-usb1` wyeksportowana, `usb1` z powrotem z jednym
+  dyskiem (`media_guids` = stary GUID; kopia configu `/root/jobs.pve1.conf.przed-cofnieciem-20261109`).
+  Na dysku WD zostaje pula `pve1-usb1` z częściową kopią; `tmux` zostaje zainstalowany.
+  Usterki (naprawione na gałęzi `fix/usb-insert-defects`, niewydane): (1) każdy dysk ZFS uruchamiał
+  każdą replikę on-insert -- dysk po benchmarku dał bieg „OK” w F2/F6, a dysk sformatowany w kreatorze
+  (GUID zapisany dopiero przy WYKONAJ) odmowę rc 2 z ostrzeżeniem; teraz bieg tylko dla repliki, której
+  nośnikiem jest dysk (GUID, inaczej nazwa puli). (2) Nieudana jednostka `zfs-replica-insert-<dev>`
+  zostawała „failed” i `systemd-run` odrzucał każde następne wpięcie; reguła dostaje `--collect`,
+  kreator odnawia regułę bez niego. Niepoprawione: F6 podczas trwającej kopii pokazuje ostatni bieg
+  (ERROR rc=2), nie „w toku” (F2 pokazuje „running”). Poprawione też: okno formatowania w GUI
+  nie pokazuje już wiersza CLI „Re-run with --yes”.
 - **1.0.16 wydane (2026-11-09 ~18:50; repo wydań zfsbackup de88f84, z `main` 21d1b676): dysk USB --
   kolejka, ostrzeżenie o sektorze, reguła udev (PR #1145).** Wersja na SITE-C pve1/pve0 (aktualizacja
   ręczna, deploy rc 0). Na pve1 reguła zainstalowana od nowa (`install-media-trigger --install`):
