@@ -137,7 +137,10 @@ while :; do
         case "${SRC[$k]}" in default) sw="$(T domyślne)" ;; *) sw="${SRC[$k]}" ;; esac
         if [ -n "${NEW[$k]+x}" ]; then v="${NEW[$k]}  ($(T było) ${VAL[$k]})"; else v="${VAL[$k]}"; [ "${SRC[$k]}" = file ] || v="$v  ($sw)"; fi
         # Wyrównanie po ZNAKACH: printf %-Ns liczy bajty, a "(domyślne)" ma polską literę.
-        c1="${k#*.}"; while [ "${#c1}" -lt 18 ]; do c1="$c1 "; done
+        # Właściciel 2026-11-09: „pogrubić pierwszą kolumnę” -- pozycja menu whiptail to zwykły
+        # tekst (bez pogrubienia), więc nazwa WIELKIMI literami; w settings.ini i w oknie edycji
+        # klucz zostaje małymi.
+        c1="${k#*.}"; c1="${c1^^}"; while [ "${#c1}" -lt 18 ]; do c1="$c1 "; done
         c2="$(clip_label "$v" 26)"; while [ "${#c2}" -lt 26 ]; do c2="$c2 "; done
         pad="                                                "          # 18 + 4 + 26 = szerokość kolumn 1-2
         dw=$(( W - 10 - 18 - 4 - 26 - 2 )); [ "$dw" -lt 20 ] && dw=20
