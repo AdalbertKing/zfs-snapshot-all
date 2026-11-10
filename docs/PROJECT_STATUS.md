@@ -166,7 +166,7 @@
   - PR #1157: w oknie ustawień hosta nazwy ustawień wielkimi literami (właściciel chciał
     pogrubienia, a whiptail go nie ma).
   - Backlog paczki GUI: U166-U171, U174-U180 (F2: kolejność i grupowanie, projekt zaakceptowany; F4 przy
-    trwającej kopii; przerwany bieg widoczny jako „running” (U167); tekst o kluczu; pliki stanu po usunięciu repliki); U174: F6 przy trwającej kopii; z labu pve11 2026-11-09: U175 puste kolumny migawek w kreatorze repliki, U176 F2/F3 bez biegów konta root, U177 F4 przy relacji bez kopii, U178 Del w trakcie kopii, U179 teksty, U180 F6 pokazuje nieaktualny stan nośnika. U172/U173: strażnik
+    trwającej kopii; przerwany bieg widoczny jako „running” (U167); tekst o kluczu; pliki stanu po usunięciu repliki); U174: F6 przy trwającej kopii; z labu pve11 2026-11-09: U175 puste kolumny migawek w kreatorze repliki, U176 F2/F3 bez biegów konta root, U177 F4 przy relacji bez kopii, U178 Del w trakcie kopii, U179 teksty, U180 F6 pokazuje nieaktualny stan nośnika. U181: kopia z datasetu pvesr ustawiana przed przyjściem migawki (Site-B pve0, obejście wdrożone 2026-11-10). U172/U173: strażnik
     przyrostu dla relacji „tylko migawki na źródle” liczony z kolektora, bez crona na źródle.
 - **1.0.17 wydane (2026-11-09 ~20:00; repo wydań zfsbackup 68ac8d3, z `main` f3e90e63, PR #1147).**
   Na SITE-C pve1 i pve0 ręczna aktualizacja (`update-control.sh --self-update`, rc 0; root i konto
