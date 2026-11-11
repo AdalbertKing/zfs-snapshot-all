@@ -538,6 +538,38 @@ check "bookmark: source bookmark GUID now matches the newly sent @c" \
       "$(zfs get -H -p -o value guid "$POOL/bm1@c")" \
       "$(zfs list -H -t bookmark -o guid "$POOL/bm1" 2>/dev/null | head -1)"
 
+# A BOOKMARK NEWER THAN THE COMMON SNAPSHOT WINS (2026-11-11). The source's
+# retention pruned the newest copied snapshot (@h1) during a collector outage,
+# while an OLDER one (@d1) survives on both ends and the source made @d2 in the
+# meantime. The engines used to take @d1 as the base and the backup landing
+# discarded @h1 on the target with recv -F, although the bookmark still carried
+# @h1's GUID. Now: -i from the bookmark to @d2 (the bridge: -I cannot start at a
+# bookmark), then -I to @h2 -- the target keeps @h1 and gains both.
+# Negative control, main before the fix: "d1 d2 h2".
+zfs create -p "$POOL/bm3" || exit 1
+zfs snapshot "$POOL/bm3@d1"; run_send -e "$POOL/bm3" "$BK"
+tick; zfs snapshot "$POOL/bm3@h1"; run_send -e "$POOL/bm3" "$BK"
+BM3T="$(tgt_of bm3)"
+zfs destroy "$POOL/bm3@h1"
+tick; zfs snapshot "$POOL/bm3@d2"
+tick; zfs snapshot "$POOL/bm3@h2"
+run_send -e "$POOL/bm3" "$BK"
+check "bookmark newer than common (push): exit 0" "0" "$RC"
+check "bookmark newer than common (push): target keeps @h1, gains @d2 (bridge) and @h2" "d1 h1 d2 h2" \
+      "$(snaps_of "$BM3T")"
+
+# The same on a pull (snapget.sh), the twin above with the sides swapped.
+zfs create -p "$POOL/origin/$POOL/bm4" || exit 1
+zfs snapshot "$POOL/origin/$POOL/bm4@d1"; run_get -e "$POOL/origin/$POOL/bm4" "$POOL/lp"
+tick; zfs snapshot "$POOL/origin/$POOL/bm4@h1"; run_get -e "$POOL/origin/$POOL/bm4" "$POOL/lp"
+zfs destroy "$POOL/origin/$POOL/bm4@h1"
+tick; zfs snapshot "$POOL/origin/$POOL/bm4@d2"
+tick; zfs snapshot "$POOL/origin/$POOL/bm4@h2"
+run_get -e "$POOL/origin/$POOL/bm4" "$POOL/lp"
+check "bookmark newer than common (pull): exit 0" "0" "$RC"
+check "bookmark newer than common (pull): target keeps @h1, gains @d2 (bridge) and @h2" "d1 h1 d2 h2" \
+      "$(snaps_of "$POOL/lp/$POOL/origin/$POOL/bm4")"
+
 # A bookmark whose GUID does NOT match the target's current head (e.g. someone
 # rebuilt the target independently) must never be trusted on a name-only
 # guess -- it must be silently skipped, falling through to the normal
