@@ -15562,7 +15562,7 @@ cmd_list_datasets() {
     # The wizard asks "who makes these -- another collector, or nobody (leftovers)?"
     # and shows its age as the one fact the admin decides on. A listing without the
     # creation column (old peer output) counts as before and reports 0.
-    local -A own_n=() own_f=() own_e=()
+    local -A own_n=() own_f=() own_e=() own_t=()
     if [ "$own" -eq 1 ]; then
         local snaps _s _d _c
         rc=0
@@ -15578,6 +15578,8 @@ cmd_list_datasets() {
         while IFS=$'\t' read -r _s _c; do
             case "$_s" in *@*) ;; *) continue ;; esac
             _d="${_s%%@*}"
+            # U175: every snapshot, reserved families too -- the replica picker shows the count.
+            own_t[$_d]=$(( ${own_t[$_d]:-0} + 1 ))
             case "${_s#*@}" in vzdump*|__replicate_*|__migration__*) continue ;; esac
             own_n[$_d]=$(( ${own_n[$_d]:-0} + 1 ))
             # Our FAMILY alone (the wizard's chain check for a backup, owner 2026-10-20):
@@ -15600,7 +15602,7 @@ SN
         [ "$first" -eq 1 ] || printf ','
         first=0
         printf '{"name":"%s","type":"%s","used":%s,"avail":%s' "$(json_escape "$_n")" "$(json_escape "$_t")" "${_u:-0}" "${_av:-0}"
-        [ "$own" -eq 1 ] && printf ',"own_snapshots":%s,"family_snapshots":%s,"family_newest":%s' "${own_n[$_n]:-0}" "${own_f[$_n]:-0}" "${own_e[$_n]:-0}"
+        [ "$own" -eq 1 ] && printf ',"own_snapshots":%s,"family_snapshots":%s,"family_newest":%s,"snapshots":%s' "${own_n[$_n]:-0}" "${own_f[$_n]:-0}" "${own_e[$_n]:-0}" "${own_t[$_n]:-0}"
         # W17: an encrypted source is offered the raw send (-w) by the wizard.
         printf ',"encryption":"%s"' "$(json_escape "${_enc:--}")"
         printf '}'

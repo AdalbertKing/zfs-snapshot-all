@@ -4982,7 +4982,9 @@ printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
 case "$1" in
     list-replicas) if [ -n "${RP_REPS:-}" ]; then printf '%s\n' "$RP_REPS"; else echo '{"replicas":[]}'; fi ;;
     status) echo '{"relations":[{"name":"pve11b","state":"active","managed_datasets":["hdd/backups/192.168.28.96/hdd/vm"]}]}' ;;
-    list-datasets) if [ -n "${RP_ENC:-}" ]; then
+    list-datasets) if [ -n "${RP_SNAPS:-}" ]; then
+                       echo '{"datasets":[{"name":"hdd","snapshots":0},{"name":"hdd/backups","snapshots":12},{"name":"hdd/data","snapshots":0},{"name":"hdd/data/mail","snapshots":3},{"name":"hdd/data/docs","snapshots":0}]}'
+                   elif [ -n "${RP_ENC:-}" ]; then
                        echo '{"datasets":[{"name":"hdd","encryption":"off"},{"name":"hdd/backups","encryption":"off"},{"name":"hdd/backups/192.168.28.96","encryption":"off"},{"name":"hdd/backups/192.168.28.96/hdd/vm","encryption":"aes-256-gcm"},{"name":"hdd/data","encryption":"off"},{"name":"hdd/data/mail","encryption":"off"},{"name":"hdd/data/docs","encryption":"off"}]}'
                    else
                        echo '{"datasets":[{"name":"hdd"},{"name":"hdd/backups"},{"name":"hdd/backups/192.168.28.96"},{"name":"hdd/backups/192.168.28.96/hdd/vm"},{"name":"hdd/data"},{"name":"hdd/data/mail"},{"name":"hdd/data/docs"}]}'
@@ -5040,6 +5042,21 @@ if grep -qF '] backups' "$RP/tree.log" && ! grep -qF '] data' "$RP/tree.log" && 
     ok "replika H-7: nosnik innej repliki (staly: hdd/data z poddrzewem) nie jest na liscie zrodel"
 else
     bad "replika H-7: nosnik innej repliki na liscie zrodel" "$(head -12 "$RP/tree.log")"
+fi
+# U175 (lab pve11 2026-11-09): drzewo kreatora repliki pokazuje liczbe migawek kazdego datasetu
+# (list-datasets --own-snapshots), a przy zerze uwage, ze pasywna replika go nie skopiuje.
+# Kontrola: dataset z migawkami ma liczbe i nie ma uwagi. Atrapa drzewa ma 80 kolumn (bez
+# kolumn), wiec: specyfikacja okna z kreatora, potem ten sam plik w prawdziwym tree.py na 200.
+rp_run "0${T}usb2
+" RP_TREE='esc' RP_SNAPS=1 >/dev/null
+RPZ="$(cat "$RP/zb.log" 2>/dev/null)"
+RPS="$("$PY" -c 'import json,sys; d={x["name"]: x for x in json.load(open(sys.argv[1], encoding="utf-8"))["datasets"]}; print(d["hdd/data"].get("snaps"), d["hdd/data"].get("note"), "|", d["hdd/backups"].get("snaps"), repr(d["hdd/backups"].get("note")))' "$RP/tree-spec.last" 2>&1 | tr -d '\r')"
+RPW="$("$PY" "$REPO/tui/tree.py" --spec "$RP/tree-spec.last" --out "$RP/tree-out.u175" --keys 'goto:hdd/data/mail,esc' --width 200 --height 30 2>&1)"
+if has "$RPZ" 'list-datasets --json --own-snapshots' && [ "$RPS" = "0 bez migawek -- pasywna replika go nie skopiuje | 12 ''" ] \
+   && hasE "$RPW" 'Migawki +Uwagi' && hasE "$RPW" ' data .* 0 +bez migawek -- pasywna replika go nie skopiuje' && hasE "$RPW" ' backups .* 12 '; then
+    ok "replika U175: drzewo -- liczba migawek datasetu, przy zerze 'bez migawek -- pasywna replika go nie skopiuje' (cala, nie uciete); z migawkami bez uwagi"
+else
+    bad "replika U175: migawki w drzewie" "spec: $RPS" "$(printf '%s\n' "$RPW" | grep -E 'Migawki|backups|data|mail' | head -8)" "$RPZ"
 fi
 # Kampania 2026-10-22: wlasny harmonogram sprawdzany W OKNIE -- "0 22 * * *zle" szedl az do planu.
 rm -f "$RP/rules"

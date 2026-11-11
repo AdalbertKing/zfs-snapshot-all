@@ -413,7 +413,7 @@ if [ "$EDIT" -eq 1 ]; then
     MENU=1
     # Plan potrzebuje wzorców wyjątków (-X) z drzewa datasetów, jak po koszyku.
     info "$(Tv 'Replika $NAME' '$NAME' "$NAME")" "$(T 'Czytam datasety tego hosta...')"
-    if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! { drop_replica_media "$TMPD/ds.json" "$TMPD/rep.json"; basket_tree_from_json "$TMPD/ds.json"; }; then
+    if ! "$ZB" list-datasets --json --own-snapshots >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! { drop_replica_media "$TMPD/ds.json" "$TMPD/rep.json"; basket_tree_from_json "$TMPD/ds.json"; }; then
         wt --title "$(T 'Nie udało się pobrać listy')" --msgbox "list-datasets:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
         clear 2>/dev/null; wt_end_nochange "$(T 'Replika: przerwane, nic nie zmieniono')"; exit 1
     fi
@@ -451,13 +451,15 @@ while :; do
     2)  # co kopiować -- TEN SAM koszyk co w kreatorze relacji (uwaga 13, 2026-10-08)
         if [ "${#T_NAME[@]}" -eq 0 ]; then
             info "$(Tv 'Replika $NAME' '$NAME' "$NAME")" "$(T 'Czytam datasety tego hosta...')"
-            if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! { drop_replica_media "$TMPD/ds.json" "$TMPD/rep.json"; basket_tree_from_json "$TMPD/ds.json"; }; then
+            if ! "$ZB" list-datasets --json --own-snapshots >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! { drop_replica_media "$TMPD/ds.json" "$TMPD/rep.json"; basket_tree_from_json "$TMPD/ds.json"; }; then
                 wt --title "$(T 'Nie udało się pobrać listy')" --msgbox "list-datasets:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
                 clear 2>/dev/null; wt_end_nochange "$(T 'Replika: przerwane, nic nie zmieniono')"; exit 1
             fi
             [ -n "$SRCS" ] && basket_from_replica
         fi
-        if ! BASKET_NO_CLOSE=1 basket_step; then
+        # U175 (lab pve11 2026-11-09): pasywna replika kopiuje tylko istniejące migawki --
+        # dataset bez żadnej nie trafia na dysk, a okno tego nie mówiło.
+        if ! BASKET_NO_CLOSE=1 BASKET_ZERO_NOTE="$(T 'bez migawek -- pasywna replika go nie skopiuje')" basket_step; then
             [ "$MENU" -eq 1 ] && { step=0; continue; }
             [ "$EDIT" -eq 1 ] && { clear 2>/dev/null; wt_end_nochange "$(T 'Replika: przerwane, nic nie zmieniono')"; exit 1; }
             step=1; continue

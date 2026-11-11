@@ -18,6 +18,9 @@ when they change how the tool is used.
 - **A connected replica disk shows how full it is** (U186): F6 has a `Used` column and the
   medium line says `used N% (X of Y)`; `list-replicas --json` carries `medium_size` and
   `medium_alloc` in bytes while the disk's pool is imported (empty otherwise).
+- **The replica wizard shows each dataset's snapshots** (U175): the dataset tree has the count
+  (`list-datasets --own-snapshots` gives `snapshots`, every family) and, at zero, the note that
+  a passive replica will not copy it.
 - **F2/F3 show every run of every job** (U176): a row finds its runs by the label of its own
   cron line. A snapshot-only relation's snapshot rows, the daily/weekly/monthly rows, and a local
   prune row made of several datasets took another line's label and showed no runs (or another

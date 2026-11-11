@@ -476,6 +476,13 @@ class Tree(object):
         if not self.cols:
             cw = [9, 0, 7, 14]
             nw = iw - (9 + 7 + 14) - 6
+        # U175: an Uwagi note longer than 14 (replica: "bez migawek -- ...") widens its
+        # column as far as the name column keeps 30.
+        ln = max([len(nd.get("note") or u"") for nd in self.nodes.values()] + [0])
+        if ln > cw[3]:
+            grow = min(ln - cw[3], max(0, nw - 30))
+            cw[3] += grow
+            nw -= grow
         hdr_cells = [_(u"Użyte").rjust(cw[0])] + ([_(u"Wolne").rjust(cw[1])] if self.cols else []) + \
                     [_(u"Migawki").rjust(cw[2]), _(u"Uwagi").ljust(cw[3])]
         hdr = (u" " + _(u"Dataset")).ljust(nw) + u"  " + u"  ".join(hdr_cells)

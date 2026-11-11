@@ -13609,6 +13609,14 @@ if [ "$got" = "[('pool', 0), ('pool/a', 1), ('pool/b', 0)]" ]; then
 else
     bad "listdatasets: family_snapshots" "got=$got" "$LDOUT"
 fi
+# U175: "snapshots" is every snapshot of the dataset, the reserved families too -- the replica
+# picker's Migawki column. Control: own_snapshots above still leaves them out (pool/b 0).
+got=$(printf '%s' "$LDOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print([(x["name"], x["snapshots"]) for x in d["datasets"]])' 2>/dev/null)
+if [ "$got" = "[('pool', 0), ('pool/a', 3), ('pool/b', 2)]" ]; then
+    ok "listdatasets U175: --own-snapshots also gives snapshots -- every one, reserved too (pool/a 3, pool/b 2)"
+else
+    bad "listdatasets U175: snapshots" "got=$got" "$LDOUT"
+fi
 # family_newest (2026-10-24): the listing asks for the creation column, the newest
 # epoch counts only for OUR family (pool/a@reczny 9000 must not), and a peer that
 # answers with names only (the stub above) reports 0 for every dataset.
