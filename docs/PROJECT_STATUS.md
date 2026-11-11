@@ -33,6 +33,11 @@
   aktualizacji); na żywo potwierdzone U180, U174, U186, U170, U172 (`--plan` przez ssh do pve9).
   U189 (gałąź `batch/gui-1-0-19`, decyzja właściciela): F2 łączy w jeden wiersz linie jednej
   relacji, czynności i szczebla, gdy każda następna startuje najwyżej 5 min po poprzedniej; tui 512/0.
+  Recenzja B01 (V3.14) odrzuciła paczkę; poprawki na gałęzi `fix/b01-f1-f2`. Przerwany sygnałem silnik
+  zamyka swoje rekordy postępu jako `interrupted` (F1). Bramka nośnika uznaje zakładkę źródła za wspólny
+  punkt, więc nośnik wracający po retencji dostaje przyrost (F3). Na żywo na pve9 na pulach z pliku:
+  odmowa U183 i powrót po retencji (F2). Suity: snapsend 408/2 (2 jak na main), mediagate 214/0,
+  twins 94/0.
   Otwarte: U190, U181(b).
 
 - **Nazwa klienta w publicznym repo wydań (2026-11-07, NIEWYDANE).** zfsbackup od wydania `b6f040f`
