@@ -2207,5 +2207,6 @@
 "datasetów": "datasets",
 "PADŁ": "FAILED",
 "PADŁ %d/%d": "FAILED %d/%d",
-"dysk podłączony, kopia za ~%s": "disk connected, copy in ~%s"
+"dysk podłączony, kopia za ~%s": "disk connected, copy in ~%s",
+"%s -- szczegóły w F6": "%s -- details in F6"
 }

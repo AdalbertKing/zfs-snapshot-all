@@ -4961,8 +4961,16 @@ def kopie_groups(rows, data, now, ch):
         groups.append({"kind": "replica", "name": r.get("name") or "?", "word": _(u"replika %s") % (r.get("name") or "?"),
                        "what": r.get("media") or "", "roots": roots, "typ": _(u"replika"), "dir": r.get("media") or "",
                        "running_since": r.get("running_since") or u"", "usage": medium_usage_words(r),
-                       "note": u"" if here else _(u"nośnik niepodłączony -- podłącz go, potem Ctrl-R")})
+                       "note": u"" if here else kopie_medium_note(r.get("present"))})
     return groups
+
+
+def kopie_medium_note(present):
+    """F4, replika bez puli tutaj (L6, lab pve11 2026-11-11): to samo co F6. Podlaczony ZLY
+    dysk albo dysk z niezaimportowana pula to nie "nosnik niepodlaczony"."""
+    if present in (None, "", "away"):
+        return _(u"nośnik niepodłączony -- podłącz go, potem Ctrl-R")
+    return _(u"%s -- szczegóły w F6") % _(MEDIA_STATES.get(present, MEDIA_STATES["unknown"])[0])
 
 
 def kopie_copy_state(it, long=False):

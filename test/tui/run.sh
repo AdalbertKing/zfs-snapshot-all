@@ -2943,6 +2943,9 @@ r["replicas"] = [dict(r["replicas"][0], present="here", running_since="2026-11-0
 json.dump(r, open(sys.argv[3] + "/rep-run.json", "w", encoding="utf-8"))
 r["replicas"][0]["running_since"] = ""
 json.dump(r, open(sys.argv[3] + "/rep-idle.json", "w", encoding="utf-8"))
+for p in ("wrong_medium", "available", "away"):
+    r["replicas"][0]["present"] = p
+    json.dump(r, open(sys.argv[3] + "/rep-%s.json" % p, "w", encoding="utf-8"))
 t["datasets"] += [{"name": "bkp/sejf-a/hdd/lab", "type": "filesystem", "snapshots": 0, "newest": 0, "pvesr": False, "resume": False},
                   {"name": "bkp/sejf-a/hdd/lab/vm-1", "type": "volume", "snapshots": 0, "newest": 0, "pvesr": False, "resume": True}]
 json.dump(t, open(sys.argv[3] + "/tree.json", "w", encoding="utf-8"))
@@ -2958,6 +2961,16 @@ if hasE "$K1" 'sejf-a .*bkp/sejf-a/hdd/lab  .* kopia trwa' && hasE "$K1" 'vm-1  
     ok "F4 U170: replika w trakcie kopii -- 'kopia trwa'; bez biegu z tokenem 'przerwana, wznowi się'; bez tokenu '-'; inny dysk z wlasna nazwa"
 else
     bad "F4 U170: kopia w toku" "$(printf '%s\n' "$K1" | grep -E 'sejf-a|vm-1|inny dysk' | head -6)" "$(printf '%s\n' "$K2" | grep -E 'sejf-a|vm-1' | head -4)"
+fi
+# L6 (lab pve11 2026-11-11): F4 mowilo "nośnik niepodłączony" przy podlaczonym ZLYM dysku
+# (F6: NIE TEN DYSK) i przy dysku z niezaimportowana pula. Mowi to samo co F6.
+K4="$(u170 rep-wrong_medium.json end)"; K5="$(u170 rep-available.json end)"; K6="$(u170 rep-away.json end)"
+if hasE "$K4" 'sejf-a +replika +NIE TEN DYSK -- szczegóły w F6' && ! hasE "$K4" 'sejf-a +replika +nośnik niepodłączony' \
+   && hasE "$K5" 'sejf-a +replika +Podłączony -- szczegóły w F6' \
+   && hasE "$K6" 'sejf-a +replika +nośnik niepodłączony -- podłącz go, potem Ctrl-R'; then
+    ok "F4 L6: replika bez puli -- zly dysk / podlaczony bez importu / w sejfie: te same slowa co F6"
+else
+    bad "F4 L6: stan nosnika w F4" "$(printf '%s\n' "$K4" "$K5" "$K6" | grep -E 'sejf-a|DYSK|Podłączony|niepodł' | cut -c1-140 | head -8)"
 fi
 rm -rf "$U170D"
 A="$(nact F7)"
