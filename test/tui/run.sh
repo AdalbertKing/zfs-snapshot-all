@@ -2715,7 +2715,7 @@ fi
 # kolumna Rodzaj (historia / migawki xN), panel: Rodzaj, Na dysku (z przykladem), Szyfrowane.
 # U93: "zdjecia" -> migawki; U99: kolumny listy Replika | Typ | Wykonana | Harmonogram.
 F6R="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen nosniki --width 200 --height 40 2>&1)"
-if hasE "$F6R" '║ Replika +Typ +Wykonana +Ostatni bieg +Harmonogram' && hasE "$F6R" 'Rodzaj +własne migawki -- replika' \
+if hasE "$F6R" '║ Replika +Typ +Zajęte +Wykonana +Ostatni bieg +Harmonogram' && hasE "$F6R" 'Rodzaj +własne migawki -- replika' \
    && hasE "$F6R" 'Na dysku +2 najnowsze migawki [a-z_]+ \(ok\. 2 dni wstecz\)' && hasE "$F6R" 'Ile migawek +nieustawione -- tyle, ile trzyma kolektor' && hasE "$F6R" 'Szyfrowane +nie' && ! has "$F6R" 'zdjęc'; then
     ok "nosniki: X11 -- panel: Rodzaj, Na dysku z przykladem, Szyfrowane (U21: rodzaj w panelu, nie w liscie)"
 else
@@ -2868,6 +2868,24 @@ else
     bad "nosniki U186: zajetosc nosnika" "$(printf '%s\n' "$U1" | grep -E 'Zajęte|sejf-|zajęte')" "$(printf '%s\n' "$U2" | grep -E 'sejf-b|zajęte')"
 fi
 rm -f "$RUS"
+# U174 (wlasciciel 2026-11-09): kopia biegnie (running_since z bramy) -- wiersz i linia Nośnik mowia
+# "kopia trwa od", nie ostatni zakonczony bieg. Kontrola: druga replika bez pola -- jak dotad.
+RRS="$(mktemp)"
+"$PY" - "$P10/replicas.json" "$RRS" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["replicas"][0].update({"present": "here", "last_current": "", "running_since": "2026-11-09 22:28"})
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+R1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RRS" --screen nosniki --width 200 --height 50 2>&1)"
+R2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RRS" --screen nosniki --keys down --width 200 --height 50 2>&1)"
+if hasE "$R1" '^║ sejf-a .* kopia trwa od 2026\.11\.09 22:28 ' && has "$R1" 'TU -- kopia trwa od 2026.11.09 22:28' \
+   && ! hasE "$R2" '^║ sejf-b .*kopia trwa' && ! has "$R2" '-- kopia trwa od'; then
+    ok "nosniki U174: biegnaca kopia -- wiersz i Nośnik 'kopia trwa od 2026.11.09 22:28'; replika bez biegu jak dotad"
+else
+    bad "nosniki U174: kopia trwa" "$(printf '%s\n' "$R1" | grep -E '^║ sejf-|Nośnik')" "$(printf '%s\n' "$R2" | grep -E '^║ sejf-b|Nośnik')"
+fi
+rm -f "$RRS"
 A="$(nact F7)"
 # Uwaga 18 (2026-10-08): F7 uruchamia ZAZNACZONA replike od razu -- bez okna "t".
 if ! has "$A" 'POTWIERDZENIE' && grep -Eq "zfs-backup.sh'? run-replicas '?--name=sejf-a'?\$" "$XL"; then
@@ -7350,6 +7368,14 @@ if [ "$(printf '%s\n' "$brq_out" | grep -c '^ok ')" -eq 3 ] && ! printf '%s\n' "
     ok "odświeżanie w tle: prośba w trakcie odczytu rusza po nim, ekran kończy na danych po zmianie (U185)"
 else
     bad "odświeżanie w tle: prośba w trakcie odczytu przepada (U185)" "$brq_out"
+fi
+
+# U180: wejscie w F6 czyta liste replik od nowa (stan nosnika z chwili wejscia); inny ekran -- nie.
+f6r_out="$("$PY" "$REPO/test/tui/f6_refresh.py" "$TUI" 2>&1 | tr -d '\r')"
+if [ "$(printf '%s\n' "$f6r_out" | grep -c '^ok ')" -eq 2 ] && ! printf '%s\n' "$f6r_out" | grep -q '^bad '; then
+    ok "F6: wejscie czyta liste replik od nowa, inny ekran jej nie czyta (U180)"
+else
+    bad "F6: odczyt replik przy wejsciu (U180)" "$f6r_out"
 fi
 
 # Limit czytnika GUI: zawieszony czytnik (ssh do martwego hosta) wraca błędem w limicie i nie

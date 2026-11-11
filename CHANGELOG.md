@@ -18,6 +18,10 @@ when they change how the tool is used.
 - **A connected replica disk shows how full it is** (U186): F6 has a `Used` column and the
   medium line says `used N% (X of Y)`; `list-replicas --json` carries `medium_size` and
   `medium_alloc` in bytes while the disk's pool is imported (empty otherwise).
+- **F6 shows a running copy and the current medium state** (U174, U180): `list-replicas --json`
+  has `running_since` (the gate's run record, live pid); the row and the medium line say
+  `kopia trwa od ...` (`copy running since ...`) instead of the last finished run. F6 reads the
+  replica list again on entry and every 15 s while it is open.
 - **A stopped run is shown as interrupted, not running for ever** (U167): `job-stats --runs`
   gives rc `-2` to a run with no END whose `zfs-job.sh` process is gone; F2 says `PRZERWANY`
   (`INTERRUPTED`). Where other users' processes cannot be read (hidepid), it stays running.

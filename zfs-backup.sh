@@ -8953,6 +8953,10 @@ cmd_list_replicas() {
         # U186 (owner 2026-11-10): how full the medium is, while its pool is imported.
         # An exported pool in the slot has no figures without importing it, and the
         # list never imports; then both fields stay empty.
+        # U174 (owner 2026-11-09): a copy running now, from the gate's run record (live pid);
+        # F6 showed the last finished run instead.
+        local rsince=""
+        [ -x "$gate" ] && rsince=$("$gate" running "$pool" "$name" 2>&1 | sed -n 's/.* running since \(.*\) (pid .*/\1/p')
         local msize="" malloc=""
         [ "$present" = "here" ] \
             && IFS=' ' read -r msize malloc < <(zpool list -Hp -o size,alloc "$pool" 2>/dev/null | tr '\t' ' ')
@@ -8990,8 +8994,8 @@ JSRC
             # media_key (W19b): the key file of an encrypted medium, by the pool name of
             # dst -- known without the disk in the slot.
             local _mk="$MEDIA_KEY_DIR/${dst%%/*}.key"; [ -s "$_mk" ] || _mk=""
-            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"exclude_family":"%s","media_guids":"%s","on_insert":"%s","keep":"%s","raw":"%s","media_key":"%s","medium_size":"%s","medium_alloc":"%s"}' \
-                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$(json_escape "$_xfam")" "$mg" "${oi:-no}" "$kp" "${rw:-no}" "$_mk" "$msize" "$malloc"
+            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"exclude_family":"%s","media_guids":"%s","on_insert":"%s","keep":"%s","raw":"%s","media_key":"%s","medium_size":"%s","medium_alloc":"%s","running_since":"%s"}' \
+                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$(json_escape "$_xfam")" "$mg" "${oi:-no}" "$kp" "${rw:-no}" "$_mk" "$msize" "$malloc" "$rsince"
         else
             printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
             [ -n "$last" ] && printf '%-14s   last seen: %s\n' "" "$last"

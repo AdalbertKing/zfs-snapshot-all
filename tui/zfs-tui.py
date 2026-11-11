@@ -223,6 +223,9 @@ MEDIA_STATES = {
     "unknown":      ("?", 4, u"brama nośnika (zfs-media-gate.sh) nie odpowiedziała -- stan nieznany, nie 'brak'"),
 }
 
+NOSNIKI_REFRESH_MS = 15000
+
+
 def replica_type_word(r):
     """U99 (wlasciciel 2026-10-27): kolumna Typ -- nosnik staly to "wewnętrzny";
     wymienny: podłączony / odłączony (stany niepewne slowami bramy)."""
@@ -256,6 +259,10 @@ def medium_usage_words(r):
 def media_state_line(r, st):
     """Stan nosnika w panelu repliki (uwaga 17, 2026-10-08). Dysk w maszynie mowi tez,
     czy kopia na nim jest aktualna -- "w slocie" samo nie mowilo nic o kopii."""
+    if r.get("running_since"):
+        # U174: kopia biegnie (rekord biegu bramy, zywy PID) -- nie ostatni zakonczony bieg.
+        u = medium_usage_words(r)
+        return u"%s -- %s%s" % (_(st[0]), _(u"kopia trwa od %s") % dshow(r["running_since"]), (u", " + u) if u else u"")
     if r.get("present") in ("available", "here"):
         lc = r.get("last_current") or ""
         u = medium_usage_words(r)
@@ -4607,7 +4614,8 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
         st = MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"])
         s = r.get("schedule") or "?"
         cells.append([r.get("name") or "?", replica_type_word(r), medium_usage_pct(r), dshow((r.get("last_current") or _(u"brak"))[:16]),
-                      replica_last_run(replica_stats_row(data, r.get("name")), data.failed("stats")),
+                      (_(u"kopia trwa od %s") % dshow(r["running_since"])) if r.get("running_since")
+                      else replica_last_run(replica_stats_row(data, r.get("name")), data.failed("stats")),
                       _(u"po podłączeniu") if s == "on-insert" else cron_words(s) + (_(u" + po podłączeniu") if r.get("on_insert") == "yes" else "")])
     det_title, det, child = u"", [], None
     if reps and 0 <= cursor < len(reps):
@@ -6948,6 +6956,9 @@ class UI(object):
                 self.screen, self.focus, self.pair_cursor = key, "list", 0
                 if key == "szablony":
                     self.ensure_profiles()
+                if key == "nosniki":
+                    # U180 (lab 2026-11-09): stan nosnika z chwili wejscia, nie z ostatniego odczytu.
+                    self.refresh_bg(("replicas",))
                 return "stay"
         n = self.count(self.screen)
         c = self.cursor[self.screen]
@@ -7476,6 +7487,9 @@ def curses_loop(ui):
                 stdscr.timeout(500)          # ogon pliku wyjscia zyje
             elif ui.bg_pending() or ui.slow_pending():
                 stdscr.timeout(300)          # dane z tła: przerysuj, gdy dojdą
+            elif ui.screen == "nosniki" and not ui.window:
+                # U180 (lab 2026-11-09): dysk wpiety albo wypiety -- F6 czyta stan nosnika co 15 s.
+                stdscr.timeout(NOSNIKI_REFRESH_MS)
             else:
                 # A16 (field 2026-11-06): komunikat systemu (wall z journald) wypisany na
                 # konsole rozjezdza ekran, a curses maluje tylko roznice wzgledem tego, co
@@ -7485,6 +7499,8 @@ def curses_loop(ui):
             if k == -1:
                 if not (ui.bg_pending() or ui.slow_pending() or (ui.window and ui.window[0] == "output")):
                     stdscr.clear()
+                    if ui.screen == "nosniki" and not ui.window:
+                        ui.refresh_bg(("replicas",))
                 ui.poll_bg()
                 ui.poll_slow()
                 continue

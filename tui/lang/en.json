@@ -2197,5 +2197,6 @@
 "Zajęte": "Used",
 "zajęte %s (%s z %s)": "used %s (%s of %s)",
 "UWAGA: kopia tej repliki właśnie biegnie (od $SINCE). Usunięcie jej nie przerywa: dobiegnie do końca i odłączy dysk.": "NOTE: a copy of this replica is running now (since $SINCE). Removing the replica does not stop it: it runs to its end and exports the disk.",
-"PRZERWANY": "INTERRUPTED"
+"PRZERWANY": "INTERRUPTED",
+"kopia trwa od %s": "copy running since %s"
 }

@@ -14963,6 +14963,15 @@ if printf '%s' "$l1" | grep -qE '"name":"mg"[^}]*"present":"here"[^}]*"medium_si
 else
     bad "listreplicas U186: medium usage" "here: $l1" "away: $l2"
 fi
+# U174: running_since from the gate's `running` answer. Control: gate says nothing runs -> empty.
+printf '#!/bin/sh\n[ "$1" = running ] || exit 1\n[ "$3" = mg ] || exit 1\necho "2026-11-11 10:00:00 - a copy of '"'"'mg'"'"' is running since 2026-11-09 22:28 (pid 7)." >&2\nexit 0\n' > "$MG/gd/zfs-media-gate.sh"
+l3=$(u186)
+if printf '%s' "$l3" | grep -qE '"name":"mg"[^}]*"running_since":"2026-11-09 22:28"' \
+   && printf '%s' "$l3" | grep -qE '"name":"mi"[^}]*"running_since":""'; then
+    ok "listreplicas U174: running_since from the gate's run record; a replica with no copy running has it empty"
+else
+    bad "listreplicas U174: running_since" "$l3"
+fi
 # U169/U178: remove-replica asks the gate whether a copy runs (NOTE in the plan) and, once
 # installed, has it forget the replica's state files. Control: a plan alone forgets nothing,
 # and with no copy running there is no NOTE.
