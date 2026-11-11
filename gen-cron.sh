@@ -4125,7 +4125,14 @@ media_bracket() {   # <media field> <target path> <label> <command> [source[,sou
     # somewhere else" is exactly the reasoning that should fail loudly if it
     # ever stops being true.
     local _body
-    _body=$(printf '( %s attach %s %s --dataset %s%s; a=$?; if [ $a -eq 0 ]; then %s%s; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; %s detach %s %s%s --engine-rc $m; d=$?; [ $m -ne 0 ] && exit $m; exit $d )' \
+    # U182 (Site-A 2026-11-09): a run killed as a whole (TERM to its process group)
+    # died in the middle and never reached detach -- the pool waited for a hand export,
+    # the run's markers stayed. Two levels now: the INNER subshell (attach + engines)
+    # leaves at once on a signal, with 143, so no further source is started; the
+    # OUTER one only notes the signal and goes on to detach with that status.
+    # Measured with dash on pve11, 2026-11-11: without the trap a group TERM never
+    # reached detach; with it, detach ran with m=143.
+    _body=$(printf '( trap : TERM INT HUP; ( trap "exit 143" TERM INT HUP; %s attach %s %s --dataset %s%s; a=$?; if [ $a -eq 0 ]; then %s%s; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; exit $m ); m=$?; %s detach %s %s%s --engine-rc $m; d=$?; [ $m -ne 0 ] && exit $m; exit $d )' \
         "$gate" "$pool" "${label:-media}" "$target" "$attopt" "$cmd" "$capture" "$gate" "$pool" "${label:-media}" "$srcopt")
     case "$_body" in
         *"'"*) die "media_bracket: the bracket generated for this job contains a single quote, which cannot be quoted for sh -c. Something reached it that the name validation should have refused: $_body" ;;
