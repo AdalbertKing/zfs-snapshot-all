@@ -15117,6 +15117,46 @@ case "$(readlink -f "$FSB/block/sdb" 2>/dev/null)" in
     ;;
 *) echo "SKIP prepare-media USB queue: this host cannot make symlinks into a fake /sys/block" ;;
 esac
+
+# U185 (Site-C 2026-11-10): after the export the plain `zpool import` scan did not
+# list the new pool for over a minute. prepare-media must not report the medium
+# ready until the plain scan shows THIS pool's GUID: udev settle, one change
+# trigger, then a refusal naming the pool. PM_SEEN = how many scans miss it first.
+if [ -n "$PMBD" ]; then
+    pm_scan() {   # <misses> -> "out rc" ; udevadm calls logged to $PMD/udev.log
+        : > "$PMD/udev.log"; echo 0 > "$PMD/scans"
+        ( source "$ZFSBACKUP"
+          media_disk_in_use() { return 1; }
+          lsblk() { :; }; usb_queue_raise() { :; }
+          zfs() { return 0; }
+          udevadm() { echo "udevadm $1" >> "$PMD/udev.log"; return 0; }
+          zpool() {
+              case "$1" in
+                  list) return 1 ;;
+                  create|export) return 0 ;;
+                  get) echo 777123 ;;
+                  import) local n; n=$(cat "$PMD/scans"); echo $((n + 1)) > "$PMD/scans"
+                          [ "$n" -ge "$PM_MISS" ] \
+                              && printf '   pool: pm3\n     id: 777123\n' || printf '   pool: pm3\n     id: 555\n' ;;
+              esac
+          }
+          MEDIA_KEY_DIR="$PMD/keys"
+          cmd_prepare_media pm3 "$PMBD" --yes ) 2>&1
+    }
+    # The plan's own "another disk is in the slot" scan runs before --yes; count it.
+    o0=$(PM_MISS=0 pm_scan); r0=$?
+    o1=$(PM_MISS=2 pm_scan); r1=$?; u1=$(tr '\n' ' ' < "$PMD/udev.log")
+    o2=$(PM_MISS=99 pm_scan); r2=$?; u2=$(tr '\n' ' ' < "$PMD/udev.log")
+    if [ "$r0" -eq 0 ] && printf '%s' "$o0" | grep -q 'medium ready' \
+       && [ "$r1" -eq 0 ] && printf '%s' "$o1" | grep -q 'medium ready' && [ -n "$u1" ] \
+       && [ "$r2" -ne 0 ] && printf '%s' "$o2" | grep -q "does not list pool 'pm3' (guid 777123)" \
+       && ! printf '%s' "$o2" | grep -q 'medium ready' \
+       && printf '%s' "$u2" | grep -q 'udevadm trigger'; then
+        ok "prepare-media: ready only when a plain zpool import scan lists the new GUID; udev settle/trigger once, else a refusal (U185)"
+    else
+        bad "prepare-media: plain scan after export (U185)" "r0=$r0 r1=$r1 u1=[$u1] r2=$r2 u2=[$u2]" "$o0" "$o1" "$o2"
+    fi
+fi
 rm -rf "$PMD"
 fi   # --- koniec sekcji runreplicas ---
 

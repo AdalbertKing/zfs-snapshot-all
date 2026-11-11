@@ -8278,6 +8278,13 @@ media_sector_warning() {   # <whole-disk device>
     return 0
 }
 
+# media_scan_sees GUID -> 0 when a plain `zpool import` scan lists a pool with
+# this GUID (what the replica list and the gate will see), 1 otherwise.
+media_scan_sees() {
+    [ -n "$1" ] || return 1
+    zpool import 2>/dev/null | awk -v g="$1" '$1 == "id:" && $2 == g {f=1} END {exit !f}'
+}
+
 cmd_prepare_media() {
     local pool="" dev="" base="replica" yes=0 list=0 enc=0 a
     for a in "$@"; do
@@ -8368,7 +8375,20 @@ cmd_prepare_media() {
     echo "guid=$(zpool get -H -o value guid "$pool" 2>/dev/null)"
     # The window shows the key once; it is the only copy that can leave this host.
     [ "$enc" -eq 1 ] && echo "key=$(cat "$keyfile" 2>/dev/null)" && echo "keyfile=$keyfile"
+    local _pguid; _pguid=$(zpool get -H -o value guid "$pool" 2>/dev/null)
     zpool export "$pool" || die "prepare-media: the medium is ready, but zpool export $pool failed -- export it manually before unplugging"
+    # U185 (Site-C 2026-11-10): right after the export a plain `zpool import`
+    # scan -- the one the replica list and the gate use -- did not show the new
+    # pool for over a minute, while `-d /dev/disk/by-id` did. A run in that
+    # window would have taken the disk for absent and skipped. So the disk is
+    # ready only when the plain scan shows THIS pool (by GUID): wait for udev,
+    # ask it once to re-read the disk, and say so plainly if it still does not.
+    media_scan_sees "$_pguid" || {
+        command -v udevadm >/dev/null 2>&1 && { udevadm settle --timeout=30 2>/dev/null; media_scan_sees "$_pguid" \
+            || { udevadm trigger --action=change "$real" 2>/dev/null; udevadm settle --timeout=30 2>/dev/null; }; }
+        media_scan_sees "$_pguid" \
+            || die "prepare-media: the medium is ready and exported, but a plain 'zpool import' does not list pool '$pool' (guid $_pguid) yet -- a replica run now would take the disk for absent. Check 'zpool import' and 'udevadm info $real' before relying on it."
+    }
     log "prepare-media: medium ready -- pool '$pool', marker $pool/$base$([ "$enc" -eq 1 ] && echo " ENCRYPTED (key $keyfile)"), failmode=continue, compression=zstd, exported. Use it as --dst=$pool/$base."
 }
 
