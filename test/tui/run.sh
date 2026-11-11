@@ -7272,6 +7272,15 @@ else
     bad "odświeżanie w tle: klawisz na starych wierszach (REV-172)" "$sbg_out"
 fi
 
+# U185: prośba o odświeżenie w trakcie biegnącego odczytu (okno właśnie zapisało, Ctrl-R)
+# nie przepada -- biegnący odczyt mógł zacząć się przed zmianą; ekran kończy na odczycie po niej.
+brq_out="$("$PY" "$REPO/test/tui/bg_requeue.py" "$TUI" 2>&1 | tr -d '\r')"
+if [ "$(printf '%s\n' "$brq_out" | grep -c '^ok ')" -eq 3 ] && ! printf '%s\n' "$brq_out" | grep -q '^bad '; then
+    ok "odświeżanie w tle: prośba w trakcie odczytu rusza po nim, ekran kończy na danych po zmianie (U185)"
+else
+    bad "odświeżanie w tle: prośba w trakcie odczytu przepada (U185)" "$brq_out"
+fi
+
 # Limit czytnika GUI: zawieszony czytnik (ssh do martwego hosta) wraca błędem w limicie i nie
 # zostawia procesów; zwykły czytnik dalej daje JSON. Prawdziwe run_verb() z produkcji.
 rto_out="$("$PY" "$REPO/test/tui/reader_timeout.py" "$TUI" 2>&1 | tr -d '\r')"

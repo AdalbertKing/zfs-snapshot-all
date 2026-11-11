@@ -5409,6 +5409,14 @@ class UI(object):
             return
         bg = getattr(self, "_bg", None)
         if bg is not None and bg[0].is_alive():
+            # U185 (2026-11-11): the running read may have started BEFORE the change this
+            # request is about (a window just saved, Ctrl-R) -- dropping the request showed
+            # its pre-change rows. Remember it; poll_bg starts it when the running one lands.
+            again = getattr(self, "_bg_again", False)
+            if only is None or again is None:
+                self._bg_again = None
+            else:
+                self._bg_again = tuple(sorted(set(again or ()) | set(only)))
             return
         import threading
         old = self.data
@@ -5525,7 +5533,16 @@ class UI(object):
         return bg is not None
 
     def poll_bg(self):
-        """-> True, gdy dane z tła weszły (trzeba przerysować)."""
+        """-> True, gdy dane z tła weszły (trzeba przerysować). Prośba o odświeżenie, która
+        przyszła w trakcie (U185), rusza zaraz po nich."""
+        got = self._poll_bg_once()
+        again = getattr(self, "_bg_again", False)
+        if got and again is not False:
+            self._bg_again = False
+            self.refresh_bg(again)
+        return got
+
+    def _poll_bg_once(self):
         bg = getattr(self, "_bg", None)
         if bg is None or bg[0].is_alive():
             return False
