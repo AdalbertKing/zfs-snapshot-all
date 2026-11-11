@@ -21,6 +21,11 @@ when they change how the tool is used.
 - **The replica wizard shows each dataset's snapshots** (U175): the dataset tree has the count
   (`list-datasets --own-snapshots` gives `snapshots`, every family) and, at zero, the note that
   a passive replica will not copy it.
+- **F2 reads newest first and folds one relation's datasets** (U166, U171): upcoming runs (the
+  next 6 h only) are on top, past runs below the `now` line, and the cursor starts on the latest
+  finished run. Cron lines of one relation, task and tier at the same minute (one line per
+  dataset) are one row `N datasets` with the worst result (`FAILED 1/3`) and the longest time;
+  Enter expands it to one row per dataset with its full path. Cron is unchanged.
 - **F4 shows a replica copy in progress** (U170): a replica dataset with no snapshot yet says
   `copy running` while the copy runs, and `interrupted, will resume` when a cut-off receive left
   a resume token (`zfs-tree --json` carries `resume`); the pair panel shows the state and how

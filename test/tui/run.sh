@@ -7434,6 +7434,16 @@ else
     bad "F6: odczyt replik przy wejsciu (U180)" "$f6r_out"
 fi
 
+# U166 + U171 (pve1 SITE-C 2026-11-09, makieta zaakceptowana): F2 malejaco, kursor pod "teraz",
+# nadchodzace tylko 6 h; trzy linie crona relacji o jednej porze = jeden wiersz "3 datasety",
+# PADŁ 1/3, Enter rozwija/zwija. Kontrola: relacja z jednym datasetem to zwykly wiersz.
+f2m_out="$("$PY" "$REPO/test/tui/f2_merge.py" "$TUI" 2>&1 | tr -d '\r')"
+if [ "$(printf '%s\n' "$f2m_out" | grep -c '^ok ')" -eq 14 ] && ! printf '%s\n' "$f2m_out" | grep -q '^bad '; then
+    ok "F2: czas malejaco, kursor pod 'teraz', 6 h naprzod; wiersz zbiorczy relacji, PADŁ 1/3, Enter rozwija (U166/U171)"
+else
+    bad "F2: kolejnosc i wiersz zbiorczy (U166/U171)" "$(printf '%s\n' "$f2m_out" | grep -v '^ok ' | head -20)"
+fi
+
 # Limit czytnika GUI: zawieszony czytnik (ssh do martwego hosta) wraca błędem w limicie i nie
 # zostawia procesów; zwykły czytnik dalej daje JSON. Prawdziwe run_verb() z produkcji.
 rto_out="$("$PY" "$REPO/test/tui/reader_timeout.py" "$TUI" 2>&1 | tr -d '\r')"

@@ -135,7 +135,7 @@ run: `ZFS_TUI_LANG=pl zfs-backup gui` or `--lang=pl`.
 | Key | Window or action |
 |---|---|
 | F1 | Help (Pomoc) |
-| F2 | Runs (Przebiegi): past and upcoming |
+| F2 | Runs (Przebiegi): the next 6 h on top, the "now" line, past runs below it; one relation's cron lines at the same time are one row "N datasets" (Enter expands it) |
 | F3 | Relations (Relacje): Ins = new, Del = delete, Enter = open, `e` = edit inside a relation window |
 | F4 | Copies (Kopie): Enter/Tab to the snapshots, Enter on a snapshot or F7 browses files, F9 restores |
 | F5 | Templates (Szablony) |
