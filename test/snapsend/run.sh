@@ -2060,6 +2060,39 @@ done
 rm -rf "$R186D"
 unset R186_LOG R186_REAL
 
+# --- REV-20261111-B01 F1: a run killed as a group closes its own progress record ---
+# A rate-capped real local send (-b 10M, ~120 MiB) runs in its own process group. TERM goes to
+# the whole group mid-transfer. Before the fix the engine died without progress_done and its
+# record stayed "running" (check-pool-capacity then raised an orphan alarm 30 minutes later).
+# Now the engine's trap marks it "interrupted". Control: another run's running record
+# (pid 1) in the same directory stays running. Measured on pve9 2026-11-11: origin/main leaves
+# "running" and the fix gives "interrupted" within 4 s.
+if command -v setsid >/dev/null; then
+    TD="$TMPD/b01f1"; mkdir -p "$TD/prog"
+    zfs create -o mountpoint="$TD/mnt" "$POOL/b01f1" && zfs create "$POOL/b01f1dst"
+    head -c 120M /dev/urandom > "$TD/mnt/blob"
+    printf '{"dataset":"x/y@s","target":"x/z","label":"other","pid":1,"state":"running"}\n' > "$TD/prog/other.json"
+    ZFS_PROGRESS_DIR="$TD/prog" setsid "$SNAPSEND" -b 10M -m "b01_" "$POOL/b01f1" "$POOL/b01f1dst" >"$TD/out" 2>&1 &
+    b01pid=$!
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        ls "$TD/prog" | grep -qv '^other.json$' && break; sleep 1
+    done
+    sleep 2
+    b01pg=$(ps -o pgid= -p "$b01pid" | tr -d ' ')
+    b01before=$(grep -l '"state":"running"' "$TD"/prog/*.json 2>/dev/null | grep -vc '/other.json$')
+    [ -n "$b01pg" ] && kill -TERM -- -"$b01pg"
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+        [ -d "/proc/$b01pid" ] || break; sleep 1
+    done
+    own=$(ls "$TD"/prog/*.json | grep -v '/other.json$' | head -1)
+    check "B01 F1: group TERM mid-transfer -> the run's record goes from running to interrupted; another run's running record is untouched" \
+          "1|interrupted|running" \
+          "$b01before|$(sed -n 's/.*"state":"\([a-z]*\)".*/\1/p' "$own" 2>/dev/null)|$(sed -n 's/.*"state":"\([a-z]*\)".*/\1/p' "$TD/prog/other.json")"
+    zfs destroy -r "$POOL/b01f1" 2>/dev/null; zfs destroy -r "$POOL/b01f1dst" 2>/dev/null
+else
+    echo "SKIP B01 F1: no setsid here"
+fi
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"
