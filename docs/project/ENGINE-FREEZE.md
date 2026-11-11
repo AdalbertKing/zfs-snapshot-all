@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 a1be796eede917ce76d4c7b35c1cd021004587d2 -->
-<!-- frozen: snapget.sh 100755 eb843fff88683f1ba0dac91528f7b7395066201c -->
+<!-- frozen: snapsend.sh 100755 2a4c09273a9f91c2c5bb662f3a46a88701ae86a4 -->
+<!-- frozen: snapget.sh 100755 eb3132d329e42a7ea89b6c93e77e5714ec632b7f -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
-<!-- frozen: lib-zfs-snap.sh 100644 6d7f45efc7c97311ef99109de18b08d30ba0e57d -->
+<!-- frozen: lib-zfs-snap.sh 100644 b844119c5048505f939305efa0ad84ea82f32538 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -1394,6 +1394,21 @@ Owner-authorized refreezes:
   U182 bracket: on origin/main the pool is exported but the record stays `running`; on the
   fix it reads `interrupted`, and another run's record is untouched.
   twin: the same trap block, word for word, in both engines.
+
+- 2026-11-11 (snapsend.sh, snapget.sh, lib-zfs-snap.sh): **a bookmark newer than the common
+  snapshot is the base; a bridge step carries the snapshots in between.** Found by the session
+  while measuring W1 on CT 990: when the target's newest snapshot was gone from the source and an
+  older snapshot was common, that older one was the base and the backup landing discarded the
+  target's newer snapshots with `recv -F`, although the `tgt-` bookmark carried the target head's
+  GUID. Measured loss on a copy (pve9, collector outage) and on a keep-mode replica disk (CT 990).
+  Fixed under the Owner's order "po wydaniu napraw silnik" (2026-11-11). Change: the bookmark
+  lookup also runs when a common snapshot exists but is not the target head; a match makes the
+  bookmark the base. New function `bookmark_bridge_snap` in lib-zfs-snap.sh: `-I` cannot start at a bookmark (ZFS 2.1.11,
+  measured), so `-i #bm @bridge` (the oldest non-excluded source snapshot after the bookmark),
+  then `-I @bridge @latest`, which the -E step plan may still split. Tests: test/snapsend
+  `bm3` (push), `bm4` (pull). Live on pve9/pve9b, both engines: on origin/main the copy loses
+  @h1 @h2; on the fix it keeps them and gains the outage daily and the new hourly.
+  twin: the same lookup and bridge block in both engines, remote arguments on the remote side.
 
 ## How it is enforced
 

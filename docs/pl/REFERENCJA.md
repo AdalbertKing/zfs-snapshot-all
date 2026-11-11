@@ -176,6 +176,13 @@ się opierał, zostanie później usunięta ze źródła (przez `delsnaps.sh`, z
 `find_bookmark_base()` w następnym przebiegu nadal znajdzie prawidłową bazę przyrostu przez
 bookmark, zamiast spadać do pełnego wysłania.
 
+Bookmark wygrywa także ze **starszą** wspólną migawką. Jeśli najnowszej migawki celu nie ma już na
+źródle, a bookmark nosi jej GUID, przyrost idzie z bookmarka; wcześniej bazą była starsza wspólna
+migawka i `zfs recv -F` kasował na celu wszystkie nowsze (np. godzinowe po przerwie kolektora).
+`zfs send -I` nie przyjmuje bookmarka, więc przyrost idzie w dwóch krokach: `-i` z bookmarka do
+najstarszej migawki źródła po nim, której `-E` nie wyklucza, potem zwykłe `-I` do najnowszej, i migawki zrobione na źródle w
+międzyczasie też docierają na cel.
+
 Nazwy bookmarków mają postać `tgt-<8 znaków hex>`: to skrót ścieżki datasetu celu (oraz
 identyfikatora `-j`, jeśli jest). Nic innego na źródle ich nie rusza, więc dokładnie jeden bookmark
 na parę (cel, identyfikator) się kumuluje, aż cel zostanie wycofany; o ich sprzątaniu zobacz

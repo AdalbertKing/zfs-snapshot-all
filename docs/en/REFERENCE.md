@@ -176,6 +176,14 @@ that bookmark was based on is later pruned from the source (by `delsnaps.sh`, be
 caught up), the next run's `find_bookmark_base()` still finds a valid incremental base via the
 bookmark instead of falling through to a full send.
 
+The bookmark also wins over an **older** common snapshot. If the target's newest snapshot is gone
+from the source and the bookmark carries its GUID, the increment starts at the bookmark; before,
+the older common snapshot was the base and `zfs recv -F` discarded every newer snapshot on the
+target (the hourlies of a collector outage, for example). `zfs send -I` does not accept a
+bookmark, so the increment goes in two steps: `-i` from the bookmark to the oldest source snapshot
+after it that `-E` does not exclude, then the usual `-I` to the newest, so the snapshots the source made in the meantime
+reach the target too.
+
 Bookmark names are `tgt-<8 hex chars>`, a hash of the target dataset path (and of the `-j`
 identifier, if any). Nothing else on the source touches them, so exactly one bookmark per
 (target, identifier) pair accumulates until the target is retired; see
