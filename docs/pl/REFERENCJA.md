@@ -1076,6 +1076,12 @@ notify       = pulled
   rusza z `-X` na dokładnie ten dysk i ostrzega; przycinanie i atomowe `-r` nie umieją pominąć
   dziecka, więc nie ruszają (`rc=76`, alarm). Zdalne drzewo, którego nie da się wylistować, rusza
   jak dotąd, z ostrzeżeniem. Cel kopii nie jest czytany.
+- **Kopia lokalna pasywna zasilana przez pvesr** (`local-backup --passive`, U161/U181). Migawki
+  przychodzą tu z repliki `pvesr`, więc relacja czyta `/etc/pve/replication.cfg`: progi monitora
+  dostają odstęp repliki (ostrzeżenie = próg + odstęp, co najmniej 2x odstęp; alarm co najmniej
+  3x), a godzina kopii każdego poziomu przesuwa się na 10 minut po biegu repliki, który przynosi
+  migawkę tego poziomu (np. kopia dzienna 01:11 za repliką `*/2:00` → 02:10). Kopia, która po
+  przesunięciu przechodzi przez północ, przesuwa też dzień tygodnia albo miesiąca.
 - `recursive` steruje wszystkimi trzema wygenerowanymi liniami z jednej deklaracji: `no` = ten
   dataset, `flat` = `-R` przy transferze, `delsnaps -R`, `check-snap-age -R`; `atomic` = `-r` przy
   transferze z tym samym `-R` dla prune i strażnika.

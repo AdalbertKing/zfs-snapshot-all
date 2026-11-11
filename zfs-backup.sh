@@ -9321,7 +9321,7 @@ pvesr_interval_s() {   # <schedule or ""> -> seconds, or nothing
 # Globals, not stdout: a $(...) call would lose PVESR_UNREAD in its subshell.
 pvesr_interval_for_roots() {   # <root>...
     local cfg="${PVE_REPLICATION_CFG:-/etc/pve/replication.cfg}" r id sc sec max=0 ids=""
-    PVESR_I=""; PVESR_IDS=""; PVESR_UNREAD=""
+    PVESR_I=""; PVESR_IDS=""; PVESR_UNREAD=""; PVESR_SCS=()
     [ -r "$cfg" ] || return 0
     local -A have=()
     for r in "$@"; do
@@ -9334,6 +9334,9 @@ pvesr_interval_for_roots() {   # <root>...
         sec=$(pvesr_interval_s "$sc")
         if [ -z "$sec" ]; then PVESR_UNREAD+="${PVESR_UNREAD:+, }$id ($sc)"; continue; fi
         ids+="${ids:+ }$id"
+        local _s _dup=0
+        for _s in "${PVESR_SCS[@]}"; do [ "$_s" = "${sc//[[:space:]]/}" ] && _dup=1; done
+        [ "$_dup" -eq 1 ] || PVESR_SCS+=("${sc//[[:space:]]/}")
         [ "$sec" -gt "$max" ] && max="$sec"
     done < <(awk '
         /^[a-z]+:[ \t]*[0-9]+-[0-9]+/ { if (id != "") print id "\t" sc; id = $2; sub(/-.*/, "", id); sc = ""; next }
@@ -9348,6 +9351,35 @@ dur_seconds() {   # <N>m|<N>h|<N>d -> seconds (check-snap-age's grammar), or not
         *[0-9]h) [[ "${1%h}" =~ ^[0-9]+$ ]] && echo $(( 10#${1%h} * 3600 )) ;;
         *[0-9]d) [[ "${1%d}" =~ ^[0-9]+$ ]] && echo $(( 10#${1%d} * 86400 )) ;;
     esac
+}
+# U181 (Site-B 2026-11-08): does pvesr schedule <sc> (one of the forms pvesr_interval_s reads)
+# run at minute-of-day <m>? '' = pvesr's default */15.
+pvesr_runs_at() {   # <sc> <minute of day 0..1439>
+    local sc="$1" h=$(( $2 / 60 )) m=$(( $2 % 60 )) x
+    case "$sc" in
+        '') [ $(( m % 15 )) -eq 0 ] ;;
+        \*/*:*) x="${sc#*/}"; [ $(( h % 10#${x%%:*} )) -eq 0 ] && [ "$m" -eq $(( 10#${x#*:} )) ] ;;
+        \*/*) [ $(( m % 10#${sc#*/} )) -eq 0 ] ;;
+        \*:*) [ "$m" -eq $(( 10#${sc#*:} )) ] ;;
+        *:*) [ "$h" -eq $(( 10#${sc%%:*} )) ] && [ "$m" -eq $(( 10#${sc#*:} )) ] ;;
+        *) return 1 ;;
+    esac
+}
+# The copy of a tier fed by pvesr: the first minute, counted from <m> - margin, at which every
+# replica schedule has run, plus the margin (pvesr takes time). -> minute of day, may be >= 1440
+# (the next day). A copy at 02:02 behind a */2:00 replica: the 02:00 run brought what the
+# snapshot at 01:34 made -> 02:10. At 03:12: the next run is 04:00 -> 04:10 (it was 03:12, a
+# week late for the weekly family).
+PVESR_MARGIN_MIN=10
+pvesr_copy_minute() {   # <minute of day> <schedule>...
+    local m0=$(( $1 - PVESR_MARGIN_MIN )) sc t best=""
+    shift
+    for sc in "$@"; do
+        t="$m0"
+        while [ "$t" -lt $(( m0 + 2880 )) ] && ! pvesr_runs_at "$sc" $(( (t + 2880) % 1440 )); do t=$(( t + 1 )); done
+        { [ -z "$best" ] || [ "$t" -gt "$best" ]; } && best="$t"
+    done
+    echo $(( best + PVESR_MARGIN_MIN ))
 }
 seconds_dur() {   # seconds -> the shortest exact <N>d|<N>h|<N>m
     if [ $(( $1 % 86400 )) -eq 0 ] && [ "$1" -ge 172800 ]; then echo "$(( $1 / 86400 ))d"
@@ -10172,18 +10204,47 @@ Taking over older jobs (a v4 config written manually): remove their sections fir
                 _c=$(rb_get "$_t" "$_sd" monitor_crit) || continue
                 _ws=$(dur_seconds "$_w"); _cs=$(dur_seconds "$_c")
                 [ -n "$_ws" ] && [ -n "$_cs" ] || continue
-                _nw="$_w"; _nc="$_c"
-                [ "$_ws" -lt $(( 2 * _pvi )) ] && _nw=$(seconds_dur $(( 2 * _pvi )))
-                [ "$_cs" -lt $(( 3 * _pvi )) ] && _nc=$(seconds_dur $(( 3 * _pvi )))
+                # U181 (a) (Site-B 2026-11-10): a snapshot reaches this host one replica
+                # interval late -- the template's threshold plus that interval, and never
+                # below 2x/3x of it.
+                _ws=$(( _ws + _pvi )); _cs=$(( _cs + _pvi ))
+                [ "$_ws" -lt $(( 2 * _pvi )) ] && _ws=$(( 2 * _pvi ))
+                [ "$_cs" -lt $(( 3 * _pvi )) ] && _cs=$(( 3 * _pvi ))
+                _nw=$(seconds_dur "$_ws"); _nc=$(seconds_dur "$_cs")
                 [ "$_nw $_nc" = "$_w $_c" ] && continue
                 rb_set "$_t" "$_sd" monitor_warn "$_nw"; rb_set "$_t" "$_sd" monitor_crit "$_nc"
                 _pvch+=("$_t ($_sd): $_w/$_c -> $_nw/$_nc")
             done; done
-            if [ "${#_pvch[@]}" -gt 0 ]; then
+            # U181 (Site-B 2026-11-08): the weekly copy ran at 03:12, the weekly snapshot (02:44
+            # on the replica's source) arrived with the 04:00 run -- every weekly copy a week
+            # late. A copy at a fixed hour goes right after the replica run that brings what
+            # was due by then (pvesr_copy_minute); hourly copies (hour '*') are left alone,
+            # the threshold above covers them. Day of week / month moves with a midnight wrap.
+            local _ss _cm _nm _f1 _f2 _f3 _f4 _f5 _d _schg=()
+            for _t in "${RB_TIERS[@]}"; do
+                _ss=$(rb_get "$_t" target send_schedule) || continue
+                read -r _f1 _f2 _f3 _f4 _f5 <<<"$_ss"
+                case "$_f1/$_f2" in *[!0-9/]*|/*|*/) continue ;; esac
+                _cm=$(( 10#$_f2 * 60 + 10#$_f1 ))
+                _nm=$(pvesr_copy_minute "$_cm" "${PVESR_SCS[@]}")
+                [ "$_nm" -eq "$_cm" ] && continue
+                _d=0; [ "$_nm" -ge 1440 ] && { _d=1; _nm=$(( _nm - 1440 )); }
+                if [ "$_d" -eq 1 ]; then
+                    case "$_f5" in '*') ;; [0-6]) _f5=$(( (_f5 + 1) % 7 )) ;; *) continue ;; esac
+                    case "$_f3" in '*') ;; [1-9]|1[0-9]|2[0-7]) _f3=$(( _f3 + 1 )) ;; *) continue ;; esac
+                fi
+                rb_set "$_t" target send_schedule "$(( _nm % 60 )) $(( _nm / 60 )) $_f3 $_f4 $_f5"
+                _schg+=("$_t: $_ss -> $(( _nm % 60 )) $(( _nm / 60 )) $_f3 $_f4 $_f5")
+            done
+            if [ "${#_pvch[@]}" -gt 0 ] || [ "${#_schg[@]}" -gt 0 ]; then
                 relblock_write "$cand" "$lb_name" || die "local-backup: could not write the [relation:$lb_name] block of the candidate"
             fi
-            echo "  Archive monitor:  fed by pvesr every $(seconds_dur "$_pvi") (guests $_pvids) -- thresholds at least 2x/3x that:"
+            echo "  Archive monitor:  fed by pvesr every $(seconds_dur "$_pvi") (guests $_pvids) -- thresholds plus that, at least 2x/3x of it:"
             if [ "${#_pvch[@]}" -gt 0 ]; then printf '                    %s\n' "${_pvch[@]}"; else echo "                    the template's already are"; fi
+            if [ "${#_schg[@]}" -gt 0 ]; then
+                echo "  Copy times:       right after the pvesr run that brings the snapshot (+${PVESR_MARGIN_MIN} min):"
+                printf '                    %s\n' "${_schg[@]}"
+            fi
         fi
         [ -n "${PVESR_UNREAD:-}" ] && echo "  Archive monitor:  pvesr schedule not read for guest(s) $PVESR_UNREAD -- the template's thresholds stay; check them against the replica"
     fi

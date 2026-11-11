@@ -10,6 +10,11 @@ when they change how the tool is used.
   `[ZFS][WARNING]` a warning, pool capacity or data growth (formerly `[ZFS CAPACITY]`,
   `[ZFS GROWTH]`), `[ZFS][ALERT]` a failed run. Mail rules matching `[ZFS]` keep working;
   rules matching `[ZFS CAPACITY]` or `[ZFS GROWTH]` need the new subject.
+- **A passive local copy fed by pvesr runs after the replica brings the snapshot** (U181):
+  `local-backup --passive` moves each tier's copy time to 10 minutes after the pvesr run that
+  brings that tier's snapshot (a daily copy at 01:11 behind a `*/2:00` replica runs at 02:10),
+  and its monitor thresholds add the replica interval to the template's (daily 32h/50h instead
+  of 30h/48h).
 - **A freshly formatted replica disk is checked before it is called ready** (U185):
   `prepare-media` waits until a plain `zpool import` lists the new pool, and refuses otherwise.
   The GUI no longer drops a refresh asked for while another one is running.

@@ -1057,6 +1057,12 @@ notify       = pulled
   (one snapshot per dataset) runs with `-X` on exactly that disk and WARNs; a prune or an atomic
   `-r` cannot leave a child out and is NOT RUN (`rc=76`, alarm). A remote tree that cannot be
   listed runs as before and WARNs. The target of a copy is never read.
+- **Passive local copy fed by pvesr** (`local-backup --passive`, U161/U181). The snapshots arrive
+  here through a `pvesr` replica, so the relation reads `/etc/pve/replication.cfg`: the monitor
+  thresholds get the replica interval added (warning = threshold + interval, at least 2x the
+  interval; alarm at least 3x), and each tier's copy time moves to 10 minutes after the replica
+  run that brings that tier's snapshot (e.g. a daily copy at 01:11 behind a `*/2:00` replica -> 02:10). A
+  copy that the shift moves past midnight also moves its day of week or month.
 - `recursive` drives all three generated lines from one declaration: `no` = this dataset,
   `flat` = `-R` on the transfer, `delsnaps -R`, `check-snap-age -R`; `atomic` = `-r` on the
   transfer with the same `-R` prune and monitor.

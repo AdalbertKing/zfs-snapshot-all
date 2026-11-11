@@ -2318,12 +2318,26 @@ u_p="$(u161 "$WORK/repl.cfg" "rpool/data rpool/data/vm-100-disk-0 rpool/data/sub
 u_o="$(u161 "$WORK/repl.cfg" "rpool/data rpool/data/subvol-200-disk-0" --passive u161o)"
 u_k="$(u161 "$WORK/repl.cfg" "rpool/data rpool/data/vm-100-disk-0" "" u161k)"
 u_x="$(u161 "$WORK/repl-odd.cfg" "rpool/data rpool/data/vm-100-disk-0" --passive u161x)"
-if [ "$(u161_mon "$u_p" hourly)" = "4h 6h" ] && [ "$(u161_mon "$u_p" daily)" = "30h 48h" ] && [ "$(u161_src "$u_p" hourly)" = "4h 6h" ] \
+# U181 (Site-B 2026-11-08/10): thresholds are the template's PLUS the replica interval (daily
+# 30h/48h -> 32h/50h: a snapshot arrives one interval late), never below 2x/3x; a copy at a fixed
+# hour moves right after the replica run that brings the snapshot (+10 min): daily 01:11 ->
+# 02:10, weekly 02:21 Sun -> 04:10 Sun; the hourly copy stays. Wrap past midnight shifts the day.
+u181_snd() { pv_cfg "$1" | awk -v t="$2" '/^\[relation:/{f=1;next} /^\[/{f=0} f && $1 == t".target_send_schedule" {$1=$2=""; sub(/^ +/, ""); print}'; }
+u181_w=$( ( pvesr_copy_minute $(( 23 * 60 + 55 )) '*/2:00'; pvesr_copy_minute $(( 2 * 60 + 2 )) '*/2:00' '*/15'; pvesr_copy_minute 600 '' ) 2>&1 | tr '\n' ' ')
+if [ "$(u181_snd "$u_p" daily)" = "10 2 * * *" ] && [ "$(u181_snd "$u_p" weekly)" = "10 4 * * 0" ] \
+   && printf '%s\n' "$u_p" | grep -qF 'hourly.send_schedule = 1 * * * *' \
+   && [ "$u181_w" = "1450 130 610 " ] && [ -z "$(u181_snd "$u_k" daily)" ]; then
+    ok "local-backup --passive U181: copies after the pvesr run that brings the snapshot (daily 02:10, weekly 04:10 Sun), hourly kept; midnight wrap; not passive -> template"
+else
+    bad "local-backup --passive U181: copy times after pvesr" "daily: $(u181_snd "$u_p" daily)" "weekly: $(u181_snd "$u_p" weekly)" "fn: $u181_w" \
+        "not passive: $(u181_snd "$u_k" daily)" "$(printf '%s\n' "$u_p" | grep -A4 'Copy times')"
+fi
+if [ "$(u161_mon "$u_p" hourly)" = "4h 6h" ] && [ "$(u161_mon "$u_p" daily)" = "32h 50h" ] && [ "$(u161_src "$u_p" hourly)" = "4h 6h" ] \
    && printf '%s\n' "$u_p" | grep -qF 'fed by pvesr every 2h (guests 100)' \
    && [ "$(u161_mon "$u_o" hourly)" = "90m 150m" ] && ! printf '%s\n' "$u_o" | grep -qF 'fed by pvesr' \
    && [ "$(u161_mon "$u_k" hourly)" = "90m 150m" ] \
    && [ "$(u161_mon "$u_x" hourly)" = "90m 150m" ] && printf '%s\n' "$u_x" | grep -qF 'pvesr schedule not read for guest(s) 100 (mon..fri 22:30)'; then
-    ok "local-backup --passive U161: */2:00 replica -> hourly 4h/6h, daily kept; other guests, no --passive, an unread schedule -> template kept"
+    ok "local-backup --passive U161/U181: */2:00 replica -> hourly 4h/6h, daily 32h/50h (template + interval); other guests, no --passive, an unread schedule -> template kept"
 else
     bad "local-backup --passive U161: thresholds from pvesr" "passive: $(u161_mon "$u_p" hourly) / $(u161_mon "$u_p" daily) source: $(u161_src "$u_p" hourly)" \
         "other guest: $(u161_mon "$u_o" hourly)" "not passive: $(u161_mon "$u_k" hourly)" "odd: $(u161_mon "$u_x" hourly)" \
