@@ -1029,18 +1029,18 @@ GJ="$FIX/jobs-group.json"; GS="$FIX/status-group.json"; GM="$FIX/monitors-group.
 G="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 400 2>&1)"
 GR="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen relacje --width 200 2>&1)"
 # F2 Przebiegi: a, b, c maja kazde swoja linie (wlasna etykiete) pod tym samym harmonogramem
-# (:05), d inny (:10). U171 (2026-11-09): linie jednej relacji, czynnosci i pory to JEDEN wiersz
-# "3 datasety" -- wierszy :05 jest tyle co :10, a :05 mowi "3 datasety"; d (inna pora) osobno.
+# (:05), d inny (:20; U189: :10 byloby 5 min po :05, czyli w tym samym wierszu). U171 (2026-11-09): linie jednej relacji, czynnosci i pory to JEDEN wiersz
+# "3 datasety" -- wierszy :05 jest tyle co :20, a :05 mowi "3 datasety"; d (inna pora) osobno.
 # Panel: kierunek synchro '<>' (z rekordu, choc linia crona to pull) i ZRODLO pierwszego datasetu.
 GN="$(lst "$G" | grep -E "^║ $KD +sync-test +(▸ )?pobranie " | sed -E 's/^║ [0-9]{4}\.[0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort | uniq -c | sed -E 's/^ *//' | tr '\n' ',')"
 GN1="$(printf '%s' "$GN" | cut -d, -f1)"; GN2="$(printf '%s' "$GN" | cut -d, -f2)"
 GZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 60 2>&1)"
-if [ "$(printf '%s' "$GN" | tr -cd ',' | wc -c | tr -d ' ')" -eq 2 ] && [ "${GN1#* }" = "05" ] && [ "${GN2#* }" = "10" ] \
+if [ "$(printf '%s' "$GN" | tr -cd ',' | wc -c | tr -d ' ')" -eq 2 ] && [ "${GN1#* }" = "05" ] && [ "${GN2#* }" = "20" ] \
     && [ "${GN1%% *}" -eq "${GN2%% *}" ] && [ "${GN2%% *}" -ge 1 ] \
     && hasE "$G" "^║ $KD +sync-test +▸ pobranie standard_hourly: 3 datasety " \
     && hasE "$G" "^║ $KD +backup-test +pobranie +standard_hourly: e " \
     && hasE "$GZ" 'Kierunek +pve20 ↔ sync-test' && hasE "$GZ" 'Zakres +3 datasetów w .*: a, b, c'; then
-    ok "zadania: F2 -- a/b/c pod :05 to jeden wiersz '3 datasety' na pore (U171), d pod :10 osobno; panel: synchro '<>' mimo ze linia to pull, zakres trzech datasetow"
+    ok "zadania: F2 -- a/b/c pod :05 to jeden wiersz '3 datasety' na pore (U171), d pod :20 osobno; panel: synchro '<>' mimo ze linia to pull, zakres trzech datasetow"
 else
     bad "zadania: F2 grupowanie i symbol synchro" "minuty wierszy sync-test (liczba minuta): $GN" "$GZ"
 fi
@@ -7500,8 +7500,8 @@ fi
 # nadchodzace tylko 6 h; trzy linie crona relacji o jednej porze = jeden wiersz "3 datasety",
 # PADŁ 1/3, Enter rozwija/zwija. Kontrola: relacja z jednym datasetem to zwykly wiersz.
 f2m_out="$("$PY" "$REPO/test/tui/f2_merge.py" "$TUI" 2>&1 | tr -d '\r')"
-if [ "$(printf '%s\n' "$f2m_out" | grep -c '^ok ')" -eq 14 ] && ! printf '%s\n' "$f2m_out" | grep -q '^bad '; then
-    ok "F2: czas malejaco, kursor pod 'teraz', 6 h naprzod; wiersz zbiorczy relacji, PADŁ 1/3, Enter rozwija (U166/U171)"
+if [ "$(printf '%s\n' "$f2m_out" | grep -c '^ok ')" -eq 16 ] && ! printf '%s\n' "$f2m_out" | grep -q '^bad '; then
+    ok "F2: czas malejaco, kursor pod 'teraz', 6 h naprzod; wiersz zbiorczy relacji, PADŁ 1/3, Enter rozwija; linie rozrzucone do 5 min = jeden wiersz (U166/U171/U189)"
 else
     bad "F2: kolejnosc i wiersz zbiorczy (U166/U171)" "$(printf '%s\n' "$f2m_out" | grep -v '^ok ' | head -20)"
 fi

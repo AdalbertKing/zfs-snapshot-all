@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 3cea126596cda0c1 -->
+<!-- status-covers-digest: ffe54d1421d4ab17 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -31,7 +31,9 @@
   mediagate 211/0, localbackup 185/0, alertmail 191/1, quiesce 268/0 (jako
   konto `zfsbackup`), zfsbackup 6 FAIL — te same na `origin/main`. Lab pve11 na gałęzi (blokada
   aktualizacji); na żywo potwierdzone U180, U174, U186, U170, U172 (`--plan` przez ssh do pve9).
-  Do decyzji: U189 (łączenie rozłożonych co minutę linii w F2); otwarte: U190, U181(b).
+  U189 (gałąź `batch/gui-1-0-19`, decyzja właściciela): F2 łączy w jeden wiersz linie jednej
+  relacji, czynności i szczebla, gdy każda następna startuje najwyżej 5 min po poprzedniej; tui 512/0.
+  Otwarte: U190, U181(b).
 
 - **Nazwa klienta w publicznym repo wydań (2026-11-07, NIEWYDANE).** zfsbackup od wydania `b6f040f`
   (2026-11-03) miał nazwę klienta w 13 komentarzach w 4 plikach; bramka w `release/publish.sh` jej

@@ -43,8 +43,8 @@ when they change how the tool is used.
   a passive replica will not copy it.
 - **F2 reads newest first and folds one relation's datasets** (U166, U171): upcoming runs (the
   next 6 h only) are on top, past runs below the `now` line, and the cursor starts on the latest
-  finished run. Cron lines of one relation, task and tier at the same minute (one line per
-  dataset) are one row `N datasets` with the worst result (`FAILED 1/3`) and the longest time;
+  finished run. Cron lines of one relation, task and tier that start at most 5 minutes apart (one
+  line per dataset, spread over free minutes to spare the link; U189) are one row `N datasets` with the worst result (`FAILED 1/3`) and the longest time;
   Enter expands it to one row per dataset with its full path. Cron is unchanged.
 - **F4 shows a replica copy in progress** (U170): a replica dataset with no snapshot yet says
   `copy running` while the copy runs, and `interrupted, will resume` when a cut-off receive left
