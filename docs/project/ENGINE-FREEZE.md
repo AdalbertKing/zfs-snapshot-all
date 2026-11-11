@@ -4,7 +4,7 @@
 <!-- frozen: snapget.sh 100755 129989aeaaad593c0af95298681e9424d7aaa231 -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
-<!-- frozen: lib-zfs-snap.sh 100644 0931a38ee66d5ca2f4b77668cc5394c5cbeb8f78 -->
+<!-- frozen: lib-zfs-snap.sh 100644 b1f187f081863319fd2789b42f0e3874893154a9 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -1371,6 +1371,17 @@ Owner-authorized refreezes:
   replaced with synthetic labels (Site-A, Site-B, Site-C, Site-D, vm-sql, biuro). In the engines
   only comment lines changed; no code line moved; versions unchanged.
   twin: comments only -- twins re-blessed on pve9, no hash changed.
+
+- 2026-11-11 (lib-zfs-snap.sh): **remote quiesce with no guest disk in scope takes a plain
+  snapshot (U188).** Found on the lab walk of batch 1.0.18 (pve11, relation `pve9`): the remote
+  quiesce script probed the delegated account's privileges before looking for a guest, so a
+  tier with `quiesce = auto,degrade` over a plain dataset refused (rc 3) and degraded to a
+  `_crash_` set with rc 8 every night. Not directed beforehand as such; covered by the Owner's
+  standing order to fix defects at once (2026-11-06). Change: `guest_id` moved above the
+  probe; no `vm-/subvol-N-disk-M` in scope = QVIA none, no privilege probe, no setsid, no
+  deadman. A scope with a guest disk is unchanged (still rc 3 without privilege). Tests:
+  test/quiesce U188 case, 268/0 on pve9 as `zfsbackup`; negative control (HEAD) rc 3.
+  twin: lib-zfs-snap.sh is the library both engines source; no twin copy of this script.
 
 ## How it is enforced
 
