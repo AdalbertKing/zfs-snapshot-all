@@ -1451,6 +1451,15 @@ process_dataset() {
             [ ${#_dry_tgt_snaps[@]} -gt 0 ] && _dry_head=$(get_snapshot_guid "$tgt_dataset" "${_dry_tgt_snaps[-1]}")
             [ -n "$_dry_head" ] && _dry_bm=$(find_bookmark_base "$src_dataset" "$_dry_head" "$remote_user" "$remote_host")
             [ -n "$_dry_bm" ] && common_snapshot="$_dry_bm"
+        elif [ $RECURSIVE -ne 1 ]; then
+            # The run's bookmark-wins rule (2026-11-11), planned the same way.
+            local _dry_ts=() _dry_bw=""
+            _dry_ts=($(get_sorted_snapshots "$tgt_dataset" 2>/dev/null))
+            if [ ${#_dry_ts[@]} -gt 0 ] && [ "${_dry_ts[-1]}" != "$common_snapshot" ]; then
+                _dry_bw=$(bookmark_beats_common "$src_dataset" "$common_snapshot" \
+                    "$(get_snapshot_guid "$tgt_dataset" "${_dry_ts[-1]}")" "$remote_user" "$remote_host")
+                [ -n "$_dry_bw" ] && common_snapshot="$_dry_bw"
+            fi
         fi
         if [ -n "$common_snapshot" ]; then
             printf 'PLAN=INCREMENTAL base=%s src=%s tgt=%s\n' "$common_snapshot" "$src_dataset" "$tgt_dataset"
@@ -1869,7 +1878,7 @@ process_dataset() {
     comp_send_flag=$(compressed_send_flag "$src_dataset" "$tgt_dataset" ""                         "${remote_host:+${remote_user}@${remote_host}}")
     [ -n "$comp_send_flag" ] && log 3 "Compressed send: using zfs send -c"
 
-    local bookmark_base=""
+    local bookmark_base="" _bm_shadow=0
     if [[ "$common_snapshot" == "null" ]] && [ $RECURSIVE -ne 1 ]; then
         # No common snapshot survives on either end -- before giving up to a
         # FULL pull, check for a bookmark left by a prior run (see
@@ -1901,8 +1910,9 @@ process_dataset() {
         # still follows a source that went backwards.
         local tgt_head_guid
         tgt_head_guid=$(get_snapshot_guid "$tgt_dataset" "${tgt_snaps[-1]}")
-        bookmark_base=$(find_bookmark_base "$src_dataset" "$tgt_head_guid" "$remote_user" "$remote_host")
+        bookmark_base=$(bookmark_beats_common "$src_dataset" "$common_snapshot" "$tgt_head_guid" "$remote_user" "$remote_host")
         if [ -n "$bookmark_base" ]; then
+            _bm_shadow=1
             log 1 "The target's newest snapshot @${tgt_snaps[-1]} is gone from the source, but bookmark $bookmark_base still marks it -- continuing from the bookmark, not from the older common snapshot @${common_snapshot} (that would discard the target's newer snapshot(s))"
             common_snapshot="null"
         fi
@@ -2097,7 +2107,7 @@ process_dataset() {
         [ $SKIP_INTERMEDIATES -eq 1 ] && incr_flag="-i"
         send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $EXTRA_SEND_OPTS $incr_flag ${src_dataset}@${common_snapshot} $snapshot"
     elif [ -n "$bookmark_base" ]; then
-        log 1 "No common snapshot, but a bookmark still anchors an incremental: $bookmark_base"
+        [ "$_bm_shadow" -eq 1 ] || log 1 "No common snapshot, but a bookmark still anchors an incremental: $bookmark_base"
         [ $SKIP_INTERMEDIATES -eq 1 ] && log 2 "-i requested but already sending a single diff via bookmark -- nothing to skip"
         send_cmd="zfs send $raw_send_flag $comp_send_flag $EXTRA_SEND_OPTS -i $bookmark_base $snapshot"
     else

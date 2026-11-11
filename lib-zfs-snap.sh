@@ -3366,6 +3366,22 @@ find_bookmark_base() {
     done <<< "$marks"
 }
 
+# A BOOKMARK NEWER THAN THE COMMON SNAPSHOT (2026-11-11), shared by the run and
+# the -n plan of both engines so the two never disagree. Echoes the source's
+# bookmark carrying the target head's GUID when that head is NOT the common
+# snapshot itself -- a head that is the common one under another name (renamed
+# on the target) keeps the ordinary -I. Prints nothing otherwise.
+# Usage: bookmark_beats_common <src_dataset> <common> <tgt_head_guid> [user host]
+bookmark_beats_common() {
+    local src="$1" common="$2" head="$3" ruser="${4:-}" rhost="${5:-}" bm cg
+    [ -n "$head" ] || return 0
+    bm=$(find_bookmark_base "$src" "$head" "$ruser" "$rhost")
+    [ -n "$bm" ] || return 0
+    cg=$(get_snapshot_guid "$src" "$common" "$ruser" "$rhost")
+    [ -n "$cg" ] && [ "$cg" = "$head" ] && return 0
+    echo "$bm"
+}
+
 # After a successful transfer, refresh the per-target bookmark on the SOURCE
 # to the snapshot that was just sent. This is the insurance policy itself:
 # if the source's own retention deletes that snapshot before the next run,
@@ -3490,6 +3506,9 @@ bookmark_bridge_snap() {
                 at = index(N[i], "@"); if (at == 0) continue
                 if (T[i] <= bt || T[i] >= lt) continue
                 s = substr(N[i], at + 1); x = 0
+                # never pvesr'\''s own: it renames or destroys them every sync,
+                # and a send from one blocks its receive (handoff test B)
+                if (index(s, "__replicate_") == 1) continue
                 for (k = 1; k <= nx; k++) if (index(s, X[k]) == 1) { x = 1; break }
                 if (x) continue
                 if (best == "" || T[i] < bestt) { best = s; bestt = T[i] }

@@ -570,6 +570,25 @@ check "bookmark newer than common (pull): exit 0" "0" "$RC"
 check "bookmark newer than common (pull): target keeps @h1, gains @d2 (bridge) and @h2" "d1 h1 d2 h2" \
       "$(snaps_of "$POOL/lp/$POOL/origin/$POOL/bm4")"
 
+# The same situation seen by -n, and a pvesr snapshot right after the bookmark.
+# The plan must name the bookmark as the base, as the run does (it used to
+# plan the older common @d1). The bridge must skip __replicate_*: pvesr renames
+# or destroys those on every sync, so the bridge is @d2 and the pvesr snapshot
+# never reaches the target. Negative control without the fix: base=...@d1 and
+# "d1 h1 __replicate_100-0_1 d2 h2".
+zfs create -p "$POOL/bm5" || exit 1
+zfs snapshot "$POOL/bm5@d1"; run_send -e "$POOL/bm5" "$BK"
+tick; zfs snapshot "$POOL/bm5@h1"; run_send -e "$POOL/bm5" "$BK"
+zfs destroy "$POOL/bm5@h1"
+tick; zfs snapshot "$POOL/bm5@__replicate_100-0_1"
+tick; zfs snapshot "$POOL/bm5@d2"
+tick; zfs snapshot "$POOL/bm5@h2"
+check "bookmark newer than common: -n plans from the bookmark, not @d1" "1" \
+      "$("$SNAPSEND" -n -e "$POOL/bm5" "$BK" 2>/dev/null | grep -c "^PLAN=INCREMENTAL base=$POOL/bm5#")"
+run_send -e "$POOL/bm5" "$BK"
+check "bookmark newer than common: the bridge skips pvesr's __replicate_" "d1 h1 d2 h2" \
+      "$(snaps_of "$(tgt_of bm5)")"
+
 # A bookmark whose GUID does NOT match the target's current head (e.g. someone
 # rebuilt the target independently) must never be trusted on a name-only
 # guess -- it must be silently skipped, falling through to the normal
