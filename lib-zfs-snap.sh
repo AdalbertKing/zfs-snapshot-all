@@ -326,6 +326,26 @@ progress_done() {   # <watcher pid> <dataset> <target> <status>
     return 0
 }
 
+# REV-20261111-B01 F1 (U182): a run killed as a whole (TERM to its process group) never
+# returned to progress_done, so its records stayed "running", and 30 minutes later
+# check-pool-capacity raised the orphan alarm that U182 was meant to remove. The engine's
+# signal trap calls this. It closes ONLY the records this engine wrote: running AND
+# "pid":<this engine's $$>. The watcher writes the pid as $$ of the engine shell, because
+# $$ is not changed in a subshell. Another run's record and a finished record are left
+# untouched.
+progress_interrupt_own() {   # [watcher pid] -- stopped first, or it rewrites "running" 2 s later
+    local dir f
+    [ -n "${1:-}" ] && kill "$1" 2>/dev/null
+    dir=$(progress_dir); [ -d "$dir" ] || return 0
+    for f in "$dir"/*.json; do
+        [ -e "$f" ] || continue
+        grep -q '"state":"running"' "$f" 2>/dev/null || continue
+        grep -q "\"pid\":$$," "$f" 2>/dev/null || continue
+        sed -i "s/,\"state\":\"running\"}\$/,\"state\":\"interrupted\",\"finished_epoch\":$(date +%s)}/" "$f" 2>/dev/null || :
+    done
+    return 0
+}
+
 
 ###############################################################################
 # RESUMABLE TRANSFER SUPPORT
