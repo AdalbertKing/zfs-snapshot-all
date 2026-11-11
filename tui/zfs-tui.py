@@ -4847,10 +4847,26 @@ def kopie_groups(rows, data, now, ch):
         here = r.get("present") == "here"
         srcs = r.get("sources") or [s for s in (r.get("source") or "").split(",") if s]
         roots = [u"%s/%s" % (r.get("dst", "").rstrip("/"), s) for s in srcs] if here and r.get("dst") else []
+        # U170 (teren 2026-11-09): w trakcie pierwszej kopii wiersze mowily "0" i "-", jakby nic
+        # sie nie dzialo. Grupa niesie bieg (running_since) i zajetosc nosnika z list-replicas.
         groups.append({"kind": "replica", "name": r.get("name") or "?", "word": _(u"replika %s") % (r.get("name") or "?"),
                        "what": r.get("media") or "", "roots": roots, "typ": _(u"replika"), "dir": r.get("media") or "",
+                       "running_since": r.get("running_since") or u"", "usage": medium_usage_words(r),
                        "note": u"" if here else _(u"nośnik niepodłączony -- podłącz go, potem Ctrl-R")})
     return groups
+
+
+def kopie_copy_state(it, long=False):
+    """U170: dataset kopii bez migawki -- kopia jeszcze biegnie (bieg repliki) albo zostala
+    przerwana i wznowi sie (receive_resume_token). Pusto, gdy nic z tych."""
+    if it.get("snaps"):
+        return u""
+    g = it.get("g") or {}
+    if g.get("running_since"):
+        return (_(u"kopia trwa od %s") % dshow(g["running_since"])) if long else _(u"kopia trwa")
+    if it.get("resume"):
+        return _(u"przerwana -- następna kopia wznowi ją od miejsca przerwania") if long else _(u"przerwana, wznowi się")
+    return u""
 
 
 def kopie_items(groups, tree):
@@ -4872,7 +4888,8 @@ def kopie_items(groups, tree):
                 depth = nm[len(root):].count("/")
                 label = nm[len(base):] if nm == root else u"  " * depth + nm.rsplit("/", 1)[-1]
                 out.append({"g": g, "ds": nm, "label": label, "snaps": int(d.get("snapshots") or 0),
-                            "newest": int(d.get("newest") or 0), "type": d.get("type") or "filesystem"})
+                            "newest": int(d.get("newest") or 0), "type": d.get("type") or "filesystem",
+                            "resume": bool(d.get("resume"))})
         if len(out) == n0:
             out.append({"g": g, "note": g.get("note") or _(u"brak datasetów kopii na tym hoście")})
     out.append({"any": True, "label": _(u"inny dysk -- pula spoza relacji i replik")})
@@ -4913,15 +4930,17 @@ def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, 
             ccur = len(cells)
         rows.append(it)
         if it.get("any"):
+            # U170: w ukladzie plaskim pusta kolumna Relacja czytala sie jak ciag dalszy repliki
+            # nad nim ("nosnik repliki nazwany obca pula") -- wiersz ma wlasna nazwe.
             cells.append([_(u"inny dysk -- pula spoza relacji i replik"), u" ", u" "] if grouped
-                         else [u" ", u" ", _(u"inny dysk -- pula spoza relacji i replik"), u" ", u" "])
+                         else [_(u"inny dysk"), u" ", _(u"pula spoza relacji i replik -- Enter wybiera"), u" ", u" "])
             continue
         if it.get("note"):
             cells.append([u"  %s %s" % (bar, it["note"]), u" ", u" "] if grouped
                          else [g["name"], g.get("typ") or u" ", it["note"], u" ", u" "])
             continue
         ds = it["ds"] + (u"  (zvol)" if it.get("type") == "volume" else u"")
-        when = fmt_when_short(it["newest"], now) if it.get("newest") else u"-"
+        when = fmt_when_short(it["newest"], now) if it.get("newest") else kopie_copy_state(it) or u"-"
         if grouped:
             cells.append([u"  %s %s" % (bar, ds), str(it.get("snaps") or 0), when])
         else:
@@ -4940,6 +4959,10 @@ def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, 
                (_(u"Najnowsza"), fmt_full(cur["newest"]) if cur.get("newest") else u"-")]
         if cur.get("type") == "volume":
             det.append((_(u"Rodzaj"), _(u"dysk maszyny (zvol) -- przy przeglądaniu wybierzesz partycję")))
+        if kopie_copy_state(cur):
+            det.append((_(u"Stan"), kopie_copy_state(cur, True)))
+        if g.get("usage"):
+            det.append((_(u"Nośnik"), g["usage"]))
         if ctx and (ctx.get("dataset") or ctx.get("at")) and ctx.get("rel") == g["name"]:
             det = [group(ch, _(u"Wskazane")),
                    (_(u"Dataset"), ctx.get("dataset") or _(u"(wybierzesz w oknie)")),

@@ -2886,6 +2886,36 @@ else
     bad "nosniki U174: kopia trwa" "$(printf '%s\n' "$R1" | grep -E '^║ sejf-|Nośnik')" "$(printf '%s\n' "$R2" | grep -E '^║ sejf-b|Nośnik')"
 fi
 rm -f "$RRS"
+# U170 (teren 2026-11-09): F4 w trakcie pierwszej kopii repliki -- datasety bez migawki mowia
+# "kopia trwa" (bieg z list-replicas), a bez biegu, z tokenem wznowienia, "przerwana, wznowi się";
+# panel: Stan i zajetosc nosnika. Wiersz "inny dysk" ma wlasna nazwe w kolumnie Relacja.
+# Kontrola: dataset bez tokenu i bez biegu -- '-' jak dotad.
+U170D="$(mktemp -d)"
+"$PY" - "$P10/replicas.json" "$P10/zfs-tree.json" "$U170D" <<'PYEOF'
+import json, sys
+r = json.load(open(sys.argv[1], encoding="utf-8")); t = json.load(open(sys.argv[2], encoding="utf-8"))
+r["replicas"] = [dict(r["replicas"][0], present="here", running_since="2026-11-09 20:22", medium_size=str(4 * 1024 ** 4),
+                      medium_alloc=str(1024 ** 4))]
+json.dump(r, open(sys.argv[3] + "/rep-run.json", "w", encoding="utf-8"))
+r["replicas"][0]["running_since"] = ""
+json.dump(r, open(sys.argv[3] + "/rep-idle.json", "w", encoding="utf-8"))
+t["datasets"] += [{"name": "bkp/sejf-a/hdd/lab", "type": "filesystem", "snapshots": 0, "newest": 0, "pvesr": False, "resume": False},
+                  {"name": "bkp/sejf-a/hdd/lab/vm-1", "type": "volume", "snapshots": 0, "newest": 0, "pvesr": False, "resume": True}]
+json.dump(t, open(sys.argv[3] + "/tree.json", "w", encoding="utf-8"))
+PYEOF
+u170() { "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" ${ALL%--replicas*} --replicas "$U170D/$1" --config "$P10/show-config.json" --stats "$P10/job-stats.json" \
+    --zfs-tree "$U170D/tree.json" --zfs-snapshots "$P10/zfs-snapshots.json" --screen relacje --keys "F4,$2" --width 220 --height 60 2>&1; }
+K1="$(u170 rep-run.json end)"; K2="$(u170 rep-idle.json end)"
+K3="$(u170 rep-run.json "down,down,down,down,down,down")"   # kursor na parze sejf-a: panel
+if hasE "$K1" 'sejf-a .*bkp/sejf-a/hdd/lab  .* kopia trwa' && hasE "$K1" 'vm-1  \(zvol\) .* kopia trwa' \
+   && hasE "$K2" 'vm-1  \(zvol\) .* przerwana, wznowi się' && ! hasE "$K2" 'bkp/sejf-a/hdd/lab  .*(kopia trwa|przerwana)' \
+   && hasE "$K1" '║ inny dysk +pula spoza relacji i replik -- Enter wybiera' \
+   && hasE "$K3" 'Stan +kopia trwa od 2026\.11\.09 20:22' && hasE "$K3" 'Nośnik +zajęte 25% \(1,0 TiB z 4,0 TiB\)'; then
+    ok "F4 U170: replika w trakcie kopii -- 'kopia trwa'; bez biegu z tokenem 'przerwana, wznowi się'; bez tokenu '-'; inny dysk z wlasna nazwa"
+else
+    bad "F4 U170: kopia w toku" "$(printf '%s\n' "$K1" | grep -E 'sejf-a|vm-1|inny dysk' | head -6)" "$(printf '%s\n' "$K2" | grep -E 'sejf-a|vm-1' | head -4)"
+fi
+rm -rf "$U170D"
 A="$(nact F7)"
 # Uwaga 18 (2026-10-08): F7 uruchamia ZAZNACZONA replike od razu -- bez okna "t".
 if ! has "$A" 'POTWIERDZENIE' && grep -Eq "zfs-backup.sh'? run-replicas '?--name=sejf-a'?\$" "$XL"; then

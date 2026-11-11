@@ -8790,10 +8790,11 @@ cmd_zfs_tree() {
         esac
     done
     [ "${#roots[@]}" -gt 0 ] || die "zfs-tree: name at least one dataset"
-    { zfs list -H -p -o name,type -r -t filesystem,volume -- "${roots[@]}" 2>/dev/null | sed 's/^/D\t/'
+    # U170: receive_resume_token -- a copy cut off mid-stream resumes from it (zfs recv -s).
+    { zfs list -H -p -o name,type,receive_resume_token -r -t filesystem,volume -- "${roots[@]}" 2>/dev/null | sed 's/^/D\t/'
       zfs list -H -p -o name,creation -r -t snapshot -- "${roots[@]}" 2>/dev/null | sed 's/^/S\t/'
     } | awk -F'\t' '
-        $1 == "D" { if (!($2 in typ)) ord[++n] = $2; typ[$2] = $3; next }
+        $1 == "D" { if (!($2 in typ)) ord[++n] = $2; typ[$2] = $3; if ($4 != "" && $4 != "-") rs[$2] = 1; next }
         $1 == "S" { i = index($2, "@"); d = substr($2, 1, i - 1); c[d]++; if ($3 + 0 > nw[d] + 0) nw[d] = $3
                     if (substr($2, i + 1, 11) == "__replicate") pv[d] = 1   # A17: a pvesr replica holds these
                     next }
@@ -8801,7 +8802,7 @@ cmd_zfs_tree() {
             printf "{\"datasets\":["
             for (i = 1; i <= n; i++) {
                 d = ord[i]
-                printf "%s{\"name\":\"%s\",\"type\":\"%s\",\"snapshots\":%d,\"newest\":%d,\"pvesr\":%s}", (i > 1 ? "," : ""), d, typ[d], c[d] + 0, nw[d] + 0, (d in pv ? "true" : "false")
+                printf "%s{\"name\":\"%s\",\"type\":\"%s\",\"snapshots\":%d,\"newest\":%d,\"pvesr\":%s,\"resume\":%s}", (i > 1 ? "," : ""), d, typ[d], c[d] + 0, nw[d] + 0, (d in pv ? "true" : "false"), (d in rs ? "true" : "false")
             }
             print "]}"
         }'

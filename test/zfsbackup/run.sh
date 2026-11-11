@@ -13665,8 +13665,8 @@ cat > "$ZT/bin/zfs" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "${ZT_ARGS:?}/zfs.argv"
 case "$*" in
-    "list -H -p -o name,type -r -t filesystem,volume -- "*)
-        printf 'tank/c\tfilesystem\ntank/c/a\tfilesystem\ntank/c/vm\tvolume\ntank/c/empty\tfilesystem\n' ;;
+    "list -H -p -o name,type,receive_resume_token -r -t filesystem,volume -- "*)
+        printf 'tank/c\tfilesystem\t-\ntank/c/a\tfilesystem\t-\ntank/c/vm\tvolume\t-\ntank/c/empty\tfilesystem\t%s\n' "${ZT_TOKEN:--}" ;;
     "list -H -p -o name,creation -r -t snapshot -- "*)
         printf 'tank/c/a@s1\t1000\ntank/c/a@s2\t3000\ntank/c/a@s0\t500\ntank/c/vm@z1\t2000\ntank/c@r1\t100\n'
         [ -n "${ZT_PVESR:-}" ] && printf 'tank/c/vm@__replicate_105-0_1700000000__\t2500\n' ;;
@@ -13694,6 +13694,16 @@ if [ "$got" = "[('tank/c', False), ('tank/c/a', False), ('tank/c/vm', True), ('t
     ok "zfstree: a dataset with a @__replicate_ snapshot is marked pvesr, the others are not (A17)"
 else
     bad "zfstree: pvesr mark (A17)" "got=$got" "$ZTOUT"
+fi
+# U170 (lab pve11 2026-11-09): a dataset whose receive was cut off holds a receive_resume_token
+# (zfs recv -s); F4 says "przerwana, wznowi się" by it. Control: '-' (no token) is resume false.
+rm -f "$ZT/zfs.argv"
+ZTOUT=$(ZT_TOKEN=1-e604ea4bf-e0-789c63 zt_run zfs-tree --json tank/c)
+got=$(printf '%s' "$ZTOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print([(x["name"], x["resume"]) for x in d["datasets"]])' 2>/dev/null | tr -d '\r')
+if [ "$got" = "[('tank/c', False), ('tank/c/a', False), ('tank/c/vm', False), ('tank/c/empty', True)]" ]; then
+    ok "zfstree: a dataset with a receive_resume_token is marked resume, '-' is not (U170)"
+else
+    bad "zfstree: resume mark (U170)" "got=$got" "$ZTOUT" "$(cat "$ZT/err")"
 fi
 rm -f "$ZT/zfs.argv"
 ZTOUT=$(zt_run zfs-snapshots --json tank/c/a)

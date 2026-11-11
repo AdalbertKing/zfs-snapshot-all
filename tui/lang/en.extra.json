@@ -939,5 +939,9 @@
 "UWAGA: kopia tej repliki właśnie biegnie (od $SINCE). Usunięcie jej nie przerywa: dobiegnie do końca i odłączy dysk.": "NOTE: a copy of this replica is running now (since $SINCE). Removing the replica does not stop it: it runs to its end and exports the disk.",
 "PRZERWANY": "INTERRUPTED",
 "kopia trwa od %s": "copy running since %s",
-"bez migawek -- pasywna replika go nie skopiuje": "no snapshots -- a passive replica will not copy it"
+"bez migawek -- pasywna replika go nie skopiuje": "no snapshots -- a passive replica will not copy it",
+"kopia trwa": "copy running",
+"przerwana -- następna kopia wznowi ją od miejsca przerwania": "interrupted -- the next copy resumes it where it stopped",
+"przerwana, wznowi się": "interrupted, will resume",
+"pula spoza relacji i replik -- Enter wybiera": "a pool outside relations and replicas -- Enter picks it"
 }
