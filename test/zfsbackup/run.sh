@@ -14934,6 +14934,19 @@ if ! printf '%s' "$o1" | grep -q 'is in the slot but not imported' && printf '%s
 else
     bad "addreplica: not-checked warning (U179-6)" "named: $o1" "unnamed: $o2"
 fi
+# U186: list-replicas carries the medium's size and allocation while its pool is imported
+# (gate status 0 = here). Control: the gate says away -> both fields empty, zpool list unread.
+mkdir -p "$MG/gd"; printf '#!/bin/sh\nexit "${U186_GATE:-0}"\n' > "$MG/gd/zfs-media-gate.sh"; chmod +x "$MG/gd/zfs-media-gate.sh"
+u186() { ( source "$ZFSBACKUP"; SCRIPT_DIR="$MG/gd"
+    zpool() { case "$*" in "list -Hp -o size,alloc repl") printf '4000\t1000\n' ;; *) return 1 ;; esac; }
+    cmd_list_replicas --json --config="$MG/c.conf" ) 2>&1; }
+l1=$(U186_GATE=0 u186); l2=$(U186_GATE=1 u186)
+if printf '%s' "$l1" | grep -qE '"name":"mg"[^}]*"present":"here"[^}]*"medium_size":"4000","medium_alloc":"1000"' \
+   && printf '%s' "$l2" | grep -qE '"name":"mg"[^}]*"present":"away"[^}]*"medium_size":"","medium_alloc":""'; then
+    ok "listreplicas U186: imported medium carries medium_size/medium_alloc; away -> both empty"
+else
+    bad "listreplicas U186: medium usage" "here: $l1" "away: $l2"
+fi
 rm -rf "$MG"
 
 # add-replica --passive (owner note 20, 2026-10-08): the section says passive = yes

@@ -933,5 +933,7 @@
 "Dysk $POOL jest podłączony. Zacząć pierwszą kopię teraz?\\n\\nKopia biegnie w tle, także po wyjściu z programu. Stan: F2 Przebiegi.": "Disk $POOL is connected. Start the first copy now?\\n\\nThe copy runs in the background, also after you leave the program. Progress: F2 Runs.",
 "relacja %s (pvesr)": "relation %s (pvesr)",
 "migawki tylko na źródle %s, bez kopii na tym hoście": "snapshots on the source %s only, no copies on this host",
-"Pasywnie = istniejące migawki źródła: idzie stan z ostatniej z nich, nie bieżący; dataset bez migawek nie jest kopiowany.": "Passive = the source's existing snapshots: the state as of the newest of them goes, not the current state; a dataset without snapshots is not copied."
+"Pasywnie = istniejące migawki źródła: idzie stan z ostatniej z nich, nie bieżący; dataset bez migawek nie jest kopiowany.": "Passive = the source's existing snapshots: the state as of the newest of them goes, not the current state; a dataset without snapshots is not copied.",
+"Zajęte": "Used",
+"zajęte %s (%s z %s)": "used %s (%s of %s)"
 }

@@ -236,12 +236,31 @@ def replica_type_word(r):
     return _(MEDIA_STATES.get(p, MEDIA_STATES["unknown"])[0])
 
 
+def medium_usage_pct(r):
+    """U186 (wlasciciel 2026-11-10): zajetosc nosnika w procentach, gdy jego pula jest
+    zaimportowana (list-replicas: medium_size/medium_alloc). Pusto, gdy nie wiadomo."""
+    try:
+        size, alloc = int(r.get("medium_size") or 0), int(r.get("medium_alloc") or 0)
+    except (TypeError, ValueError):
+        return u""
+    return u"%d%%" % (alloc * 100 // size) if size > 0 else u""
+
+
+def medium_usage_words(r):
+    pct = medium_usage_pct(r)
+    if not pct:
+        return u""
+    return _(u"zajęte %s (%s z %s)") % (pct, human_bytes(r.get("medium_alloc")), human_bytes(r.get("medium_size")))
+
+
 def media_state_line(r, st):
     """Stan nosnika w panelu repliki (uwaga 17, 2026-10-08). Dysk w maszynie mowi tez,
     czy kopia na nim jest aktualna -- "w slocie" samo nie mowilo nic o kopii."""
     if r.get("present") in ("available", "here"):
         lc = r.get("last_current") or ""
-        return u"%s -- %s" % (_(st[0]), (_(u"kopia aktualna z %s") % dshow(lc)) if lc else _(u"brak kopii"))
+        u = medium_usage_words(r)
+        return u"%s -- %s%s" % (_(st[0]), (_(u"kopia aktualna z %s") % dshow(lc)) if lc else _(u"brak kopii"),
+                                (u", " + u) if u else u"")
     return u"%s -- %s" % (_(st[0]), _(st[2]))
 
 
@@ -4584,7 +4603,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
     for r in reps:
         st = MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"])
         s = r.get("schedule") or "?"
-        cells.append([r.get("name") or "?", replica_type_word(r), dshow((r.get("last_current") or _(u"brak"))[:16]),
+        cells.append([r.get("name") or "?", replica_type_word(r), medium_usage_pct(r), dshow((r.get("last_current") or _(u"brak"))[:16]),
                       replica_last_run(replica_stats_row(data, r.get("name")), data.failed("stats")),
                       _(u"po podłączeniu") if s == "on-insert" else cron_words(s) + (_(u" + po podłączeniu") if r.get("on_insert") == "yes" else "")])
     det_title, det, child = u"", [], None
@@ -4602,9 +4621,9 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
         det_title = _(u"stany nośnika")
         det = [(_(MEDIA_STATES[k][0]), _(MEDIA_STATES[k][2])) for k in ("here", "available", "away", "wrong_medium")]
     return render_tabbed(data, width, height, now, ch, "nosniki", _(u"Repliki backupu kolektora (%d)") % len(reps),
-                         [_(u"Replika"), _(u"Typ"), _(u"Wykonana"), _(u"Ostatni bieg"), _(u"Harmonogram")], cells, cursor,
+                         [_(u"Replika"), _(u"Typ"), _(u"Zajęte"), _(u"Wykonana"), _(u"Ostatni bieg"), _(u"Harmonogram")], cells, cursor,
                          (_(u"Enter szczegóły   Ins nowa   Del usuń   Tab do przebiegów")) if reps else _(u"Ins nowa replika"),
-                         det_title, det, child, focus, pair_cursor, screen_actions("nosniki"), empty, prio=[0, 3, 1, 2, 4], flex=4)
+                         det_title, det, child, focus, pair_cursor, screen_actions("nosniki"), empty, prio=[0, 4, 1, 2, 3, 5], flex=5)
 
 
 # --- F5 Szablony (uwaga 24, 2026-10-09) ------------------------------------

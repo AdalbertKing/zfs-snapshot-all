@@ -15,6 +15,14 @@ when they change how the tool is used.
   The GUI no longer drops a refresh asked for while another one is running.
 - **A passive replica no longer reports "could not record what ... now holds"** after every
   good run (U187). It never skips by design, so the record was never needed.
+- **A connected replica disk shows how full it is** (U186): F6 has a `Used` column and the
+  medium line says `used N% (X of Y)`; `list-replicas --json` carries `medium_size` and
+  `medium_alloc` in bytes while the disk's pool is imported (empty otherwise).
+- **A replica copy stopped by SIGTERM still exports its disk** (U182): the cron line runs the
+  gate's `detach` even when the whole job's process group is killed.
+- **A first copy that cannot fit on the disk is refused** (U183): before writing, the gate adds
+  up the sources that have no copy on the medium yet, compares that with the free space, and
+  exports the disk when it is short.
 
 - **A ZFS disk whose pool name and GUID cannot be read starts no replica on insertion**
   (REV-20261109-193). In 1.0.17 such a disk ran every on-insert replica; now the insertion is

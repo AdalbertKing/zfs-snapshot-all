@@ -8950,6 +8950,13 @@ cmd_list_replicas() {
         # written on every recorded copy and on a "medium already current" skip -- the
         # same fact the age monitor reads (owner note 17: "w slocie" said nothing
         # about whether the copy on that disk is any good).
+        # U186 (owner 2026-11-10): how full the medium is, while its pool is imported.
+        # An exported pool in the slot has no figures without importing it, and the
+        # list never imports; then both fields stay empty.
+        local msize="" malloc=""
+        [ "$present" = "here" ] \
+            && IFS=' ' read -r msize malloc < <(zpool list -Hp -o size,alloc "$pool" 2>/dev/null | tr '\t' ' ')
+        case "$msize$malloc" in *[!0-9]*) msize=""; malloc="" ;; esac
         local lcur=""
         [ -e "/var/lib/zfs-snapshot-all/media/$name.current" ] \
             && lcur="$(date -r "/var/lib/zfs-snapshot-all/media/$name.current" '+%Y-%m-%d %H:%M' 2>/dev/null)"
@@ -8983,8 +8990,8 @@ JSRC
             # media_key (W19b): the key file of an encrypted medium, by the pool name of
             # dst -- known without the disk in the slot.
             local _mk="$MEDIA_KEY_DIR/${dst%%/*}.key"; [ -s "$_mk" ] || _mk=""
-            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"exclude_family":"%s","media_guids":"%s","on_insert":"%s","keep":"%s","raw":"%s","media_key":"%s"}' \
-                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$(json_escape "$_xfam")" "$mg" "${oi:-no}" "$kp" "${rw:-no}" "$_mk"
+            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"exclude_family":"%s","media_guids":"%s","on_insert":"%s","keep":"%s","raw":"%s","media_key":"%s","medium_size":"%s","medium_alloc":"%s"}' \
+                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$(json_escape "$_xfam")" "$mg" "${oi:-no}" "$kp" "${rw:-no}" "$_mk" "$msize" "$malloc"
         else
             printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
             [ -n "$last" ] && printf '%-14s   last seen: %s\n' "" "$last"

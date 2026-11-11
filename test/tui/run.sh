@@ -2519,7 +2519,7 @@ N="$(screen nosniki)"
 # Piec kolumn (Ostatni bieg, 2026-10-28): przy 80 znakach Harmonogram ustepuje (jest w panelu),
 # wiec wiersze czytane przy 120.
 NW="$(screen nosniki "" --width 120)"
-if hasE "$NW" '^║ sejf-a +odłączony +brak +- +co dobę 02:30 +║' && hasE "$NW" '^║ sejf-b +wewnętrzny +brak +- +po podłączen'; then
+if hasE "$NW" '^║ sejf-a +odłączony +- +brak +- +co dobę 02:30 +║' && hasE "$NW" '^║ sejf-b +wewnętrzny +- +brak +- +po podłączen'; then
     ok "nosniki: wiersz = replika, Typ nosnika slowem (U99), kiedy ostatnia aktualna kopia (Wykonana), harmonogram slowami (U21)"
 else
     bad "nosniki: wiersze" "$NW"
@@ -2527,7 +2527,7 @@ fi
 # Ostatni bieg (przejscie GUI pve10, 2026-10-28): calapula padla 4/4 rc=1, a lista mowila
 # tylko "Wykonana 22.10". Kolumna niesie wynik i czas ostatniego biegu z job-stats.
 NF="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" ${ALL%--stats*} --stats "$FIX/stats-replica-fail.json" --screen nosniki --width 160 --height 40 2>&1)"
-if hasE "$NF" '^║ sejf-a +odłączony +brak +BŁĄD rc=1 2026\.09\.11 22:02 +co dobę' && hasE "$NF" '^║ sejf-b +wewnętrzny +brak +- +po podłączen'; then
+if hasE "$NF" '^║ sejf-a +odłączony +- +brak +BŁĄD rc=1 2026\.09\.11 22:02 +co dobę' && hasE "$NF" '^║ sejf-b +wewnętrzny +- +brak +- +po podłączen'; then
     ok "nosniki: kolumna Ostatni bieg -- nieudany bieg repliki widac na liscie (BŁĄD rc=1 + czas)"
 else
     bad "nosniki: Ostatni bieg" "$NF"
@@ -2825,6 +2825,26 @@ else
     bad "nosniki U99: Typ nosnika" "$(printf '%s\n' "$RTYS" | grep -E '^║ (Replika|r-)')"
 fi
 rm -f "$RTY"
+# U186 (wlasciciel 2026-11-10): podlaczony nosnik pokazuje zajetosc -- kolumna Zajęte i dopisek
+# w linii Nośnik. Kontrola: wiersz bez medium_size/medium_alloc (pula wyeksportowana) ma pusto.
+RUS="$(mktemp)"
+"$PY" - "$P10/replicas.json" "$RUS" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["replicas"][0].update({"present": "here", "last_current": "2026-10-08 20:46",
+                         "medium_size": str(4 * 1024 ** 4), "medium_alloc": str(1024 ** 4)})
+d["replicas"][1].update({"present": "available", "last_current": "", "medium_size": "", "medium_alloc": ""})
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+U1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RUS" --screen nosniki --width 200 --height 50 2>&1)"
+U2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RUS" --screen nosniki --keys down --width 200 --height 50 2>&1)"
+if has "$U1" 'Zajęte' && hasE "$U1" '^║ sejf-a +podłączony +25% ' && has "$U1" 'zajęte 25%' && has "$U1" '(1,0 TiB z 4,0 TiB)' \
+   && hasE "$U2" '^║ sejf-b +[^ ]+ +- ' && ! has "$U2" 'zajęte '; then
+    ok "nosniki U186: podlaczony nosnik -- kolumna Zajęte 25% i 'zajęte 25% (1,0 TiB z 4,0 TiB)'; bez danych puli '-'"
+else
+    bad "nosniki U186: zajetosc nosnika" "$(printf '%s\n' "$U1" | grep -E 'Zajęte|sejf-|zajęte')" "$(printf '%s\n' "$U2" | grep -E 'sejf-b|zajęte')"
+fi
+rm -f "$RUS"
 A="$(nact F7)"
 # Uwaga 18 (2026-10-08): F7 uruchamia ZAZNACZONA replike od razu -- bez okna "t".
 if ! has "$A" 'POTWIERDZENIE' && grep -Eq "zfs-backup.sh'? run-replicas '?--name=sejf-a'?\$" "$XL"; then
