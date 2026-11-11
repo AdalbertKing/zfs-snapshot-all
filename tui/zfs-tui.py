@@ -269,7 +269,7 @@ def media_state_line(r, st):
 COLOR_WORDS = [
     ("nie odpowiada", 4), ("bez monitora", 4), ("aktualne", 2), (u"spóźnione", 3),
     (" stare", 1), ("NIE TEN DYSK", 1), ("Podłączony", 3), ("W SEJFIE", 4), (" TU ", 2),
-    (u"BŁĄD", 1), ("w toku", 3), ("PAUZA", 3), ("NIEwdro", 1), ("nieczytelny", 1),
+    (u"BŁĄD", 1), ("PRZERWANY", 1), ("w toku", 3), ("PAUZA", 3), ("NIEwdro", 1), ("nieczytelny", 1),
     (u"błąd źródła", 1), (" OK ", 2), (" OK", 2),
 ]
 
@@ -2556,6 +2556,9 @@ def run_result(r):
         return _(u"pominięty")
     if rc == -1:
         return _(u"biegnie")
+    if rc == -2:
+        # U167: bez END, a procesu zfs-job tej linii juz nie ma (zatrzymany, zabity).
+        return _(u"PRZERWANY")
     return _(u"BŁĄD rc=%s") % rc
 
 

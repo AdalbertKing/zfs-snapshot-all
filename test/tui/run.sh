@@ -1258,6 +1258,29 @@ if [ "$(printf '%s\n' "$PRW1L" | grep -cE "^║ $KD .* OK( |$)")" = 1 ] && [ "$(
 else
     bad "przebiegi: okno 72 h i bieg trwajacy" "pokazane: $(printf '%s\n' "$PRW1L" | grep -E 'OK|biegnie')" "schowane: $(printf '%s\n' "$PRW2L" | grep -E 'OK|biegnie')"
 fi
+# U167 (wlasciciel 2026-11-09): bez END, a procesu zfs-job juz nie ma (job-stats: rc -2) -- PRZERWANY,
+# nie "biegnie" bez konca; jak wykonany, F8 go chowa. Kontrola: rc -1 wyzej nadal 'biegnie'.
+PRX="$(mktemp)"
+"$PY" - "$GES" "$PRX" "$NOW" "$GEJ" <<'PYEOF'
+import datetime, json, sys
+st = json.load(open(sys.argv[1], encoding="utf-8"))
+now = int(sys.argv[3])
+j = json.load(open(sys.argv[4], encoding="utf-8"))
+d = [x["scope"].rsplit("/", 1)[-1] for x in j["jobs"] if x["label"] == "sync-test"][0]
+def iso(ts):
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone(datetime.timedelta(hours=2))).isoformat()
+st["runs"] = [{"label": "hourly backup (sync-test-%s)" % d, "start": iso(now - 7200), "end": "-", "rc": -2, "error": ""}]
+json.dump(st, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+PRX1L="$(lst "$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$PRX" --screen zadania --keys home --width 200 --height 60 2>&1)")"
+PRX2L="$(lst "$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$PRX" --screen zadania --keys home,F8 --width 200 --height 60 2>&1)")"
+rm -f "$PRX"
+if [ "$(printf '%s\n' "$PRX1L" | grep -cE "^║ $KD .* PRZERWANY( |$)")" = 1 ] && ! printf '%s\n' "$PRX1L" | grep -qE "^║ $KD .* biegnie( |$)" \
+   && ! printf '%s\n' "$PRX2L" | grep -q 'PRZERWANY'; then
+    ok "przebiegi U167: bieg bez END i bez zywego procesu (rc -2) -- 'PRZERWANY', nie 'biegnie'; F8 chowa go jak wykonany"
+else
+    bad "przebiegi U167: przerwany bieg" "$(printf '%s\n' "$PRX1L" | grep -E 'PRZERWANY|biegnie|BŁĄD')" "F8: $(printf '%s\n' "$PRX2L" | grep -E 'PRZERWANY')"
+fi
 # Kursor na OSTATNIM wierszu okna, gdy nizej sa dalsze: wiersz byl zastepowany przez
 # "... jeszcze N" i biegu z panelu nie bylo na liscie. Niska wysokosc, kursor przy "teraz":
 # czas biegu z panelu (Kiedy RRRR-MM-DD GG:MM) musi stac na liscie.

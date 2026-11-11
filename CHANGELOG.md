@@ -18,6 +18,9 @@ when they change how the tool is used.
 - **A connected replica disk shows how full it is** (U186): F6 has a `Used` column and the
   medium line says `used N% (X of Y)`; `list-replicas --json` carries `medium_size` and
   `medium_alloc` in bytes while the disk's pool is imported (empty otherwise).
+- **A stopped run is shown as interrupted, not running for ever** (U167): `job-stats --runs`
+  gives rc `-2` to a run with no END whose `zfs-job.sh` process is gone; F2 says `PRZERWANY`
+  (`INTERRUPTED`). Where other users' processes cannot be read (hidepid), it stays running.
 - **Removing a replica removes its state files** (U169, U178): `remove-replica --install`
   has the gate (new verb `forget`) delete the replica's files in `/var/lib/zfs-snapshot-all/media/`;
   a copy running at that moment is named in the plan and in the Del window (new gate verb

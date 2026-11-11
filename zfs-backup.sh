@@ -17715,6 +17715,17 @@ jobstats_cache_write() {   # <file> <content> -- best effort; a failure only lea
     return 0
 }
 
+# U167: every argument of every live zfs-job.sh process, one per line (its label is one of
+# them). Fails -- the caller then decides nothing -- when other users' processes cannot be
+# read (hidepid): an unseen process is not a dead one. JOB_PROC_ROOT is the test override.
+job_live_args() {
+    local pr="${JOB_PROC_ROOT:-/proc}" f
+    [ -n "$(tr -d '\0' < "$pr/1/cmdline" 2>/dev/null)" ] || return 1
+    for f in "$pr"/[0-9]*/cmdline; do
+        tr '\0' '\n' < "$f" 2>/dev/null | awk 'seen { print; next } /(^|\/)zfs-job\.sh$/ { seen = 1 }'
+    done
+    return 0
+}
 cmd_job_stats() {
     local as_json=0 days="${ZFS_DIGEST_DAYS:-7}" a vol_cache=0 runs_h=0
     for a in "$@"; do
@@ -17930,6 +17941,16 @@ cmd_job_stats() {
     # In progress: the newest open start, and only when no END of its line came after it --
     # a start a reboot killed stays on the stack and must not read as running for hours.
     END { for (l in sp) if (sp[l] > 0 && bt[l, sp[l]] >= since && !(bt[l, sp[l]] < lastend[l])) printf "%s\t%s\t-\t-1\t-\n", l, bt[l, sp[l]] }')
+            # U167 (owner 2026-11-09): a stopped copy writes no END, and F2 showed it running for
+            # good. An open start whose label no live zfs-job.sh process carries is INTERRUPTED,
+            # rc -2. The BEGIN line has no pid (its format is a contract), the process list does.
+            if printf '%s\n' "$rl_rows" | grep -q "$(printf '\t')-1$(printf '\t')-\$"; then
+                local _live; _live=$(job_live_args) && rl_rows=$(printf '%s\n' "$rl_rows" | _JL="$_live" awk -F'\t' -v OFS='\t' '
+                    BEGIN { n = split(ENVIRON["_JL"], a, "\n")
+                            # a row label starts after the host word (label() above, field 5 on)
+                            for (i = 1; i <= n; i++) { on[a[i]] = 1; x = a[i]; if (sub(/^[^ ]+ /, "", x)) on[x] = 1 } }
+                    $4 == "-1" && !($1 in on) { $4 = "-2" } { print }')
+            fi
         fi
     fi
     # Volume, the digest's way: `written` of every snapshot created since the

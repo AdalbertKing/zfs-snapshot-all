@@ -13286,8 +13286,22 @@ $(rt 29) ZFS-JOB END pve10 hourly backup (rn-bad) rc=1
 $(rt 20) ZFS-JOB BEGIN pve10 hourly backup (rn-skip)
 $(rt 20) ZFS-JOB END pve10 hourly backup (rn-skip) rc=75
 $(rt 5) ZFS-JOB BEGIN pve10 hourly backup (rn-now)
+$(rt 4) ZFS-JOB BEGIN pve10 replica copy (rn-dead)
 RLOG
-RNOUT=$( ( PATH="$JS/bin:$PATH" ZFS_CRON_LOGS="$JS/runs.log" bash "$ZFSBACKUP" job-stats --json --runs=2 ) 2>"$JS/err")
+# U167: the process list -- pid 1, a live zfs-job.sh for rn-now, nothing for rn-dead.
+JPR="$JS/proc"; mkdir -p "$JPR/1" "$JPR/4242" "$JPR/77"
+printf 'init\0' > "$JPR/1/cmdline"
+printf '/bin/bash\0/root/scripts/zfs-snapshot-all/zfs-job.sh\0--detail=8\0pve10 hourly backup (rn-now)\0--\0/x/snapsend.sh\0' > "$JPR/4242/cmdline"
+printf '/bin/sleep\0pve10 replica copy (rn-dead)\0' > "$JPR/77/cmdline"
+RNOUT=$( ( PATH="$JS/bin:$PATH" JOB_PROC_ROOT="$JPR" ZFS_CRON_LOGS="$JS/runs.log" bash "$ZFSBACKUP" job-stats --json --runs=2 ) 2>"$JS/err")
+: > "$JPR/1/cmdline"
+RNH=$( ( PATH="$JS/bin:$PATH" JOB_PROC_ROOT="$JPR" ZFS_CRON_LOGS="$JS/runs.log" bash "$ZFSBACKUP" job-stats --json --runs=2 ) 2>/dev/null)
+rnh=$(printf '%s' "$RNH" | "$PY_OR_PYTHON" -c 'import sys,json; r={x["label"]: x["rc"] for x in json.load(sys.stdin)["runs"]}; print(r["hourly backup (rn-now)"], r["replica copy (rn-dead)"])' 2>&1 | tr -d '\r')
+if [ "$rnh" = "-1 -1" ]; then
+    ok "jobstats --runs U167: process list unreadable (hidepid) -> an open start stays running, never called interrupted"
+else
+    bad "jobstats --runs U167 hidepid" "$rnh"
+fi
 RN0=$( ( PATH="$JS/bin:$PATH" ZFS_CRON_LOGS="$JS/runs.log" bash "$ZFSBACKUP" job-stats --json ) 2>/dev/null)
 got=$(printf '%s' "$RNOUT" | "$PY_OR_PYTHON" -c '
 import sys,json; d=json.load(sys.stdin); r={x["label"]: x for x in d["runs"]}
@@ -13295,15 +13309,17 @@ print(d["runs_hours"], sorted(r))
 print(r["hourly backup (rn-ok)"]["rc"], r["hourly backup (rn-ok)"]["error"] == "", bool(r["hourly backup (rn-ok)"]["start"]) and r["hourly backup (rn-ok)"]["end"] > r["hourly backup (rn-ok)"]["start"])
 print(r["hourly backup (rn-bad)"]["rc"], r["hourly backup (rn-bad)"]["error"])
 print(r["hourly backup (rn-skip)"]["rc"], r["hourly backup (rn-skip)"]["error"] == "")
-print(r["hourly backup (rn-now)"]["rc"], r["hourly backup (rn-now)"]["end"] == "")' 2>&1 | tr -d '\r')
-want="2 ['hourly backup (rn-bad)', 'hourly backup (rn-now)', 'hourly backup (rn-ok)', 'hourly backup (rn-skip)']
+print(r["hourly backup (rn-now)"]["rc"], r["hourly backup (rn-now)"]["end"] == "")
+print(r["replica copy (rn-dead)"]["rc"], r["replica copy (rn-dead)"]["end"] == "")' 2>&1 | tr -d '\r')
+want="2 ['hourly backup (rn-bad)', 'hourly backup (rn-now)', 'hourly backup (rn-ok)', 'hourly backup (rn-skip)', 'replica copy (rn-dead)']
 0 True True
 1 Refusing 'hdd/lab/b': it is the disk of guest 901, which is currently RUNNING.
 75 True
--1 True"
+-1 True
+-2 True"
 has_runs=$(printf '%s' "$RN0" | "$PY_OR_PYTHON" -c 'import sys,json; print("runs" in json.load(sys.stdin))' 2>&1 | tr -d '\r')
 if [ "$got" = "$want" ] && [ "$has_runs" = False ]; then
-    ok "jobstats --runs: each run with start/end/rc, the error only for a failure, rc=75 plain, a BEGIN without END running (rc -1), older than the window left out, absent without --runs"
+    ok "jobstats --runs: each run with start/end/rc, the error only for a failure, rc=75 plain, a BEGIN without END running (rc -1) or, with no live zfs-job.sh of that label, interrupted (rc -2, U167), older than the window left out, absent without --runs"
 else
     bad "jobstats --runs" "$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$got"))" "without --runs: runs present=$has_runs" "$(cat "$JS/err")"
 fi
