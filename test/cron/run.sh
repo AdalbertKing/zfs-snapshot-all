@@ -1698,7 +1698,6 @@ check "PRG4 control: without on_insert there is no '#on-insert' copy, without me
 # stayed behind. The rendered bracket itself is run under /bin/sh with stub scripts in
 # place of /R/*: the engine stand-in sleeps, the group is killed, and detach must still
 # be called, told the engine's 143. Control: the same body without its trap.
-u182_body=$(printf '%s\n' "$fo" | grep '^30 2 .*replica copy (pv)' | head -1 | sed "s|.*/bin/sh -c '\(.*\)'\$|\1|")
 u182() {   # <body> -> what the gate stub logged
     local d; d=$(mktemp -d)
     local n
@@ -1719,6 +1718,19 @@ u182() {   # <body> -> what the gate stub logged
     grep -o 'detach .*--engine-rc [0-9]*' "$d/gate.log" 2>/dev/null | sed 's/.*--engine-rc /detach rc=/'
     rm -rf "$d"
 }
+# U183: attach sizes a first copy by the whole source tree only when the replica is
+# recursive -- so the flag has to reach the rendered line (R1), and only then.
+pv_conf "	media    = removable" "	recursive = yes"
+fo=$(for_run)
+u183_r=$(printf '%s\n' "$fo" | grep '^30 2 .*replica copy (pv)' | grep -o 'attach [^;]*' | grep -c -- ' --recursive')
+pv_conf "	media    = removable" "	recursive = no"
+fo2=$(for_run)
+u183_n=$(printf '%s\n' "$fo2" | grep '^30 2 .*replica copy (pv)' | grep -o 'attach [^;]*' | grep -c -- ' --recursive')
+check "U183 a recursive replica's attach carries --recursive; control: recursive = no does not" "1:0" "$u183_r:$u183_n"
+pv_conf "	media    = removable" "	media_guids = 111,222
+	on_insert = yes"
+fo=$(for_run)
+u182_body=$(printf '%s\n' "$fo" | grep '^30 2 .*replica copy (pv)' | head -1 | sed "s|.*/bin/sh -c '\(.*\)'\$|\1|")
 if command -v setsid >/dev/null 2>&1 && command -v pgrep >/dev/null 2>&1 && [ -n "$u182_body" ]; then
     check "U182 a replica run killed as a group still detaches, told the engine's 143; control: no trap, no detach" \
           "detach rc=143|" \

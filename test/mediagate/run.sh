@@ -109,6 +109,13 @@ case "$*" in
   # W19b: an encrypted medium. KEYSTATUS is what the dataset reports before
   # load-key (unset = not encrypted, "-"); KEY_LOADS=1 makes load-key succeed,
   # after which keystatus reads "available" from $KEY_STATE.
+  # U183: sizes for the first-copy space check. Unset = no output (the gate skips the check).
+  *"get -H -p -o value used "*)
+      [ -n "${SRC_USED:-}" ] && echo "$SRC_USED"; exit 0 ;;
+  *"get -H -p -o value usedbydataset,usedbysnapshots "*)
+      [ -n "${SRC_UDS:-}" ] && printf '%s\n%s\n' "$SRC_UDS" "${SRC_USN:-0}"; exit 0 ;;
+  *"get -H -p -o value available "*)
+      [ -n "${MED_AVAIL:-}" ] && echo "$MED_AVAIL"; exit 0 ;;
   *"get -H -o value keystatus"*)
       if [ -n "${KEY_STATE:-}" ] && [ -s "$KEY_STATE" ]; then cat "$KEY_STATE"; else echo "${KEYSTATUS:--}"; fi; exit 0 ;;
   *"get -H -o value encryptionroot"*)
@@ -1382,6 +1389,37 @@ mkdir -p "$TMPD/nolib" && cp "$GATE" "$TMPD/nolib/zfs-media-gate.sh"
 out="$(PATH="$BIN:$PATH" MEDIA_STATE_DIR="$STATE" bash "$TMPD/nolib/zfs-media-gate.sh" status rotpool rep 2>&1)"; rc=$?
 check "USBQ10: a gate without lib-backup-common.sh beside it refuses with rc 2" "2" "$rc"
 has "cannot read" "$out" && has "lib-backup-common.sh" "$out" && ok "USBQ11: ...and names the missing library" || bad "USBQ11: ...and names the missing library" "$out"
+
+# U183 (Site-A 2026-11-09): a first copy that cannot fit is refused before the engine
+# starts -- rc 2 with both numbers, the medium exported. Passive (--prefix -) so the
+# quiet check does not decide first. rotpool/replica exists; rotpool/replica/tank/src
+# does not (first copy) unless FIRST=no.
+u183() {   # <recursive 0/1> ; env SRC_USED SRC_UDS SRC_USN MED_AVAIL FIRST
+    rm -f "$STATE/rep.imported-by-us" "$STATE/rep.running"
+    POOLS="hdd"; IMPORTABLE="rotpool"; : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
+    DATASETS="hdd rotpool/replica tank/src"
+    [ "${FIRST:-yes}" = no ] && DATASETS="$DATASETS rotpool/replica/tank/src"
+    export SRC_USED SRC_UDS SRC_USN MED_AVAIL
+    out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix - $([ "$1" = 1 ] && echo --recursive))"; rc=$?
+    POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+}
+SRC_USED=1000000000; SRC_UDS=""; MED_AVAIL=500000000; FIRST=yes; u183 1
+if [ "$rc" = 2 ] && has "REFUSING: the first copy of tank/src needs about" "$out" && has "has 477M free" "$out" \
+   && grep -qx rotpool "$EXPORTED_LOG"; then
+    ok "U183a: recursive first copy bigger than the medium's free space -- refused rc 2 with both sizes, medium exported"
+else
+    bad "U183a: too small refused" "rc=$rc" "exported: $(cat "$EXPORTED_LOG")" "$out"
+fi
+MED_AVAIL=5000000000; u183 1
+check "U183b: control -- the same copy with room enough is let through" "0" "$rc"
+SRC_UDS=300000000; SRC_USN=100000000; MED_AVAIL=500000000; u183 0
+check "U183c: not recursive -- sized by that dataset (400M of a 1G tree) and let through" "0" "$rc"
+SRC_UDS=""; MED_AVAIL=1; FIRST=no; u183 1
+check "U183d: the copy already on the medium is no first copy -- not sized, let through" "0" "$rc"
+SRC_USED=""; SRC_UDS=""; MED_AVAIL=""; FIRST=yes; u183 1
+check "U183e: sizes unreadable -- the check is skipped, not guessed" "0" "$rc"
+unset SRC_USED SRC_UDS SRC_USN MED_AVAIL FIRST
+DATASETS="hdd rotpool/replica tank/src tank/src/a"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

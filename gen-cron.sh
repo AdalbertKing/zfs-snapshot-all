@@ -4075,8 +4075,8 @@ sh_subshell() {   # <body without the parentheses> -> /bin/sh -c '( body )'
     printf "/bin/sh -c '( %s )'" "$1"
 }
 
-media_bracket() {   # <media field> <target path> <label> <command> [source[,source...]] [prefix] [cmd_captures_status] [guids]
-    local media="$1" target="$2" label="$3" cmd="$4" src="${5:-}" pref="${6:-}" caps="${7:-0}" guids="${8:-}"
+media_bracket() {   # <media field> <target path> <label> <command> [source[,source...]] [prefix] [cmd_captures_status] [guids] [recursive 1/0]
+    local media="$1" target="$2" label="$3" cmd="$4" src="${5:-}" pref="${6:-}" caps="${7:-0}" guids="${8:-}" rec="${9:-0}"
     [ "$media" = removable ] || { printf '%s' "$cmd"; return 0; }
     [ -n "$target" ] || { printf '%s' "$cmd"; return 0; }
     local pool="${target%%/*}"
@@ -4101,6 +4101,8 @@ media_bracket() {   # <media field> <target path> <label> <command> [source[,sou
     # measured against cron's 1000 bytes.
     local attopt="$srcopt"
     [ -n "$guids" ] && attopt="$attopt --guids $guids"
+    # U183: attach sizes a first copy by the whole source tree only for a recursive replica.
+    [ "$rec" = 1 ] && [ -n "$srcopt" ] && attopt="$attopt --recursive"
     # The caller may already have captured the engine status into $m -- a
     # replica with several sources folds N statuses into one, and only it knows
     # how. Everything else hands over a plain command and this adds the capture.
@@ -4615,7 +4617,7 @@ emit_replicas() {
             elif [ "$media" = removable ]; then
                 cmd="$cmd; m=\$?"
             fi
-            cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$fam" 1 "$guids")"
+            cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$fam" 1 "$guids" "$recursive")"
         else
             # A LOOP, not the engine call repeated. Same reason as the comma
             # list above: cron refuses a command over 1000 bytes, and repeating
@@ -4638,7 +4640,7 @@ emit_replicas() {
                 cmd="m=0; for s in${quoted}; do $one; r=\$?; [ \$m -eq 0 ] && m=\$r; done"
             fi
             if [ "$media" = removable ]; then
-                cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$fam" 1 "$guids")"
+                cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$fam" 1 "$guids" "$recursive")"
             else
                 # NO BRACKET, so nothing else would carry the folded status out:
                 # the line's rc would be that of the last `[ $m -eq 0 ]` test,

@@ -89,6 +89,7 @@ EOF
 # passed straight through to `zpool import -d`.
 VERB=""; POOL=""; LABEL=""; DATASET=""; STATS=""; QUIET=0; _own=0; _erc=0; _fm=""
 _skip=no; _rec_guid=""; _rec_snap=""; _now_guid=""; _new_snap=""; _src=""
+RECURSIVE=0; _need=0; _new=""; _ok=""; _b=""; _free=""
 SOURCE=""; PREFIX=""; ENGINE_RC=""; AGE_WARN=""; AGE_CRIT=""
 # --prefix - : ANY snapshot (a passive replica, which takes none of its own and
 # carries every family already there -- owner note 20, 2026-10-08). PREFIX is
@@ -142,6 +143,7 @@ while [ "$#" -gt 0 ]; do
         # line (attach and detach), is 18 bytes per source spent on nothing.
         # Measured on pve9 2026-08-30 -- the one-source replica line was
         # already 934 characters.
+        --recursive)  RECURSIVE=1; shift ;;
         --source)     _msrc_add "${2:-}"; shift 2 ;;
         --source=*)   _msrc_add "${1#--source=}"; shift ;;
         --engine-rc)   ENGINE_RC="${2:-}"; shift 2 ;;
@@ -839,6 +841,38 @@ EOF
             fi
             emit lineage_mismatch; exit 2
         done
+    fi
+
+    # U183 (Site-A 2026-11-09): a first copy started onto a disk far too small for its
+    # sources and ran until the owner killed it. Before the engine starts, a source with
+    # no copy on this medium yet is a full send: about its `used` (the whole tree with
+    # snapshots, for a recursive replica) or `usedbydataset + usedbysnapshots` (that one
+    # dataset), compressed on the wire as on disk. If the sum exceeds what the medium
+    # has free, refuse with both numbers -- rc 2, an alert -- and put the disk away.
+    # Unreadable numbers skip the check rather than block a copy on a guess.
+    if [ "${#SOURCES[@]}" -gt 0 ] && [ -n "$DATASET" ]; then
+        _need=0; _new=""; _ok=yes
+        for _src in "${SOURCES[@]}"; do
+            zfs list -H -o name "$DATASET/$_src" >/dev/null 2>&1 && continue
+            if [ "$RECURSIVE" = 1 ]; then
+                _b="$(zfs get -H -p -o value used "$_src" 2>/dev/null)"
+            else
+                _b="$(zfs get -H -p -o value usedbydataset,usedbysnapshots "$_src" 2>/dev/null | awk '{s += $1} END {if (NR == 2) printf "%d", s}')"
+            fi
+            case "$_b" in ''|*[!0-9]*) _ok=no; break ;; esac
+            _need=$(( _need + _b )); _new="$_new $_src"
+        done
+        _free="$(zfs get -H -p -o value available "$DATASET" 2>/dev/null)"
+        case "$_free" in ''|*[!0-9]*) _ok=no ;; esac
+        if [ "$_ok" = yes ] && [ -n "$_new" ] && [ "$_need" -gt "$_free" ]; then
+            say "REFUSING: the first copy of$_new needs about $(numfmt --to=iec "$_need" 2>/dev/null || echo "$_need bytes") (zfs used on the source$([ "$RECURSIVE" = 1 ] && echo ", whole tree")), and '$DATASET' has $(numfmt --to=iec "$_free" 2>/dev/null || echo "$_free bytes") free. It cannot fit; not starting it. Use a bigger disk, or fewer sources for this replica."
+            if bounded_export >/dev/null 2>&1; then
+                rm -f "$OURS" 2>/dev/null || :
+            else
+                say "DO NOT UNPLUG '$POOL': the refusal above stands, but exporting the pool afterwards did not succeed, so it is STILL IMPORTED. The ownership marker is kept so this run's detach can export it; pulling the disk now can hang this host."
+            fi
+            emit medium_too_small; exit 2
+        fi
     fi
 
     say "imported '$POOL' for '$LABEL' -- this run will export it again when it is done."
