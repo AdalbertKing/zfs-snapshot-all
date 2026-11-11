@@ -18051,7 +18051,7 @@ cmd_job_stats() {
             # U167 (owner 2026-11-09): a stopped copy writes no END, and F2 showed it running for
             # good. An open start whose label no live zfs-job.sh process carries is INTERRUPTED,
             # rc -2. The BEGIN line has no pid (its format is a contract), the process list does.
-            if printf '%s\n' "$rl_rows" | grep -q "$(printf '\t')-1$(printf '\t')-\$"; then
+            if printf '%s\n' "$rl_rows" | grep_q "$(printf '\t')-1$(printf '\t')-\$"; then
                 local _live; _live=$(job_live_args) && rl_rows=$(printf '%s\n' "$rl_rows" | _JL="$_live" awk -F'\t' -v OFS='\t' '
                     BEGIN { n = split(ENVIRON["_JL"], a, "\n")
                             # a row label starts after the host word (label() above, field 5 on)
