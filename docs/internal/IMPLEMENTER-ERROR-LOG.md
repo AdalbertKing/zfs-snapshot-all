@@ -160,7 +160,7 @@ Owner, 2026-11-06 ("100 linii kodu i 3 godziny -- niedopuszczalne"). Order, no l
 3. Only then: text-checker on the response, a single commit for the response, views and
    status, `reviewctl --generate` / `impact.sh --refresh-status` / `--verify` run on pve9 with
    `REVIEWCTL_PUBREF=HEAD`, not here (5+ min on this box). One push, one CI read.
-4. Code edits through the Edit tool only; never a Python/heredoc patch with a backslash in it (E53, E122).
+4. Code edits through the Edit tool only; never a Python/heredoc patch or sed replacement with a backslash in it (E53, E122, E124, E128).
 
 A guard in front of an irreversible step refuses on its own failure, and a value
 written into a cron line is checked against a whitelist of characters, from the first
@@ -2111,6 +2111,20 @@ that habit was carried onto a window with a different default.
 
 *Rule.* R14, unchanged: Esc out of a destructive window; `capture-pane -e` before Enter.
 A repeat under an existing rule, so it is evidence for R14, not a new rule.
+
+### E128 — the heredoc ate the backslashes three more times (2026-11-11, R16 point 4, repeat of E124)
+**2026-11-11, batch 1.0.18 (`batch/gui-1-0-18`).**
+
+*Genesis.* Three Python patches inside Bash heredocs carried `\n` / `\t` / `\\"`: the U172
+test fixture in `test/alertmail/run.sh` came out with real newlines in `printf` formats, the
+L1 test patch asserted on text that no longer matched, and a `sed` replacement split a line
+of `test/tui/run.sh`. Each was caught by `bash -n` or the cut-out run before a commit, and
+redone with the Edit tool; no push carried it.
+
+*Cause.* R16 point 4 again: "only a test line", "only a sed".
+
+*Rule.* R16 point 4, widened in this batch to name `sed` replacement text as well. Evidence
+for an existing rule, not a new one.
 
 ### E120 — the full battery three times inside one REV round (2026-11-05, CLAUDE.md "Batches, not rounds")
 **2026-11-05, REV-20261104-186 round 3, PR #1077.**

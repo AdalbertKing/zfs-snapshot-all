@@ -20,6 +20,19 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Paczka GUI 1.0.18 (2026-11-11, NIEWYDANE, gałąź `batch/gui-1-0-18`).** U166–U188 poza U181(b):
+  F2 malejąco z łączeniem biegów jednej minuty i „PADŁ k/n” (U166/U171), F4 „kopia trwa” /
+  „przerwana, wznowi się” (U170), F6 bieg w toku, zajętość nośnika i „kopia za ~N s” po
+  podłączeniu (U174, U180, U186), tematy maili `[ZFS][REPORT]`/`[ZFS][WARNING]`/`[ZFS][ALERT]`
+  (U184), plan pierwszej kopii z rozmiarem i wolnym miejscem (U183), kopia pasywna za pvesr 10 min
+  po biegu repliki i progi + odstęp repliki (U181), strażnik przyrostu liczy źródła relacji „tylko
+  migawki” przez ssh, a host bez configu nie alarmuje (U172/U173), quiesce bez dysku gościa w
+  zakresie robi zwykłą migawkę zamiast `_crash_` z rc 8 (U188). Suity na pve9: tui 512/0,
+  mediagate 211/0, localbackup 185/0, alertmail 191/1, quiesce 268/0 (jako
+  konto `zfsbackup`), zfsbackup 6 FAIL — te same na `origin/main`. Lab pve11 na gałęzi (blokada
+  aktualizacji); na żywo potwierdzone U180, U174, U186, U170, U172 (`--plan` przez ssh do pve9).
+  Do decyzji: U189 (łączenie rozłożonych co minutę linii w F2); otwarte: U190, U181(b).
+
 - **Nazwa klienta w publicznym repo wydań (2026-11-07, NIEWYDANE).** zfsbackup od wydania `b6f040f`
   (2026-11-03) miał nazwę klienta w 13 komentarzach w 4 plikach; bramka w `release/publish.sh` jej
   nie znała. Gałąź `fix/scrub-customer-name`: komentarze bez nazwy, a bramka
@@ -85,7 +98,7 @@
   - **„Could not list ... (exit 1)” z 11-06:** to A21 na 1.0.11, naprawione w 1.0.12.
 - **Nazwa instalacji w temacie maili (2026-11-07, #1118; wydane w 1.0.13).** Prośba
   właściciela: „pve2” jest w kilku firmach. Nowe ustawienie `alerts.site` (F10). Z nim temat
-  zbiorczego maila i maila alertu (tryb „od razu”) brzmi `[ZFS] Site-A pve2 ...`, a nadawca
+  zbiorczego maila i maila alertu (tryb „od razu”) brzmi `[ZFS] Site-A pve2 ...` (od 1.0.18, U184, z rodzajem maila: `[ZFS][REPORT] Site-A pve2 ...`, `[ZFS][ALERT] Site-A pve2 ...`), a nadawca
   (gdy host ma sendmail) `zfs-backup Site-A pve2`. Bez niego temat ma pełną nazwę hosta zamiast samego `pve2`.
   Nazwy trzeba ustawić na każdym kolektorze; to zrobi właściciel albo ja za jego zgodą.
 - **REV-191 i REV-190 r2 (2026-11-07, #1117; wydane w 1.0.13).**
@@ -457,8 +470,8 @@
     treść i załącznik składa python3, wysyła `sendmail -t` jako „zfs-backup <host>”. Bez sendmail: treść
     ASCII przez `mail -s`, bez załącznika; bez python3 albo przy błędzie: dotychczasowy mail zadań
     (także `ZFS_DIGEST_LAYOUT=jobs`).
-  - Alert pojedynczy (`notify-fail.sh`, `notify-warn.sh`, tryb immediate): temat „[ZFS] host: relacja --
-    co się stało (kiedy)”, zdanie co to znaczy i co zrobić, dopisek, gdy monitor liczy wiek od utworzenia
+  - Alert pojedynczy (`notify-fail.sh`, `notify-warn.sh`, tryb immediate): temat „[ZFS][ALERT] host: relacja --
+    co się stało (kiedy)” (`notify-warn.sh`: `[ZFS][WARNING]`), zdanie co to znaczy i co zrobić, dopisek, gdy monitor liczy wiek od utworzenia
     datasetu (relacja bez startu relacji); treść wskazuje `cron.log` obok skryptu (konto albo root).
   - U159: rc=8 (bieg bez zamrożenia gościa) idzie z `zfs-job.sh` do `notify-warn`, nie do `notify-fail`;
     raport pokazuje „bez zamrożenia”. Przyczyn rc=8 jest kilka (konto bez dostępu do gości, agent gościa
