@@ -4,7 +4,7 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
-## [Unreleased]
+## [1.0.18] — 2026-11-11
 
 - **A replica disk that comes back after retention gets an increment again** (REV-20261111-B01):
   once the collector's retention had pruned the snapshot the disk holds, the media gate refused
