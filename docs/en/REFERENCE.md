@@ -1176,6 +1176,13 @@ the defaults above. The environment beating the file is what makes
 | `[capacity] guard`, `guard_at`, `guard_target`, `guard_min_keep` | `ZFS_GUARD*` (capacity guard) |
 | `[growth] alert`, `factor`, `min_mib`, `max_ratio_pct`, `days` | `ZFS_GROWTH_*` (growth guard) |
 
+The growth guard (`growth-guard.sh`, hourly from cron) watches the datasets of the retention
+lines (`delsnaps.sh`) in this host's configs. A remote entry of such a line (a "snapshots on
+the source only" relation: the collector takes and prunes the snapshots) is measured on the
+source over ssh, with the options that line connects with, under the collector's `[growth]`
+thresholds; the alarm subject names the source, the dataset and the relation. A host with no
+config of its own has nothing to watch: exit 0, no mail.
+
 `deploy.sh` writes `/etc/zfs-alert.conf` once with every key documented and never overwrites it,
 so a hand-edited mode survives every re-run and upgrade; a host provisioned before a key existed
 still accepts it, only the comment is missing.

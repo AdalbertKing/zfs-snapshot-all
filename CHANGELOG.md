@@ -10,6 +10,12 @@ when they change how the tool is used.
   `[ZFS][WARNING]` a warning, pool capacity or data growth (formerly `[ZFS CAPACITY]`,
   `[ZFS GROWTH]`), `[ZFS][ALERT]` a failed run. Mail rules matching `[ZFS]` keep working;
   rules matching `[ZFS CAPACITY]` or `[ZFS GROWTH]` need the new subject.
+- **The growth guard also watches sources of "snapshots on the source only" relations**
+  (U172): on the collector, `growth-guard.sh` reads the remote entries of its retention lines
+  and measures the source's increments over ssh with that line's own options (key, known
+  hosts, port), under the collector's `[growth]` thresholds; the alarm subject names the source,
+  the dataset and the relation. A host with no config of its own has nothing to watch: exit 0,
+  no mail (U173; it used to mail "the guard is not working" every hour).
 - **A passive local copy fed by pvesr runs after the replica brings the snapshot** (U181):
   `local-backup --passive` moves each tier's copy time to 10 minutes after the pvesr run that
   brings that tier's snapshot (a daily copy at 01:11 behind a `*/2:00` replica runs at 02:10),

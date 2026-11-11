@@ -1197,6 +1197,12 @@ powyższe wartości domyślne. To, że środowisko wygrywa z plikiem, sprawia, �
 | `[capacity] guard`, `guard_at`, `guard_target`, `guard_min_keep` | `ZFS_GUARD*` (strażnik pojemności) |
 | `[growth] alert`, `factor`, `min_mib`, `max_ratio_pct`, `days` | `ZFS_GROWTH_*` (strażnik przyrostu) |
 
+Strażnik przyrostu (`growth-guard.sh`, cron co godzinę) pilnuje datasetów z linii retencji
+(`delsnaps.sh`) configów tego hosta. Zdalny wpis takiej linii (relacja „tylko migawki na
+źródle”: migawki i retencję robi kolektor) jest liczony na źródle przez ssh, z tymi samymi
+opcjami, z którymi łączy się ta linia, i progami `[growth]` kolektora; temat alarmu podaje
+źródło, dataset i relację. Host bez własnego configu nie ma czego pilnować: kod 0, bez maila.
+
 `deploy.sh` zapisuje `/etc/zfs-alert.conf` jednorazowo, z opisem każdego klucza, i nigdy go nie
 nadpisuje, więc ręcznie edytowany tryb przeżywa każde ponowne uruchomienie i aktualizację; host
 wdrożony, zanim dany klucz istniał, nadal go przyjmuje — brakuje tylko komentarza.

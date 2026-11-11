@@ -2361,7 +2361,7 @@ GW_M=1048576
 gw_data() {   # <L ostatniego MiB> <C ostatniego MiB> [liczba przyrostow, domyslnie 5]
     local n="${3:-5}" i
     : > "$gw_dir/snaps"; : > "$gw_dir/sizes"
-    for ds in tank/d tank/off tank/x; do
+    for ds in ${GW_DSS:-tank/d tank/off tank/x}; do
         for i in $(seq 0 "$n"); do printf '%s@s%s\t%s\t%s\n' "$ds" "$i" "$((7000 + i))" "$((i * 3600))" >> "$gw_dir/snaps"; done
         for i in $(seq 1 "$n"); do
             if [ "$i" -eq "$n" ]; then L=$(($1 * GW_M)); C=$(($2 * GW_M)); else L=$((100 * GW_M)); C=$((50 * GW_M)); fi
@@ -2552,13 +2552,46 @@ if [ "$gw_rc" -eq 1 ] && grep -q "nie ufam $gw_dir/bin/gencron" "$gw_dir/mail" &
 else
     bad "growth-guard: zaufanie gen-cron" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
 fi
+# U173 (2026-11-09): zrodlo bez configu (migawki i retencje robi mu kolektor) -- strażnik nie
+# ma tu nic do pilnowania: kod 0, bez maila (wczesniej co godzine "strażnik nie dziala").
 mkdir -p "$gw_dir/pusty"
 GW_CONFDIR="$gw_dir/pusty" gw_run on; gw_rc=$?
-if [ "$gw_rc" -eq 1 ] && grep -q 'brak configu' "$gw_dir/mail" && gw_nosend; then
-    ok "growth-guard: brak configu hosta -- rc 1, alert, zadnych oszacowan"
+GW_CONFDIR="$gw_dir/pusty" gw_run on --plan; gw_prc=$?
+if [ "$gw_rc" -eq 0 ] && [ "$gw_prc" -eq 0 ] && [ ! -s "$gw_dir/mail" ] && gw_nosend && grep -q 'Brak naszych datasetów' "$gw_dir/out"; then
+    ok "growth-guard U173: brak configu hosta -- rc 0, bez alertu, --plan: brak naszych datasetow"
 else
-    bad "growth-guard: brak configu" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+    bad "growth-guard U173: brak configu" "rc=$gw_rc plan=$gw_prc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
 fi
+# U172 (wlasciciel 2026-11-09, wariant A): relacja "tylko migawki na zrodle" -- linia retencji
+# kolektora ma zdalny wpis. Strażnik liczy przyrost zrodla przez ssh z OPCJAMI TEJ LINII
+# (-K, -k, -p), tymi samymi progami; temat alarmu: zrodlo, dataset, relacja.
+cp "$gw_dir/cron/root" "$gw_dir/cron/root.u172"
+{
+    echo "# BEGIN zfs-backup-managed"
+    echo "21 * * * * $GW_J /r/delsnaps.sh -p 2222 -k /k/kh -K /k/id -L rel1 \"zfsbackup-pve1@pve0:rp/v\" \"automated_hourly\" -H24"
+    echo "# END zfs-backup-managed"
+} > "$gw_dir/cron/root"
+cat > "$gw_dir/bin/ssh" <<'SS'
+#!/bin/bash
+printf '%s\n' "$*" >> "$GW_DIR/ssh"
+uh="${@: -2:1}"; c="${@: -1}"
+echo "REMOTE $uh $c" >> "$GW_DIR/calls"
+eval "$c"
+SS
+chmod +x "$gw_dir/bin/ssh"
+printf 'tank/d\tlz4\ntank/off\toff\ntank/x\tlz4\nrp/v\tlz4\n' > "$gw_dir/ds"
+rm -f "$gw_dir/ssh"
+GW_DSS="rp/v" gw_data 2000 2000
+gw_run on; gw_rc=$?
+if [ "$gw_rc" -eq 1 ] && grep -q 'PODEJRZANY PRZYROST danych na źródle zfsbackup-pve1@pve0:rp/v (relacja rel1)' "$gw_dir/mail" \
+   && grep -q 'zfsbackup-pve1@pve0:rp/v (relacja rel1): przyrost 2000 MiB (do rp/v@s5)' "$gw_dir/mail" \
+   && grep -q -- "-o IdentitiesOnly=yes -i /k/id -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/k/kh -p 2222 .*BatchMode=yes.* zfsbackup-pve1@pve0 zfs 'send' '-nP' '-c' '-i' 'rp/v@s4' 'rp/v@s5'" "$gw_dir/ssh" \
+   && [ ! -s "$gw_dir/destroyed" ]; then
+    ok "growth-guard U172: zdalny wpis linii retencji -- przyrost zrodla liczony przez ssh z -K/-k/-p linii, alarm z temat: zrodlo, dataset, relacja"
+else
+    bad "growth-guard U172: zdalne zrodlo" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null | head -8)" "$(head -3 "$gw_dir/ssh" 2>/dev/null)"
+fi
+mv "$gw_dir/cron/root.u172" "$gw_dir/cron/root"; rm -f "$gw_dir/bin/ssh"
 gw_data 2000 2000
 GW_LOCK="$gw_dir/nie-ma/g.lock" gw_run on; gw_rc=$?
 if [ "$gw_rc" -eq 1 ] && [ ! -s "$gw_dir/calls" ] && grep -q 'strażnik przyrostu NIE działa' "$gw_dir/mail" && grep -q 'nie-ma/g.lock' "$gw_dir/mail"; then
