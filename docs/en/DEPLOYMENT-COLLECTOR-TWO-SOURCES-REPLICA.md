@@ -495,6 +495,12 @@ unclosed `zfs unallow` (an old manual grant), run the `zfs unallow -u <uid>
 and says so outright. None of these verbs deletes datasets or the copies on the
 medium: "unpairing ends the relationship, not the backup".
 
+`remove-replica --install` also removes the replica's state files in
+`/var/lib/zfs-snapshot-all/media/` (`<name>.current`, `.synced`, `.last-seen`, and the run
+records), so a new replica of the same name starts clean. A copy running at that moment is
+named in the plan and is not stopped: it runs to its end, exports the disk, and keeps its own
+run records until then.
+
 **The package does not delete the copies on the medium** — there is no separate verb
 for that. The disk is cleaned by formatting: in the GUI, change the replica ->
 "Dodaj dysk" (add disk).

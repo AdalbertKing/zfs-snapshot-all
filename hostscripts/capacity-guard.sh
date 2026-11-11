@@ -71,7 +71,7 @@ HOST="$(hostname -s 2>/dev/null || hostname)"
 say() { echo "$(date '+%Y-%m-%d %H:%M:%S') capacity-guard: $*"; }
 alert() {   # <temat> <treść>
     if [ -x "$NOTIFY" ]; then "$NOTIFY" "$1" "$2" 2>/dev/null && return 0; fi
-    command -v mail >/dev/null 2>&1 && printf '%s\n' "$2" | mail -s "[ZFS CAPACITY] $1" "${ZFS_ALERT_EMAIL:-root}" 2>/dev/null
+    command -v mail >/dev/null 2>&1 && printf '%s\n' "$2" | mail -s "[ZFS][WARNING] $1" "${ZFS_ALERT_EMAIL:-root}" 2>/dev/null
     return 0
 }
 

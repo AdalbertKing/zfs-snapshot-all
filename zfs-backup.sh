@@ -7134,7 +7134,12 @@ cmd_run_replicas() {
         # no import, no alert (a quick re-plug fires the rule again anyway).
         local wsec; wsec="$(insert_wait)"
         log "run-replicas: disk inserted${device:+ ($device)} -- waiting ${wsec}s before anything touches it"
+        # U180 (lab 2026-11-09): F6 said "disconnected / IN VAULT" through this wait. The
+        # wait is recorded (until when, per device); list-replicas turns it into insert_in.
+        local _iw="${MEDIA_STATE_DIR:-/var/lib/zfs-snapshot-all/media}/insert-wait.${device:-}"
+        [ -n "$device" ] && { printf '%s\n' "$(( $(date +%s) + wsec ))" > "$_iw"; } 2>/dev/null
         sleep "$wsec"
+        [ -n "$device" ] && rm -f "$_iw" 2>/dev/null
         if [ -n "$device" ]; then
             local dp="${REPLICA_DEV_DIR:-/dev}/$device" fst
             if ! [ -e "$dp" ]; then
@@ -8278,6 +8283,13 @@ media_sector_warning() {   # <whole-disk device>
     return 0
 }
 
+# media_scan_sees GUID -> 0 when a plain `zpool import` scan lists a pool with
+# this GUID (what the replica list and the gate will see), 1 otherwise.
+media_scan_sees() {
+    [ -n "$1" ] || return 1
+    zpool import 2>/dev/null | awk -v g="$1" '$1 == "id:" && $2 == g {f=1} END {exit !f}'
+}
+
 cmd_prepare_media() {
     local pool="" dev="" base="replica" yes=0 list=0 enc=0 a
     for a in "$@"; do
@@ -8331,7 +8343,7 @@ cmd_prepare_media() {
     if [ "$enc" -eq 1 ]; then
         echo "  2. zfs create -o encryption=aes-256-gcm -o keyformat=hex -o keylocation=file://$keyfile $pool/$base"
         echo "              -- ENCRYPTED: without the key nobody reads the disk; marks it as this replica's medium"
-        if [ "$keynew" -eq 1 ]; then echo "     key:     NEW, $keyfile (0600 root) -- shown once after formatting: write it down OFF this host"
+        if [ "$keynew" -eq 1 ]; then echo "     key:     NEW, $keyfile (0600 root) -- shown after formatting, and again any time on F6 (F8): write it down OFF this host"
         else echo "     key:     EXISTING $keyfile (the other disk of this pool uses it too)"; fi
     else
         echo "  2. zfs create $pool/$base   -- marks it as this replica's medium (NOT encrypted)"
@@ -8368,7 +8380,20 @@ cmd_prepare_media() {
     echo "guid=$(zpool get -H -o value guid "$pool" 2>/dev/null)"
     # The window shows the key once; it is the only copy that can leave this host.
     [ "$enc" -eq 1 ] && echo "key=$(cat "$keyfile" 2>/dev/null)" && echo "keyfile=$keyfile"
+    local _pguid; _pguid=$(zpool get -H -o value guid "$pool" 2>/dev/null)
     zpool export "$pool" || die "prepare-media: the medium is ready, but zpool export $pool failed -- export it manually before unplugging"
+    # U185 (Site-C 2026-11-10): right after the export a plain `zpool import`
+    # scan -- the one the replica list and the gate use -- did not show the new
+    # pool for over a minute, while `-d /dev/disk/by-id` did. A run in that
+    # window would have taken the disk for absent and skipped. So the disk is
+    # ready only when the plain scan shows THIS pool (by GUID): wait for udev,
+    # ask it once to re-read the disk, and say so plainly if it still does not.
+    media_scan_sees "$_pguid" || {
+        command -v udevadm >/dev/null 2>&1 && { udevadm settle --timeout=30 2>/dev/null; media_scan_sees "$_pguid" \
+            || { udevadm trigger --action=change "$real" 2>/dev/null; udevadm settle --timeout=30 2>/dev/null; }; }
+        media_scan_sees "$_pguid" \
+            || die "prepare-media: the medium is ready and exported, but a plain 'zpool import' does not list pool '$pool' (guid $_pguid) yet -- a replica run now would take the disk for absent. Check 'zpool import' and 'udevadm info $real' before relying on it."
+    }
     log "prepare-media: medium ready -- pool '$pool', marker $pool/$base$([ "$enc" -eq 1 ] && echo " ENCRYPTED (key $keyfile)"), failmode=continue, compression=zstd, exported. Use it as --dst=$pool/$base."
 }
 
@@ -8672,9 +8697,37 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
     elif zpool import 2>/dev/null | awk -v p="$pool" '$1=="pool:" && $2==p {found=1} END{exit !found}'; then
         # In the slot, just not imported. Saying "not here" about a disk the
         # operator can see would be the same falsehood the listing used to tell.
-        warn "medium '$pool' is in the slot but not imported, so '$dst' was not checked. The job imports it itself; if that dataset is not on it, the first run will refuse it as the wrong medium."
+        # U179(6): not for the disk this replica names by GUID -- the wizard has just
+        # formatted it with that very dataset, and the "!!!" was noise on its own work.
+        local _slot_ids; _slot_ids=$(zpool import 2>/dev/null | awk -v p="$pool" '$1=="pool:" {inp=($2==p)} inp && $1=="id:" {print $2}')
+        local _named=0 _i
+        for _i in $_slot_ids; do case " ${mguids[*]} " in *" $_i "*) _named=1 ;; esac; done
+        [ "$_named" -eq 1 ] \
+            || warn "medium '$pool' is in the slot but not imported, so '$dst' was not checked. The job imports it itself; if that dataset is not on it, the first run will refuse it as the wrong medium."
     else
         warn "medium '$pool' is not here, so '$dst' could not be checked. That is normal for a disk in a safe -- but if it was never prepared, the first run will refuse it as the wrong medium. Prepare it once: zpool create $pool <device> && zfs create $dst"
+    fi
+
+    # U183 (Site-A 2026-11-09): a first copy ran onto a disk far too small for it. Say its
+    # size here, next to the medium's free space when the pool is imported -- the wizard
+    # shows these lines before EXECUTE. Only sources with no copy on the medium yet (the
+    # gate refuses at attach with the same numbers, first_copy_bytes).
+    local _need=0 _new="" _nb _free=""
+    for _s2 in "${sources[@]}"; do
+        zfs list -H -o name "$dst/$_s2" >/dev/null 2>&1 && continue
+        _nb="$(first_copy_bytes "$rec" "$_s2")" || { _new=""; break; }
+        _need=$(( _need + _nb )); _new="$_new $_s2"
+    done
+    if [ -n "$_new" ]; then
+        zpool list -H -o name "$pool" >/dev/null 2>&1 && _free="$(zfs get -H -p -o value available "$dst" 2>/dev/null)"
+        case "$_free" in *[!0-9]*) _free="" ;; esac
+        if [ -z "$_free" ]; then
+            echo ">>> first copy:$_new -- about $(iec_bytes "$_need"); the medium's free space is checked when the copy starts"
+        elif [ "$_need" -gt "$_free" ]; then
+            warn "the first copy of$_new needs about $(iec_bytes "$_need") and '$dst' has $(iec_bytes "$_free") free. It cannot fit: the run will refuse to start it. Use a bigger disk, or fewer sources."
+        else
+            echo ">>> first copy:$_new -- about $(iec_bytes "$_need"), '$dst' has $(iec_bytes "$_free") free"
+        fi
     fi
 
     local resolver_user; resolver_user="$(cron_target_user)"
@@ -8764,10 +8817,11 @@ cmd_zfs_tree() {
         esac
     done
     [ "${#roots[@]}" -gt 0 ] || die "zfs-tree: name at least one dataset"
-    { zfs list -H -p -o name,type -r -t filesystem,volume -- "${roots[@]}" 2>/dev/null | sed 's/^/D\t/'
+    # U170: receive_resume_token -- a copy cut off mid-stream resumes from it (zfs recv -s).
+    { zfs list -H -p -o name,type,receive_resume_token -r -t filesystem,volume -- "${roots[@]}" 2>/dev/null | sed 's/^/D\t/'
       zfs list -H -p -o name,creation -r -t snapshot -- "${roots[@]}" 2>/dev/null | sed 's/^/S\t/'
     } | awk -F'\t' '
-        $1 == "D" { if (!($2 in typ)) ord[++n] = $2; typ[$2] = $3; next }
+        $1 == "D" { if (!($2 in typ)) ord[++n] = $2; typ[$2] = $3; if ($4 != "" && $4 != "-") rs[$2] = 1; next }
         $1 == "S" { i = index($2, "@"); d = substr($2, 1, i - 1); c[d]++; if ($3 + 0 > nw[d] + 0) nw[d] = $3
                     if (substr($2, i + 1, 11) == "__replicate") pv[d] = 1   # A17: a pvesr replica holds these
                     next }
@@ -8775,7 +8829,7 @@ cmd_zfs_tree() {
             printf "{\"datasets\":["
             for (i = 1; i <= n; i++) {
                 d = ord[i]
-                printf "%s{\"name\":\"%s\",\"type\":\"%s\",\"snapshots\":%d,\"newest\":%d,\"pvesr\":%s}", (i > 1 ? "," : ""), d, typ[d], c[d] + 0, nw[d] + 0, (d in pv ? "true" : "false")
+                printf "%s{\"name\":\"%s\",\"type\":\"%s\",\"snapshots\":%d,\"newest\":%d,\"pvesr\":%s,\"resume\":%s}", (i > 1 ? "," : ""), d, typ[d], c[d] + 0, nw[d] + 0, (d in pv ? "true" : "false"), (d in rs ? "true" : "false")
             }
             print "]}"
         }'
@@ -8924,6 +8978,29 @@ cmd_list_replicas() {
         # written on every recorded copy and on a "medium already current" skip -- the
         # same fact the age monitor reads (owner note 17: "w slocie" said nothing
         # about whether the copy on that disk is any good).
+        # U186 (owner 2026-11-10): how full the medium is, while its pool is imported.
+        # An exported pool in the slot has no figures without importing it, and the
+        # list never imports; then both fields stay empty.
+        # U174 (owner 2026-11-09): a copy running now, from the gate's run record (live pid);
+        # F6 showed the last finished run instead.
+        local rsince=""
+        [ -x "$gate" ] && rsince=$("$gate" running "$pool" "$name" 2>&1 | sed -n 's/.* running since \(.*\) (pid .*/\1/p')
+        # U180: a disk of this pool just inserted, its copy waiting (run-replicas --on-insert
+        # records the wait per device; the device's pool name by blkid, read-only).
+        local insin="" _iwf _iwu _iwl
+        if [ "$present" != here ] && [ -z "$rsince" ]; then
+            for _iwf in "${MEDIA_STATE_DIR:-/var/lib/zfs-snapshot-all/media}"/insert-wait.*; do
+                [ -f "$_iwf" ] || continue
+                _iwu="$(head -c 20 "$_iwf" 2>/dev/null | tr -cd 0-9)"
+                [ -n "$_iwu" ] && [ "$_iwu" -gt "$(date +%s)" ] || continue
+                _iwl="$(blkid -o value -s LABEL "${REPLICA_DEV_DIR:-/dev}/${_iwf##*/insert-wait.}" 2>/dev/null)"
+                [ "$_iwl" = "$pool" ] && { insin=$(( _iwu - $(date +%s) )); break; }
+            done
+        fi
+        local msize="" malloc=""
+        [ "$present" = "here" ] \
+            && IFS=' ' read -r msize malloc < <(zpool list -Hp -o size,alloc "$pool" 2>/dev/null | tr '\t' ' ')
+        case "$msize$malloc" in *[!0-9]*) msize=""; malloc="" ;; esac
         local lcur=""
         [ -e "/var/lib/zfs-snapshot-all/media/$name.current" ] \
             && lcur="$(date -r "/var/lib/zfs-snapshot-all/media/$name.current" '+%Y-%m-%d %H:%M' 2>/dev/null)"
@@ -8957,8 +9034,8 @@ JSRC
             # media_key (W19b): the key file of an encrypted medium, by the pool name of
             # dst -- known without the disk in the slot.
             local _mk="$MEDIA_KEY_DIR/${dst%%/*}.key"; [ -s "$_mk" ] || _mk=""
-            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"exclude_family":"%s","media_guids":"%s","on_insert":"%s","keep":"%s","raw":"%s","media_key":"%s"}' \
-                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$(json_escape "$_xfam")" "$mg" "${oi:-no}" "$kp" "${rw:-no}" "$_mk"
+            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"exclude_family":"%s","media_guids":"%s","on_insert":"%s","keep":"%s","raw":"%s","media_key":"%s","medium_size":"%s","medium_alloc":"%s","running_since":"%s","insert_in":"%s"}' \
+                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$(json_escape "$_xfam")" "$mg" "${oi:-no}" "$kp" "${rw:-no}" "$_mk" "$msize" "$malloc" "$rsince" "$insin"
         else
             printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
             [ -n "$last" ] && printf '%-14s   last seen: %s\n' "" "$last"
@@ -9168,6 +9245,18 @@ cmd_remove_replica() {
 
     local empties_schedule=0
     config_has_job_sections "$cand" || empties_schedule=1
+    # U169/U178 (owner 2026-11-09): the gate keeps state files per replica name; they go
+    # with the section. A copy running now is said, not stopped: it finishes and exports.
+    local _rdst _rpool _gate="$SCRIPT_DIR/zfs-media-gate.sh" _rrun=""
+    _rdst=$(awk -v want="[replica:$name]" '
+        $0 == want { in_s=1; next }  in_s && /^[[]/ { exit }
+        in_s { k=$1; sub(/=.*/, "", k); gsub(/[ \t]/, "", k); if (k == "dst") { v=$0; sub(/^[^=]*=[ \t]*/, "", v); sub(/[ \t\r]+$/, "", v); print v; exit } }
+    ' "$config")
+    _rpool="${_rdst%%/*}"
+    if [ -n "$_rpool" ] && [ -x "$_gate" ]; then
+        _rrun=$("$_gate" running "$_rpool" "$name" 2>&1) || _rrun=""
+        [ -n "$_rrun" ] && echo "NOTE: ${_rrun#* - } Removing the replica does not stop it: it runs to its end and exports the disk."
+    fi
 
     if [ "$empties_schedule" -eq 1 ]; then
         echo
@@ -9204,6 +9293,9 @@ cmd_remove_replica() {
         atomic_replace_and_install "$config" "$cand" \
             || die "remove-replica: the install failed -- see above. The config and crontab were rolled back together."
     fi
+    if [ -n "$_rpool" ] && [ -x "$_gate" ]; then
+        "$_gate" forget "$_rpool" "$name" 2>&1 | sed 's/^[0-9-]* [0-9:]* - //' || :
+    fi
     log "replica '$name' removed from the schedule. The COPY on that medium was not touched -- it is still a copy; deleting it is a separate, deliberate act."
 }
 
@@ -9229,7 +9321,7 @@ pvesr_interval_s() {   # <schedule or ""> -> seconds, or nothing
 # Globals, not stdout: a $(...) call would lose PVESR_UNREAD in its subshell.
 pvesr_interval_for_roots() {   # <root>...
     local cfg="${PVE_REPLICATION_CFG:-/etc/pve/replication.cfg}" r id sc sec max=0 ids=""
-    PVESR_I=""; PVESR_IDS=""; PVESR_UNREAD=""
+    PVESR_I=""; PVESR_IDS=""; PVESR_UNREAD=""; PVESR_SCS=()
     [ -r "$cfg" ] || return 0
     local -A have=()
     for r in "$@"; do
@@ -9242,6 +9334,9 @@ pvesr_interval_for_roots() {   # <root>...
         sec=$(pvesr_interval_s "$sc")
         if [ -z "$sec" ]; then PVESR_UNREAD+="${PVESR_UNREAD:+, }$id ($sc)"; continue; fi
         ids+="${ids:+ }$id"
+        local _s _dup=0
+        for _s in "${PVESR_SCS[@]}"; do [ "$_s" = "${sc//[[:space:]]/}" ] && _dup=1; done
+        [ "$_dup" -eq 1 ] || PVESR_SCS+=("${sc//[[:space:]]/}")
         [ "$sec" -gt "$max" ] && max="$sec"
     done < <(awk '
         /^[a-z]+:[ \t]*[0-9]+-[0-9]+/ { if (id != "") print id "\t" sc; id = $2; sub(/-.*/, "", id); sc = ""; next }
@@ -9256,6 +9351,35 @@ dur_seconds() {   # <N>m|<N>h|<N>d -> seconds (check-snap-age's grammar), or not
         *[0-9]h) [[ "${1%h}" =~ ^[0-9]+$ ]] && echo $(( 10#${1%h} * 3600 )) ;;
         *[0-9]d) [[ "${1%d}" =~ ^[0-9]+$ ]] && echo $(( 10#${1%d} * 86400 )) ;;
     esac
+}
+# U181 (Site-B 2026-11-08): does pvesr schedule <sc> (one of the forms pvesr_interval_s reads)
+# run at minute-of-day <m>? '' = pvesr's default */15.
+pvesr_runs_at() {   # <sc> <minute of day 0..1439>
+    local sc="$1" h=$(( $2 / 60 )) m=$(( $2 % 60 )) x
+    case "$sc" in
+        '') [ $(( m % 15 )) -eq 0 ] ;;
+        \*/*:*) x="${sc#*/}"; [ $(( h % 10#${x%%:*} )) -eq 0 ] && [ "$m" -eq $(( 10#${x#*:} )) ] ;;
+        \*/*) [ $(( m % 10#${sc#*/} )) -eq 0 ] ;;
+        \*:*) [ "$m" -eq $(( 10#${sc#*:} )) ] ;;
+        *:*) [ "$h" -eq $(( 10#${sc%%:*} )) ] && [ "$m" -eq $(( 10#${sc#*:} )) ] ;;
+        *) return 1 ;;
+    esac
+}
+# The copy of a tier fed by pvesr: the first minute, counted from <m> - margin, at which every
+# replica schedule has run, plus the margin (pvesr takes time). -> minute of day, may be >= 1440
+# (the next day). A copy at 02:02 behind a */2:00 replica: the 02:00 run brought what the
+# snapshot at 01:34 made -> 02:10. At 03:12: the next run is 04:00 -> 04:10 (it was 03:12, a
+# week late for the weekly family).
+PVESR_MARGIN_MIN=10
+pvesr_copy_minute() {   # <minute of day> <schedule>...
+    local m0=$(( $1 - PVESR_MARGIN_MIN )) sc t best=""
+    shift
+    for sc in "$@"; do
+        t="$m0"
+        while [ "$t" -lt $(( m0 + 2880 )) ] && ! pvesr_runs_at "$sc" $(( (t + 2880) % 1440 )); do t=$(( t + 1 )); done
+        { [ -z "$best" ] || [ "$t" -gt "$best" ]; } && best="$t"
+    done
+    echo $(( best + PVESR_MARGIN_MIN ))
 }
 seconds_dur() {   # seconds -> the shortest exact <N>d|<N>h|<N>m
     if [ $(( $1 % 86400 )) -eq 0 ] && [ "$1" -ge 172800 ]; then echo "$(( $1 / 86400 ))d"
@@ -10080,18 +10204,47 @@ Taking over older jobs (a v4 config written manually): remove their sections fir
                 _c=$(rb_get "$_t" "$_sd" monitor_crit) || continue
                 _ws=$(dur_seconds "$_w"); _cs=$(dur_seconds "$_c")
                 [ -n "$_ws" ] && [ -n "$_cs" ] || continue
-                _nw="$_w"; _nc="$_c"
-                [ "$_ws" -lt $(( 2 * _pvi )) ] && _nw=$(seconds_dur $(( 2 * _pvi )))
-                [ "$_cs" -lt $(( 3 * _pvi )) ] && _nc=$(seconds_dur $(( 3 * _pvi )))
+                # U181 (a) (Site-B 2026-11-10): a snapshot reaches this host one replica
+                # interval late -- the template's threshold plus that interval, and never
+                # below 2x/3x of it.
+                _ws=$(( _ws + _pvi )); _cs=$(( _cs + _pvi ))
+                [ "$_ws" -lt $(( 2 * _pvi )) ] && _ws=$(( 2 * _pvi ))
+                [ "$_cs" -lt $(( 3 * _pvi )) ] && _cs=$(( 3 * _pvi ))
+                _nw=$(seconds_dur "$_ws"); _nc=$(seconds_dur "$_cs")
                 [ "$_nw $_nc" = "$_w $_c" ] && continue
                 rb_set "$_t" "$_sd" monitor_warn "$_nw"; rb_set "$_t" "$_sd" monitor_crit "$_nc"
                 _pvch+=("$_t ($_sd): $_w/$_c -> $_nw/$_nc")
             done; done
-            if [ "${#_pvch[@]}" -gt 0 ]; then
+            # U181 (Site-B 2026-11-08): the weekly copy ran at 03:12, the weekly snapshot (02:44
+            # on the replica's source) arrived with the 04:00 run -- every weekly copy a week
+            # late. A copy at a fixed hour goes right after the replica run that brings what
+            # was due by then (pvesr_copy_minute); hourly copies (hour '*') are left alone,
+            # the threshold above covers them. Day of week / month moves with a midnight wrap.
+            local _ss _cm _nm _f1 _f2 _f3 _f4 _f5 _d _schg=()
+            for _t in "${RB_TIERS[@]}"; do
+                _ss=$(rb_get "$_t" target send_schedule) || continue
+                read -r _f1 _f2 _f3 _f4 _f5 <<<"$_ss"
+                case "$_f1/$_f2" in *[!0-9/]*|/*|*/) continue ;; esac
+                _cm=$(( 10#$_f2 * 60 + 10#$_f1 ))
+                _nm=$(pvesr_copy_minute "$_cm" "${PVESR_SCS[@]}")
+                [ "$_nm" -eq "$_cm" ] && continue
+                _d=0; [ "$_nm" -ge 1440 ] && { _d=1; _nm=$(( _nm - 1440 )); }
+                if [ "$_d" -eq 1 ]; then
+                    case "$_f5" in '*') ;; [0-6]) _f5=$(( (_f5 + 1) % 7 )) ;; *) continue ;; esac
+                    case "$_f3" in '*') ;; [1-9]|1[0-9]|2[0-7]) _f3=$(( _f3 + 1 )) ;; *) continue ;; esac
+                fi
+                rb_set "$_t" target send_schedule "$(( _nm % 60 )) $(( _nm / 60 )) $_f3 $_f4 $_f5"
+                _schg+=("$_t: $_ss -> $(( _nm % 60 )) $(( _nm / 60 )) $_f3 $_f4 $_f5")
+            done
+            if [ "${#_pvch[@]}" -gt 0 ] || [ "${#_schg[@]}" -gt 0 ]; then
                 relblock_write "$cand" "$lb_name" || die "local-backup: could not write the [relation:$lb_name] block of the candidate"
             fi
-            echo "  Archive monitor:  fed by pvesr every $(seconds_dur "$_pvi") (guests $_pvids) -- thresholds at least 2x/3x that:"
+            echo "  Archive monitor:  fed by pvesr every $(seconds_dur "$_pvi") (guests $_pvids) -- thresholds plus that, at least 2x/3x of it:"
             if [ "${#_pvch[@]}" -gt 0 ]; then printf '                    %s\n' "${_pvch[@]}"; else echo "                    the template's already are"; fi
+            if [ "${#_schg[@]}" -gt 0 ]; then
+                echo "  Copy times:       right after the pvesr run that brings the snapshot (+${PVESR_MARGIN_MIN} min):"
+                printf '                    %s\n' "${_schg[@]}"
+            fi
         fi
         [ -n "${PVESR_UNREAD:-}" ] && echo "  Archive monitor:  pvesr schedule not read for guest(s) $PVESR_UNREAD -- the template's thresholds stay; check them against the replica"
     fi
@@ -15510,7 +15663,7 @@ cmd_list_datasets() {
     # The wizard asks "who makes these -- another collector, or nobody (leftovers)?"
     # and shows its age as the one fact the admin decides on. A listing without the
     # creation column (old peer output) counts as before and reports 0.
-    local -A own_n=() own_f=() own_e=()
+    local -A own_n=() own_f=() own_e=() own_t=()
     if [ "$own" -eq 1 ]; then
         local snaps _s _d _c
         rc=0
@@ -15526,6 +15679,8 @@ cmd_list_datasets() {
         while IFS=$'\t' read -r _s _c; do
             case "$_s" in *@*) ;; *) continue ;; esac
             _d="${_s%%@*}"
+            # U175: every snapshot, reserved families too -- the replica picker shows the count.
+            own_t[$_d]=$(( ${own_t[$_d]:-0} + 1 ))
             case "${_s#*@}" in vzdump*|__replicate_*|__migration__*) continue ;; esac
             own_n[$_d]=$(( ${own_n[$_d]:-0} + 1 ))
             # Our FAMILY alone (the wizard's chain check for a backup, owner 2026-10-20):
@@ -15548,7 +15703,7 @@ SN
         [ "$first" -eq 1 ] || printf ','
         first=0
         printf '{"name":"%s","type":"%s","used":%s,"avail":%s' "$(json_escape "$_n")" "$(json_escape "$_t")" "${_u:-0}" "${_av:-0}"
-        [ "$own" -eq 1 ] && printf ',"own_snapshots":%s,"family_snapshots":%s,"family_newest":%s' "${own_n[$_n]:-0}" "${own_f[$_n]:-0}" "${own_e[$_n]:-0}"
+        [ "$own" -eq 1 ] && printf ',"own_snapshots":%s,"family_snapshots":%s,"family_newest":%s,"snapshots":%s' "${own_n[$_n]:-0}" "${own_f[$_n]:-0}" "${own_e[$_n]:-0}" "${own_t[$_n]:-0}"
         # W17: an encrypted source is offered the raw send (-w) by the wizard.
         printf ',"encryption":"%s"' "$(json_escape "${_enc:--}")"
         printf '}'
@@ -17667,6 +17822,17 @@ jobstats_cache_write() {   # <file> <content> -- best effort; a failure only lea
     return 0
 }
 
+# U167: every argument of every live zfs-job.sh process, one per line (its label is one of
+# them). Fails -- the caller then decides nothing -- when other users' processes cannot be
+# read (hidepid): an unseen process is not a dead one. JOB_PROC_ROOT is the test override.
+job_live_args() {
+    local pr="${JOB_PROC_ROOT:-/proc}" f
+    [ -n "$(tr -d '\0' < "$pr/1/cmdline" 2>/dev/null)" ] || return 1
+    for f in "$pr"/[0-9]*/cmdline; do
+        tr '\0' '\n' < "$f" 2>/dev/null | awk 'seen { print; next } /(^|\/)zfs-job\.sh$/ { seen = 1 }'
+    done
+    return 0
+}
 cmd_job_stats() {
     local as_json=0 days="${ZFS_DIGEST_DAYS:-7}" a vol_cache=0 runs_h=0
     for a in "$@"; do
@@ -17882,6 +18048,16 @@ cmd_job_stats() {
     # In progress: the newest open start, and only when no END of its line came after it --
     # a start a reboot killed stays on the stack and must not read as running for hours.
     END { for (l in sp) if (sp[l] > 0 && bt[l, sp[l]] >= since && !(bt[l, sp[l]] < lastend[l])) printf "%s\t%s\t-\t-1\t-\n", l, bt[l, sp[l]] }')
+            # U167 (owner 2026-11-09): a stopped copy writes no END, and F2 showed it running for
+            # good. An open start whose label no live zfs-job.sh process carries is INTERRUPTED,
+            # rc -2. The BEGIN line has no pid (its format is a contract), the process list does.
+            if printf '%s\n' "$rl_rows" | grep_q "$(printf '\t')-1$(printf '\t')-\$"; then
+                local _live; _live=$(job_live_args) && rl_rows=$(printf '%s\n' "$rl_rows" | _JL="$_live" awk -F'\t' -v OFS='\t' '
+                    BEGIN { n = split(ENVIRON["_JL"], a, "\n")
+                            # a row label starts after the host word (label() above, field 5 on)
+                            for (i = 1; i <= n; i++) { on[a[i]] = 1; x = a[i]; if (sub(/^[^ ]+ /, "", x)) on[x] = 1 } }
+                    $4 == "-1" && !($1 in on) { $4 = "-2" } { print }')
+            fi
         fi
     fi
     # Volume, the digest's way: `written` of every snapshot created since the

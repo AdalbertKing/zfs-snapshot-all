@@ -223,25 +223,63 @@ MEDIA_STATES = {
     "unknown":      ("?", 4, u"brama nośnika (zfs-media-gate.sh) nie odpowiedziała -- stan nieznany, nie 'brak'"),
 }
 
+NOSNIKI_REFRESH_MS = 15000
+
+
 def replica_type_word(r):
     """U99 (wlasciciel 2026-10-27): kolumna Typ -- nosnik staly to "wewnętrzny";
     wymienny: podłączony / odłączony (stany niepewne slowami bramy)."""
     if (r.get("media") or "") == "fixed":
         return _(u"wewnętrzny")
     p = r.get("present") or "unknown"
-    if p in ("here", "available"):
+    if p in ("here", "available") or insert_wait(r):
         return _(u"podłączony")
     if p == "away":
         return _(u"odłączony")
     return _(MEDIA_STATES.get(p, MEDIA_STATES["unknown"])[0])
 
 
+def medium_usage_pct(r):
+    """U186 (wlasciciel 2026-11-10): zajetosc nosnika w procentach, gdy jego pula jest
+    zaimportowana (list-replicas: medium_size/medium_alloc). Pusto, gdy nie wiadomo."""
+    try:
+        size, alloc = int(r.get("medium_size") or 0), int(r.get("medium_alloc") or 0)
+    except (TypeError, ValueError):
+        return u""
+    return u"%d%%" % (alloc * 100 // size) if size > 0 else u""
+
+
+def medium_usage_words(r):
+    pct = medium_usage_pct(r)
+    if not pct:
+        return u""
+    return _(u"zajęte %s (%s z %s)") % (pct, human_bytes(r.get("medium_alloc")), human_bytes(r.get("medium_size")))
+
+
+def insert_wait(r):
+    """U180 (lab 2026-11-09): dysk wlasnie wpiety, kopia czeka (replica.insert_wait) --
+    list-replicas: insert_in = sekundy do startu. Pusto, gdy nie czeka."""
+    try:
+        n = int(r.get("insert_in") or 0)
+    except (TypeError, ValueError):
+        return u""
+    return (_(u"dysk podłączony, kopia za ~%s") % fmt_dur(n)) if n > 0 else u""
+
+
 def media_state_line(r, st):
     """Stan nosnika w panelu repliki (uwaga 17, 2026-10-08). Dysk w maszynie mowi tez,
     czy kopia na nim jest aktualna -- "w slocie" samo nie mowilo nic o kopii."""
+    if insert_wait(r):
+        return insert_wait(r)
+    if r.get("running_since"):
+        # U174: kopia biegnie (rekord biegu bramy, zywy PID) -- nie ostatni zakonczony bieg.
+        u = medium_usage_words(r)
+        return u"%s -- %s%s" % (_(st[0]), _(u"kopia trwa od %s") % dshow(r["running_since"]), (u", " + u) if u else u"")
     if r.get("present") in ("available", "here"):
         lc = r.get("last_current") or ""
-        return u"%s -- %s" % (_(st[0]), (_(u"kopia aktualna z %s") % dshow(lc)) if lc else _(u"brak kopii"))
+        u = medium_usage_words(r)
+        return u"%s -- %s%s" % (_(st[0]), (_(u"kopia aktualna z %s") % dshow(lc)) if lc else _(u"brak kopii"),
+                                (u", " + u) if u else u"")
     return u"%s -- %s" % (_(st[0]), _(st[2]))
 
 
@@ -250,7 +288,7 @@ def media_state_line(r, st):
 COLOR_WORDS = [
     ("nie odpowiada", 4), ("bez monitora", 4), ("aktualne", 2), (u"spóźnione", 3),
     (" stare", 1), ("NIE TEN DYSK", 1), ("Podłączony", 3), ("W SEJFIE", 4), (" TU ", 2),
-    (u"BŁĄD", 1), ("w toku", 3), ("PAUZA", 3), ("NIEwdro", 1), ("nieczytelny", 1),
+    (u"BŁĄD", 1), ("PRZERWANY", 1), (u"PADŁ", 1), ("w toku", 3), ("PAUZA", 3), ("NIEwdro", 1), ("nieczytelny", 1),
     (u"błąd źródła", 1), (" OK ", 2), (" OK", 2),
 ]
 
@@ -715,11 +753,17 @@ def times_cell(last, avg, mx):
     return "/".join("-" if v < 0 else "%.1f" % (v / 3600.0) for v in vals) + "h"
 
 
-def job_cron_label(j):
+def job_cron_label(j, prune=None):
     """Etykieta zadania w cronie -- to, co zfs-job.sh dostaje w cudzyslowie --
-    BEZ pierwszego slowa (hosta), bo tak liczy ja digest (pola od 5.)."""
+    BEZ pierwszego slowa (hosta), bo tak liczy ja digest (pola od 5.).
+    prune: wiersz porzadkow (linia delsnaps); None = z rodzaju sekcji."""
     kind = j.get("section_kind", "")
-    want = ("snapsend.sh", "snapget.sh") if kind == "dataset" else ("delsnaps.sh",)
+    if prune is None:
+        prune = kind not in ("dataset", "snaponly")
+    # U176 (lab pve11 2026-11-09): migawka relacji snaponly to linia snapget -s, nie
+    # delsnaps -- F2/F3 nie mialy jej biegow; wiersz "lokalny prune" zlozony z kilku
+    # sekcji [dataset:] bral etykiete pobrania.
+    want = ("delsnaps.sh",) if prune else ("snapsend.sh", "snapget.sh")
     scope = j.get("scope", "")
     # The line quotes the scope OR the other end: a pull names its SOURCE
     # ("konto@host:dataset") and, for a mirror, no local path at all. Matching
@@ -728,6 +772,11 @@ def job_cron_label(j):
     # ct-201, and a refused pull of another dataset stayed "aktualne"
     # (measured 2026-10-08).
     ends = ['"%s"' % x for x in (scope, j.get("other_end") or "") if x]
+    # U176: the block carries a line per tier; the label's first word is the tier
+    # ("<tier> snapshot (...)", a snaponly line only its last "__" part). Every
+    # daily/weekly row took the hourly line's label and its runs.
+    tier = j.get("tier") or ""
+    tiers = {tier, tier.rsplit("__", 1)[-1]} - {""}
     cands = []
     for ln in j.get("cron_lines") or []:
         if not any(w in ln for w in want):
@@ -735,12 +784,13 @@ def job_cron_label(j):
         m = re.search(r'zfs-job\.sh "([^"]+)"', ln)
         if not m:
             continue
-        cands.append((any(e in ln for e in ends), m.group(1)))
+        parts = m.group(1).split(" ", 1)
+        lb = parts[1] if len(parts) > 1 else parts[0]
+        cands.append((any(e in ln for e in ends), lb.split(" ", 1)[0] in tiers, lb))
     if not cands:
         return ""
-    cands.sort(key=lambda c: 0 if c[0] else 1)
-    parts = cands[0][1].split(" ", 1)
-    return parts[1] if len(parts) > 1 else parts[0]
+    cands.sort(key=lambda c: (0 if c[0] else 1, 0 if c[1] else 1))
+    return cands[0][2]
 
 
 def job_stats_for(data, j, label):
@@ -1804,8 +1854,9 @@ def build_jobs(data, now):
         tier = j.get("tier", "")
         if "__" in tier:
             tier = tier.rsplit("__", 1)[-1]
-        # U143: wewnetrzny przedrostek zrodla relacji lokalnej (lsrc_) to nie nazwa szczebla.
-        tier = re.sub(r"^lsrc_", "", tier)
+        # U143: wewnetrzny przedrostek zrodla relacji lokalnej (lsrc_) to nie nazwa szczebla;
+        # L4 (lab pve11 2026-11-11): tak samo src_ retencji zrodla ("remote prune src_hourly").
+        tier = re.sub(r"^l?src_", "", tier)
         kind = j.get("section_kind", "")
         ret = j.get("retain") or j.get("keep") or ""
         # R4-4 (wlasciciel 2026-09-24): Zadanie to SAMO slowo; rodzina, retencja
@@ -2342,7 +2393,7 @@ def run_is_prune(it):
     return j.get("section_kind") == "prune" or u"prune" in (it.get("task") or u"")
 
 
-def build_runs(data, jobrows, now, show_done=True, grouped=False, past_h=PRZ_PAST_H):
+def build_runs(data, jobrows, now, show_done=True, grouped=False, past_h=PRZ_PAST_H, opened=(), one_ahead=False):
     """Wiersze PRZEBIEGOW: bieg = (zadanie, chwila). Zadania z jedna linia crona
     (jedna etykieta) ida razem -- pve2: subvol-103 i ROOT/pve-1 w jednym snapget,
     jeden bieg, nie dwa. Wiersze "now" (kreska) i "grp" (naglowek relacji) sa
@@ -2362,7 +2413,7 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False, past_h=PRZ_PAS
         else:
             parts = []
             for j in it.get("jobs") or [it["job"]]:
-                lb = it.get("clabel") if len(it.get("jobs") or [1]) == 1 else job_cron_label(j)
+                lb = it.get("clabel") if len(it.get("jobs") or [1]) == 1 else job_cron_label(j, run_is_prune(it))
                 parts.append((lb or "", j))
         for lbl, j in parts:
             key = (lbl, it.get("schedule") or "") if lbl else ("\0", id(it), id(j))
@@ -2413,21 +2464,26 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False, past_h=PRZ_PAS
         t, n = it0.get("next_epoch"), 0
         sched = it0.get("schedule") or ""
         # Z nadchodzacych prune tylko najblizszy (U112); transfery i migawki -- kazdy bieg.
+        # U166/U171 (wlasciciel 2026-11-09, makieta zaakceptowana): nadchodzace tylko z
+        # najblizszych PRZ_AHEAD_H -- dobowy bieg za 20 h nie wisi na gorze listy. F6 (zakladka
+        # biegow repliki) chce co najmniej jednego, choc kopia bywa za kilka dni (one_ahead).
         nmax = 1 if run_is_prune(it0) else 48
-        while t and n < nmax and (n == 0 or t <= now + PRZ_AHEAD_H * 3600):
+        while t and n < nmax and ((one_ahead and n == 0) or t <= now + PRZ_AHEAD_H * 3600):
             r = dict(base)
             r.update({"past": False, "at": t})
             out.append(r)
             n += 1
             t = cron_next(sched, t + 60) if it0.get("kind") == "job" else None
-        if n == 0:
+        if n == 0 and not t:
             r = dict(base)
             r.update({"past": False, "at": None})
             out.append(r)
-    key = lambda r: (r["at"] is None, r["at"] or 0)
+    out = runs_merge(out)
+    # U166: czas MALEJACO -- nadchodzace na gorze, najdawniejsze na dole; bez terminu na samej gorze.
+    key = lambda r: (r["at"] is not None, -(r["at"] or 0))
     if not grouped:
         out.sort(key=key)
-        return static + insert_now(out, now, show_done)
+        return static + insert_now(runs_open(out, opened), now, show_done)
     names = []
     for r in out:
         if r["name"] not in names:
@@ -2435,21 +2491,98 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False, past_h=PRZ_PAS
     res = []
     for nm in names:
         mine = sorted([r for r in out if r["name"] == nm], key=key)
+        flat = [q for r in mine for q in (r.get("agg") or [r])]
         bad = any(r["past"] and r.get("rc") not in (0, 75, -1, None) and not any(
-            q["past"] and q["at"] > r["at"] and q.get("rc") == 0 and q["item"] is r["item"] for q in mine) for r in mine)
+            q["past"] and q["at"] > r["at"] and q.get("rc") == 0 and q["item"] is r["item"] for q in flat) for r in flat)
         res.append({"kind": "grp", "name": nm, "bad": bad, "item": mine[0]["item"]})
-        res += insert_now(mine, now, show_done)
+        res += insert_now(runs_open(mine, opened), now, show_done)
     return static + res
 
 
+def run_rank(rc):
+    """Najgorszy wynik wiersza zbiorczego: blad > przerwany > biegnie > pominiety > OK."""
+    return {0: 0, 75: 1, None: 2, -1: 3, -2: 4}.get(rc, 5)
+
+
+def run_failed(r):
+    return bool(r.get("past")) and r.get("rc") not in (0, 75, -1, None)
+
+
+def run_dataset(j):
+    """Pelna sciezka datasetu zadania (zakres bez konta i hosta)."""
+    return (j.get("scope") or u"").rsplit(":", 1)[-1] or u"?"
+
+
+def runs_merge(rows):
+    """U171 (pve1 SITE-C 2026-11-09): trzy linie crona relacji o tej samej porze (snapget -s
+    na hdd/data, rpool/ROOT, rpool/data) daja JEDEN wiersz "3 datasety": wynik najgorszy,
+    czas najdluzszy, przy bledzie "PADŁ 1/3". Cron bez zmian -- kazda linia ma swoj wynik,
+    log i alarm; Enter rozwija wiersz na datasety. Klucz: relacja + czynnosc + szczebel +
+    minuta startu (bieg wykonany) albo terminu (nadchodzacy)."""
+    buckets, order = {}, []
+    for r in rows:
+        it = r["item"]
+        if it.get("kind") != "job" or r.get("at") is None:
+            order.append([r])
+            continue
+        t0 = r.get("start") if r.get("past") and r.get("start") else r["at"]
+        k = (r["name"], it.get("task") or u"", it.get("tier") or u"", run_is_prune(it), bool(r["past"]), int(t0 // 60))
+        if k in buckets:
+            buckets[k].append(r)
+        else:
+            buckets[k] = [r]
+            order.append(buckets[k])
+    out = []
+    for ms in order:
+        if len(ms) < 2:
+            out += ms
+            continue
+        ms = sorted(ms, key=lambda r: u",".join(run_dataset(j) for j in run_jobs(r)))
+        worst = max(ms, key=lambda r: run_rank(r.get("rc")))
+        agg = dict(ms[0])
+        items, jobs = [], []
+        for r in ms:
+            items += [x for x in r["items"] if all(x is not y for y in items)]
+            jobs += [j for j in run_jobs(r) if all(j is not y for y in jobs)]
+        agg.update({"agg": ms, "items": items, "jobs": jobs, "at": max(r["at"] for r in ms),
+                    "label": u"\0".join(sorted(r.get("label") or u"" for r in ms)),
+                    "agg_bad": len([r for r in ms if run_failed(r)]), "fold_n": None})
+        t0 = ms[0].get("start") if ms[0].get("past") and ms[0].get("start") else ms[0]["at"]
+        agg["agg_key"] = agg["label"] + u"\0%d" % (t0 // 60)   # stały, gdy bieg się kończy
+        if agg["past"]:
+            agg["rc"] = worst.get("rc")
+            agg["err"] = u"; ".join(u"%s: %s" % (u",".join(run_dataset(j) for j in run_jobs(r)), r.get("err") or r.get("rc"))
+                                    for r in ms if run_failed(r))
+            done = [r for r in ms if r.get("start") and r.get("end")]
+            if any(r.get("end") is None for r in ms) or not done:
+                agg["end"] = None
+            else:
+                lng = max(done, key=lambda r: r["end"] - r["start"])
+                agg["start"], agg["end"] = lng["start"], lng["end"]
+        out.append(agg)
+    return out
+
+
+def runs_open(rows, opened):
+    """Wiersz zbiorczy rozwiniety Enterem: pod nim jego biegi, po jednym na dataset."""
+    out = []
+    for r in rows:
+        if r.get("agg") and r["agg_key"] in opened:
+            out += [dict(r, open=True)] + [dict(q, child=True) for q in r["agg"]]
+        else:
+            out.append(r)
+    return out
+
+
 def insert_now(rows, now, show_done):
-    """Kreska "teraz" miedzy wykonanymi a nadchodzacymi (tylko gdy wykonane widac)."""
+    """Kreska "teraz" miedzy nadchodzacymi (nad nia) a wykonanymi (pod nia), tylko gdy
+    wykonane widac (U166: czas malejaco)."""
     if not show_done or not any(r["past"] for r in rows):
         return rows
     for i, r in enumerate(rows):
-        if not r["past"]:
+        if r["past"]:
             return rows[:i] + [{"kind": "now", "name": r["name"], "at": now}] + rows[i:]
-    return rows + [{"kind": "now", "name": rows[-1]["name"], "at": now}]
+    return rows
 
 
 def run_window_row(r):
@@ -2526,6 +2659,10 @@ def run_result(r):
     if not r.get("past"):
         return _(u"nadchodzący")
     rc = r.get("rc")
+    if r.get("agg_bad"):
+        return _(u"PADŁ %d/%d") % (r["agg_bad"], len(r["agg"]))
+    if rc == 0 and r.get("agg"):
+        return u"OK %d/%d" % (len(r["agg"]), len(r["agg"]))
     if rc == 0:
         # Zwiniety prune (U112): "xN" w WYNIKU, nie w Co -- przy 80 kolumnach Co znika
         # (prio tabeli), a wiersz "pve9 OK" nie mowil, ze to 12 biegow (kampania 2026-10-28).
@@ -2537,6 +2674,9 @@ def run_result(r):
         return _(u"pominięty")
     if rc == -1:
         return _(u"biegnie")
+    if rc == -2:
+        # U167: bez END, a procesu zfs-job tej linii juz nie ma (zatrzymany, zabity).
+        return _(u"PRZERWANY")
     return _(u"BŁĄD rc=%s") % rc
 
 
@@ -2769,7 +2909,7 @@ def rep_children(tab, r, data, now, ch, jobrows=None):
     nadchodzace (wlasciciel 2026-10-29, U130: "Wzór to okno jobs"). Zrodlo -> cel stoi
     w prawym panelu (grupa Co)."""
     bar = u"\u2500\u2500 " if not ch.ascii else u"-- "
-    rows = [x for x in build_runs(data, jobrows or [], now, True, False, past_h=PRZ_RUNS_H)
+    rows = [x for x in build_runs(data, jobrows or [], now, True, False, past_h=PRZ_RUNS_H, one_ahead=True)
             if x.get("kind") == "now" or (x.get("item") or {}).get("kind") == "replica"
             and (x["item"].get("replica") or {}).get("name") == r.get("name")]
     if not any(x.get("kind") == "run" for x in rows):
@@ -3077,9 +3217,18 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
             # hourly' o 07:15 -- vms i data -- byly nie do odroznienia); w grupie to robi Zadanie.
             co = (u"%s %s" % (it.get("task") or u"", u"" if grouped else job_id_cell(r["items"], r.get("jobs")))).strip() if it.get("kind") == "job" else \
                 (_(u"replika") if it.get("kind") == "replica" else (it.get("task") or u"-"))
+            if r.get("agg"):
+                # U171: wiersz zbiorczy -- znacznik rozwiniecia i liczba datasetow
+                mk = (u"v " if ch.ascii else u"▾ ") if r.get("open") else (u"> " if ch.ascii else u"▸ ")
+                co = mk + u"%s: %s" % (u" ".join(x for x in (it.get("task"), it.get("tier")) if x), plural(len(r["agg"]), _(u"dataset"), _(u"datasety"), _(u"datasetów")))
+            elif r.get("child"):
+                co = u"    " + u", ".join(run_dataset(j) for j in run_jobs(r))
             czas = fmt_dur(r["end"] - r["start"]) if r.get("past") and r.get("start") and r.get("end") else u"-"
-            when = run_when(r["at"])
+            when = u"" if r.get("child") else run_when(r["at"])
             rb = run_bytes(r, data)
+            if r.get("child"):
+                cells.append([(u"    %s " % bar) if grouped else u" ", u" ", co, run_result(r), czas, hbytes_short(rb) if rb is not None else u"-"])
+                continue
             cells.append([(u"    %s " % bar + when) if grouped and not r.get("static") else when,
                           job_id_cell(r["items"], r.get("jobs")) if grouped and not r.get("static") else r["name"],
                           co, run_result(r), czas, hbytes_short(rb) if rb is not None else u"-"])
@@ -3101,7 +3250,9 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
             one = dict(it)
             one["jobs"] = run_jobs(r)
             one["job"] = one["jobs"][0]
-            if r.get("label") and r["label"] != it.get("clabel"):
+            # U171: wiersz zbiorczy ma etykiety wszystkich swoich linii -- panel liczy jak
+            # zadanie (bledy, wyrzucone migawki ze wszystkich), nie po sklejonej etykiecie.
+            if r.get("label") and r["label"] != it.get("clabel") and not r.get("agg"):
                 # panel liczy przebiegi TEJ linii crona, nie pierwszej z wiersza zadania
                 srow, vol = job_stats_for(data, one["job"], r["label"])
                 one.update({"clabel": r["label"], "srow": srow, "srows": [srow] if srow else [], "vol": vol, "fails": [], "discards": []})
@@ -4584,8 +4735,9 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
     for r in reps:
         st = MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"])
         s = r.get("schedule") or "?"
-        cells.append([r.get("name") or "?", replica_type_word(r), dshow((r.get("last_current") or _(u"brak"))[:16]),
-                      replica_last_run(replica_stats_row(data, r.get("name")), data.failed("stats")),
+        cells.append([r.get("name") or "?", replica_type_word(r), medium_usage_pct(r), dshow((r.get("last_current") or _(u"brak"))[:16]),
+                      (_(u"kopia trwa od %s") % dshow(r["running_since"])) if r.get("running_since")
+                      else insert_wait(r) or replica_last_run(replica_stats_row(data, r.get("name")), data.failed("stats")),
                       _(u"po podłączeniu") if s == "on-insert" else cron_words(s) + (_(u" + po podłączeniu") if r.get("on_insert") == "yes" else "")])
     det_title, det, child = u"", [], None
     if reps and 0 <= cursor < len(reps):
@@ -4596,16 +4748,15 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
         ti = ti % len(tabs)
         child = rep_children(tabs[ti][0], r, data, now, ch, jobrows)
         child.update({"name": r.get("name"), "tabs": tabs, "ti": ti})
-    empty = [_(u"Brak sekcji [replica:] w configu tego kolektora."),
-             _(u"Brak skonfigurowanych replik dla tego kolektora"),
-             _(u"Ins dodaje ją w oknach; komendą wsadową: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA")]
+    # U179(3): one line -- the three said the same, and the command was cut off mid-way.
+    empty = [_(u"Na tym hoście nie ma jeszcze replik.")]
     if not reps:
         det_title = _(u"stany nośnika")
         det = [(_(MEDIA_STATES[k][0]), _(MEDIA_STATES[k][2])) for k in ("here", "available", "away", "wrong_medium")]
     return render_tabbed(data, width, height, now, ch, "nosniki", _(u"Repliki backupu kolektora (%d)") % len(reps),
-                         [_(u"Replika"), _(u"Typ"), _(u"Wykonana"), _(u"Ostatni bieg"), _(u"Harmonogram")], cells, cursor,
+                         [_(u"Replika"), _(u"Typ"), _(u"Zajęte"), _(u"Wykonana"), _(u"Ostatni bieg"), _(u"Harmonogram")], cells, cursor,
                          (_(u"Enter szczegóły   Ins nowa   Del usuń   Tab do przebiegów")) if reps else _(u"Ins nowa replika"),
-                         det_title, det, child, focus, pair_cursor, screen_actions("nosniki"), empty, prio=[0, 3, 1, 2, 4], flex=4)
+                         det_title, det, child, focus, pair_cursor, screen_actions("nosniki"), empty, prio=[0, 4, 1, 2, 3, 5], flex=5)
 
 
 # --- F5 Szablony (uwaga 24, 2026-10-09) ------------------------------------
@@ -4801,15 +4952,39 @@ def kopie_groups(rows, data, now, ch):
                 roots.append(d)
         groups.append({"kind": "pvesr", "name": r["name"], "word": _(u"relacja %s (pvesr)") % r["name"],
                        "what": u"pvesr", "roots": roots, "typ": u"pvesr", "dir": r.get("dir") or "",
-                       "note": _(u"brak kopii pvesr na tym hoście"), "pvesr_only": True})
+                       "note": _(u"migawki tylko na źródle %s, bez kopii na tym hoście") % (rel.get("peer") or r["name"]), "pvesr_only": True})
     for r in ((data.replicas or {}).get("replicas") or []) if data is not None else []:
         here = r.get("present") == "here"
         srcs = r.get("sources") or [s for s in (r.get("source") or "").split(",") if s]
         roots = [u"%s/%s" % (r.get("dst", "").rstrip("/"), s) for s in srcs] if here and r.get("dst") else []
+        # U170 (teren 2026-11-09): w trakcie pierwszej kopii wiersze mowily "0" i "-", jakby nic
+        # sie nie dzialo. Grupa niesie bieg (running_since) i zajetosc nosnika z list-replicas.
         groups.append({"kind": "replica", "name": r.get("name") or "?", "word": _(u"replika %s") % (r.get("name") or "?"),
                        "what": r.get("media") or "", "roots": roots, "typ": _(u"replika"), "dir": r.get("media") or "",
-                       "note": u"" if here else _(u"nośnik niepodłączony -- podłącz go, potem Ctrl-R")})
+                       "running_since": r.get("running_since") or u"", "usage": medium_usage_words(r),
+                       "note": u"" if here else kopie_medium_note(r.get("present"))})
     return groups
+
+
+def kopie_medium_note(present):
+    """F4, replika bez puli tutaj (L6, lab pve11 2026-11-11): to samo co F6. Podlaczony ZLY
+    dysk albo dysk z niezaimportowana pula to nie "nosnik niepodlaczony"."""
+    if present in (None, "", "away"):
+        return _(u"nośnik niepodłączony -- podłącz go, potem Ctrl-R")
+    return _(u"%s -- szczegóły w F6") % _(MEDIA_STATES.get(present, MEDIA_STATES["unknown"])[0])
+
+
+def kopie_copy_state(it, long=False):
+    """U170: dataset kopii bez migawki -- kopia jeszcze biegnie (bieg repliki) albo zostala
+    przerwana i wznowi sie (receive_resume_token). Pusto, gdy nic z tych."""
+    if it.get("snaps"):
+        return u""
+    g = it.get("g") or {}
+    if g.get("running_since"):
+        return (_(u"kopia trwa od %s") % dshow(g["running_since"])) if long else _(u"kopia trwa")
+    if it.get("resume"):
+        return _(u"przerwana -- następna kopia wznowi ją od miejsca przerwania") if long else _(u"przerwana, wznowi się")
+    return u""
 
 
 def kopie_items(groups, tree):
@@ -4831,7 +5006,8 @@ def kopie_items(groups, tree):
                 depth = nm[len(root):].count("/")
                 label = nm[len(base):] if nm == root else u"  " * depth + nm.rsplit("/", 1)[-1]
                 out.append({"g": g, "ds": nm, "label": label, "snaps": int(d.get("snapshots") or 0),
-                            "newest": int(d.get("newest") or 0), "type": d.get("type") or "filesystem"})
+                            "newest": int(d.get("newest") or 0), "type": d.get("type") or "filesystem",
+                            "resume": bool(d.get("resume"))})
         if len(out) == n0:
             out.append({"g": g, "note": g.get("note") or _(u"brak datasetów kopii na tym hoście")})
     out.append({"any": True, "label": _(u"inny dysk -- pula spoza relacji i replik")})
@@ -4872,15 +5048,17 @@ def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, 
             ccur = len(cells)
         rows.append(it)
         if it.get("any"):
+            # U170: w ukladzie plaskim pusta kolumna Relacja czytala sie jak ciag dalszy repliki
+            # nad nim ("nosnik repliki nazwany obca pula") -- wiersz ma wlasna nazwe.
             cells.append([_(u"inny dysk -- pula spoza relacji i replik"), u" ", u" "] if grouped
-                         else [u" ", u" ", _(u"inny dysk -- pula spoza relacji i replik"), u" ", u" "])
+                         else [_(u"inny dysk"), u" ", _(u"pula spoza relacji i replik -- Enter wybiera"), u" ", u" "])
             continue
         if it.get("note"):
             cells.append([u"  %s %s" % (bar, it["note"]), u" ", u" "] if grouped
                          else [g["name"], g.get("typ") or u" ", it["note"], u" ", u" "])
             continue
         ds = it["ds"] + (u"  (zvol)" if it.get("type") == "volume" else u"")
-        when = fmt_when_short(it["newest"], now) if it.get("newest") else u"-"
+        when = fmt_when_short(it["newest"], now) if it.get("newest") else kopie_copy_state(it) or u"-"
         if grouped:
             cells.append([u"  %s %s" % (bar, ds), str(it.get("snaps") or 0), when])
         else:
@@ -4899,6 +5077,10 @@ def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, 
                (_(u"Najnowsza"), fmt_full(cur["newest"]) if cur.get("newest") else u"-")]
         if cur.get("type") == "volume":
             det.append((_(u"Rodzaj"), _(u"dysk maszyny (zvol) -- przy przeglądaniu wybierzesz partycję")))
+        if kopie_copy_state(cur):
+            det.append((_(u"Stan"), kopie_copy_state(cur, True)))
+        if g.get("usage"):
+            det.append((_(u"Nośnik"), g["usage"]))
         if ctx and (ctx.get("dataset") or ctx.get("at")) and ctx.get("rel") == g["name"]:
             det = [group(ch, _(u"Wskazane")),
                    (_(u"Dataset"), ctx.get("dataset") or _(u"(wybierzesz w oknie)")),
@@ -5165,6 +5347,7 @@ class UI(object):
         self.kopie_ctx = None   # F4 Kopie otwarte z Przebiegow/Relacji: {"rel", "dataset", "at"}
         self.zad_sort = 0   # kolejnosc zadan (F3 zakladka Zadania): relacje, w srodku wg nastepnego
         self.prz_done, self.prz_group = True, False   # F2 Przebiegi: F8 wykonane, F9 grupy
+        self.prz_open = set()                         # F2: rozwiniete wiersze zbiorcze (U171, Enter)
         self.kopie_group = False                      # F4 Kopie: F8 grupy (jak F9 na F2)
         # LINIA POLECEN (wlasciciel 2026-09-11: "chcemy moc w kazdej chwili
         # pisac komendy z palca"). Styl mc: kazdy drukowalny znak leci tu,
@@ -5187,7 +5370,7 @@ class UI(object):
             self.message = _(self.MON_NOTE)
         self.rows = mark_pending(build_relations(self.data, self.now()), self.data)
         self.jobrows = sort_zad_rows(mark_pending(build_jobs(self.data, self.now()), self.data), self.zad_sort, self.data)
-        self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group)
+        self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group, opened=self.prz_open)
         # F2 otwiera sie PRZY "teraz" (najblizszy nadchodzacy bieg), nie na najstarszym
         # biegu sprzed 12 h (przejscie GUI pve10, 2026-10-28). Home = gora listy.
         self.cursor["zadania"] = self.run_cursor_for(None)
@@ -5409,6 +5592,14 @@ class UI(object):
             return
         bg = getattr(self, "_bg", None)
         if bg is not None and bg[0].is_alive():
+            # U185 (2026-11-11): the running read may have started BEFORE the change this
+            # request is about (a window just saved, Ctrl-R) -- dropping the request showed
+            # its pre-change rows. Remember it; poll_bg starts it when the running one lands.
+            again = getattr(self, "_bg_again", False)
+            if only is None or again is None:
+                self._bg_again = None
+            else:
+                self._bg_again = tuple(sorted(set(again or ()) | set(only)))
             return
         import threading
         old = self.data
@@ -5525,7 +5716,16 @@ class UI(object):
         return bg is not None
 
     def poll_bg(self):
-        """-> True, gdy dane z tła weszły (trzeba przerysować)."""
+        """-> True, gdy dane z tła weszły (trzeba przerysować). Prośba o odświeżenie, która
+        przyszła w trakcie (U185), rusza zaraz po nich."""
+        got = self._poll_bg_once()
+        again = getattr(self, "_bg_again", False)
+        if got and again is not False:
+            self._bg_again = False
+            self.refresh_bg(again)
+        return got
+
+    def _poll_bg_once(self):
         bg = getattr(self, "_bg", None)
         if bg is None or bg[0].is_alive():
             return False
@@ -5571,12 +5771,16 @@ class UI(object):
                 self.ensure_profiles()
         prz = getattr(self, "runrows", None) or []
         old_run = prz[self.cursor["zadania"]] if self.cursor["zadania"] < len(prz) else None
+        # L1 (lab pve11, 2026-11-11): kursor nieruszony (miejsce domyslne) zostaje domyslny. Bez
+        # tego pierwszy odczyt bez wykonanych biegow stawial go na ostatnim nadchodzacym, a drugi
+        # etap (wykonane) trzymal go tam -- pod kreska "teraz" byl juz bieg 15:56.
+        at_default = bool(prz) and self.cursor["zadania"] == self.run_cursor_for(None)
         self.rows = mark_pending(build_relations(self.data, self.now()), self.data)
         self.jobrows = sort_zad_rows(mark_pending(build_jobs(self.data, self.now()), self.data), self.zad_sort, self.data)
-        self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group)
+        self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group, opened=self.prz_open)
         # F2: kursor na TYM SAMYM biegu, nie na tym samym numerze wiersza. Drugi etap (job-stats)
         # dokłada wykonane biegi NAD nim -- start na pve10, 2026-10-29: "teraz" uciekło na 08:13.
-        self.cursor["zadania"] = self.run_cursor_same(old_run)
+        self.cursor["zadania"] = self.run_cursor_for(None) if at_default else self.run_cursor_same(old_run)
         for k in self.cursor:
             # F4 liczy wiersze z drzewa kopii (zfs-tree) -- poza F4 nie czytamy go tu w glownym
             # watku: na pve10 to bylo 5 s zamrozonego "Wczytuję… 0 s" po KAZDYM oknie (zrzut stosu,
@@ -5622,16 +5826,19 @@ class UI(object):
 
     def run_cursor_for(self, old):
         """Po przebudowie Przebiegow: ten sam bieg (zadanie i chwila), inaczej
+        bieg zaraz pod kreska "teraz" (U166: najswiezszy wykonany), bez wykonanych --
         najblizszy nadchodzacy; nigdy na kresce ani naglowku."""
         rows = self.runrows
         if old is not None and old.get("kind") == "run":
             for i, r in enumerate(rows):
-                if r.get("kind") == "run" and r["item"] is old["item"] and r.get("at") == old.get("at"):
+                if r.get("kind") == "run" and r.get("agg_key") == old.get("agg_key") and bool(r.get("child")) == bool(old.get("child")) \
+                        and r["item"] is old["item"] and r.get("at") == old.get("at"):
                     return i
         for i, r in enumerate(rows):
-            if r.get("kind") == "run" and not r.get("past"):
+            if r.get("kind") == "run" and r.get("past") and not r.get("static"):
                 return i
-        return self.run_step(0, 1)
+        ahead = [i for i, r in enumerate(rows) if r.get("kind") == "run" and r.get("at") and not r.get("static")]
+        return ahead[-1] if ahead else self.run_step(0, 1)
 
     def run_step(self, c, d):
         """Kursor Przebiegow: przeskocz wiersze tylko do czytania (kreska, naglowek)."""
@@ -5781,7 +5988,8 @@ class UI(object):
 
     def output_lines(self, obj, width):
         """Ogon pliku wyjscia + stan procesu. Czytane przy kazdym rysowaniu."""
-        out = wrap(u"$ " + obj["shell"], width - 4) + [""]
+        # U179(7): a window that only shows something (the medium key) ran no command -- no "$" line.
+        out = (wrap(u"$ " + obj["shell"], width - 4) + [""]) if obj.get("shell") else []
         if obj.get("lines") is not None:
             body = list(obj["lines"])
         else:
@@ -6022,7 +6230,8 @@ class UI(object):
             return
         c = self.cursor["nosniki"]
         if not reps or not (0 <= c < len(reps)):
-            self.message = _(u"brak replik -- nie ma czego uruchomić (Ins dodaje)") if k == "F7" else _(u"brak replik")
+            self.message = {"F7": _(u"brak replik -- nie ma czego uruchomić"),
+                            "F8": _(u"brak replik -- nie ma klucza nośnika do pokazania")}.get(k, _(u"brak replik"))
             return
         n = reps[c].get("name")
         if k == "F7":
@@ -6048,7 +6257,7 @@ class UI(object):
                 self.message = _(u"nie da się przeczytać klucza %s: %s") % (kf, e)
                 return
             self.window = ("output", {"title": _(u"Klucz nośnika repliki %s") % n, "path": None, "proc": None, "shell": "",
-                                      "lines": [u"Klucz (64 znaki hex):", u"", u"  " + key, u"",
+                                      "lines": [_(u"Klucz (64 znaki hex):"), u"", u"  " + key, u"",
                                                 _(u"Zapisz go gdzieś POZA tym serwerem. Gdy serwer przepadnie, bez klucza"),
                                                 _(u"kopii z dysku nie odczytasz."), _(u"Plik: ") + kf], "rc": 0})
             self.scroll = 0
@@ -6794,7 +7003,7 @@ class UI(object):
                 self.prz_done = not self.prz_done
             else:
                 self.prz_group = not self.prz_group
-            self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group)
+            self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group, opened=self.prz_open)
             self.cursor["zadania"] = self.run_cursor_for(cur_row)
             return "stay"
         # LINIA POLECEN: pisanie, kasowanie, historia, wykonanie. Litera to
@@ -6908,6 +7117,9 @@ class UI(object):
                 self.screen, self.focus, self.pair_cursor = key, "list", 0
                 if key == "szablony":
                     self.ensure_profiles()
+                if key == "nosniki":
+                    # U180 (lab 2026-11-09): stan nosnika z chwili wejscia, nie z ostatniego odczytu.
+                    self.refresh_bg(("replicas",))
                 return "stay"
         n = self.count(self.screen)
         c = self.cursor[self.screen]
@@ -6956,6 +7168,12 @@ class UI(object):
                 self.window, self.scroll = ("relacja", self.rows[c]), 0
             elif self.screen == "zadania" and self.runrows[c].get("kind") != "run":
                 pass
+            elif self.screen == "zadania" and self.runrows[c].get("agg"):
+                # U171: Enter rozwija / zwija wiersz zbiorczy (pelne sciezki datasetow pod nim)
+                cur = self.runrows[c]
+                self.prz_open ^= {cur["agg_key"]}
+                self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group, opened=self.prz_open)
+                c = self.run_cursor_for(cur)
             elif self.screen == "zadania" and self.runrows[c].get("static"):
                 self.window, self.scroll = ("relacja", self.runrows[c]["item"]), 0
             elif self.screen == "zadania" and self.runrows[c]["item"].get("kind") == "replica":
@@ -7436,6 +7654,9 @@ def curses_loop(ui):
                 stdscr.timeout(500)          # ogon pliku wyjscia zyje
             elif ui.bg_pending() or ui.slow_pending():
                 stdscr.timeout(300)          # dane z tła: przerysuj, gdy dojdą
+            elif ui.screen == "nosniki" and not ui.window:
+                # U180 (lab 2026-11-09): dysk wpiety albo wypiety -- F6 czyta stan nosnika co 15 s.
+                stdscr.timeout(NOSNIKI_REFRESH_MS)
             else:
                 # A16 (field 2026-11-06): komunikat systemu (wall z journald) wypisany na
                 # konsole rozjezdza ekran, a curses maluje tylko roznice wzgledem tego, co
@@ -7445,6 +7666,8 @@ def curses_loop(ui):
             if k == -1:
                 if not (ui.bg_pending() or ui.slow_pending() or (ui.window and ui.window[0] == "output")):
                     stdscr.clear()
+                    if ui.screen == "nosniki" and not ui.window:
+                        ui.refresh_bg(("replicas",))
                 ui.poll_bg()
                 ui.poll_slow()
                 continue

@@ -135,7 +135,7 @@ run: `ZFS_TUI_LANG=pl zfs-backup gui` or `--lang=pl`.
 | Key | Window or action |
 |---|---|
 | F1 | Help (Pomoc) |
-| F2 | Runs (Przebiegi): past and upcoming |
+| F2 | Runs (Przebiegi): the next 6 h on top, the "now" line, past runs below it; one relation's cron lines at the same time are one row "N datasets" (Enter expands it) |
 | F3 | Relations (Relacje): Ins = new, Del = delete, Enter = open, `e` = edit inside a relation window |
 | F4 | Copies (Kopie): Enter/Tab to the snapshots, Enter on a snapshot or F7 browses files, F9 restores |
 | F5 | Templates (Szablony) |
@@ -349,7 +349,8 @@ job cannot leave a guest frozen. It needs privilege on the source: pair with `--
 the delegated account and run `deploy.sh --join <package> --allow-quiesce` on the source, which
 installs `zfs-quiesce-helper.sh` and a sudo rule for that one script. With neither, the default
 degrade policy applies: a `_crash_` snapshot and exit 8 (see above); with `,strict` the job fails
-without a snapshot. A local source freezes the guests
+without a snapshot. A scope with no guest disk (`vm-N-disk-M`, `subvol-N-disk-M`) has nothing to
+freeze and needs no privilege: a plain snapshot, exit 0 (U188). A local source freezes the guests
 on this host.
 
 Filesystem-consistent is not application-consistent. For a database-consistent snapshot, put the
@@ -1057,6 +1058,12 @@ notify       = pulled
   (one snapshot per dataset) runs with `-X` on exactly that disk and WARNs; a prune or an atomic
   `-r` cannot leave a child out and is NOT RUN (`rc=76`, alarm). A remote tree that cannot be
   listed runs as before and WARNs. The target of a copy is never read.
+- **Passive local copy fed by pvesr** (`local-backup --passive`, U161/U181). The snapshots arrive
+  here through a `pvesr` replica, so the relation reads `/etc/pve/replication.cfg`: the monitor
+  thresholds get the replica interval added (warning = threshold + interval, at least 2x the
+  interval; alarm at least 3x), and each tier's copy time moves to 10 minutes after the replica
+  run that brings that tier's snapshot (e.g. a daily copy at 01:11 behind a `*/2:00` replica -> 02:10). A
+  copy that the shift moves past midnight also moves its day of week or month.
 - `recursive` drives all three generated lines from one declaration: `no` = this dataset,
   `flat` = `-R` on the transfer, `delsnaps -R`, `check-snap-age -R`; `atomic` = `-r` on the
   transfer with the same `-R` prune and monitor.
@@ -1164,11 +1171,18 @@ the defaults above. The environment beating the file is what makes
 | `[alerts] warnings` | `ZFS_WARN_MODE` |
 | `[alerts] all_ok_mail` | `ZFS_DIGEST_QUIET` |
 | `[alerts] stats_days` | `ZFS_DIGEST_DAYS` |
-| `[alerts] site` | `ZFS_ALERT_SITE`: the installation's name in the subject of the daily summary and of the alert mails (`notify-fail.sh`, `notify-warn.sh`), `[ZFS] <site> <host>`, and in the sender's name where the host has a sendmail; unset or `-` gives the host's full name |
+| `[alerts] site` | `ZFS_ALERT_SITE`: the installation's name in the subject of the daily summary and of the alert mails (`notify-fail.sh`, `notify-warn.sh`), `[ZFS][REPORT|WARNING|ALERT] <site> <host>`, and in the sender's name where the host has a sendmail; unset or `-` gives the host's full name. The tag after `[ZFS]` says the kind of mail, for mail rules: `REPORT` the daily summary, `WARNING` a warning, pool capacity or data growth, `ALERT` a failed run |
 | `[alerts] repeat_after` | `ZFS_ALERT_COOLDOWN` (a number of seconds, or `30m`, `4h`) |
 | `[capacity] threshold` | `ZFS_CAPACITY_THRESHOLD` |
 | `[capacity] guard`, `guard_at`, `guard_target`, `guard_min_keep` | `ZFS_GUARD*` (capacity guard) |
 | `[growth] alert`, `factor`, `min_mib`, `max_ratio_pct`, `days` | `ZFS_GROWTH_*` (growth guard) |
+
+The growth guard (`growth-guard.sh`, hourly from cron) watches the datasets of the retention
+lines (`delsnaps.sh`) in this host's configs. A remote entry of such a line (a "snapshots on
+the source only" relation: the collector takes and prunes the snapshots) is measured on the
+source over ssh, with the options that line connects with, under the collector's `[growth]`
+thresholds; the alarm subject names the source, the dataset and the relation. A host with no
+config of its own has nothing to watch: exit 0, no mail.
 
 `deploy.sh` writes `/etc/zfs-alert.conf` once with every key documented and never overwrites it,
 so a hand-edited mode survives every re-run and upgrade; a host provisioned before a key existed
@@ -1214,7 +1228,7 @@ notify-fail.sh ...; [ $rc -ge 3 ] && notify-fail.sh ...`).
 |---|---|---|
 | `notify-fail.sh` | Any job returning non-zero (`snapsend`/`snapget`/`delsnaps` failure), `check-snap-age.sh` CRITICAL/UNKNOWN, or a pool that is not ONLINE | `daily`: appends `epoch<TAB>ALERT<TAB>label<TAB>detail` to the queue and sends no mail. `immediate`: mails at once, rate-limited per message |
 | `notify-warn.sh` | `check-snap-age.sh` WARNING (getting stale, not yet CRITICAL) | The same queue with severity `WARN`, per `ZFS_WARN_MODE` |
-| `alert-digest.sh` | | The only backup mail a host sends in `daily` mode. Once a day it mails one message whose subject is `[ZFS] <host> <date> STAN: OK\|UWAGA -- N alert / M warn`. The first block is the state *now* (pools, and a table of the jobs over the `ZFS_DIGEST_DAYS` window); the second is what *happened*: ALERT findings first, then WARNING findings, each followed by what the finding actually said. A quiet day uses a different subject (`... cisza, kanal sprawny (raport okresowy)`) so it cannot be mistaken for a findings mail. If `mail` fails, the findings are put back on the queue and it exits non-zero |
+| `alert-digest.sh` | | The only backup mail a host sends in `daily` mode. Once a day it mails one message whose subject is `[ZFS][REPORT] <host> <date> STAN: OK\|UWAGA -- N alert / M warn`. The first block is the state *now* (pools, and a table of the jobs over the `ZFS_DIGEST_DAYS` window); the second is what *happened*: ALERT findings first, then WARNING findings, each followed by what the finding actually said. A quiet day uses a different subject (`... cisza, kanal sprawny (raport okresowy)`) so it cannot be mistaken for a findings mail. If `mail` fails, the findings are put back on the queue and it exits non-zero |
 | `check-pool-capacity.sh` | A pool, or a dataset with a refquota, approaching full, ahead of any job failing from it. Reports through `notify-fail.sh` and so arrives in the same digest | Cron, default threshold 90% (`ZFS_CAPACITY_THRESHOLD`) |
 | `capacity-guard.sh` | Optional (default `off`): when a pool crosses `ZFS_GUARD_AT` (default 89%), deletes only snapshots that are safe to delete: ones this host's own local `delsnaps` lines own, never held, never the newest snapshot of a dataset. Any uncertainty means deleting nothing | `[capacity]` in `settings.ini` |
 | `growth-guard.sh` | Optional (default `off`), alert only: flags an increment that is a multiple (`ZFS_GROWTH_FACTOR`, default 5) of the dataset's recent norm while being poorly compressible, the signature of mass file encryption. Deletes and pauses nothing | `[growth]` in `settings.ini` |

@@ -1692,6 +1692,52 @@ pv_conf "	media    = removable" ""
 fo=$(for_run)
 check "PRG4 control: without on_insert there is no '#on-insert' copy, without media_guids no --guids" "0:0" \
       "$(printf '%s\n' "$fo" | grep -c '^#on-insert .*replica copy (pv)'):$(printf '%s\n' "$fo" | grep -c -- '--guids')"
+
+# U182 (Site-A 2026-11-09): a replica run killed as a whole (TERM to its process group)
+# never reached detach -- the pool was left to a hand export and the run's markers
+# stayed behind. The rendered bracket itself is run under /bin/sh with stub scripts in
+# place of /R/*: the engine stand-in sleeps, the group is killed, and detach must still
+# be called, told the engine's 143. Control: the same body without its trap.
+u182() {   # <body> -> what the gate stub logged
+    local d; d=$(mktemp -d)
+    local n
+    for n in $(printf '%s' "$1" | grep -o '/R/[A-Za-z0-9._-]*' | sort -u); do
+        case "$n" in
+            */zfs-media-gate.sh) printf '#!/bin/sh\necho "$1 $*" >> %s/gate.log\nexit 0\n' "$d" > "$d/${n#/R/}" ;;
+            *) printf '#!/bin/sh\nexec sleep 20\n' > "$d/${n#/R/}" ;;
+        esac
+        chmod +x "$d/${n#/R/}"
+    done
+    setsid /bin/sh -c "$(printf '%s' "$1" | sed "s|/R/|$d/|g")" >/dev/null 2>&1 &
+    local i pg=""
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        pg=$(pgrep -f "^sleep 20" | head -1); [ -n "$pg" ] && break; sleep 0.3
+    done
+    [ -n "$pg" ] && kill -TERM -- "-$(ps -o pgid= -p "$pg" | tr -d ' ')" 2>/dev/null
+    sleep 1
+    grep -o 'detach .*--engine-rc [0-9]*' "$d/gate.log" 2>/dev/null | sed 's/.*--engine-rc /detach rc=/'
+    rm -rf "$d"
+}
+# U183: attach sizes a first copy by the whole source tree only when the replica is
+# recursive -- so the flag has to reach the rendered line (R1), and only then.
+pv_conf "	media    = removable" "	recursive = yes"
+fo=$(for_run)
+u183_r=$(printf '%s\n' "$fo" | grep '^30 2 .*replica copy (pv)' | grep -o 'attach [^;]*' | grep -c -- ' --recursive')
+pv_conf "	media    = removable" "	recursive = no"
+fo2=$(for_run)
+u183_n=$(printf '%s\n' "$fo2" | grep '^30 2 .*replica copy (pv)' | grep -o 'attach [^;]*' | grep -c -- ' --recursive')
+check "U183 a recursive replica's attach carries --recursive; control: recursive = no does not" "1:0" "$u183_r:$u183_n"
+pv_conf "	media    = removable" "	media_guids = 111,222
+	on_insert = yes"
+fo=$(for_run)
+u182_body=$(printf '%s\n' "$fo" | grep '^30 2 .*replica copy (pv)' | head -1 | sed "s|.*/bin/sh -c '\(.*\)'\$|\1|")
+if command -v setsid >/dev/null 2>&1 && command -v pgrep >/dev/null 2>&1 && [ -n "$u182_body" ]; then
+    check "U182 a replica run killed as a group still detaches, told the engine's 143; control: no trap, no detach" \
+          "detach rc=143|" \
+          "$(u182 "$u182_body")|$(u182 "$(printf '%s' "$u182_body" | sed 's/^( trap : TERM INT HUP; /( /')")"
+else
+    echo "SKIP U182: no setsid/pgrep here, or no rendered bracket"
+fi
 pv_conf "	media    = removable" "	media_guids = 11x"
 fo=$(for_run); frc=$?
 check "PRG5 media_guids that is not digits is refused" "1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0)"

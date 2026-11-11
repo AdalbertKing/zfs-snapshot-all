@@ -13,7 +13,9 @@
 # (co najmniej 3 przyrosty historii -- inaczej brak normy); L >= min_mib; L/C <= max_ratio_pct/100.
 # Konwersja baz (duży, ale kompresowalny przyrost) nie alarmuje; szyfrowanie plików -- tak.
 #
-# „Nasze” datasety: lokalne linie delsnaps.sh z configów hosta wyrenderowanych przez gen-cron.sh
+# „Nasze” datasety: linie delsnaps.sh z configów hosta wyrenderowanych przez gen-cron.sh; zdalny
+# wpis (relacja „tylko migawki na źródle”, U172) liczony przez ssh z opcjami tej linii. Host bez
+# configu: nic do pilnowania, kod 0 (U173). Configi hosta wyrenderowane przez gen-cron.sh
 # jako root (z -R także dzieci) -- to samo źródło zaufania co capacity-guard.sh
 # (REV-20261021-158 F2): NIE crontaby, bo znacznik bloku w crontabie dowolnego konta niczego
 # nie dowodzi. Config, jego katalog, gen-cron.sh i lib-cron.sh -- własność roota, bez zapisu dla
@@ -58,7 +60,7 @@ say() { echo "$(date '+%Y-%m-%d %H:%M:%S') growth-guard: $*"; }
 alert() {   # <temat> <treść>
     [ "$PLAN" -eq 1 ] && return 0
     if [ -x "$NOTIFY" ]; then "$NOTIFY" "$1" "$2" 2>/dev/null && return 0; fi
-    command -v mail >/dev/null 2>&1 && printf '%s\n' "$2" | mail -s "[ZFS GROWTH] $1" "${ZFS_ALERT_EMAIL:-root}" 2>/dev/null && return 0
+    command -v mail >/dev/null 2>&1 && printf '%s\n' "$2" | mail -s "[ZFS][WARNING] $1" "${ZFS_ALERT_EMAIL:-root}" 2>/dev/null && return 0
     say "NIE DAŁO SIĘ wysłać alertu: $1"
     return 1     # alarm pary nie jest zapisany jako oceniony -- następny bieg spróbuje znowu
 }
@@ -123,23 +125,29 @@ trusted_path() {   # <ścieżka> -> 0, gdy plik i jego katalog należą do roota
 }
 roots() {
     [ -d "$CONFDIR" ] && [ -r "$CONFDIR" ] && [ -x "$CONFDIR" ] || { echo "nie da się czytać $CONFDIR" >&2; return 1; }
+    local c n=0 cs=()
+    for c in "$CONFDIR/jobs.$CONFHOST.conf" "$CONFDIR/jobs.$CONFHOST".*.conf; do [ -e "$c" ] && cs+=("$c"); done
+    # U173 (2026-11-09): źródło bez configu (migawki i retencję robi mu kolektor przez ssh)
+    # nie ma tu nic do pilnowania -- to nie awaria strażnika. Pilnuje go kolektor (U172).
+    [ "${#cs[@]}" -gt 0 ] || return 0
     trusted_path "$GENCRON" || { echo "nie ufam $GENCRON (właściciel inny niż root albo zapisywalny dla grupy/innych)" >&2; return 1; }
     # gen-cron.sh dołącza lib-cron.sh (source) -- jako root, więc ten plik też musi być zaufany.
     trusted_path "$(dirname "$GENCRON")/lib-cron.sh" || { echo "nie ufam $(dirname "$GENCRON")/lib-cron.sh (właściciel inny niż root albo zapisywalny dla grupy/innych)" >&2; return 1; }
-    local c n=0
     # Najpierw do pliku, POTEM analiza: błąd jednego configu nie może zniknąć w potoku.
     : > "$WORK/managed"
-    for c in "$CONFDIR/jobs.$CONFHOST.conf" "$CONFDIR/jobs.$CONFHOST".*.conf; do
-        [ -e "$c" ] || continue
+    for c in "${cs[@]}"; do
         trusted_path "$c" || { echo "nie ufam $c (właściciel inny niż root albo zapisywalny dla grupy/innych)" >&2; return 1; }
         if ! bash "$GENCRON" -c "$c" >> "$WORK/managed" 2> "$WORK/gc.err"; then
             # Config bez żadnej reguły to nie błąd -- po prostu nic z niego nie wynika.
             grep -q 'no send/prune/monitor rules resolved' "$WORK/gc.err" \
                 || { echo "gen-cron $c: $(head -1 "$WORK/gc.err")" >&2; return 1; }
         fi
-        n=$((n + 1))
     done
-    [ "$n" -gt 0 ] || { echo "brak configu $CONFDIR/jobs.$CONFHOST.conf ani jobs.$CONFHOST.<konto>.conf" >&2; return 1; }
+    # Wiersz: dataset, -R, konto@host (pusty = lokalny), opcje ssh linii (oddzielone \037),
+    # etykieta relacji (-L). U172: zdalny wpis linii retencji (relacja "tylko migawki na
+    # źródle": migawki i retencja z kolektora) jest liczony przez ssh z TYMI SAMYMI opcjami,
+    # z którymi ta linia łączy się ze źródłem (jak w delsnaps.sh: -K/-O z przodu, potem
+    # klucz hosta i port, potem szyfr).
     awk '
         function tok(s,    i, c, t, n) {
             n = 0; i = 1
@@ -156,49 +164,93 @@ roots() {
         }
         (p = index($0, "/delsnaps.sh ")) > 0 {
             n = tok(substr($0, p + 13)); if (n < 0) next
-            rec = 0; skip = 0; i = 1
+            rec = 0; skip = 0; i = 1; port = 22; kh = ""; key = ""; ci = ""; xo = ""; lbl = ""
             while (i <= n && T[i] ~ /^-/) {
-                o = T[i]
+                o = T[i]; v = ""
+                if (o ~ /^-[pkcKOPL]$/) { i++; v = T[i]; o = substr(o, 1, 2) }
+                else if (o ~ /^-[pkcKOPL]./) { v = substr(o, 3); o = substr(o, 1, 2) }
                 if (o == "-R" || o == "--recursive") rec = 1
                 else if (o == "-B" || o == "-n") skip = 1
-                else if (o ~ /^-[pkcKOPL]$/) i++
+                else if (o == "-p") port = v
+                else if (o == "-k") kh = v
+                else if (o == "-c") ci = v
+                else if (o == "-K") key = v
+                else if (o == "-O") xo = xo "\037-o\037" v
+                else if (o == "-L") lbl = v
                 i++
             }
             if (skip || i > n) next
+            so = ""
+            if (key != "") so = so "\037-o\037IdentitiesOnly=yes\037-i\037" key
+            so = so xo
+            if (kh != "") so = so "\037-o\037StrictHostKeyChecking=yes\037-o\037UserKnownHostsFile=" kh
+            else so = so "\037-o\037StrictHostKeyChecking=accept-new"
+            so = so "\037-p\037" port
+            if (ci != "") so = so "\037-c\037" ci
+            so = substr(so "\037-o\037BatchMode=yes\037-o\037ConnectTimeout=30", 2)
             m = split(T[i], a, ",")
-            for (k = 1; k <= m; k++) if (a[k] != "" && a[k] !~ /:/) print a[k] "\t" rec
+            for (k = 1; k <= m; k++) {
+                if (a[k] == "") continue
+                # Jak delsnaps.sh: zdalny tylko wtedy, gdy przed pierwszym ":" nie ma "/".
+                c = index(a[k], ":")
+                if (c == 0 || index(substr(a[k], 1, c - 1), "/") > 0) { print a[k] "\t" rec "\t\t\t"; continue }
+                uh = substr(a[k], 1, c - 1); if (uh !~ /@/) uh = "root@" uh
+                print substr(a[k], c + 1) "\t" rec "\t" uh "\t" so "\t" lbl
+            }
         }' "$WORK/managed" | sort -u
 }
 if ! roots > "$WORK/roots" 2> "$WORK/roots.err"; then
     err "odczyt configów: $(head -1 "$WORK/roots.err")"
 fi
 
+# zfs tu albo, gdy UH jest ustawione, na źródle przez ssh z opcjami SSHO (U172). Nazwy ZFS
+# nie mają apostrofu, więc każdy argument w apostrofach przechodzi do powłoki źródła dosłownie.
+UH=""; SSHO=()
+Z() {
+    if [ -z "$UH" ]; then zfs "$@"; return; fi
+    local c="zfs" a
+    for a in "$@"; do c+=" '$a'"; done
+    ssh -n "${SSHO[@]}" "$UH" "$c"
+}
+use_src() {   # <konto@host albo ""> <opcje ssh oddzielone \037>
+    UH="$1"; SSHO=()
+    [ -n "$UH" ] && IFS=$'\037' read -r -a SSHO <<< "$2"
+    return 0
+}
+
 # ---- rozwinięcie do datasetów z ich kompresją ----------------------------------------
+# Wiersz $WORK/ds: dataset, kompresja, konto@host, opcje ssh, relacja.
 : > "$WORK/ds"
-while IFS=$'\t' read -r r rec; do
+while IFS=$'\t' read -r r rec uh so lbl; do
     [ -n "$r" ] || continue
-    if [ "$rec" = 1 ]; then out="$(zfs list -H -o name,compression -t filesystem,volume -r "$r" 2>"$WORK/e")"
-    else out="$(zfs list -H -o name,compression -t filesystem,volume "$r" 2>"$WORK/e")"; fi
-    if [ $? -ne 0 ]; then err "zfs list $r: $(head -1 "$WORK/e")"; continue; fi
-    printf '%s\n' "$out" >> "$WORK/ds"
+    use_src "$uh" "$so"
+    if [ "$rec" = 1 ]; then out="$(Z list -H -o name,compression -t filesystem,volume -r "$r" 2>"$WORK/e")"
+    else out="$(Z list -H -o name,compression -t filesystem,volume "$r" 2>"$WORK/e")"; fi
+    if [ $? -ne 0 ]; then err "zfs list ${uh:+$uh:}$r: $(head -1 "$WORK/e")"; continue; fi
+    printf '%s\n' "$out" | awk -F'\t' -v t="	$uh	$so	$lbl" 'NF { print $0 t }' >> "$WORK/ds"
 done < "$WORK/roots"
-sort -u "$WORK/ds" -o "$WORK/ds"
+awk -F'\t' '!s[$1 FS $3]++' "$WORK/ds" > "$WORK/ds1" && mv "$WORK/ds1" "$WORK/ds"
 
 size_of() {   # <-c albo ""> <a> <ds@b> -> bajty albo kod 1
     local o v
-    o="$(zfs send -nP $1 -i "$2" "$3" 2>/dev/null)" || return 1
+    if [ -n "$1" ]; then o="$(Z send -nP "$1" -i "$2" "$3" 2>/dev/null)" || return 1
+    else o="$(Z send -nP -i "$2" "$3" 2>/dev/null)" || return 1; fi
     v="$(printf '%s\n' "$o" | awk '$1 == "size" { print $2; exit }')"
     case "$v" in ''|*[!0-9]*) return 1 ;; esac
     printf '%s' "$v"
 }
 
-alarms=""; alarm_guids=""; nds=0
+alarms=""; alarm_guids=""; nds=0; asub=""; nrem=0
 win=$((DAYS * 86400))
-while IFS=$'\t' read -r ds comp; do
-    [ -n "$ds" ] || continue
+while IFS=$'\t' read -r dsn comp uh so lbl; do
+    [ -n "$dsn" ] || continue
     nds=$((nds + 1))
+    use_src "$uh" "$so"
+    # Nazwa w komunikatach i w stanie: zdalny dataset razem ze źródłem (ta sama nazwa może
+    # być i tu, i na źródle).
+    ds="${uh:+$uh:}$dsn"
     if [ "$comp" = off ]; then [ "$PLAN" -eq 1 ] && echo "$ds: pominięty -- compression=off (każdy przyrost wyglądałby na niekompresowalny)"; continue; fi
-    if ! zfs list -H -p -t snapshot -o name,guid,creation -s creation -d 1 "$ds" > "$WORK/s" 2>"$WORK/e"; then
+    if ! Z list -H -p -t snapshot -o name,guid,creation -s creation -d 1 "$dsn" > "$WORK/s" 2>"$WORK/e"; then
         err "zfs list migawek $ds: $(head -1 "$WORK/e")"; continue
     fi
     if awk -F'\t' 'NF != 3 || $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ { bad = 1 } END { exit !bad }' "$WORK/s"; then
@@ -252,12 +304,14 @@ while IFS=$'\t' read -r ds comp; do
         hot=0
         if [ "$med" -gt 0 ]; then fast=$(( rate >= FACTOR * med )); else fast=$(( rate > 0 )); fi
         if [ "$L" -ge $((MINMIB * 1048576)) ] && [ "$rpct" -le "$MAXR" ] && [ "$fast" -eq 1 ]; then hot=1; fi
-        line="$ds: przyrost ${mib} MiB (do $bn), tempo ${times}x normy, kompresja przyrostu ${ratio}"
+        line="$ds${lbl:+ (relacja $lbl)}: przyrost ${mib} MiB (do $bn), tempo ${times}x normy, kompresja przyrostu ${ratio}"
         shown=1
         if [ "$hot" -eq 1 ]; then
             # Para z alarmem trafia do seen dopiero po wysłanym alercie (niżej).
             if [ "$PLAN" -eq 1 ]; then echo "$line -- ALARM"; else alarms="$alarms
-  $line"; alarm_guids="$alarm_guids $bg"; fi
+  $line"; alarm_guids="$alarm_guids $bg"
+                # U172: alarm ze źródła -- temat mówi, które źródło, dataset i relacja.
+                if [ -n "$uh" ]; then nrem=$((nrem + 1)); [ -n "$asub" ] || asub="$ds${lbl:+ (relacja $lbl)}"; fi; fi
         else
             [ "$PLAN" -eq 1 ] && echo "$line -- w porządku"
             [ "$PLAN" -eq 1 ] || printf '%s\n' "$bg" >> "$STATE/seen"
@@ -273,7 +327,9 @@ rc=0
 if [ -n "$alarms" ]; then
     rc=1
     say "PODEJRZANY PRZYROST:$alarms"
-    if alert "$HOST: PODEJRZANY PRZYROST danych (możliwe szyfrowanie)" "Przyrost między migawkami jest wielokrotnie większy niż zwykle i prawie się nie kompresuje -- tak wygląda szyfrowanie plików (ransomware), ale też np. wgranie dużej ilości już skompresowanych danych.$alarms
+    sub="$HOST: PODEJRZANY PRZYROST danych (możliwe szyfrowanie)"
+    [ -n "$asub" ] && sub="$HOST: PODEJRZANY PRZYROST danych na źródle $asub$([ "$nrem" -gt 1 ] && echo " i $((nrem - 1)) inne") (możliwe szyfrowanie)"
+    if alert "$sub" "Przyrost między migawkami jest wielokrotnie większy niż zwykle i prawie się nie kompresuje -- tak wygląda szyfrowanie plików (ransomware), ale też np. wgranie dużej ilości już skompresowanych danych.$alarms
 Strażnik niczego nie zatrzymał (tylko alarm). Sprawdź, co się dzieje na tym datasecie, zanim retencja usunie starsze, czyste migawki."; then
         for g in $alarm_guids; do printf '%s\n' "$g" >> "$STATE/seen"; done
     fi
@@ -282,5 +338,5 @@ if [ -n "$errs" ]; then
     rc=1
     alert "$HOST: strażnik przyrostu NIE działa w całości" "Nie dało się sprawdzić części datasetów -- dla nich nie ma ochrony:$errs"
 fi
-[ "$PLAN" -eq 1 ] && [ "$nds" -eq 0 ] && [ -z "$errs" ] && echo "Brak naszych datasetów (lokalnych linii retencji) na tym hoście."
+[ "$PLAN" -eq 1 ] && [ "$nds" -eq 0 ] && [ -z "$errs" ] && echo "Brak naszych datasetów (linii retencji, lokalnych ani zdalnych) na tym hoście."
 exit "$rc"

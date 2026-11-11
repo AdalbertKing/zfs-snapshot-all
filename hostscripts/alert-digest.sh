@@ -973,11 +973,11 @@ if [ -n "$LIVE_LABELS" ]; then
 fi
 if [ -n "$STATE_BAD" ]; then VERDICT="UWAGA"; else VERDICT="OK"; fi
 
-SUBJ="[ZFS] $(zfs_mail_host) $TODAY STAN: $VERDICT -- $N_ALERT alert / $N_WARN warn"
+SUBJ="[ZFS][REPORT] $(zfs_mail_host) $TODAY STAN: $VERDICT -- $N_ALERT alert / $N_WARN warn"
 # A quiet report is not a findings mail and must not look like one in a mailbox
 # sorted by subject: "0 alert / 0 warn" reads as a verdict that was reached by
 # measuring something, which is the one thing this mail did not do.
-[ "$QUIET" = "1" ] && SUBJ="[ZFS] $(zfs_mail_host) $TODAY -- cisza, kanal sprawny (raport okresowy)"
+[ "$QUIET" = "1" ] && SUBJ="[ZFS][REPORT] $(zfs_mail_host) $TODAY -- cisza, kanal sprawny (raport okresowy)"
 
 # The job-table mail (the layout before U160). Kept whole: it is what goes out when the
 # relations mail cannot be built (no python3, no temp dir, a renderer error) -- this mail
@@ -1442,14 +1442,14 @@ K = sum(1 for x in order if x["rank"] >= 5)
 pool_bad = [p for p in pools if p[1] != "ONLINE" or int(re.sub(r"\D", "", p[2]) or 0) >= 80]
 day = time.strftime("%d.%m", NOW)
 if K == 0 and not pool_bad:
-    subj = u"[ZFS] %s %s: OK, %d %s" % (LABEL, day, N, plural(N, "relacja", "relacje", "relacji"))
+    subj = u"[ZFS][REPORT] %s %s: OK, %d %s" % (LABEL, day, N, plural(N, "relacja", "relacje", "relacji"))
 else:
     parts = []
     if K:
         parts.append(u"%d z %d relacji wymaga uwagi" % (K, N))
     for p in pool_bad:
         parts.append("pula %s %s %s" % (p[0], p[1], p[2]))
-    subj = u"[ZFS] %s %s: %s" % (LABEL, day, ", ".join(parts))
+    subj = u"[ZFS][REPORT] %s %s: %s" % (LABEL, day, ", ".join(parts))
 if E.get("DG_QUIET") == "1":
     subj += u" (raport okresowy)"
 

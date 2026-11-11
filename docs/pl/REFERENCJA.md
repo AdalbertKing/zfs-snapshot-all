@@ -135,7 +135,7 @@ jednorazowo: `ZFS_TUI_LANG=pl zfs-backup gui` albo `--lang=pl`.
 | Klawisz | Okno lub akcja |
 |---|---|
 | F1 | Pomoc |
-| F2 | Przebiegi (co biegło i co pobiegnie) |
+| F2 | Przebiegi: nadchodzące z 6 h na górze, kreska „teraz”, wykonane pod nią; linie crona jednej relacji o tej samej porze to jeden wiersz „N datasety” (Enter rozwija) |
 | F3 | Relacje (Ins = nowa, Del = usuń, Enter = otwórz, `e` = edytuj w oknie relacji) |
 | F4 | Kopie (Enter/Tab do migawek, Enter na migawce albo F7 przegląda pliki, F9 przywraca) |
 | F5 | Szablony |
@@ -354,7 +354,8 @@ połączenie lub zabite lokalne zadanie nie zostawi gościa zamrożonego. Potrze
 `deploy.sh --join <pakiet> --allow-quiesce`, co instaluje `zfs-quiesce-helper.sh` i regułę sudo
 dla tego jednego skryptu. Gdy nie zrobisz żadnego z tych dwóch, obowiązuje domyślna polityka
 degradacji: migawka `_crash_` i kod wyjścia 8 (zobacz wyżej); z `,strict` zadanie kończy się
-błędem bez migawki. Źródło lokalne zamraża gości na tym hoście.
+błędem bez migawki. Zakres bez dysku gościa (`vm-N-disk-M`, `subvol-N-disk-M`) nie ma czego
+zamrażać i uprawnień nie potrzebuje: zwykła migawka, kod 0 (U188). Źródło lokalne zamraża gości na tym hoście.
 
 Spójność systemu plików to nie spójność aplikacji. Dla migawki spójnej z bazą danych umieść własną
 logikę zamrażania silnika bazy (`FLUSH TABLES WITH READ LOCK`, tryb backupu Postgresa, ...) w
@@ -1076,6 +1077,12 @@ notify       = pulled
   rusza z `-X` na dokładnie ten dysk i ostrzega; przycinanie i atomowe `-r` nie umieją pominąć
   dziecka, więc nie ruszają (`rc=76`, alarm). Zdalne drzewo, którego nie da się wylistować, rusza
   jak dotąd, z ostrzeżeniem. Cel kopii nie jest czytany.
+- **Kopia lokalna pasywna zasilana przez pvesr** (`local-backup --passive`, U161/U181). Migawki
+  przychodzą tu z repliki `pvesr`, więc relacja czyta `/etc/pve/replication.cfg`: progi monitora
+  dostają odstęp repliki (ostrzeżenie = próg + odstęp, co najmniej 2x odstęp; alarm co najmniej
+  3x), a godzina kopii każdego poziomu przesuwa się na 10 minut po biegu repliki, który przynosi
+  migawkę tego poziomu (np. kopia dzienna 01:11 za repliką `*/2:00` → 02:10). Kopia, która po
+  przesunięciu przechodzi przez północ, przesuwa też dzień tygodnia albo miesiąca.
 - `recursive` steruje wszystkimi trzema wygenerowanymi liniami z jednej deklaracji: `no` = ten
   dataset, `flat` = `-R` przy transferze, `delsnaps -R`, `check-snap-age -R`; `atomic` = `-r` przy
   transferze z tym samym `-R` dla prune i strażnika.
@@ -1185,11 +1192,17 @@ powyższe wartości domyślne. To, że środowisko wygrywa z plikiem, sprawia, �
 | `[alerts] warnings` | `ZFS_WARN_MODE` |
 | `[alerts] all_ok_mail` | `ZFS_DIGEST_QUIET` |
 | `[alerts] stats_days` | `ZFS_DIGEST_DAYS` |
-| `[alerts] site` | `ZFS_ALERT_SITE`: nazwa instalacji w temacie zbiorczego maila i maili alertów (`notify-fail.sh`, `notify-warn.sh`), `[ZFS] <site> <host>`, oraz w nazwie nadawcy, gdy host ma sendmail; brak albo `-` daje pełną nazwę hosta |
+| `[alerts] site` | `ZFS_ALERT_SITE`: nazwa instalacji w temacie zbiorczego maila i maili alertów (`notify-fail.sh`, `notify-warn.sh`), `[ZFS][REPORT|WARNING|ALERT] <site> <host>`, oraz w nazwie nadawcy, gdy host ma sendmail; brak albo `-` daje pełną nazwę hosta. Znacznik po `[ZFS]` mówi, jaki to mail (dla reguł poczty): `REPORT` raport dzienny, `WARNING` ostrzeżenie, zajętość puli albo przyrost danych, `ALERT` nieudany bieg |
 | `[alerts] repeat_after` | `ZFS_ALERT_COOLDOWN` (liczba sekund albo `30m`, `4h`) |
 | `[capacity] threshold` | `ZFS_CAPACITY_THRESHOLD` |
 | `[capacity] guard`, `guard_at`, `guard_target`, `guard_min_keep` | `ZFS_GUARD*` (strażnik pojemności) |
 | `[growth] alert`, `factor`, `min_mib`, `max_ratio_pct`, `days` | `ZFS_GROWTH_*` (strażnik przyrostu) |
+
+Strażnik przyrostu (`growth-guard.sh`, cron co godzinę) pilnuje datasetów z linii retencji
+(`delsnaps.sh`) configów tego hosta. Zdalny wpis takiej linii (relacja „tylko migawki na
+źródle”: migawki i retencję robi kolektor) jest liczony na źródle przez ssh, z tymi samymi
+opcjami, z którymi łączy się ta linia, i progami `[growth]` kolektora; temat alarmu podaje
+źródło, dataset i relację. Host bez własnego configu nie ma czego pilnować: kod 0, bez maila.
 
 `deploy.sh` zapisuje `/etc/zfs-alert.conf` jednorazowo, z opisem każdego klucza, i nigdy go nie
 nadpisuje, więc ręcznie edytowany tryb przeżywa każde ponowne uruchomienie i aktualizację; host
@@ -1235,7 +1248,7 @@ notify-fail.sh ...; [ $rc -ge 3 ] && notify-fail.sh ...`).
 |---|---|---|
 | `notify-fail.sh` | Każde zadanie zwracające kod różny od zera (awaria `snapsend`/`snapget`/`delsnaps`), `check-snap-age.sh` CRITICAL/UNKNOWN albo pulę, która nie jest ONLINE | `daily`: dopisuje `epoch<TAB>ALERT<TAB>label<TAB>detail` do kolejki i nie wysyła maila. `immediate`: wysyła mail od razu, z limitem częstotliwości per wiadomość |
 | `notify-warn.sh` | `check-snap-age.sh` WARNING (robi się nieświeże, jeszcze nie CRITICAL) | Ta sama kolejka z poziomem `WARN`, zgodnie z `ZFS_WARN_MODE` |
-| `alert-digest.sh` | | Jedyny mail o backupie, jaki host wysyła w trybie `daily`. Raz dziennie wysyła jedną wiadomość z tematem `[ZFS] <host> <date> STAN: OK\|UWAGA -- N alert / M warn`. Pierwszy blok to stan *teraz* (pule oraz tabela zadań z okna `ZFS_DIGEST_DAYS`); drugi to to, co *się wydarzyło*: najpierw ustalenia ALERT, potem WARNING, a po każdym to, co ustalenie faktycznie mówiło. Cichy dzień ma inny temat (`... cisza, kanal sprawny (raport okresowy)`), żeby nie dało się go pomylić z mailem z ustaleniami. Jeśli `mail` zawiedzie, ustalenia wracają do kolejki, a skrypt kończy się kodem różnym od zera |
+| `alert-digest.sh` | | Jedyny mail o backupie, jaki host wysyła w trybie `daily`. Raz dziennie wysyła jedną wiadomość z tematem `[ZFS][REPORT] <host> <date> STAN: OK\|UWAGA -- N alert / M warn`. Pierwszy blok to stan *teraz* (pule oraz tabela zadań z okna `ZFS_DIGEST_DAYS`); drugi to to, co *się wydarzyło*: najpierw ustalenia ALERT, potem WARNING, a po każdym to, co ustalenie faktycznie mówiło. Cichy dzień ma inny temat (`... cisza, kanal sprawny (raport okresowy)`), żeby nie dało się go pomylić z mailem z ustaleniami. Jeśli `mail` zawiedzie, ustalenia wracają do kolejki, a skrypt kończy się kodem różnym od zera |
 | `check-pool-capacity.sh` | Pulę albo dataset z refquota zbliżającą się do zapełnienia, zanim jakiekolwiek zadanie przez to zawiedzie. Zgłasza przez `notify-fail.sh`, więc trafia do tego samego digestu | Cron, domyślny próg 90% (`ZFS_CAPACITY_THRESHOLD`) |
 | `capacity-guard.sh` | Opcjonalny (domyślnie `off`): gdy pula przekroczy `ZFS_GUARD_AT` (domyślnie 89%), usuwa wyłącznie migawki, które można bezpiecznie usunąć: te należące do lokalnych linii `delsnaps` tego hosta, nigdy z holdem, nigdy najnowszą migawkę datasetu. Każda wątpliwość oznacza, że nie usuwa nic | `[capacity]` w `settings.ini` |
 | `growth-guard.sh` | Opcjonalny (domyślnie `off`), tylko alert: oznacza przyrost będący wielokrotnością (`ZFS_GROWTH_FACTOR`, domyślnie 5) niedawnej normy datasetu, a przy tym słabo kompresowalny, co jest sygnaturą masowego szyfrowania plików. Niczego nie usuwa i niczego nie wstrzymuje | `[growth]` w `settings.ini` |

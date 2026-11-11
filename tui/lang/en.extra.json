@@ -932,6 +932,21 @@
 "Tak, teraz": "Yes, now",
 "Dysk $POOL jest podłączony. Zacząć pierwszą kopię teraz?\\n\\nKopia biegnie w tle, także po wyjściu z programu. Stan: F2 Przebiegi.": "Disk $POOL is connected. Start the first copy now?\\n\\nThe copy runs in the background, also after you leave the program. Progress: F2 Runs.",
 "relacja %s (pvesr)": "relation %s (pvesr)",
-"brak kopii pvesr na tym hoście": "no pvesr copies on this host",
-"Pasywnie = istniejące migawki źródła: idzie stan z ostatniej z nich, nie bieżący; dataset bez migawek nie jest kopiowany.": "Passive = the source's existing snapshots: the state as of the newest of them goes, not the current state; a dataset without snapshots is not copied."
+"migawki tylko na źródle %s, bez kopii na tym hoście": "snapshots on the source %s only, no copies on this host",
+"Pasywnie = istniejące migawki źródła: idzie stan z ostatniej z nich, nie bieżący; dataset bez migawek nie jest kopiowany.": "Passive = the source's existing snapshots: the state as of the newest of them goes, not the current state; a dataset without snapshots is not copied.",
+"Zajęte": "Used",
+"zajęte %s (%s z %s)": "used %s (%s of %s)",
+"UWAGA: kopia tej repliki właśnie biegnie (od $SINCE). Usunięcie jej nie przerywa: dobiegnie do końca i odłączy dysk.": "NOTE: a copy of this replica is running now (since $SINCE). Removing the replica does not stop it: it runs to its end and exports the disk.",
+"PRZERWANY": "INTERRUPTED",
+"kopia trwa od %s": "copy running since %s",
+"bez migawek -- pasywna replika go nie skopiuje": "no snapshots -- a passive replica will not copy it",
+"kopia trwa": "copy running",
+"przerwana -- następna kopia wznowi ją od miejsca przerwania": "interrupted -- the next copy resumes it where it stopped",
+"przerwana, wznowi się": "interrupted, will resume",
+"pula spoza relacji i replik -- Enter wybiera": "a pool outside relations and replicas -- Enter picks it",
+"datasetów": "datasets",
+"PADŁ": "FAILED",
+"PADŁ %d/%d": "FAILED %d/%d",
+"dysk podłączony, kopia za ~%s": "disk connected, copy in ~%s",
+"%s -- szczegóły w F6": "%s -- details in F6"
 }

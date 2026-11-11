@@ -63,6 +63,14 @@ KD='[0-9]{4}\.[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2}'   # komorka Kiedy: "rrrr.mm.
 # Sama LISTA (lewa strona ramki): wiersz listy dzieli linie z wierszem panelu, a panel ma
 # 'OK', 'BŁĄD (rc=1)', 'wysyłka' we wlasnych slowach -- wzorzec z '.*' bez tego lapie panel.
 lst() { printf '%s\n' "$1" | sed 's/║│.*//'; }
+# U166: F2 pokazuje nadchodzace tylko z 6 h. Bieg dobowy (np. 00:21) widac z "teraz" na
+# godzine przed nim: now_before HH:MM -> epoch godzine przed najblizszym HH:MM po $NOW
+# (czas lokalny maszyny testowej, jak w GUI).
+now_before() { "$PY" -c 'import sys, time
+t = int(sys.argv[1]) // 60 * 60
+while time.strftime("%H:%M", time.localtime(t)) != sys.argv[2]:
+    t += 60
+print(t - 3600)' "$NOW" "$1"; }
 zkeys() {   # <wzorzec wiersza listy> [argumenty zrodel: --status/--jobs/...] -> klucze
     local rx="$1" full ln dv n keys="" i
     shift
@@ -190,6 +198,10 @@ sj = copy.deepcopy(hj)
 sj.update(label="lab-vm101", direction="snapshot", tier="profile__relacja-lab__lsrc_hourly", schedule="7 * * * *",
           prefix="automated_hourly_", scope="hdd/lab/vm-101")
 jobs["jobs"].append(sj)
+# L4 (lab pve11 2026-11-11): retencja zrodla ma szczebel src_<szczebel> -- F2 bez przedrostka.
+rj = copy.deepcopy(sj)
+rj.update(tier="profile__relacja-lab__src_daily", schedule="41 * * * *", prefix="automated_daily_")
+jobs["jobs"].append(rj)
 json.dump(jobs, open(out + "/list-jobs.json", "w", encoding="utf-8"))
 PYEOF
 S4W="$(screen relacje down,down,down,down --width 260 --height 40 --monitors "$C3D/monitor.json" --jobs "$C3D/list-jobs.json")"
@@ -197,7 +209,7 @@ F2W="$(screen zadania '' --width 220 --height 400 --monitors "$C3D/monitor.json"
 # W2 (kampania 2026-11-03): szczebel chodzi, drugi czeka -- relacja "aktualne", nie "czeka".
 if hasE "$S4W" 'Kopie +aktualne' && hasE "$S4W" 'hourly +aktualne   alarm po 150m' \
    && hasE "$S4W" 'daily +czeka na pierwszy termin   pierwsza: .*alarm po 48h' && ! hasE "$S4W" 'daily +.*najnowsza sprzed' \
-   && has "$F2W" 'tylko migawka' && ! has "$F2W" 'lsrc_' && ! hasE "$S4" 'czeka na pierwszy'; then
+   && has "$F2W" 'tylko migawka' && ! has "$F2W" 'src_' && ! hasE "$S4" 'czeka na pierwszy'; then
     ok "U137 C3: szczebel przed pierwszym biegiem -- 'czeka na pierwszy termin' z data najblizszego biegu z crona, kazdy szczebel osobno z progiem; F2: 'tylko migawka' bez lsrc_; kontrola bez WAITING -- bez 'czeka'"
 else
     bad "U137 C3: stan czeka / F2" "$(printf '%s' "$S4W" | grep -E 'Kopie|hourly|daily' | head -6)" "$(printf '%s' "$F2W" | grep -E 'migawk|lsrc|transfer' | head -4)"
@@ -767,8 +779,10 @@ else
 fi
 L1=$(lst "$ZSORT0" | grep -nE "^║ $KD .*wysyłka .*nadchodzący" | head -1 | cut -d: -f1)
 L2=$(lst "$ZSORT0" | grep -nE "^║ $KD .*kopia .*nadchodzący" | head -1 | cut -d: -f1)
-if [ -n "$L1" ] && [ -n "$L2" ] && [ "$L1" -lt "$L2" ]; then
-    ok "zadania: os czasu -- 'wysyłka hourly' (biegnie w ciagu godziny) stoi przed 'kopia daily' (biegnie dopiero jutro)"
+# U166: czas malejaco, nadchodzace tylko z 6 h -- 'kopia daily' (jutro) nie wisi na liscie.
+TW=$(lst "$ZSORT0" | grep -E "^║ $KD .*wysyłka .*nadchodzący" | grep -oE '[0-9]{2}:[0-9]{2}' | tr '\n' ' ')
+if [ -n "$L1" ] && [ -z "$L2" ] && [ "$TW" = "$(printf '%s\n' $TW | sort -r | tr '\n' ' ')" ] && [ "$(printf '%s\n' $TW | wc -l)" -ge 2 ]; then
+    ok "zadania: os czasu malejaco (U166) -- 'wysyłka hourly' od najdalszej; 'kopia daily' (jutro, poza 6 h) nie stoi na liscie"
 else
     bad "zadania: kolejnosc wierszy na osi czasu" "L1=$L1 L2=$L2" "$ZSORT0"
 fi
@@ -1014,18 +1028,19 @@ rm -f "$FPF"
 GJ="$FIX/jobs-group.json"; GS="$FIX/status-group.json"; GM="$FIX/monitors-group.json"
 G="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 400 2>&1)"
 GR="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen relacje --width 200 2>&1)"
-# F2 Przebiegi: wiersz to BIEG jednej LINII CRONA. a, b, c maja kazde swoja linie (wlasna
-# etykiete) pod tym samym harmonogramem (:05), d inny (:10): wierszy :05 jest trzy razy tyle
-# co :10 -- kazda linia ma swoj bieg i swoj wynik, nic sie nie zlewa. Panel wiersza a: kierunek
-# synchro '<>' (z rekordu, choc linia crona to pull) i ZRODLO/CEL tego jednego datasetu.
-GN="$(lst "$G" | grep -E "^║ $KD +sync-test +pobranie " | sed -E 's/^║ [0-9]{4}\.[0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort | uniq -c | sed -E 's/^ *//' | tr '\n' ',')"
+# F2 Przebiegi: a, b, c maja kazde swoja linie (wlasna etykiete) pod tym samym harmonogramem
+# (:05), d inny (:10). U171 (2026-11-09): linie jednej relacji, czynnosci i pory to JEDEN wiersz
+# "3 datasety" -- wierszy :05 jest tyle co :10, a :05 mowi "3 datasety"; d (inna pora) osobno.
+# Panel: kierunek synchro '<>' (z rekordu, choc linia crona to pull) i ZRODLO pierwszego datasetu.
+GN="$(lst "$G" | grep -E "^║ $KD +sync-test +(▸ )?pobranie " | sed -E 's/^║ [0-9]{4}\.[0-9]{2}\.[0-9]{2} [0-9]{2}:([0-9]{2}) .*/\1/' | sort | uniq -c | sed -E 's/^ *//' | tr '\n' ',')"
 GN1="$(printf '%s' "$GN" | cut -d, -f1)"; GN2="$(printf '%s' "$GN" | cut -d, -f2)"
 GZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 60 2>&1)"
 if [ "$(printf '%s' "$GN" | tr -cd ',' | wc -c | tr -d ' ')" -eq 2 ] && [ "${GN1#* }" = "05" ] && [ "${GN2#* }" = "10" ] \
-    && [ "${GN1%% *}" -eq $(( ${GN2%% *} * 3 )) ] && [ "${GN2%% *}" -ge 1 ] \
+    && [ "${GN1%% *}" -eq "${GN2%% *}" ] && [ "${GN2%% *}" -ge 1 ] \
+    && hasE "$G" "^║ $KD +sync-test +▸ pobranie standard_hourly: 3 datasety " \
     && hasE "$G" "^║ $KD +backup-test +pobranie +standard_hourly: e " \
-    && hasE "$GZ" 'Kierunek +pve20 ↔ sync-test' && hasE "$GZ" 'Źródło +sync-test:hdd/lab/a'; then
-    ok "zadania: F2 -- kazda linia crona ma swoj bieg (a/b/c pod :05 = 3x wierszy d pod :10); panel: synchro '<>' mimo ze linia to pull, zrodlo tego datasetu"
+    && hasE "$GZ" 'Kierunek +pve20 ↔ sync-test' && hasE "$GZ" 'Zakres +3 datasetów w .*: a, b, c'; then
+    ok "zadania: F2 -- a/b/c pod :05 to jeden wiersz '3 datasety' na pore (U171), d pod :10 osobno; panel: synchro '<>' mimo ze linia to pull, zakres trzech datasetow"
 else
     bad "zadania: F2 grupowanie i symbol synchro" "minuty wierszy sync-test (liczba minuta): $GN" "$GZ"
 fi
@@ -1165,12 +1180,16 @@ if [ "$(printf '%s\n' "$GEL" | grep -cE "^║ $KD +sync-test .*BŁĄD rc=1")" = 
 else
     bad "zadania: błąd biegu na F2" "$(printf '%s\n' "$GE" | grep -E '^║ (sync|backup)-test|teraz' | head -8)" "$(printf '%s\n' "$GEP" | grep -E 'Wynik|Powód|Ten bieg')"
 fi
-if hasE "$GE" 'Błąd +2026\.09\.08 13:48 +[^ ]*/lab/b +rc=1' && has "$GE" 'Refusing' \
-   && hasE "$GE" 'Wyrzucono +2026\.09\.08 12:16  hdd/lab/a: 1 snapshot' \
-   && has "$GE" 'błędów 1   w 3 zadaniach'; then
+# U166/U171: kursor startuje pod "teraz" (bieg jednego datasetu); panel trzech zadan ma wiersz
+# zbiorczy a/b/c -- ustawiamy kursor na nim.
+GEA="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES" --screen zadania --width 200 --height 50 \
+    --keys "$(zkeys "^║ $KD +sync-test +▸ pobranie .*3 datasety +nadchodzący" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES")" 2>&1)"
+if hasE "$GEA" 'Błąd +2026\.09\.08 13:48 +[^ ]*/lab/b +rc=1' && has "$GEA" 'Refusing' \
+   && hasE "$GEA" 'Wyrzucono +2026\.09\.08 12:16  hdd/lab/a: 1 snapshot' \
+   && has "$GEA" 'błędów 1   w 3 zadaniach'; then
     ok "zadania: panel wiersza mowi, ktory dataset i dlaczego (blad z dziennika) oraz co bieg wyrzucil z kopii"
 else
-    bad "zadania: panel błąd/wyrzucono" "$(printf '%s\n' "$GE" | grep -E 'Błąd|Wyrzuc|błędów')"
+    bad "zadania: panel błąd/wyrzucono" "$(printf '%s\n' "$GEA" | grep -E 'Błąd|Wyrzuc|błędów|Zakres')"
 fi
 # PRZEBIEGI: WIERSZE TYLKO DO CZYTANIA. Kreska "── teraz HH:MM" (i w grupach naglowek
 # "▸ NAZWA") nie jest biegiem: kursor jej nie zaznacza (panel zawsze mowi o biegu: 'Ten bieg'
@@ -1192,37 +1211,38 @@ json.dump(st, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 PRARGS="--status $GS --jobs $GEJ --monitors $GM --stats $PRS"
 prz() {   # <klawisze> [extra] -> ekran F2
-    # "home": F2 startuje przy "teraz"; te przypadki licza klawisze od gory listy
-    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PRARGS --screen zadania --keys "home${1:+,$1}" --width 200 --height 60 "${@:2}" 2>&1
+    # U166: F2 startuje na wykonanym biegu zaraz pod "teraz" -- najblizszy nadchodzacy to "up"
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PRARGS --screen zadania --keys "$1" --width 200 --height 60 "${@:2}" 2>&1
 }
 PR0="$(prz "")"
 PR0L="$(lst "$PR0")"
-PRL="$(printf '%s\n' "$PR0L" | grep -nE "^║ ($KD|── teraz)" | head -3 | cut -d: -f1 | tr '\n' ' ')"
+# U166: czas malejaco -- nadchodzace nad kreska, wykonany pod nia (ostatnie trzy wiersze listy).
+PRL="$(printf '%s\n' "$PR0L" | grep -nE "^║ ($KD|── teraz)" | tail -3 | cut -d: -f1 | tr '\n' ' ')"
 set -- $PRL
 if hasE "$PR0L" "^║ $KD +sync-test +pobranie .* OK( |$)" && hasE "$PR0L" '^║ ── teraz [0-9]{2}:[0-9]{2}' && [ $# -ge 3 ] \
-   && printf '%s\n' "$PR0L" | sed -n "${1}p" | grep -qE ' OK( |$)' && printf '%s\n' "$PR0L" | sed -n "${2}p" | grep -q 'teraz' \
-   && printf '%s\n' "$PR0L" | sed -n "${3}p" | grep -q 'nadchodzący'; then
-    ok "przebiegi: wiersze tylko do czytania (a) -- kreska 'teraz' stoi miedzy wykonanym biegiem OK a pierwszym nadchodzacym"
+   && printf '%s\n' "$PR0L" | sed -n "${1}p" | grep -q 'nadchodzący' && printf '%s\n' "$PR0L" | sed -n "${2}p" | grep -q 'teraz' \
+   && printf '%s\n' "$PR0L" | sed -n "${3}p" | grep -qE ' OK( |$)'; then
+    ok "przebiegi: wiersze tylko do czytania (a) -- kreska 'teraz' stoi miedzy najblizszym nadchodzacym (nad nia) a wykonanym biegiem OK (pod nia, U166)"
 else
     bad "przebiegi: kreska 'teraz'" "linie: $PRL" "$PR0"
 fi
-PRD="$(prz down)"; PRU="$(prz down,up)"; PRUU="$(prz down,down,up,up)"; PRUP="$(prz up)"
-# 'down' z wykonanego przeskakuje kreske na pierwszy nadchodzacy; 'up' z niego wraca na wykonany
-# (nie na kreske -- na kresce panel by zniknal); 'up' w gore od zerowego wiersza zostaje.
+PRD="$(prz up)"; PRU="$(prz up,down)"; PRUU="$(prz up,up,down,down)"; PRUP="$(prz down)"
+# Start na wykonanym (pod kreska): 'up' przeskakuje kreske na najblizszy nadchodzacy; 'down' z niego
+# wraca na wykonany (nie na kreske -- na kresce panel by zniknal); 'down' z ostatniego wiersza zostaje.
 if has "$PRD" 'Nadchodzący bieg' && ! has "$PRD" '── Ten bieg' \
    && has "$PRU" '── Ten bieg' && ! has "$PRU" 'Nadchodzący bieg' \
    && has "$PRUU" '── Ten bieg' && ! has "$PRUU" 'Nadchodzący bieg' \
    && has "$PRUP" '── Ten bieg'; then
-    ok "przebiegi: wiersze tylko do czytania (b) -- kursor nie staje na kresce 'teraz': down przeskakuje ja, up z pierwszego nadchodzacego wraca na wykonany (panel zawsze o biegu)"
+    ok "przebiegi: wiersze tylko do czytania (b) -- kursor nie staje na kresce 'teraz': up przeskakuje ja, down z najblizszego nadchodzacego wraca na wykonany (panel zawsze o biegu)"
 else
-    bad "przebiegi: kursor na kresce" "down: $(printf '%s\n' "$PRD" | grep -E 'Ten bieg|Nadchodzący')" "down,up: $(printf '%s\n' "$PRU" | grep -E 'Ten bieg|Nadchodzący')" "down,down,up,up: $(printf '%s\n' "$PRUU" | grep -E 'Ten bieg|Nadchodzący')"
+    bad "przebiegi: kursor na kresce" "up: $(printf '%s\n' "$PRD" | grep -E 'Ten bieg|Nadchodzący')" "up,down: $(printf '%s\n' "$PRU" | grep -E 'Ten bieg|Nadchodzący')" "up,up,down,down: $(printf '%s\n' "$PRUU" | grep -E 'Ten bieg|Nadchodzący')"
 fi
 PXL="$(mktemp)"; : > "$PXL"
-# Start BEZ klawiszy: kursor przy "teraz" -- na najblizszym nadchodzacym biegu, nie na
-# najstarszym wykonanym (przejscie GUI pve10, 2026-10-28).
+# Start BEZ klawiszy: kursor zaraz pod "teraz" -- na najswiezszym wykonanym biegu (U166, wlasciciel
+# 2026-11-09; wczesniej najblizszy nadchodzacy, przejscie GUI pve10 2026-10-28).
 PRZS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PRARGS --screen zadania --keys "" --width 200 --height 60 2>&1)"
-if hasE "$PRZS" 'Nadchodzący bieg' && ! hasE "$PRZS" '── Ten bieg'; then
-    ok "przebiegi: F2 otwiera sie z kursorem przy 'teraz' (najblizszy nadchodzacy bieg)"
+if hasE "$PRZS" '── Ten bieg' && ! hasE "$PRZS" 'Nadchodzący bieg'; then
+    ok "przebiegi: F2 otwiera sie z kursorem zaraz pod 'teraz' (najswiezszy wykonany bieg, U166)"
 else
     bad "przebiegi: start kursora" "$(printf '%s\n' "$PRZS" | grep -E 'Ten bieg|Nadchodzący')"
 fi
@@ -1258,6 +1278,29 @@ if [ "$(printf '%s\n' "$PRW1L" | grep -cE "^║ $KD .* OK( |$)")" = 1 ] && [ "$(
 else
     bad "przebiegi: okno 72 h i bieg trwajacy" "pokazane: $(printf '%s\n' "$PRW1L" | grep -E 'OK|biegnie')" "schowane: $(printf '%s\n' "$PRW2L" | grep -E 'OK|biegnie')"
 fi
+# U167 (wlasciciel 2026-11-09): bez END, a procesu zfs-job juz nie ma (job-stats: rc -2) -- PRZERWANY,
+# nie "biegnie" bez konca; jak wykonany, F8 go chowa. Kontrola: rc -1 wyzej nadal 'biegnie'.
+PRX="$(mktemp)"
+"$PY" - "$GES" "$PRX" "$NOW" "$GEJ" <<'PYEOF'
+import datetime, json, sys
+st = json.load(open(sys.argv[1], encoding="utf-8"))
+now = int(sys.argv[3])
+j = json.load(open(sys.argv[4], encoding="utf-8"))
+d = [x["scope"].rsplit("/", 1)[-1] for x in j["jobs"] if x["label"] == "sync-test"][0]
+def iso(ts):
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone(datetime.timedelta(hours=2))).isoformat()
+st["runs"] = [{"label": "hourly backup (sync-test-%s)" % d, "start": iso(now - 7200), "end": "-", "rc": -2, "error": ""}]
+json.dump(st, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+PRX1L="$(lst "$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$PRX" --screen zadania --keys home --width 200 --height 60 2>&1)")"
+PRX2L="$(lst "$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$PRX" --screen zadania --keys home,F8 --width 200 --height 60 2>&1)")"
+rm -f "$PRX"
+if [ "$(printf '%s\n' "$PRX1L" | grep -cE "^║ $KD .* PRZERWANY( |$)")" = 1 ] && ! printf '%s\n' "$PRX1L" | grep -qE "^║ $KD .* biegnie( |$)" \
+   && ! printf '%s\n' "$PRX2L" | grep -q 'PRZERWANY'; then
+    ok "przebiegi U167: bieg bez END i bez zywego procesu (rc -2) -- 'PRZERWANY', nie 'biegnie'; F8 chowa go jak wykonany"
+else
+    bad "przebiegi U167: przerwany bieg" "$(printf '%s\n' "$PRX1L" | grep -E 'PRZERWANY|biegnie|BŁĄD')" "F8: $(printf '%s\n' "$PRX2L" | grep -E 'PRZERWANY')"
+fi
 # Kursor na OSTATNIM wierszu okna, gdy nizej sa dalsze: wiersz byl zastepowany przez
 # "... jeszcze N" i biegu z panelu nie bylo na liscie. Niska wysokosc, kursor przy "teraz":
 # czas biegu z panelu (Kiedy RRRR-MM-DD GG:MM) musi stac na liscie.
@@ -1283,7 +1326,7 @@ else
 fi
 PRF="$(prz F7 --exec-log "$PXL")"
 PRF_LOG="$(cat "$PXL")"
-PRG="$(prz down,F7 --exec-log "$PXL")"
+PRG="$(prz up,F7 --exec-log "$PXL")"
 if has "$PRF" 'ten bieg już był -- F7 uruchamia zadanie z wiersza nadchodzącego' && [ -z "$PRF_LOG" ] \
    && ! has "$PRG" 'ten bieg już był' && grep -q 'zfs-job.sh' "$PXL"; then
     ok "przebiegi: wiersze tylko do czytania (c) -- F7 na wykonanym biegu mowi 'ten bieg już był' i nic nie uruchamia; ten sam F7 na nadchodzacym uruchamia linie crona"
@@ -1297,14 +1340,14 @@ rm -f "$PXL"
 # Fikstura: wykonany bieg konczy sie o NOW-5400 (PRS), pierwszy wiersz listy; migawki celu
 # (zfs-snapshots.json, dataset a..d pod 192.168.28.50) sa o 1788955201 (PO biegu, 11:20),
 # 1788951601 (PRZED biegiem, 10:20) i wczesniejsza -- wybrana ma byc ta z 10:20, nie najnowsza.
-# Na biegu NADCHODZACYM (down) nie ma chwili: fokus zostaje na liscie, Enter tylko go przenosi.
+# Na biegu NADCHODZACYM (up, U166) nie ma chwili: fokus zostaje na liscie, Enter tylko go przenosi.
 PZ="--zfs-tree $P10/zfs-tree.json --zfs-snapshots $P10/zfs-snapshots.json"
 PKX="$(mktemp)"; : > "$PKX"
 PK4="$(prz F4 --exec-log "$PKX" $PZ)"
 PK4E="$(prz F4,enter --exec-log "$PKX" $PZ)"; PK4LOG="$(cat "$PKX")"
 : > "$PKX"
-PK4N="$(prz down,F4 --exec-log "$PKX" $PZ)"
-PK4NE="$(prz down,F4,enter --exec-log "$PKX" $PZ)"; PK4NLOG="$(cat "$PKX")"
+PK4N="$(prz up,F4 --exec-log "$PKX" $PZ)"
+PK4NE="$(prz up,F4,enter --exec-log "$PKX" $PZ)"; PK4NLOG="$(cat "$PKX")"
 if has "$PK4" '╔═ Kopie na pve20' && hasE "$PK4" 'hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]: \[Migawki\]' \
    && hasE "$PK4" 'Migawka +@automated_hourly_2026-09-09_10-20-01' && hasE "$PK4" 'Dataset +hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]' && ! has "$PK4" 'Enter/Tab do migawek' \
    && printf '%s\n' "$PK4LOG" | grep -Eq "zfs-backup.sh'? browse sync-test --ask --snapshot=hdd/backups/192\.168\.28\.50/hdd/lab/[a-d]@automated_hourly_2026-09-09_10-20-01\$" \
@@ -1324,8 +1367,8 @@ rm -f "$PKX"
 # (run_cursor_for: ten sam bieg -- zadanie i chwila; wykonanego, ktory zniknal, zastepuje
 # pierwszy nadchodzacy). F9 przeklada wiersze do grup, a bieg pod kursorem sie nie zmienia.
 pr_when() { printf '%s\n' "$1" | grep -oE 'Kiedy +20[0-9]{2}\.[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1; }
-PRH="$(prz F8)"; PRHH="$(prz down,F8)"; PRHR="$(prz down,F8,F8)"; PRN="$(prz down)"
-PRG9="$(prz down,F9)"
+PRH="$(prz F8)"; PRHH="$(prz up,F8)"; PRHR="$(prz up,F8,F8)"; PRN="$(prz up)"
+PRG9="$(prz up,F9)"
 PRHL="$(lst "$PRH")"; PRHRL="$(lst "$PRHR")"; PRG9L="$(lst "$PRG9")"
 if ! hasE "$PRHL" "^║ $KD +sync-test +pobranie .* OK( |$)" && ! hasE "$PRHL" '^║ ── teraz' && has "$PRH" '-- tylko nadchodzące' && has "$PRH" 'Nadchodzący bieg' \
    && [ -n "$(pr_when "$PRN")" ] && [ "$(pr_when "$PRN")" = "$(pr_when "$PRH")" ] && [ "$(pr_when "$PRN")" = "$(pr_when "$PRHH")" ] \
@@ -1333,7 +1376,7 @@ if ! hasE "$PRHL" "^║ $KD +sync-test +pobranie .* OK( |$)" && ! hasE "$PRHL" '
    && [ "$(pr_when "$PRN")" = "$(pr_when "$PRG9")" ] && hasE "$PRG9L" '^║ ▸ sync-test' && hasE "$PRG9L" '^║ ── teraz'; then
     ok "przebiegi: F8 chowa wykonane i kreske, drugi F8 je przywraca; kursor zostaje na tym samym biegu po F8 i po F9 (grupa ma swoja kreske)"
 else
-    bad "przebiegi: F8/F9 i kursor" "bez F8: $(pr_when "$PRN")" "F8: $(pr_when "$PRH")" "down,F8: $(pr_when "$PRHH")" "down,F8,F8: $(pr_when "$PRHR")" "down,F9: $(pr_when "$PRG9")"
+    bad "przebiegi: F8/F9 i kursor" "bez F8: $(pr_when "$PRN")" "F8: $(pr_when "$PRH")" "up,F8: $(pr_when "$PRHH")" "up,F8,F8: $(pr_when "$PRHR")" "up,F9: $(pr_when "$PRG9")"
 fi
 rm -f "$PRS"
 GER="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES" --screen relacje --width 200 2>&1)"
@@ -1473,9 +1516,9 @@ if hasE "$ZPP" 'Cel +pve10:hdd/backups/192.168.28.99/hdd/lab/vm-101' && ! hasE "
 else
     bad "zadania: porzadki zrodlo/cel" "$ZPP"
 fi
-ZH2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --keys down,down 2>&1)"
-# down,down: widok domyslny grupuje wiersze relacji -- oba "(bez rel.)" sa pierwsze
-ZH2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --keys down,down --width 160 2>&1)"
+# kursor na wierszu wysylki (U166: lista malejaco, start przy najblizszym biegu)
+ZH2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 160 \
+    --keys "$(zkeys "^║ $KD +pve9 +wysyłka " --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json")" 2>&1)"
 if has "$ZH2" 'hdd/vm-disks/subvol-100-disk-0' && has "$ZH2" 'pve9:hdd/backups' && hasE "$ZH2" 'Źródło +hostA:hdd/vm-disks'; then
     ok "zadania: dla WYSYLKI zrodlo jest tutaj, a cel u peera"
 else
@@ -1483,7 +1526,9 @@ else
 fi
 # F2 Przebiegi: kazdy bieg to wiersz 'dd.mm HH:MM  relacja  zadanie ...'; wiersze wysylki,
 # pobrania i kopii sa na liscie (szeroko, 160: przy 120 kolumna Co by odpadla), nie na jednym numerze.
-ZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 160 --height 100 2>&1)"
+# U166: nadchodzace tylko z 6 h -- "kopia" (dobowa, 00:21) widac godzine przed jej biegiem.
+NOWK="$(now_before 00:21)"
+ZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOWK" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 160 --height 100 2>&1)"
 if hasE "$ZH" "^║ $KD +pve9 +wysyłka " && hasE "$ZH" "^║ $KD +pve1 +pobranie " && hasE "$ZH" "^║ $KD +\(bez rel\.\) +kopia "; then
     ok "zadania: wysylka, pobranie i kopia na hoscie w liscie; zadanie bez etykiety mowi '(bez rel.)' (kierunek w panelu, U21)"
 else
@@ -1844,7 +1889,7 @@ else
 fi
 A="$(od "" --width 200 --height 50)"
 if hasE "$A" 'sejf-a .*nośnik niepodłączony -- podłącz go, potem Ctrl-R' && hasE "$A" 'sejf-b .*nośnik niepodłączony -- podłącz go, potem Ctrl-R' \
-   && has "$A" 'inny dysk -- pula spoza relacji i replik' \
+   && hasE "$A" 'inny dysk +pula spoza relacji i replik' \
    && hasE "$A" "Dataset +$VM101" && hasE "$A" 'Relacja +duplikat +backup' && hasE "$A" 'Migawek +3' && ! hasE "$A" 'Migawka +@'; then
     ok "kopie: repliki z nosnikiem niepodlaczonym -- wiersz z uwaga 'podłącz go, potem Ctrl-R'; ostatni wiersz 'inny dysk'; panel: Dataset/Relacja/Migawek, bez Migawki gdy fokus na liscie"
 else
@@ -1899,7 +1944,7 @@ else
     bad "kopie: F9 na inny dysk" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 A="$(od end)"
-if has "$A" 'inny dysk -- pula spoza relacji i replik' && has "$A" 'zpool import'; then
+if hasE "$A" 'inny dysk +pula spoza relacji i replik' && has "$A" 'zpool import'; then
     ok "kopie: kursor na 'inny dysk' -- prawy panel i Szczegoly mowia o puli spoza relacji (zpool import)"
 else
     bad "kopie: panel 'inny dysk'" "$A"
@@ -2476,9 +2521,9 @@ else
 fi
 # F2 Przebiegi: dwa zadania snaponly (hourly :39 i daily 01:49) to wiersze 'migawka hourly' i
 # 'migawka daily' -- rodzina (dawny Prefiks) jest w nazwie szczebla w kolumnie Co; werdykt
-# 'aktualne' jest na F3 (test 'relacje: dataset snaponly' wyzej). Wysokosc 400: dzienne
-# zadanie biegnie dopiero jutro, wiec stoi na koncu osi czasu.
-SO2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen zadania --width 200 --height 400 2>&1)"
+# 'aktualne' jest na F3 (test 'relacje: dataset snaponly' wyzej). U166: nadchodzace z 6 h --
+# "teraz" godzine przed dziennym biegiem (01:49), zeby stal na liscie obok godzinowego.
+SO2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$(now_before 01:49)" $SOA --screen zadania --width 200 --height 400 2>&1)"
 if hasE "$SO2" "^║ $KD +som +migawka +hourly: [^ ]+ +nadchodzący" && hasE "$SO2" "^║ $KD +som +migawka +daily: [^ ]+ +nadchodzący"; then
     ok "zadania: zadania snaponly to 'migawka' z wlasnym szczeblem (hourly, daily) w kolumnie Co"
 else
@@ -2519,7 +2564,7 @@ N="$(screen nosniki)"
 # Piec kolumn (Ostatni bieg, 2026-10-28): przy 80 znakach Harmonogram ustepuje (jest w panelu),
 # wiec wiersze czytane przy 120.
 NW="$(screen nosniki "" --width 120)"
-if hasE "$NW" '^║ sejf-a +odłączony +brak +- +co dobę 02:30 +║' && hasE "$NW" '^║ sejf-b +wewnętrzny +brak +- +po podłączen'; then
+if hasE "$NW" '^║ sejf-a +odłączony +- +brak +- +co dobę 02:30 +║' && hasE "$NW" '^║ sejf-b +wewnętrzny +- +brak +- +po podłączen'; then
     ok "nosniki: wiersz = replika, Typ nosnika slowem (U99), kiedy ostatnia aktualna kopia (Wykonana), harmonogram slowami (U21)"
 else
     bad "nosniki: wiersze" "$NW"
@@ -2527,7 +2572,7 @@ fi
 # Ostatni bieg (przejscie GUI pve10, 2026-10-28): calapula padla 4/4 rc=1, a lista mowila
 # tylko "Wykonana 22.10". Kolumna niesie wynik i czas ostatniego biegu z job-stats.
 NF="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" ${ALL%--stats*} --stats "$FIX/stats-replica-fail.json" --screen nosniki --width 160 --height 40 2>&1)"
-if hasE "$NF" '^║ sejf-a +odłączony +brak +BŁĄD rc=1 2026\.09\.11 22:02 +co dobę' && hasE "$NF" '^║ sejf-b +wewnętrzny +brak +- +po podłączen'; then
+if hasE "$NF" '^║ sejf-a +odłączony +- +brak +BŁĄD rc=1 2026\.09\.11 22:02 +co dobę' && hasE "$NF" '^║ sejf-b +wewnętrzny +- +brak +- +po podłączen'; then
     ok "nosniki: kolumna Ostatni bieg -- nieudany bieg repliki widac na liscie (BŁĄD rc=1 + czas)"
 else
     bad "nosniki: Ostatni bieg" "$NF"
@@ -2553,8 +2598,8 @@ else
     bad "nosniki: wyjasnienie stanu" "$NB"
 fi
 NE="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --screen nosniki 2>&1)"
-if has "$NE" 'Brak sekcji [replica:]' && has "$NE" 'NIE TEN DYSK' && has "$NE" 'add-replica NAZWA'; then
-    ok "nosniki: bez replik -- powiedziane, ze to brak konfiguracji, z legenda czterech stanow i komenda"
+if has "$NE" 'Na tym hoście nie ma jeszcze replik.' && has "$NE" 'NIE TEN DYSK' && ! has "$NE" 'Brak sekcji [replica:]' && ! has "$NE" 'add-replica NAZWA'; then
+    ok "nosniki: bez replik -- jedno zdanie (U179-3), legenda czterech stanow; bez powtorzen i ucietej komendy"
 else
     bad "nosniki: pusty" "$NE"
 fi
@@ -2570,9 +2615,9 @@ json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 RALL="--status $P10/status.json --jobs $P10/list-jobs.json --monitors $P10/monitor.json --replicas $P10/replicas.json --stats $RST"
 # F2 Przebiegi: replika z cronem to wiersz z terminem; replika 'po podłączeniu' nie ma terminu --
-# Kiedy '-', na koncu osi czasu, a panel mowi 'bez terminu' (nie wymyslona godzina). Wysokosc 400:
-# wiersz bez terminu jest ostatni.
-Z2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen zadania --width 200 --height 400 2>&1)"
+# Kiedy '-', na gorze osi czasu (U166: malejaco), a panel mowi 'bez terminu' (nie wymyslona godzina).
+# "Teraz" godzine przed kopia sejf-a (02:30) -- nadchodzace tylko z 6 h.
+Z2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$(now_before 02:30)" $RALL --screen zadania --width 200 --height 400 2>&1)"
 Z2K="$(zkeys '^║ - +sejf-b +replika ' $RALL)"
 Z2B="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen zadania --keys "$Z2K" --width 200 --height 60 2>&1)"
 if hasE "$Z2" "^║ $KD +sejf-a +replika +nadchodzący" && hasE "$Z2" '^║ - +sejf-b +replika +nadchodzący' && hasE "$Z2B" 'Kiedy +bez terminu'; then
@@ -2640,16 +2685,25 @@ iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(t))
 now = int(sys.argv[3]); st = json.load(open(sys.argv[7], encoding="utf-8"))
 st["runs"] = [{"label": r["label"], "start": iso(now - 3600 * k - 40), "end": iso(now - 3600 * k - 30), "rc": 0}
               for r in ui.runrows if r.get("label") for k in (1, 2)]
+# L1 (lab pve11 2026-11-11): kursor NIERUSZONY -> po drugim etapie na najswiezszy wykonany
+# (zaraz pod "teraz"); kursor RUSZONY przez uzytkownika -> zostaje na swoim biegu.
 ui.data.stats = st
 ui.apply_data(ui.data, full=False)
 i1 = ui.cursor["zadania"]; r1 = ui.runrows[i1]
-print("moved=%s same=%s upcoming=%s" % (i1 != i0, (r1.get("label"), r1.get("at")) == (r0.get("label"), r0.get("at")),
-                                         not r1.get("past")))
+first_past = next(i for i, r in enumerate(ui.runrows) if r.get("kind") == "run" and r.get("past") and not r.get("static"))
+ui2 = m.UI(sys.argv[2], files, m.Chars(False), int(sys.argv[3]), None)
+up = [i for i, r in enumerate(ui2.runrows) if r.get("kind") == "run" and r.get("at")]
+ui2.cursor["zadania"] = up[0]; ru = ui2.runrows[up[0]]
+ui2.data.stats = st
+ui2.apply_data(ui2.data, full=False)
+r2 = ui2.runrows[ui2.cursor["zadania"]]
+print("untouched_on_newest_past=%s moved_keeps=%s" % (r1.get("past") is True and i1 == first_past and r0 is not None,
+      (r2.get("label"), r2.get("at")) == (ru.get("label"), ru.get("at"))))
 PYEOF
 )"
 Z4="$(printf '%s' "$Z4" | tr -d '\r')"
-if has "$Z4" 'moved=True same=True upcoming=True'; then
-    ok "przebiegi: gdy job-stats dochodzi drugim etapem, kursor zostaje na tym samym nadchodzacym biegu (numer wiersza sie zmienia)"
+if hasE "$Z4" 'untouched_on_newest_past=True moved_keeps=True'; then
+    ok "przebiegi: job-stats drugim etapem -- nieruszony kursor na najswiezszy wykonany (pod 'teraz'), ruszony zostaje na swoim biegu"
 else
     bad "przebiegi: kursor po drugim etapie" "$Z4"
 fi
@@ -2692,7 +2746,7 @@ fi
 # kolumna Rodzaj (historia / migawki xN), panel: Rodzaj, Na dysku (z przykladem), Szyfrowane.
 # U93: "zdjecia" -> migawki; U99: kolumny listy Replika | Typ | Wykonana | Harmonogram.
 F6R="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen nosniki --width 200 --height 40 2>&1)"
-if hasE "$F6R" '║ Replika +Typ +Wykonana +Ostatni bieg +Harmonogram' && hasE "$F6R" 'Rodzaj +własne migawki -- replika' \
+if hasE "$F6R" '║ Replika +Typ +Zajęte +Wykonana +Ostatni bieg +Harmonogram' && hasE "$F6R" 'Rodzaj +własne migawki -- replika' \
    && hasE "$F6R" 'Na dysku +2 najnowsze migawki [a-z_]+ \(ok\. 2 dni wstecz\)' && hasE "$F6R" 'Ile migawek +nieustawione -- tyle, ile trzyma kolektor' && hasE "$F6R" 'Szyfrowane +nie' && ! has "$F6R" 'zdjęc'; then
     ok "nosniki: X11 -- panel: Rodzaj, Na dysku z przykladem, Szyfrowane (U21: rodzaj w panelu, nie w liscie)"
 else
@@ -2750,7 +2804,7 @@ rm -f "$RMK" "$KF"
 # X23 (wlasciciel 2026-10-14): F7 na wierszu REPLIKI na F2 uruchamia replike (jak F7 na F6),
 # zamiast "nie ma linii w cronie" -- wiersz repliki powstaje z list-replicas, bez linii crona.
 : > "$XL"
-A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/empty-mon.json" --replicas "$P10/replicas.json" --exec-log "$XL" --screen zadania --keys F7 --width 160 2>&1)"
+A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$(now_before 02:30)" --jobs "$FIX/empty.json" --monitors "$FIX/empty-mon.json" --replicas "$P10/replicas.json" --exec-log "$XL" --screen zadania --keys F7 --width 160 2>&1)"
 if has "$A" 'Replika sejf-a -- biegnie teraz' && grep -q "run-replicas --name=sejf-a" "$XL" && ! has "$A" 'nie ma linii w cronie'; then
     ok "zadania: X23 -- F7 na wierszu repliki uruchamia run-replicas --name (jak F6)"
 else
@@ -2825,6 +2879,104 @@ else
     bad "nosniki U99: Typ nosnika" "$(printf '%s\n' "$RTYS" | grep -E '^║ (Replika|r-)')"
 fi
 rm -f "$RTY"
+# U186 (wlasciciel 2026-11-10): podlaczony nosnik pokazuje zajetosc -- kolumna Zajęte i dopisek
+# w linii Nośnik. Kontrola: wiersz bez medium_size/medium_alloc (pula wyeksportowana) ma pusto.
+RUS="$(mktemp)"
+"$PY" - "$P10/replicas.json" "$RUS" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["replicas"][0].update({"present": "here", "last_current": "2026-10-08 20:46",
+                         "medium_size": str(4 * 1024 ** 4), "medium_alloc": str(1024 ** 4)})
+d["replicas"][1].update({"present": "available", "last_current": "", "medium_size": "", "medium_alloc": ""})
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+U1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RUS" --screen nosniki --width 200 --height 50 2>&1)"
+U2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RUS" --screen nosniki --keys down --width 200 --height 50 2>&1)"
+if has "$U1" 'Zajęte' && hasE "$U1" '^║ sejf-a +podłączony +25% ' && has "$U1" 'zajęte 25%' && has "$U1" '(1,0 TiB z 4,0 TiB)' \
+   && hasE "$U2" '^║ sejf-b +[^ ]+ +- ' && ! has "$U2" 'zajęte '; then
+    ok "nosniki U186: podlaczony nosnik -- kolumna Zajęte 25% i 'zajęte 25% (1,0 TiB z 4,0 TiB)'; bez danych puli '-'"
+else
+    bad "nosniki U186: zajetosc nosnika" "$(printf '%s\n' "$U1" | grep -E 'Zajęte|sejf-|zajęte')" "$(printf '%s\n' "$U2" | grep -E 'sejf-b|zajęte')"
+fi
+rm -f "$RUS"
+# U174 (wlasciciel 2026-11-09): kopia biegnie (running_since z bramy) -- wiersz i linia Nośnik mowia
+# "kopia trwa od", nie ostatni zakonczony bieg. Kontrola: druga replika bez pola -- jak dotad.
+RRS="$(mktemp)"
+"$PY" - "$P10/replicas.json" "$RRS" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["replicas"][0].update({"present": "here", "last_current": "", "running_since": "2026-11-09 22:28"})
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+R1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RRS" --screen nosniki --width 200 --height 50 2>&1)"
+R2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RRS" --screen nosniki --keys down --width 200 --height 50 2>&1)"
+if hasE "$R1" '^║ sejf-a .* kopia trwa od 2026\.11\.09 22:28 ' && has "$R1" 'TU -- kopia trwa od 2026.11.09 22:28' \
+   && ! hasE "$R2" '^║ sejf-b .*kopia trwa' && ! has "$R2" '-- kopia trwa od'; then
+    ok "nosniki U174: biegnaca kopia -- wiersz i Nośnik 'kopia trwa od 2026.11.09 22:28'; replika bez biegu jak dotad"
+else
+    bad "nosniki U174: kopia trwa" "$(printf '%s\n' "$R1" | grep -E '^║ sejf-|Nośnik')" "$(printf '%s\n' "$R2" | grep -E '^║ sejf-b|Nośnik')"
+fi
+# U180 (lab 2026-11-09): dysk wlasnie wpiety, kopia czeka (list-replicas: insert_in) -- przez te
+# 60 s F6 mowilo "odłączony / W SEJFIE". Teraz Typ 'podłączony', wiersz i Nośnik 'kopia za ~45 s'.
+# Kontrola: sejf-b bez pola -- jak dotad.
+"$PY" - "$P10/replicas.json" "$RRS" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["replicas"][0].update({"present": "away", "running_since": "", "insert_in": "45"})
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+R3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RRS" --screen nosniki --width 200 --height 50 2>&1)"
+R4="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RRS" --screen nosniki --keys down --width 200 --height 50 2>&1)"
+if hasE "$R3" '^║ sejf-a +podłączony .* dysk podłączony, kopia za ~45 s ' && hasE "$R3" 'Nośnik +dysk podłączony, kopia za ~45 s' \
+   && ! hasE "$R4" '^║ sejf-b .*kopia za' && ! hasE "$R4" 'Nośnik +dysk podłączony'; then
+    ok "nosniki U180: dysk wpiety, kopia czeka -- 'podłączony' i 'kopia za ~45 s' w wierszu i w Nośnik; replika bez pola jak dotad"
+else
+    bad "nosniki U180: kopia za ~N s" "$(printf '%s\n' "$R3" | grep -E '^║ sejf-|Nośnik')" "$(printf '%s\n' "$R4" | grep -E '^║ sejf-b|Nośnik')"
+fi
+rm -f "$RRS"
+# U170 (teren 2026-11-09): F4 w trakcie pierwszej kopii repliki -- datasety bez migawki mowia
+# "kopia trwa" (bieg z list-replicas), a bez biegu, z tokenem wznowienia, "przerwana, wznowi się";
+# panel: Stan i zajetosc nosnika. Wiersz "inny dysk" ma wlasna nazwe w kolumnie Relacja.
+# Kontrola: dataset bez tokenu i bez biegu -- '-' jak dotad.
+U170D="$(mktemp -d)"
+"$PY" - "$P10/replicas.json" "$P10/zfs-tree.json" "$U170D" <<'PYEOF'
+import json, sys
+r = json.load(open(sys.argv[1], encoding="utf-8")); t = json.load(open(sys.argv[2], encoding="utf-8"))
+r["replicas"] = [dict(r["replicas"][0], present="here", running_since="2026-11-09 20:22", medium_size=str(4 * 1024 ** 4),
+                      medium_alloc=str(1024 ** 4))]
+json.dump(r, open(sys.argv[3] + "/rep-run.json", "w", encoding="utf-8"))
+r["replicas"][0]["running_since"] = ""
+json.dump(r, open(sys.argv[3] + "/rep-idle.json", "w", encoding="utf-8"))
+for p in ("wrong_medium", "available", "away"):
+    r["replicas"][0]["present"] = p
+    json.dump(r, open(sys.argv[3] + "/rep-%s.json" % p, "w", encoding="utf-8"))
+t["datasets"] += [{"name": "bkp/sejf-a/hdd/lab", "type": "filesystem", "snapshots": 0, "newest": 0, "pvesr": False, "resume": False},
+                  {"name": "bkp/sejf-a/hdd/lab/vm-1", "type": "volume", "snapshots": 0, "newest": 0, "pvesr": False, "resume": True}]
+json.dump(t, open(sys.argv[3] + "/tree.json", "w", encoding="utf-8"))
+PYEOF
+u170() { "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" ${ALL%--replicas*} --replicas "$U170D/$1" --config "$P10/show-config.json" --stats "$P10/job-stats.json" \
+    --zfs-tree "$U170D/tree.json" --zfs-snapshots "$P10/zfs-snapshots.json" --screen relacje --keys "F4,$2" --width 220 --height 60 2>&1; }
+K1="$(u170 rep-run.json end)"; K2="$(u170 rep-idle.json end)"
+K3="$(u170 rep-run.json "down,down,down,down,down,down")"   # kursor na parze sejf-a: panel
+if hasE "$K1" 'sejf-a .*bkp/sejf-a/hdd/lab  .* kopia trwa' && hasE "$K1" 'vm-1  \(zvol\) .* kopia trwa' \
+   && hasE "$K2" 'vm-1  \(zvol\) .* przerwana, wznowi się' && ! hasE "$K2" 'bkp/sejf-a/hdd/lab  .*(kopia trwa|przerwana)' \
+   && hasE "$K1" '║ inny dysk +pula spoza relacji i replik -- Enter wybiera' \
+   && hasE "$K3" 'Stan +kopia trwa od 2026\.11\.09 20:22' && hasE "$K3" 'Nośnik +zajęte 25% \(1,0 TiB z 4,0 TiB\)'; then
+    ok "F4 U170: replika w trakcie kopii -- 'kopia trwa'; bez biegu z tokenem 'przerwana, wznowi się'; bez tokenu '-'; inny dysk z wlasna nazwa"
+else
+    bad "F4 U170: kopia w toku" "$(printf '%s\n' "$K1" | grep -E 'sejf-a|vm-1|inny dysk' | head -6)" "$(printf '%s\n' "$K2" | grep -E 'sejf-a|vm-1' | head -4)"
+fi
+# L6 (lab pve11 2026-11-11): F4 mowilo "nośnik niepodłączony" przy podlaczonym ZLYM dysku
+# (F6: NIE TEN DYSK) i przy dysku z niezaimportowana pula. Mowi to samo co F6.
+K4="$(u170 rep-wrong_medium.json end)"; K5="$(u170 rep-available.json end)"; K6="$(u170 rep-away.json end)"
+if hasE "$K4" 'sejf-a +replika +NIE TEN DYSK -- szczegóły w F6' && ! hasE "$K4" 'sejf-a +replika +nośnik niepodłączony' \
+   && hasE "$K5" 'sejf-a +replika +Podłączony -- szczegóły w F6' \
+   && hasE "$K6" 'sejf-a +replika +nośnik niepodłączony -- podłącz go, potem Ctrl-R'; then
+    ok "F4 L6: replika bez puli -- zly dysk / podlaczony bez importu / w sejfie: te same slowa co F6"
+else
+    bad "F4 L6: stan nosnika w F4" "$(printf '%s\n' "$K4" "$K5" "$K6" | grep -E 'sejf-a|DYSK|Podłączony|niepodł' | cut -c1-140 | head -8)"
+fi
+rm -rf "$U170D"
 A="$(nact F7)"
 # Uwaga 18 (2026-10-08): F7 uruchamia ZAZNACZONA replike od razu -- bez okna "t".
 if ! has "$A" 'POTWIERDZENIE' && grep -Eq "zfs-backup.sh'? run-replicas '?--name=sejf-a'?\$" "$XL"; then
@@ -2923,7 +3075,8 @@ else
     bad "linia: Tab + historia" "$C"
 fi
 C1="$(screen zadania "down" | sed 1d)"; C2="$(screen zadania "tab,down" | sed 1d)"; C3="$(screen zadania "tab,tab,down" | sed 1d)"; C4="$(screen zadania "tab,esc,down" | sed 1d)"
-C1="$(screen zadania "down" | sed 1d)"; C2="$(screen zadania "tab,tab,down" | sed 1d)"; C3="$(screen zadania "tab,tab,tab,down" | sed 1d)"; C4="$(screen zadania "tab,esc,down" | sed 1d)"
+# U166: start przy najblizszym biegu na dole listy -- 'home' najpierw, zeby 'down' mial dokad isc.
+C1="$(screen zadania "home,down" | sed 1d)"; C2="$(screen zadania "home,tab,tab,down" | sed 1d)"; C3="$(screen zadania "home,tab,tab,tab,down" | sed 1d)"; C4="$(screen zadania "home,tab,esc,down" | sed 1d)"
 if [ "$C2" != "$C1" ] && [ "$C3" = "$C1" ] && [ "$C4" = "$C1" ]; then
     ok "linia: w linii polecen strzalki nie ruszaja listy; Tab (lista -> przebiegi -> linia -> lista) albo Esc z dolnego panelu wraca do listy"
 else
@@ -4380,6 +4533,34 @@ else
     bad "okno usuwania: komunikat po zatrzymaniu" "$DROUT" "$(cat "$DRD/err")"
 fi
 
+# U178 (wlasciciel 2026-11-09): Del na F6 przy biegnacej kopii -- okno to mowi (brama: running).
+# Kontrola: brama mowi "nie biegnie" -> bez UWAGI. Wstecz w obu, nic nie usuwa.
+cat > "$NR/bin/zb-rdel" <<'EOF'
+#!/bin/bash
+[ "$1" = list-replicas ] && { echo '{"replicas":[{"name":"usb1","dst":"repl/replica","sources":["hdd/data"],"present":"here","schedule":"0 22 * * *"}]}'; exit 0; }
+echo "$*" >> "$NR_DIR/zb.log"; exit 0
+EOF
+cat > "$NR/bin/gate-run" <<'EOF'
+#!/bin/sh
+[ "$1" = running ] && [ "$3" = usb1 ] && [ "$2" = repl ] || exit 2
+echo "2026-11-11 10:00:00 - a copy of 'usb1' is running since 2026-11-11 09:00 (pid 42)." >&2; exit 0
+EOF
+printf '#!/bin/sh\nexit 1\n' > "$NR/bin/gate-idle"
+chmod +x "$NR/bin/zb-rdel" "$NR/bin/gate-run" "$NR/bin/gate-idle"
+for g in run idle; do
+    rm -rf "$DRD"; mkdir -p "$DRD"; printf '1\t\n' > "$DRD/answers"
+    ( export NR_DIR="$DRD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-rdel" ZFS_MEDIA_GATE="$NR/bin/gate-$g"
+      bash "$REPO/tui/replica-delete.sh" usb1 ) >/dev/null 2>"$DRD/err" </dev/null
+    cp "$DRD/wt.log" "$NR/rdel-$g.log" 2>/dev/null; [ -e "$DRD/zb.log" ] && cp "$DRD/zb.log" "$NR/rdel-$g.zb"
+done
+RDR="$(cat "$NR/rdel-run.log" 2>/dev/null)"; RDI="$(cat "$NR/rdel-idle.log" 2>/dev/null)"
+if has "$RDR" "UWAGA: kopia tej repliki właśnie biegnie (od 2026-11-11 09:00)" && has "$RDR" "dobiegnie do końca i odłączy dysk" \
+   && has "$RDI" "Replika usb1 przestanie działać" && ! has "$RDI" "UWAGA: kopia" && [ ! -e "$NR/rdel-run.zb" ] && [ ! -e "$NR/rdel-idle.zb" ]; then
+    ok "okno usuwania repliki U178: biegnaca kopia -- UWAGA z czasem startu; bez biegu bez UWAGI; Wstecz nic nie usuwa"
+else
+    bad "okno usuwania repliki U178" "run: $(printf '%s\n' "$RDR" | head -20)" "idle: $(printf '%s\n' "$RDI" | head -8)" "$(cat "$DRD/err")"
+fi
+
 # 3i2 (kampania 2026-10-22): relacja LOKALNA bez kopii -- okno mowilo "Zrodlo (?): bez zmian --
 #      a local relationship ..." i "Kopii domyslnie NIE ruszam." przy relacji, ktora kopii nie ma.
 cat > "$NR/bin/zb-del3" <<'EOF'
@@ -4893,7 +5074,9 @@ printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
 case "$1" in
     list-replicas) if [ -n "${RP_REPS:-}" ]; then printf '%s\n' "$RP_REPS"; else echo '{"replicas":[]}'; fi ;;
     status) echo '{"relations":[{"name":"pve11b","state":"active","managed_datasets":["hdd/backups/192.168.28.96/hdd/vm"]}]}' ;;
-    list-datasets) if [ -n "${RP_ENC:-}" ]; then
+    list-datasets) if [ -n "${RP_SNAPS:-}" ]; then
+                       echo '{"datasets":[{"name":"hdd","snapshots":0},{"name":"hdd/backups","snapshots":12},{"name":"hdd/data","snapshots":0},{"name":"hdd/data/mail","snapshots":3},{"name":"hdd/data/docs","snapshots":0}]}'
+                   elif [ -n "${RP_ENC:-}" ]; then
                        echo '{"datasets":[{"name":"hdd","encryption":"off"},{"name":"hdd/backups","encryption":"off"},{"name":"hdd/backups/192.168.28.96","encryption":"off"},{"name":"hdd/backups/192.168.28.96/hdd/vm","encryption":"aes-256-gcm"},{"name":"hdd/data","encryption":"off"},{"name":"hdd/data/mail","encryption":"off"},{"name":"hdd/data/docs","encryption":"off"}]}'
                    else
                        echo '{"datasets":[{"name":"hdd"},{"name":"hdd/backups"},{"name":"hdd/backups/192.168.28.96"},{"name":"hdd/backups/192.168.28.96/hdd/vm"},{"name":"hdd/data"},{"name":"hdd/data/mail"},{"name":"hdd/data/docs"}]}'
@@ -4951,6 +5134,21 @@ if grep -qF '] backups' "$RP/tree.log" && ! grep -qF '] data' "$RP/tree.log" && 
     ok "replika H-7: nosnik innej repliki (staly: hdd/data z poddrzewem) nie jest na liscie zrodel"
 else
     bad "replika H-7: nosnik innej repliki na liscie zrodel" "$(head -12 "$RP/tree.log")"
+fi
+# U175 (lab pve11 2026-11-09): drzewo kreatora repliki pokazuje liczbe migawek kazdego datasetu
+# (list-datasets --own-snapshots), a przy zerze uwage, ze pasywna replika go nie skopiuje.
+# Kontrola: dataset z migawkami ma liczbe i nie ma uwagi. Atrapa drzewa ma 80 kolumn (bez
+# kolumn), wiec: specyfikacja okna z kreatora, potem ten sam plik w prawdziwym tree.py na 200.
+rp_run "0${T}usb2
+" RP_TREE='esc' RP_SNAPS=1 >/dev/null
+RPZ="$(cat "$RP/zb.log" 2>/dev/null)"
+RPS="$("$PY" -c 'import json,sys; d={x["name"]: x for x in json.load(open(sys.argv[1], encoding="utf-8"))["datasets"]}; print(d["hdd/data"].get("snaps"), d["hdd/data"].get("note"), "|", d["hdd/backups"].get("snaps"), repr(d["hdd/backups"].get("note")))' "$RP/tree-spec.last" 2>&1 | tr -d '\r')"
+RPW="$("$PY" "$REPO/tui/tree.py" --spec "$RP/tree-spec.last" --out "$RP/tree-out.u175" --keys 'goto:hdd/data/mail,esc' --width 200 --height 30 2>&1)"
+if has "$RPZ" 'list-datasets --json --own-snapshots' && [ "$RPS" = "0 bez migawek -- pasywna replika go nie skopiuje | 12 ''" ] \
+   && hasE "$RPW" 'Migawki +Uwagi' && hasE "$RPW" ' data .* 0 +bez migawek -- pasywna replika go nie skopiuje' && hasE "$RPW" ' backups .* 12 '; then
+    ok "replika U175: drzewo -- liczba migawek datasetu, przy zerze 'bez migawek -- pasywna replika go nie skopiuje' (cala, nie uciete); z migawkami bez uwagi"
+else
+    bad "replika U175: migawki w drzewie" "spec: $RPS" "$(printf '%s\n' "$RPW" | grep -E 'Migawki|backups|data|mail' | head -8)" "$RPZ"
 fi
 # Kampania 2026-10-22: wlasny harmonogram sprawdzany W OKNIE -- "0 22 * * *zle" szedl az do planu.
 rm -f "$RP/rules"
@@ -7270,6 +7468,42 @@ if [ "$sbg_ok" -eq 13 ] && [ "$sbg_bad" -eq 0 ]; then
     ok "odświeżanie w tle po limicie: Del/F7/strzałka nic nie planują na starych wierszach, nieudane odświeżenie przepuszcza tylko klawisze niezależne od wierszy (Ins na Szablonach też stoi), po świeżych danych Del i Ins celują w świeże (REV-172, REV-173)"
 else
     bad "odświeżanie w tle: klawisz na starych wierszach (REV-172)" "$sbg_out"
+fi
+
+# U185: prośba o odświeżenie w trakcie biegnącego odczytu (okno właśnie zapisało, Ctrl-R)
+# nie przepada -- biegnący odczyt mógł zacząć się przed zmianą; ekran kończy na odczycie po niej.
+brq_out="$("$PY" "$REPO/test/tui/bg_requeue.py" "$TUI" 2>&1 | tr -d '\r')"
+if [ "$(printf '%s\n' "$brq_out" | grep -c '^ok ')" -eq 3 ] && ! printf '%s\n' "$brq_out" | grep -q '^bad '; then
+    ok "odświeżanie w tle: prośba w trakcie odczytu rusza po nim, ekran kończy na danych po zmianie (U185)"
+else
+    bad "odświeżanie w tle: prośba w trakcie odczytu przepada (U185)" "$brq_out"
+fi
+
+# U176: wiersz F2/F3 bierze etykiete WLASNEJ linii crona -- migawka snaponly (snapget -s), szczebel
+# daily/weekly, lokalny prune z kilku sekcji [dataset:]. Kontrola: pobranie bierze snapget.
+rlb_out="$("$PY" "$REPO/test/tui/run_labels.py" "$TUI" 2>&1 | tr -d '\r')"
+if [ "$(printf '%s\n' "$rlb_out" | grep -c '^ok ')" -eq 4 ] && ! printf '%s\n' "$rlb_out" | grep -q '^bad '; then
+    ok "F2/F3: etykieta biegu z wlasnej linii crona -- migawka snaponly, szczebel, lokalny prune; pobranie bez zmian (U176)"
+else
+    bad "F2/F3: etykieta biegu (U176)" "$rlb_out"
+fi
+
+# U180: wejscie w F6 czyta liste replik od nowa (stan nosnika z chwili wejscia); inny ekran -- nie.
+f6r_out="$("$PY" "$REPO/test/tui/f6_refresh.py" "$TUI" 2>&1 | tr -d '\r')"
+if [ "$(printf '%s\n' "$f6r_out" | grep -c '^ok ')" -eq 2 ] && ! printf '%s\n' "$f6r_out" | grep -q '^bad '; then
+    ok "F6: wejscie czyta liste replik od nowa, inny ekran jej nie czyta (U180)"
+else
+    bad "F6: odczyt replik przy wejsciu (U180)" "$f6r_out"
+fi
+
+# U166 + U171 (pve1 SITE-C 2026-11-09, makieta zaakceptowana): F2 malejaco, kursor pod "teraz",
+# nadchodzace tylko 6 h; trzy linie crona relacji o jednej porze = jeden wiersz "3 datasety",
+# PADŁ 1/3, Enter rozwija/zwija. Kontrola: relacja z jednym datasetem to zwykly wiersz.
+f2m_out="$("$PY" "$REPO/test/tui/f2_merge.py" "$TUI" 2>&1 | tr -d '\r')"
+if [ "$(printf '%s\n' "$f2m_out" | grep -c '^ok ')" -eq 14 ] && ! printf '%s\n' "$f2m_out" | grep -q '^bad '; then
+    ok "F2: czas malejaco, kursor pod 'teraz', 6 h naprzod; wiersz zbiorczy relacji, PADŁ 1/3, Enter rozwija (U166/U171)"
+else
+    bad "F2: kolejnosc i wiersz zbiorczy (U166/U171)" "$(printf '%s\n' "$f2m_out" | grep -v '^ok ' | head -20)"
 fi
 
 # Limit czytnika GUI: zawieszony czytnik (ssh do martwego hosta) wraca błędem w limicie i nie

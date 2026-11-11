@@ -714,7 +714,7 @@ for p in m.walk():
         print("ATTACH:", p.get_filename(), "alfa" in p.get_content(), "beta" in p.get_content())
 PYREL
 )
-            if printf '%s' "$_rm" | grep -q 'SUBJECT: \[ZFS\] .*: 2 z 3 relacji wymaga uwagi' \
+            if printf '%s' "$_rm" | grep -q 'SUBJECT: \[ZFS\]\[REPORT\] .*: 2 z 3 relacji wymaga uwagi' \
                && printf '%s' "$_rm" | grep -q '^FROM: zfs-backup ' \
                && printf '%s' "$_rm" | grep -qE '^beta +.*błąd biegu \(1 z 1 zadania\)' \
                && printf '%s' "$_rm" | grep -qE '^gamma +.*bez zamrożenia \(1 z 1 zadania\)' \
@@ -757,9 +757,9 @@ PYREL
                 cat "$hb_dir/bin/sm.eml" 2>/dev/null; }
             _na=$(_u158 "CRITICAL dataset=d pattern=automated_yearly -- no snapshot found matching this pattern; age measured from dataset creation age=900h")
             _nb=$(_u158 "CRITICAL dataset=d pattern=automated_yearly newest=automated_yearly_2025-01-01_00-00-01 age=9000h")
-            if printf '%s' "$_na" | grep -q '^Subject: \[ZFS\] [^ ]*: migawki-x -- brak jakiejkolwiek migawki rocznej (' \
+            if printf '%s' "$_na" | grep -q '^Subject: \[ZFS\]\[ALERT\] [^ ]*: migawki-x -- brak jakiejkolwiek migawki rocznej (' \
                && printf '%s' "$_na" | grep -q '^From: zfs-backup ' && printf '%s' "$_na" | grep -q 'liczy wiek od utworzenia datasetu' \
-               && printf '%s' "$_nb" | grep -q '^Subject: \[ZFS\] [^ ]*: migawki-x -- brak swiezej migawki rocznej (najnowsza sprzed 9000h)' \
+               && printf '%s' "$_nb" | grep -q '^Subject: \[ZFS\]\[ALERT\] [^ ]*: migawki-x -- brak swiezej migawki rocznej (najnowsza sprzed 9000h)' \
                && ! printf '%s' "$_nb" | grep -q 'liczy wiek od utworzenia datasetu'; then
                 ok "notify-fail U158: subject = relation -- what happened; a monitor without a relation start says so; a real age does not"
             else
@@ -780,12 +780,12 @@ PYREL
             bash "$hb_dir/notify-fail.sh" "h profile__relacja-migawki-x__lsrc_yearly stale (d)" "CRITICAL dataset=d pattern=automated_yearly newest=automated_yearly_2025-01-01_00-00-01 age=9000h" >/dev/null 2>&1
             _sn=$(cat "$hb_dir/bin/sm.eml" 2>/dev/null)
             _fq=$(hostname -f 2>/dev/null || hostname)
-            if printf '%s' "$_sd" | grep -qE '^SUBJECT: \[ZFS\] Site-A [^ .]+ [^ ]+: 2 z 3 relacji wymaga uwagi' \
+            if printf '%s' "$_sd" | grep -qE '^SUBJECT: \[ZFS\]\[REPORT\] Site-A [^ .]+ [^ ]+: 2 z 3 relacji wymaga uwagi' \
                && printf '%s' "$_sd" | grep -q '^FROM: zfs-backup Site-A ' \
-               && printf '%s' "$_sn" | grep -qE '^Subject: \[ZFS\] Site-A [^ .]+: migawki-x -- ' \
+               && printf '%s' "$_sn" | grep -qE '^Subject: \[ZFS\]\[ALERT\] Site-A [^ .]+: migawki-x -- ' \
                && printf '%s' "$_sn" | grep -q '^From: zfs-backup Site-A ' \
-               && printf '%s' "$_rm" | grep -qF "SUBJECT: [ZFS] $_fq " \
-               && printf '%s' "$_na" | grep -qF "Subject: [ZFS] $_fq: "; then
+               && printf '%s' "$_rm" | grep -qF "SUBJECT: [ZFS][REPORT] $_fq " \
+               && printf '%s' "$_na" | grep -qF "Subject: [ZFS][ALERT] $_fq: "; then
                 ok "alerts.site: digest and single alert say '[ZFS] Site-A <host>' and so does the sender; without it, the full host name"
             else
                 bad "alerts.site in the subject" "digest: $_sd" "alert: $(printf '%s' "$_sn" | head -3)" "no site: $(printf '%s' "$_rm" | head -1) / $(printf '%s' "$_na" | grep '^Subject')" "hostname -f: $_fq"
@@ -2361,7 +2361,7 @@ GW_M=1048576
 gw_data() {   # <L ostatniego MiB> <C ostatniego MiB> [liczba przyrostow, domyslnie 5]
     local n="${3:-5}" i
     : > "$gw_dir/snaps"; : > "$gw_dir/sizes"
-    for ds in tank/d tank/off tank/x; do
+    for ds in ${GW_DSS:-tank/d tank/off tank/x}; do
         for i in $(seq 0 "$n"); do printf '%s@s%s\t%s\t%s\n' "$ds" "$i" "$((7000 + i))" "$((i * 3600))" >> "$gw_dir/snaps"; done
         for i in $(seq 1 "$n"); do
             if [ "$i" -eq "$n" ]; then L=$(($1 * GW_M)); C=$(($2 * GW_M)); else L=$((100 * GW_M)); C=$((50 * GW_M)); fi
@@ -2552,13 +2552,46 @@ if [ "$gw_rc" -eq 1 ] && grep -q "nie ufam $gw_dir/bin/gencron" "$gw_dir/mail" &
 else
     bad "growth-guard: zaufanie gen-cron" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
 fi
+# U173 (2026-11-09): zrodlo bez configu (migawki i retencje robi mu kolektor) -- strażnik nie
+# ma tu nic do pilnowania: kod 0, bez maila (wczesniej co godzine "strażnik nie dziala").
 mkdir -p "$gw_dir/pusty"
 GW_CONFDIR="$gw_dir/pusty" gw_run on; gw_rc=$?
-if [ "$gw_rc" -eq 1 ] && grep -q 'brak configu' "$gw_dir/mail" && gw_nosend; then
-    ok "growth-guard: brak configu hosta -- rc 1, alert, zadnych oszacowan"
+GW_CONFDIR="$gw_dir/pusty" gw_run on --plan; gw_prc=$?
+if [ "$gw_rc" -eq 0 ] && [ "$gw_prc" -eq 0 ] && [ ! -s "$gw_dir/mail" ] && gw_nosend && grep -q 'Brak naszych datasetów' "$gw_dir/out"; then
+    ok "growth-guard U173: brak configu hosta -- rc 0, bez alertu, --plan: brak naszych datasetow"
 else
-    bad "growth-guard: brak configu" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+    bad "growth-guard U173: brak configu" "rc=$gw_rc plan=$gw_prc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
 fi
+# U172 (wlasciciel 2026-11-09, wariant A): relacja "tylko migawki na zrodle" -- linia retencji
+# kolektora ma zdalny wpis. Strażnik liczy przyrost zrodla przez ssh z OPCJAMI TEJ LINII
+# (-K, -k, -p), tymi samymi progami; temat alarmu: zrodlo, dataset, relacja.
+cp "$gw_dir/cron/root" "$gw_dir/cron/root.u172"
+{
+    echo "# BEGIN zfs-backup-managed"
+    echo "21 * * * * $GW_J /r/delsnaps.sh -p 2222 -k /k/kh -K /k/id -L rel1 \"zfsbackup-pve1@pve0:rp/v\" \"automated_hourly\" -H24"
+    echo "# END zfs-backup-managed"
+} > "$gw_dir/cron/root"
+cat > "$gw_dir/bin/ssh" <<'SS'
+#!/bin/bash
+printf '%s\n' "$*" >> "$GW_DIR/ssh"
+uh="${@: -2:1}"; c="${@: -1}"
+echo "REMOTE $uh $c" >> "$GW_DIR/calls"
+eval "$c"
+SS
+chmod +x "$gw_dir/bin/ssh"
+printf 'tank/d\tlz4\ntank/off\toff\ntank/x\tlz4\nrp/v\tlz4\n' > "$gw_dir/ds"
+rm -f "$gw_dir/ssh"
+GW_DSS="rp/v" gw_data 2000 2000
+gw_run on; gw_rc=$?
+if [ "$gw_rc" -eq 1 ] && grep -q 'PODEJRZANY PRZYROST danych na źródle zfsbackup-pve1@pve0:rp/v (relacja rel1)' "$gw_dir/mail" \
+   && grep -q 'zfsbackup-pve1@pve0:rp/v (relacja rel1): przyrost 2000 MiB (do rp/v@s5)' "$gw_dir/mail" \
+   && grep -q -- "-o IdentitiesOnly=yes -i /k/id -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/k/kh -p 2222 .*BatchMode=yes.* zfsbackup-pve1@pve0 zfs 'send' '-nP' '-c' '-i' 'rp/v@s4' 'rp/v@s5'" "$gw_dir/ssh" \
+   && [ ! -s "$gw_dir/destroyed" ]; then
+    ok "growth-guard U172: zdalny wpis linii retencji -- przyrost zrodla liczony przez ssh z -K/-k/-p linii, alarm z temat: zrodlo, dataset, relacja"
+else
+    bad "growth-guard U172: zdalne zrodlo" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null | head -8)" "$(head -3 "$gw_dir/ssh" 2>/dev/null)"
+fi
+mv "$gw_dir/cron/root.u172" "$gw_dir/cron/root"; rm -f "$gw_dir/bin/ssh"
 gw_data 2000 2000
 GW_LOCK="$gw_dir/nie-ma/g.lock" gw_run on; gw_rc=$?
 if [ "$gw_rc" -eq 1 ] && [ ! -s "$gw_dir/calls" ] && grep -q 'strażnik przyrostu NIE działa' "$gw_dir/mail" && grep -q 'nie-ma/g.lock' "$gw_dir/mail"; then
@@ -2573,6 +2606,26 @@ else
     bad "growth-guard: mktemp" "rc=$gw_rc" "$(cat "$gw_dir/calls" "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
 fi
 rm -rf "$gw_dir"
+
+# U184 (owner 2026-11-10): the subject says the KIND of mail, so a mail rule can sort it
+# while the old "[ZFS]" rules still match. Report = digest, WARNING = notify-warn,
+# pool capacity and growth, ALERT = a failed run. The digest and notify-fail subjects
+# are checked live above; this checks every sender's literal, and that no bare
+# "[ZFS] " or the old "[ZFS CAPACITY]"/"[ZFS GROWTH]" subject is left.
+u184_bad=""
+grep -q 'SUBJ="\[ZFS\]\[REPORT\] ' "$HS/alert-digest.sh" || u184_bad="$u184_bad digest"
+grep -q 'u"\[ZFS\]\[REPORT\] ' "$HS/alert-digest.sh" || u184_bad="$u184_bad digest-py"
+grep -q 'alert_mail "\[ZFS\]\[WARNING\] ' "$HS/notify-warn.sh" || u184_bad="$u184_bad notify-warn"
+grep -q 'alert_mail "\[ZFS\]\[ALERT\] ' "$HS/notify-fail.sh" || u184_bad="$u184_bad notify-fail"
+for f in check-pool-capacity.sh capacity-guard.sh growth-guard.sh; do
+    grep -q 'mail -s "\[ZFS\]\[WARNING\] ' "$HS/$f" || u184_bad="$u184_bad $f"
+done
+u184_old=$(grep -lE '(SUBJ=|subj = u|alert_mail |mail -s )"\[ZFS( CAPACITY| GROWTH)?\] ' "$HS"/*.sh 2>/dev/null | tr '\n' ' ')
+if [ -z "$u184_bad" ] && [ -z "$u184_old" ]; then
+    ok "U184: subjects say [ZFS][REPORT] / [ZFS][WARNING] / [ZFS][ALERT] in every sender; no bare [ZFS], [ZFS CAPACITY] or [ZFS GROWTH] left"
+else
+    bad "U184: mail subject tags" "missing:$u184_bad" "old subject in: $u184_old"
+fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

@@ -56,7 +56,7 @@ source "$_GATE_DIR/lib-backup-common.sh"
 
 usage() {
     cat >&2 <<'EOF'
-Usage: zfs-media-gate.sh <attach|detach|status|age> <pool> <label> [--dataset D] [--dir DIR]...
+Usage: zfs-media-gate.sh <attach|detach|status|age|forget|running> <pool> <label> [--dataset D] [--dir DIR]...
                          [--source DS]... [--prefix P|-] [--stats FILE] [--quiet]
 
   --prefix - means ANY snapshot: a passive replica takes none of its own.
@@ -75,6 +75,10 @@ Usage: zfs-media-gate.sh <attach|detach|status|age> <pool> <label> [--dataset D]
            proved current. 0 ok, 1 warning, 2 critical, 3 cannot tell --
            the exit codes of check-snap-age, so a monitor line reads it the
            same way.
+  running  is a copy of this replica running now? 0 yes (says since when),
+           1 no. Changes nothing.
+  forget   remove this replica's state files (remove-replica). 0 done; 75 a
+           copy is running -- its own run records stay for its detach.
 EOF
     exit 2
 }
@@ -89,6 +93,7 @@ EOF
 # passed straight through to `zpool import -d`.
 VERB=""; POOL=""; LABEL=""; DATASET=""; STATS=""; QUIET=0; _own=0; _erc=0; _fm=""
 _skip=no; _rec_guid=""; _rec_snap=""; _now_guid=""; _new_snap=""; _src=""
+RECURSIVE=0; _need=0; _new=""; _ok=""; _b=""; _free=""
 SOURCE=""; PREFIX=""; ENGINE_RC=""; AGE_WARN=""; AGE_CRIT=""
 # --prefix - : ANY snapshot (a passive replica, which takes none of its own and
 # carries every family already there -- owner note 20, 2026-10-08). PREFIX is
@@ -142,6 +147,7 @@ while [ "$#" -gt 0 ]; do
         # line (attach and detach), is 18 bytes per source spent on nothing.
         # Measured on pve9 2026-08-30 -- the one-source replica line was
         # already 934 characters.
+        --recursive)  RECURSIVE=1; shift ;;
         --source)     _msrc_add "${2:-}"; shift 2 ;;
         --source=*)   _msrc_add "${1#--source=}"; shift ;;
         --engine-rc)   ENGINE_RC="${2:-}"; shift 2 ;;
@@ -164,7 +170,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ "$PREFIX" = "-" ] && { PREFIX=""; PREFIX_ANY=1; }
 [ -n "$VERB" ] && [ -n "$POOL" ] && [ -n "$LABEL" ] || usage
-case "$VERB" in attach|detach|status|age) ;; *) echo "unknown verb: $VERB" >&2; usage ;; esac
+case "$VERB" in attach|detach|status|age|forget|running) ;; *) echo "unknown verb: $VERB" >&2; usage ;; esac
 
 # SOURCE is the first one, for the messages that name a dataset.
 [ "${#SOURCES[@]}" -gt 0 ] && SOURCE="${SOURCES[0]}"
@@ -257,6 +263,14 @@ record_snap_for() {   # <dataset> -> the snapshot this medium was recorded holdi
     [ -r "$SYNCED" ] || return 1
     awk -v ds="snap:$_rds=" 'index($0, ds)==1 { print substr($0, length(ds)+1); found=1; exit } END{ exit !found }' "$SYNCED"
 }
+
+# U187 (Site-C 2026-11-11): the skip record exists only to let a later run SKIP,
+# and a passive replica (--prefix -) never skips (see "NOT FOR A PASSIVE REPLICA"
+# at the skip check). Its sources are often containers with no snapshot of their
+# own, so the all-or-nothing record often cannot be written, and every good run
+# said "could not record" -- a failure that was not one. The record is still
+# written when it can be (L8p); its absence is reported only where a skip needs it.
+skip_record_kept() { [ -n "$PREFIX" ]; }
 
 record_write() {   # <guid> -- every source, or nothing at all
     local _wg="$1" _wds _ws _wtmp
@@ -441,6 +455,33 @@ check_dataset() {
 }
 
 case "$VERB" in
+
+running)
+    # U178 (owner 2026-11-09): Del on F6 says so when a copy of this replica is running.
+    h=$(running_holder)
+    [ -n "$h" ] || exit 1
+    say "a copy of '$LABEL' is running since $(running_since "$h") (pid ${h%% *})."
+    exit 0
+    ;;
+
+forget)
+    # U169 (owner 2026-11-09): remove-replica left <label>.current/.synced/.last-seen/
+    # .running(.lock)/.imported-by-us behind, and a new replica of the same name would
+    # read the old .current and .synced as its own. The copy on the medium and the
+    # medium key are not touched. A RUNNING copy keeps the records its detach reads
+    # (.running, .imported-by-us, the lock); an imported pool keeps the marker that
+    # lets a later export call it ours.
+    h=$(running_holder)
+    rm -f "$SEEN" "$SYNCED" "$CURRENT" 2>/dev/null
+    if [ -n "$h" ]; then
+        say "a copy of '$LABEL' is running since $(running_since "$h") (pid ${h%% *}); its run records in $STATE_DIR stay until it ends."
+        emit forget_running; exit 75
+    fi
+    rm -f "$RUNNING" "$RUNNING.lock" 2>/dev/null
+    imported || rm -f "$OURS" 2>/dev/null
+    say "state files of '$LABEL' in $STATE_DIR removed; the copy on the medium is not touched."
+    emit forgotten; exit 0
+    ;;
 
 status)
     # THE ONE SENTENCE AN OPERATOR STANDING AT THE MACHINE NEEDS.
@@ -833,6 +874,32 @@ EOF
         done
     fi
 
+    # U183 (Site-A 2026-11-09): a first copy started onto a disk far too small for its
+    # sources and ran until the owner killed it. Before the engine starts, a source with
+    # no copy on this medium yet is a full send (first_copy_bytes, lib-backup-common.sh).
+    # If the sum exceeds what the medium has free, refuse with both numbers -- rc 2, an
+    # alert -- and put the disk away.
+    # Unreadable numbers skip the check rather than block a copy on a guess.
+    if [ "${#SOURCES[@]}" -gt 0 ] && [ -n "$DATASET" ]; then
+        _need=0; _new=""; _ok=yes
+        for _src in "${SOURCES[@]}"; do
+            zfs list -H -o name "$DATASET/$_src" >/dev/null 2>&1 && continue
+            _b="$(first_copy_bytes "$RECURSIVE" "$_src")" || { _ok=no; break; }
+            _need=$(( _need + _b )); _new="$_new $_src"
+        done
+        _free="$(zfs get -H -p -o value available "$DATASET" 2>/dev/null)"
+        case "$_free" in ''|*[!0-9]*) _ok=no ;; esac
+        if [ "$_ok" = yes ] && [ -n "$_new" ] && [ "$_need" -gt "$_free" ]; then
+            say "REFUSING: the first copy of$_new needs about $(iec_bytes "$_need") (zfs used on the source$([ "$RECURSIVE" = 1 ] && echo ", whole tree")), and '$DATASET' has $(iec_bytes "$_free") free. It cannot fit; not starting it. Use a bigger disk, or fewer sources for this replica."
+            if bounded_export >/dev/null 2>&1; then
+                rm -f "$OURS" 2>/dev/null || :
+            else
+                say "DO NOT UNPLUG '$POOL': the refusal above stands, but exporting the pool afterwards did not succeed, so it is STILL IMPORTED. The ownership marker is kept so this run's detach can export it; pulling the disk now can hang this host."
+            fi
+            emit medium_too_small; exit 2
+        fi
+    fi
+
     say "imported '$POOL' for '$LABEL' -- this run will export it again when it is done."
     emit imported; exit 0
     ;;
@@ -922,7 +989,7 @@ detach)
                 _now_guid="$(pool_guid)"
                 # The copy itself proves the medium current; the skip record is extra.
                 mark_current
-                if [ -z "$_now_guid" ] || ! record_write "$_now_guid"; then
+                if { [ -z "$_now_guid" ] || ! record_write "$_now_guid"; } && skip_record_kept; then
                     say "note: could not record what '$POOL' now holds ($SYNCED) -- the next run will copy rather than skip on a record it does not have."
                 fi
             fi
@@ -953,7 +1020,7 @@ detach)
         # brought up. The engine's success proves the medium current; the record only lets
         # a later run SKIP, and stays all-or-nothing for that.
         mark_current
-        if [ -z "$_now_guid" ] || ! record_write "$_now_guid"; then
+        if { [ -z "$_now_guid" ] || ! record_write "$_now_guid"; } && skip_record_kept; then
             say "note: could not record what '$POOL' now holds ($SYNCED) -- the next run will import it rather than skip on a record it does not have."
         fi
     fi

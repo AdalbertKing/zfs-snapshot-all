@@ -9,7 +9,8 @@
 # (zmiana repliki -> "Dodaj dysk"). Czasownika do kasowania kopii na nośniku nie ma
 # (właściciel 2026-10-18: "nie chcemy tego").
 #
-# Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka.
+# Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka,
+# ZFS_MEDIA_GATE = brama (pytanie, czy kopia biegnie).
 set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -54,6 +55,12 @@ if ! IFS=$'\t' read -r DST SRCS PRESENT <"$TMPD/rep.tsv"; then
     wt --title "$(Tv 'Nie ma repliki '\''$NAME'\''' '$NAME' "$NAME")" --msgbox "$(Tv 'W configu tego kolektora nie ma [replica:$NAME].' '$NAME' "$NAME")" 8 "$W"
     exit 1
 fi
+# U178 (wlasciciel 2026-11-09): kopia tej repliki biegnie -- okno to mowi. Usuniecie jej
+# nie przerywa: dobiega do konca i odlacza dysk. Pyta brama (jej rekord biegu, zywy PID).
+RUNNING_SINCE=""
+if [ -n "$DST" ] && [ "$DST" != "-" ]; then
+    RUNNING_SINCE=$("${ZFS_MEDIA_GATE:-$HERE/zfs-media-gate.sh}" running "${DST%%/*}" "$NAME" 2>&1 | sed -n 's/.* running since \(.*\) (pid .*/\1/p')
+fi
 
 while :; do
     geom
@@ -63,6 +70,10 @@ while :; do
         echo "$(Tv 'Replika $NAME przestanie działać: znikną jej sekcja i zadanie z crona.' '$NAME' "$NAME")"
         echo "$(Tv 'Dane na dyskach repliki ZOSTAJĄ ($DST). Żeby je skasować, sformatuj dysk: zmiana repliki -> Dodaj dysk.' '$DST' "$DST")"
         echo
+        if [ -n "$RUNNING_SINCE" ]; then
+            echo "$(Tv 'UWAGA: kopia tej repliki właśnie biegnie (od $SINCE). Usunięcie jej nie przerywa: dobiegnie do końca i odłączy dysk.' '$SINCE' "$RUNNING_SINCE")"
+            echo
+        fi
         if [ "$UNTRIG" = yes ]; then
             echo "$(T 'Reguła udev "po podłączeniu" ZOSTANIE ZDJĘTA -- żadna inna replika z niej nie korzysta.')"
             echo

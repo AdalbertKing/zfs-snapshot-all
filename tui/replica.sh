@@ -413,7 +413,7 @@ if [ "$EDIT" -eq 1 ]; then
     MENU=1
     # Plan potrzebuje wzorców wyjątków (-X) z drzewa datasetów, jak po koszyku.
     info "$(Tv 'Replika $NAME' '$NAME' "$NAME")" "$(T 'Czytam datasety tego hosta...')"
-    if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! { drop_replica_media "$TMPD/ds.json" "$TMPD/rep.json"; basket_tree_from_json "$TMPD/ds.json"; }; then
+    if ! "$ZB" list-datasets --json --own-snapshots >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! { drop_replica_media "$TMPD/ds.json" "$TMPD/rep.json"; basket_tree_from_json "$TMPD/ds.json"; }; then
         wt --title "$(T 'Nie udało się pobrać listy')" --msgbox "list-datasets:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
         clear 2>/dev/null; wt_end_nochange "$(T 'Replika: przerwane, nic nie zmieniono')"; exit 1
     fi
@@ -451,13 +451,15 @@ while :; do
     2)  # co kopiować -- TEN SAM koszyk co w kreatorze relacji (uwaga 13, 2026-10-08)
         if [ "${#T_NAME[@]}" -eq 0 ]; then
             info "$(Tv 'Replika $NAME' '$NAME' "$NAME")" "$(T 'Czytam datasety tego hosta...')"
-            if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! { drop_replica_media "$TMPD/ds.json" "$TMPD/rep.json"; basket_tree_from_json "$TMPD/ds.json"; }; then
+            if ! "$ZB" list-datasets --json --own-snapshots >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! { drop_replica_media "$TMPD/ds.json" "$TMPD/rep.json"; basket_tree_from_json "$TMPD/ds.json"; }; then
                 wt --title "$(T 'Nie udało się pobrać listy')" --msgbox "list-datasets:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
                 clear 2>/dev/null; wt_end_nochange "$(T 'Replika: przerwane, nic nie zmieniono')"; exit 1
             fi
             [ -n "$SRCS" ] && basket_from_replica
         fi
-        if ! BASKET_NO_CLOSE=1 basket_step; then
+        # U175 (lab pve11 2026-11-09): pasywna replika kopiuje tylko istniejące migawki --
+        # dataset bez żadnej nie trafia na dysk, a okno tego nie mówiło.
+        if ! BASKET_NO_CLOSE=1 BASKET_ZERO_NOTE="$(T 'bez migawek -- pasywna replika go nie skopiuje')" basket_step; then
             [ "$MENU" -eq 1 ] && { step=0; continue; }
             [ "$EDIT" -eq 1 ] && { clear 2>/dev/null; wt_end_nochange "$(T 'Replika: przerwane, nic nie zmieniono')"; exit 1; }
             step=1; continue
@@ -810,19 +812,21 @@ PYEOF
             if [ "$SCHED" = on-insert ]; then _first="$(T 'ruszy opóźniona po podłączeniu dysku')"
             elif [ "$MEDIA" = removable ] && [ "$ONINS" = yes ]; then _first="$(T 'ruszy opóźniona po podłączeniu dysku albo o czasie z harmonogramu')"
             else _first="$(T 'ruszy o czasie z harmonogramu')"; fi
+            # U179(1): the "start now" question below says it already -- the F6/F7 hint only without it.
+            _pool="${DST%%/*}"; _ask_now=0
+            if [ "$EDIT" -eq 0 ] && [ "$MEDIA" = removable ] \
+               && { zpool list -H -o name "$_pool" >/dev/null 2>&1 \
+                    || zpool import 2>/dev/null | awk -v p="$_pool" '$1 == "pool:" && $2 == p {f=1} END {exit !f}'; }; then _ask_now=1; fi
             { if [ "$EDIT" -eq 1 ]; then Tv 'GOTOWE: replika '\''$NAME'\'' zmieniona (rc=$RC).' '$NAME' "$NAME" '$RC' "$RC"; echo; Tv '    Następna kopia $_first.' '$_first' "$_first"; echo
               else Tv 'GOTOWE: replika '\''$NAME'\'' zainstalowana (rc=$RC).' '$NAME' "$NAME" '$RC' "$RC"; echo; Tv '    Pierwsza kopia $_first.' '$_first' "$_first"; echo; fi
-              Tv '    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '\''$NAME'\'' i naciśnij F7 (Uruchom teraz).' '$NAME' "$NAME"; echo
+              [ "$_ask_now" -eq 1 ] || { Tv '    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '\''$NAME'\'' i naciśnij F7 (Uruchom teraz).' '$NAME' "$NAME"; echo; }
             } >"$TMPD/result.txt"
             result_box "$(Tv 'Replika $NAME: GOTOWE' '$NAME' "$NAME")" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
             # A8 (field 2026-11-05): dysk był podłączony przy instalacji, a pierwsza kopia
             # ruszyła dopiero następnej nocy -- udev reaguje tylko na WŁOŻENIE. Nowa replika
             # na dysku, który już jest: pytanie, czy zacząć teraz. Bieg w tle, ten sam
             # czasownik co F7, przeżywa wyjście z GUI.
-            _pool="${DST%%/*}"
-            if [ "$EDIT" -eq 0 ] && [ "$MEDIA" = removable ] \
-               && { zpool list -H -o name "$_pool" >/dev/null 2>&1 \
-                    || zpool import 2>/dev/null | awk -v p="$_pool" '$1 == "pool:" && $2 == p {f=1} END {exit !f}'; } \
+            if [ "$_ask_now" -eq 1 ] \
                && wt --title "$(Tv 'Replika $NAME' '$NAME' "$NAME")" --yes-button "$(T 'Tak, teraz')" --no-button "$(T 'Nie')" \
                      --yesno "$(Tv 'Dysk $POOL jest podłączony. Zacząć pierwszą kopię teraz?\n\nKopia biegnie w tle, także po wyjściu z programu. Stan: F2 Przebiegi.' '$POOL' "$_pool")" 10 "$W"; then
                 setsid -f "$ZB" run-replicas --name="$NAME" </dev/null >/dev/null 2>&1 || :

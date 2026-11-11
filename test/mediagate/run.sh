@@ -109,6 +109,13 @@ case "$*" in
   # W19b: an encrypted medium. KEYSTATUS is what the dataset reports before
   # load-key (unset = not encrypted, "-"); KEY_LOADS=1 makes load-key succeed,
   # after which keystatus reads "available" from $KEY_STATE.
+  # U183: sizes for the first-copy space check. Unset = no output (the gate skips the check).
+  *"get -H -p -o value used "*)
+      [ -n "${SRC_USED:-}" ] && echo "$SRC_USED"; exit 0 ;;
+  *"get -H -p -o value usedbydataset,usedbysnapshots "*)
+      [ -n "${SRC_UDS:-}" ] && printf '%s\n%s\n' "$SRC_UDS" "${SRC_USN:-0}"; exit 0 ;;
+  *"get -H -p -o value available "*)
+      [ -n "${MED_AVAIL:-}" ] && echo "$MED_AVAIL"; exit 0 ;;
   *"get -H -o value keystatus"*)
       if [ -n "${KEY_STATE:-}" ] && [ -s "$KEY_STATE" ]; then cat "$KEY_STATE"; else echo "${KEYSTATUS:--}"; fi; exit 0 ;;
   *"get -H -o value encryptionroot"*)
@@ -839,10 +846,24 @@ POOLS="hdd"; IMPORTABLE="rotpool"; DATASETS="hdd rotpool/replica tank/src tank/s
 g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
 POOLS="hdd rotpool"; IMPORTABLE=""
 out="$(SRC_TREE_tank_empty=tank/empty SRC_SNAP_tank_empty= g detach rotpool rep --source tank/src --source tank/empty --prefix - --engine-rc 0)"
-if [ -e "$STATE/rep.current" ] && [ ! -f "$SYNCFILE" ] && has "could not record" "$out"; then
-    ok "L8c: a source with no snapshot of its own -- no skip record (all-or-nothing), but the medium is marked current"
+# U187 (Site-C 2026-11-11): a passive replica never skips, so the missing skip record
+# is no failure and gets no "could not record" note -- every good run printed one.
+if [ -e "$STATE/rep.current" ] && [ ! -f "$SYNCFILE" ] && ! has "could not record" "$out"; then
+    ok "L8c: a source with no snapshot of its own -- no skip record (all-or-nothing), the medium marked current, and a passive replica says nothing about a record it never uses (U187)"
 else
     bad "L8c: container source" "current: $(ls "$STATE")" "$(cat "$SYNCFILE" 2>/dev/null)" "$out"
+fi
+rm -f "$SYNCFILE" "$STATE/rep.current" "$STATE/rep.imported-by-us"
+# L8c2. The same container source on an OWN-family replica: there the record is what a
+#       later run skips on, so its absence is still said (control for L8c).
+POOLS="hdd"; IMPORTABLE="rotpool"
+g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
+POOLS="hdd rotpool"; IMPORTABLE=""
+out="$(SRC_TREE_tank_empty=tank/empty SRC_SNAP_tank_empty= g detach rotpool rep --source tank/src --source tank/empty --prefix replica_ --engine-rc 0)"
+if [ -e "$STATE/rep.current" ] && [ ! -f "$SYNCFILE" ] && has "could not record" "$out"; then
+    ok "L8c2: an own-family replica that cannot write its skip record still says so (control for L8c)"
+else
+    bad "L8c2: own-family container source" "current: $(ls "$STATE")" "$(cat "$SYNCFILE" 2>/dev/null)" "$out"
 fi
 rm -f "$SYNCFILE" "$STATE/rep.current" "$STATE/rep.imported-by-us"
 DATASETS="hdd rotpool/replica tank/src tank/src/a"
@@ -1273,6 +1294,16 @@ else
     printf '%s %s %s\n' "$RU_PID" "$RU_ST" "$(( $(date +%s) - 6 * 86400 ))" > "$STATE/rep.running"
     out="$(g age rotpool rep --warn 3d --crit 5d)"; rc=$?
     check "RU4: a copy running longer than crit is a WARNING" "1" "$rc"
+    # U178: `running` says so; U169: `forget` under a running copy keeps that run's records.
+    out="$(g running rotpool rep)"; rc=$?
+    check "RU-F1: running -- a live copy is 0" "0" "$rc"
+    has "is running since" "$out" && ok "RU-F1: ...and says since when" || bad "RU-F1: ...says since when" "$out"
+    for f in current synced last-seen; do echo x > "$STATE/rep.$f"; done
+    : > "$STATE/rep.running.lock"
+    out="$(g forget rotpool rep)"; rc=$?
+    check "RU-F2: forget during a running copy is 75" "75" "$rc"
+    check "RU-F2: ...the run's records stay, the rest is gone" "rep.imported-by-us rep.running rep.running.lock" \
+        "$(cd "$STATE" && ls rep.* 2>/dev/null | sort | tr '\n' ' ' | sed 's/ $//')"
     # Control: the holder dies -- its record is a dead run's and blocks nothing.
     kill "$RU_PID" 2>/dev/null; wait "$RU_PID" 2>/dev/null
     rm -f "$STATE/rep.imported-by-us"
@@ -1283,6 +1314,20 @@ else
     POOLS="hdd rotpool"; IMPORTABLE=""
     g detach rotpool rep >/dev/null
     rm -f "$STATE"/rep.running "$STATE"/rep.imported-by-us
+    # U169: no live copy -- running is 1, forget removes every state file of the label;
+    # an imported pool keeps its imported-by-us marker. Another label's files stay.
+    out="$(g running rotpool rep)"; rc=$?
+    check "RU-F3: running -- no live copy is 1" "1" "$rc"
+    for f in current synced last-seen running running.lock imported-by-us; do echo x > "$STATE/rep.$f"; done
+    echo x > "$STATE/other.current"
+    POOLS="hdd"; out="$(g forget rotpool rep)"; rc=$?
+    check "RU-F4: forget with no copy running is 0" "0" "$rc"
+    check "RU-F4: ...every state file of the label is gone" "" "$(cd "$STATE" && ls rep.* 2>/dev/null)"
+    check "RU-F4: ...another label's file stays" "x" "$(cat "$STATE/other.current" 2>/dev/null)"
+    printf 'guid=%s\n' "$POOL_GUID" > "$STATE/rep.imported-by-us"
+    POOLS="hdd rotpool"; out="$(g forget rotpool rep)"; rc=$?
+    check "RU-F5: forget keeps imported-by-us while the pool is imported" "rep.imported-by-us" "$(cd "$STATE" && ls rep.* 2>/dev/null)"
+    rm -f "$STATE/rep.imported-by-us" "$STATE/other.current"
 
     # FAIL CLOSED (REV-20261106-189). A claim that cannot be written (a directory
     # where rep.running belongs) or a lock that cannot be created must stop
@@ -1368,6 +1413,37 @@ mkdir -p "$TMPD/nolib" && cp "$GATE" "$TMPD/nolib/zfs-media-gate.sh"
 out="$(PATH="$BIN:$PATH" MEDIA_STATE_DIR="$STATE" bash "$TMPD/nolib/zfs-media-gate.sh" status rotpool rep 2>&1)"; rc=$?
 check "USBQ10: a gate without lib-backup-common.sh beside it refuses with rc 2" "2" "$rc"
 has "cannot read" "$out" && has "lib-backup-common.sh" "$out" && ok "USBQ11: ...and names the missing library" || bad "USBQ11: ...and names the missing library" "$out"
+
+# U183 (Site-A 2026-11-09): a first copy that cannot fit is refused before the engine
+# starts -- rc 2 with both numbers, the medium exported. Passive (--prefix -) so the
+# quiet check does not decide first. rotpool/replica exists; rotpool/replica/tank/src
+# does not (first copy) unless FIRST=no.
+u183() {   # <recursive 0/1> ; env SRC_USED SRC_UDS SRC_USN MED_AVAIL FIRST
+    rm -f "$STATE/rep.imported-by-us" "$STATE/rep.running"
+    POOLS="hdd"; IMPORTABLE="rotpool"; : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
+    DATASETS="hdd rotpool/replica tank/src"
+    [ "${FIRST:-yes}" = no ] && DATASETS="$DATASETS rotpool/replica/tank/src"
+    export SRC_USED SRC_UDS SRC_USN MED_AVAIL
+    out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix - $([ "$1" = 1 ] && echo --recursive))"; rc=$?
+    POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+}
+SRC_USED=1000000000; SRC_UDS=""; MED_AVAIL=500000000; FIRST=yes; u183 1
+if [ "$rc" = 2 ] && has "REFUSING: the first copy of tank/src needs about" "$out" && has "has 477M free" "$out" \
+   && grep -qx rotpool "$EXPORTED_LOG"; then
+    ok "U183a: recursive first copy bigger than the medium's free space -- refused rc 2 with both sizes, medium exported"
+else
+    bad "U183a: too small refused" "rc=$rc" "exported: $(cat "$EXPORTED_LOG")" "$out"
+fi
+MED_AVAIL=5000000000; u183 1
+check "U183b: control -- the same copy with room enough is let through" "0" "$rc"
+SRC_UDS=300000000; SRC_USN=100000000; MED_AVAIL=500000000; u183 0
+check "U183c: not recursive -- sized by that dataset (400M of a 1G tree) and let through" "0" "$rc"
+SRC_UDS=""; MED_AVAIL=1; FIRST=no; u183 1
+check "U183d: the copy already on the medium is no first copy -- not sized, let through" "0" "$rc"
+SRC_USED=""; SRC_UDS=""; MED_AVAIL=""; FIRST=yes; u183 1
+check "U183e: sizes unreadable -- the check is skipped, not guessed" "0" "$rc"
+unset SRC_USED SRC_UDS SRC_USN MED_AVAIL FIRST
+DATASETS="hdd rotpool/replica tank/src tank/src/a"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

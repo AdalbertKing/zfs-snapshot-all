@@ -6,6 +6,75 @@ when they change how the tool is used.
 
 ## [Unreleased]
 
+- **Mail subjects say what kind of mail it is** (U184): `[ZFS][REPORT]` the daily summary,
+  `[ZFS][WARNING]` a warning, pool capacity or data growth (formerly `[ZFS CAPACITY]`,
+  `[ZFS GROWTH]`), `[ZFS][ALERT]` a failed run. Mail rules matching `[ZFS]` keep working;
+  rules matching `[ZFS CAPACITY]` or `[ZFS GROWTH]` need the new subject.
+- **GUI, from the lab walk:** F2 opens on the newest finished run once the run history arrives
+  (it stayed on the last upcoming run); F4 shows a replica's medium in F6's words -- "WRONG
+  DISK" or "CONNECTED" (pool not imported) instead of "medium not connected"; F2 shows a
+  source-retention tier as "hourly", not "src_hourly".
+- **A quiesced tier of a dataset that is not a guest disk no longer fails every night** (U188):
+  the remote quiesce run used to check the account's privileges before looking for a guest,
+  so a delegated account without `--allow-quiesce` turned every such snapshot into a `_crash_`
+  set with exit 8. With no `vm-N-disk-M`/`subvol-N-disk-M` in scope it now takes a plain
+  snapshot and exits 0; a scope with a guest disk is checked as before.
+- **The growth guard also watches sources of "snapshots on the source only" relations**
+  (U172): on the collector, `growth-guard.sh` reads the remote entries of its retention lines
+  and measures the source's increments over ssh with that line's own options (key, known
+  hosts, port), under the collector's `[growth]` thresholds; the alarm subject names the source,
+  the dataset and the relation. A host with no config of its own has nothing to watch: exit 0,
+  no mail (U173; it used to mail "the guard is not working" every hour).
+- **A passive local copy fed by pvesr runs after the replica brings the snapshot** (U181):
+  `local-backup --passive` moves each tier's copy time to 10 minutes after the pvesr run that
+  brings that tier's snapshot (a daily copy at 01:11 behind a `*/2:00` replica runs at 02:10),
+  and its monitor thresholds add the replica interval to the template's (daily 32h/50h instead
+  of 30h/48h).
+- **A freshly formatted replica disk is checked before it is called ready** (U185):
+  `prepare-media` waits until a plain `zpool import` lists the new pool, and refuses otherwise.
+  The GUI no longer drops a refresh asked for while another one is running.
+- **A passive replica no longer reports "could not record what ... now holds"** after every
+  good run (U187). It never skips by design, so the record was never needed.
+- **A connected replica disk shows how full it is** (U186): F6 has a `Used` column and the
+  medium line says `used N% (X of Y)`; `list-replicas --json` carries `medium_size` and
+  `medium_alloc` in bytes while the disk's pool is imported (empty otherwise).
+- **The replica wizard shows each dataset's snapshots** (U175): the dataset tree has the count
+  (`list-datasets --own-snapshots` gives `snapshots`, every family) and, at zero, the note that
+  a passive replica will not copy it.
+- **F2 reads newest first and folds one relation's datasets** (U166, U171): upcoming runs (the
+  next 6 h only) are on top, past runs below the `now` line, and the cursor starts on the latest
+  finished run. Cron lines of one relation, task and tier at the same minute (one line per
+  dataset) are one row `N datasets` with the worst result (`FAILED 1/3`) and the longest time;
+  Enter expands it to one row per dataset with its full path. Cron is unchanged.
+- **F4 shows a replica copy in progress** (U170): a replica dataset with no snapshot yet says
+  `copy running` while the copy runs, and `interrupted, will resume` when a cut-off receive left
+  a resume token (`zfs-tree --json` carries `resume`); the pair panel shows the state and how
+  full the medium is. The `other disk` row has its own name.
+- **F2/F3 show every run of every job** (U176): a row finds its runs by the label of its own
+  cron line. A snapshot-only relation's snapshot rows, the daily/weekly/monthly rows, and a local
+  prune row made of several datasets took another line's label and showed no runs (or another
+  line's runs).
+- **F6 shows a running copy and the current medium state** (U174, U180): `list-replicas --json`
+  has `running_since` (the gate's run record, live pid); the row and the medium line say
+  `kopia trwa od ...` (`copy running since ...`) instead of the last finished run. F6 reads the
+  replica list again on entry and every 15 s while it is open. A disk just inserted, its copy
+  waiting (`replica.insert_wait`), reads `disk connected, copy in ~N s` instead of `disconnected`:
+  `run-replicas --on-insert` records the wait per device and `list-replicas` gives `insert_in`.
+- **A stopped run is shown as interrupted, not running for ever** (U167): `job-stats --runs`
+  gives rc `-2` to a run with no END whose `zfs-job.sh` process is gone; F2 says `PRZERWANY`
+  (`INTERRUPTED`). Where other users' processes cannot be read (hidepid), it stays running.
+- **Removing a replica removes its state files** (U169, U178): `remove-replica --install`
+  has the gate (new verb `forget`) delete the replica's files in `/var/lib/zfs-snapshot-all/media/`;
+  a copy running at that moment is named in the plan and in the Del window (new gate verb
+  `running`) and is not stopped.
+- **A replica copy stopped by SIGTERM still exports its disk** (U182): the cron line runs the
+  gate's `detach` even when the whole job's process group is killed.
+- **A first copy that cannot fit on the disk is refused** (U183): before writing, the gate adds
+  up the sources that have no copy on the medium yet, compares that with the free space, and
+  exports the disk when it is short. The `add-replica` plan (and the replica wizard before
+  EXECUTE) says how big the first copy is and, with the medium's pool imported, how much is
+  free, with `!!!` when it cannot fit.
+
 - **A ZFS disk whose pool name and GUID cannot be read starts no replica on insertion**
   (REV-20261109-193). In 1.0.17 such a disk ran every on-insert replica; now the insertion is
   logged and nothing runs. Runs by schedule or by hand are unchanged.

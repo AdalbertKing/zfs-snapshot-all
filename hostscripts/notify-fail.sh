@@ -92,4 +92,4 @@ alert_words "$JOB" "$DETAIL"
         printf '%s\n' "$DETAIL" | sed 's/^/    /'
     fi
     printf '\nPelny log: %s/cron.log na %s\n' "$(cd "$(dirname "$0")" && pwd)" "${HOST}"
-} | alert_mail "[ZFS] $(zfs_mail_host): ${AW_REL:+$AW_REL -- }${AW_WHAT} ($(date '+%d.%m %H:%M'))" "$EMAIL"
+} | alert_mail "[ZFS][ALERT] $(zfs_mail_host): ${AW_REL:+$AW_REL -- }${AW_WHAT} ($(date '+%d.%m %H:%M'))" "$EMAIL"

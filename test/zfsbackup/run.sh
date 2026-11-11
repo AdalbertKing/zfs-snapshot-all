@@ -13286,8 +13286,22 @@ $(rt 29) ZFS-JOB END pve10 hourly backup (rn-bad) rc=1
 $(rt 20) ZFS-JOB BEGIN pve10 hourly backup (rn-skip)
 $(rt 20) ZFS-JOB END pve10 hourly backup (rn-skip) rc=75
 $(rt 5) ZFS-JOB BEGIN pve10 hourly backup (rn-now)
+$(rt 4) ZFS-JOB BEGIN pve10 replica copy (rn-dead)
 RLOG
-RNOUT=$( ( PATH="$JS/bin:$PATH" ZFS_CRON_LOGS="$JS/runs.log" bash "$ZFSBACKUP" job-stats --json --runs=2 ) 2>"$JS/err")
+# U167: the process list -- pid 1, a live zfs-job.sh for rn-now, nothing for rn-dead.
+JPR="$JS/proc"; mkdir -p "$JPR/1" "$JPR/4242" "$JPR/77"
+printf 'init\0' > "$JPR/1/cmdline"
+printf '/bin/bash\0/root/scripts/zfs-snapshot-all/zfs-job.sh\0--detail=8\0pve10 hourly backup (rn-now)\0--\0/x/snapsend.sh\0' > "$JPR/4242/cmdline"
+printf '/bin/sleep\0pve10 replica copy (rn-dead)\0' > "$JPR/77/cmdline"
+RNOUT=$( ( PATH="$JS/bin:$PATH" JOB_PROC_ROOT="$JPR" ZFS_CRON_LOGS="$JS/runs.log" bash "$ZFSBACKUP" job-stats --json --runs=2 ) 2>"$JS/err")
+: > "$JPR/1/cmdline"
+RNH=$( ( PATH="$JS/bin:$PATH" JOB_PROC_ROOT="$JPR" ZFS_CRON_LOGS="$JS/runs.log" bash "$ZFSBACKUP" job-stats --json --runs=2 ) 2>/dev/null)
+rnh=$(printf '%s' "$RNH" | "$PY_OR_PYTHON" -c 'import sys,json; r={x["label"]: x["rc"] for x in json.load(sys.stdin)["runs"]}; print(r["hourly backup (rn-now)"], r["replica copy (rn-dead)"])' 2>&1 | tr -d '\r')
+if [ "$rnh" = "-1 -1" ]; then
+    ok "jobstats --runs U167: process list unreadable (hidepid) -> an open start stays running, never called interrupted"
+else
+    bad "jobstats --runs U167 hidepid" "$rnh"
+fi
 RN0=$( ( PATH="$JS/bin:$PATH" ZFS_CRON_LOGS="$JS/runs.log" bash "$ZFSBACKUP" job-stats --json ) 2>/dev/null)
 got=$(printf '%s' "$RNOUT" | "$PY_OR_PYTHON" -c '
 import sys,json; d=json.load(sys.stdin); r={x["label"]: x for x in d["runs"]}
@@ -13295,15 +13309,17 @@ print(d["runs_hours"], sorted(r))
 print(r["hourly backup (rn-ok)"]["rc"], r["hourly backup (rn-ok)"]["error"] == "", bool(r["hourly backup (rn-ok)"]["start"]) and r["hourly backup (rn-ok)"]["end"] > r["hourly backup (rn-ok)"]["start"])
 print(r["hourly backup (rn-bad)"]["rc"], r["hourly backup (rn-bad)"]["error"])
 print(r["hourly backup (rn-skip)"]["rc"], r["hourly backup (rn-skip)"]["error"] == "")
-print(r["hourly backup (rn-now)"]["rc"], r["hourly backup (rn-now)"]["end"] == "")' 2>&1 | tr -d '\r')
-want="2 ['hourly backup (rn-bad)', 'hourly backup (rn-now)', 'hourly backup (rn-ok)', 'hourly backup (rn-skip)']
+print(r["hourly backup (rn-now)"]["rc"], r["hourly backup (rn-now)"]["end"] == "")
+print(r["replica copy (rn-dead)"]["rc"], r["replica copy (rn-dead)"]["end"] == "")' 2>&1 | tr -d '\r')
+want="2 ['hourly backup (rn-bad)', 'hourly backup (rn-now)', 'hourly backup (rn-ok)', 'hourly backup (rn-skip)', 'replica copy (rn-dead)']
 0 True True
 1 Refusing 'hdd/lab/b': it is the disk of guest 901, which is currently RUNNING.
 75 True
--1 True"
+-1 True
+-2 True"
 has_runs=$(printf '%s' "$RN0" | "$PY_OR_PYTHON" -c 'import sys,json; print("runs" in json.load(sys.stdin))' 2>&1 | tr -d '\r')
 if [ "$got" = "$want" ] && [ "$has_runs" = False ]; then
-    ok "jobstats --runs: each run with start/end/rc, the error only for a failure, rc=75 plain, a BEGIN without END running (rc -1), older than the window left out, absent without --runs"
+    ok "jobstats --runs: each run with start/end/rc, the error only for a failure, rc=75 plain, a BEGIN without END running (rc -1) or, with no live zfs-job.sh of that label, interrupted (rc -2, U167), older than the window left out, absent without --runs"
 else
     bad "jobstats --runs" "$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$got"))" "without --runs: runs present=$has_runs" "$(cat "$JS/err")"
 fi
@@ -13593,6 +13609,14 @@ if [ "$got" = "[('pool', 0), ('pool/a', 1), ('pool/b', 0)]" ]; then
 else
     bad "listdatasets: family_snapshots" "got=$got" "$LDOUT"
 fi
+# U175: "snapshots" is every snapshot of the dataset, the reserved families too -- the replica
+# picker's Migawki column. Control: own_snapshots above still leaves them out (pool/b 0).
+got=$(printf '%s' "$LDOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print([(x["name"], x["snapshots"]) for x in d["datasets"]])' 2>/dev/null)
+if [ "$got" = "[('pool', 0), ('pool/a', 3), ('pool/b', 2)]" ]; then
+    ok "listdatasets U175: --own-snapshots also gives snapshots -- every one, reserved too (pool/a 3, pool/b 2)"
+else
+    bad "listdatasets U175: snapshots" "got=$got" "$LDOUT"
+fi
 # family_newest (2026-10-24): the listing asks for the creation column, the newest
 # epoch counts only for OUR family (pool/a@reczny 9000 must not), and a peer that
 # answers with names only (the stub above) reports 0 for every dataset.
@@ -13641,8 +13665,8 @@ cat > "$ZT/bin/zfs" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "${ZT_ARGS:?}/zfs.argv"
 case "$*" in
-    "list -H -p -o name,type -r -t filesystem,volume -- "*)
-        printf 'tank/c\tfilesystem\ntank/c/a\tfilesystem\ntank/c/vm\tvolume\ntank/c/empty\tfilesystem\n' ;;
+    "list -H -p -o name,type,receive_resume_token -r -t filesystem,volume -- "*)
+        printf 'tank/c\tfilesystem\t-\ntank/c/a\tfilesystem\t-\ntank/c/vm\tvolume\t-\ntank/c/empty\tfilesystem\t%s\n' "${ZT_TOKEN:--}" ;;
     "list -H -p -o name,creation -r -t snapshot -- "*)
         printf 'tank/c/a@s1\t1000\ntank/c/a@s2\t3000\ntank/c/a@s0\t500\ntank/c/vm@z1\t2000\ntank/c@r1\t100\n'
         [ -n "${ZT_PVESR:-}" ] && printf 'tank/c/vm@__replicate_105-0_1700000000__\t2500\n' ;;
@@ -13670,6 +13694,16 @@ if [ "$got" = "[('tank/c', False), ('tank/c/a', False), ('tank/c/vm', True), ('t
     ok "zfstree: a dataset with a @__replicate_ snapshot is marked pvesr, the others are not (A17)"
 else
     bad "zfstree: pvesr mark (A17)" "got=$got" "$ZTOUT"
+fi
+# U170 (lab pve11 2026-11-09): a dataset whose receive was cut off holds a receive_resume_token
+# (zfs recv -s); F4 says "przerwana, wznowi się" by it. Control: '-' (no token) is resume false.
+rm -f "$ZT/zfs.argv"
+ZTOUT=$(ZT_TOKEN=1-e604ea4bf-e0-789c63 zt_run zfs-tree --json tank/c)
+got=$(printf '%s' "$ZTOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print([(x["name"], x["resume"]) for x in d["datasets"]])' 2>/dev/null | tr -d '\r')
+if [ "$got" = "[('tank/c', False), ('tank/c/a', False), ('tank/c/vm', False), ('tank/c/empty', True)]" ]; then
+    ok "zfstree: a dataset with a receive_resume_token is marked resume, '-' is not (U170)"
+else
+    bad "zfstree: resume mark (U170)" "got=$got" "$ZTOUT" "$(cat "$ZT/err")"
 fi
 rm -f "$ZT/zfs.argv"
 ZTOUT=$(zt_run zfs-snapshots --json tank/c/a)
@@ -14920,6 +14954,115 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'a pool GUID is digits'; then
 else
     bad "addreplica: --media-guid validation" "rc=$rc" "$out"
 fi
+# U179(6): the wizard formats a disk, then adds the replica naming it by GUID -- the plan
+# must not warn "in the slot but not imported ... not checked" about its own work.
+# Control: the same disk in the slot, not named by GUID, is still warned about.
+u1796() { ( source "$ZFSBACKUP"
+    zfs() { case "$*" in "list -H -o name hdd/data") return 0 ;; esac; return 1; }
+    zpool() { case "$1" in list) return 1 ;; import) printf '   pool: repl\n     id: 999\n' ;; esac; }
+    cmd_add_replica rr --source=hdd/data --dst=repl/replica --config="$MG/u.conf" "$@" ) 2>&1; }
+printf '[defaults]\n\thost_label = h\n' > "$MG/u.conf"
+o1=$(u1796 --media-guid=999); o2=$(u1796)
+if ! printf '%s' "$o1" | grep -q 'is in the slot but not imported' && printf '%s' "$o2" | grep -q 'is in the slot but not imported'; then
+    ok "addreplica: no 'not checked' warning for the disk named by --media-guid (U179-6); control: an unnamed disk in the slot still warned"
+else
+    bad "addreplica: not-checked warning (U179-6)" "named: $o1" "unnamed: $o2"
+fi
+# U183 (Site-A 2026-11-09): the plan says how big the first copy is, next to the medium's
+# free space -- the wizard shows it before EXECUTE. Too small: "!!!" with both numbers.
+# Controls: room enough -> ">>>" line, no "!!!"; pool not imported -> size only, free checked
+# at start; the source already on the medium -> no first copy, no line.
+u183p() { ( source "$ZFSBACKUP"
+    zfs() { case "$*" in
+        "list -H -o name hdd/data"|"list -H -o name repl/replica") return 0 ;;
+        "list -H -o name repl/replica/hdd/data") [ -n "${U183_ON:-}" ] ;;
+        "get -H -p -o value used hdd/data") echo 2147483648 ;;
+        "get -H -p -o value available repl/replica") echo "$U183_FREE" ;;
+        *) return 1 ;; esac; }
+    zpool() { case "$1" in list) [ -n "${U183_IMP:-}" ] ;; *) return 1 ;; esac; }
+    cmd_add_replica rr --source=hdd/data --dst=repl/replica --config="$MG/u.conf" ) 2>&1; }
+p1=$(U183_IMP=1 U183_FREE=1073741824 u183p); p2=$(U183_IMP=1 U183_FREE=3221225472 u183p); p3=$(U183_FREE=1 u183p)
+p4=$(U183_IMP=1 U183_ON=1 U183_FREE=1 u183p)
+if printf '%s' "$p1" | grep -qE "^!!! the first copy of hdd/data needs about 2\.0G and 'repl/replica' has 1\.0G free" \
+   && printf '%s' "$p2" | grep -qE "^>>> first copy: hdd/data -- about 2\.0G, 'repl/replica' has 3\.0G free" && ! printf '%s' "$p2" | grep -q 'cannot fit' \
+   && printf '%s' "$p3" | grep -qE "^>>> first copy: hdd/data -- about 2\.0G; the medium's free space is checked when the copy starts" \
+   && ! printf '%s' "$p4" | grep -q 'first copy'; then
+    ok "addreplica U183: the plan sizes the first copy -- too small '!!!' with both numbers; room enough '>>>'; not imported: size only; already on the medium: nothing"
+else
+    bad "addreplica U183: first copy size in the plan" "small: $(printf '%s' "$p1" | grep -i 'first copy')" "room: $(printf '%s' "$p2" | grep -i 'first copy')" \
+        "away: $(printf '%s' "$p3" | grep -i 'first copy')" "on medium: $(printf '%s' "$p4" | grep -i 'first copy')"
+fi
+# U186: list-replicas carries the medium's size and allocation while its pool is imported
+# (gate status 0 = here). Control: the gate says away -> both fields empty, zpool list unread.
+mkdir -p "$MG/gd"; printf '#!/bin/sh\nexit "${U186_GATE:-0}"\n' > "$MG/gd/zfs-media-gate.sh"; chmod +x "$MG/gd/zfs-media-gate.sh"
+u186() { ( source "$ZFSBACKUP"; SCRIPT_DIR="$MG/gd"
+    zpool() { case "$*" in "list -Hp -o size,alloc repl") printf '4000\t1000\n' ;; *) return 1 ;; esac; }
+    cmd_list_replicas --json --config="$MG/c.conf" ) 2>&1; }
+l1=$(U186_GATE=0 u186); l2=$(U186_GATE=1 u186)
+if printf '%s' "$l1" | grep -qE '"name":"mg"[^}]*"present":"here"[^}]*"medium_size":"4000","medium_alloc":"1000"' \
+   && printf '%s' "$l2" | grep -qE '"name":"mg"[^}]*"present":"away"[^}]*"medium_size":"","medium_alloc":""'; then
+    ok "listreplicas U186: imported medium carries medium_size/medium_alloc; away -> both empty"
+else
+    bad "listreplicas U186: medium usage" "here: $l1" "away: $l2"
+fi
+# U174: running_since from the gate's `running` answer. Control: gate says nothing runs -> empty.
+printf '#!/bin/sh\n[ "$1" = running ] || exit 1\n[ "$3" = mg ] || exit 1\necho "2026-11-11 10:00:00 - a copy of '"'"'mg'"'"' is running since 2026-11-09 22:28 (pid 7)." >&2\nexit 0\n' > "$MG/gd/zfs-media-gate.sh"
+l3=$(u186)
+if printf '%s' "$l3" | grep -qE '"name":"mg"[^}]*"running_since":"2026-11-09 22:28"' \
+   && printf '%s' "$l3" | grep -qE '"name":"mi"[^}]*"running_since":""'; then
+    ok "listreplicas U174: running_since from the gate's run record; a replica with no copy running has it empty"
+else
+    bad "listreplicas U174: running_since" "$l3"
+fi
+# U180: a disk just inserted, its copy waiting -- run-replicas --on-insert records the wait per
+# device; list-replicas gives insert_in (seconds) to the replica whose pool that device carries
+# (blkid LABEL). Controls: an expired record and a device of another pool -> empty.
+mkdir -p "$MG/st" "$MG/dev"; : > "$MG/dev/sdz"; : > "$MG/dev/sdy"
+u180() { ( source "$ZFSBACKUP"; SCRIPT_DIR="$MG/gd"; export MEDIA_STATE_DIR="$MG/st" REPLICA_DEV_DIR="$MG/dev"
+    zpool() { return 1; }
+    blkid() { case "$*" in *"/sdz") echo repl2 ;; *"/sdy") echo other ;; esac; }
+    cmd_list_replicas --json --config="$MG/c.conf" ) 2>&1; }
+rm -f "$MG/st"/insert-wait.*; echo $(( $(date +%s) + 40 )) > "$MG/st/insert-wait.sdz"; echo $(( $(date +%s) + 40 )) > "$MG/st/insert-wait.sdy"
+l4=$(u180)
+echo $(( $(date +%s) - 5 )) > "$MG/st/insert-wait.sdz"; l5=$(u180)
+# the writer: run-replicas --on-insert records "until" before its wait and drops it after
+w180=$( ( source "$ZFSBACKUP"; export MEDIA_STATE_DIR="$MG/st" REPLICA_DEV_DIR="$MG/dev"; rm -f "$MG/st"/insert-wait.*
+    insert_wait() { echo 60; }; sleep() { cat "$MG/st/insert-wait.sdx" > "$MG/w180" 2>/dev/null || echo none > "$MG/w180"; }
+    cmd_run_replicas --on-insert --device=sdx --config="$MG/c.conf" >/dev/null 2>&1; cat "$MG/w180"; ls "$MG/st" | grep -c insert-wait ) 2>&1 )
+if printf '%s' "$l4" | grep -qE '"name":"mi"[^}]*"insert_in":"(3[0-9]|40)"' && printf '%s' "$l4" | grep -qE '"name":"mg"[^}]*"insert_in":""' \
+   && printf '%s' "$l5" | grep -qE '"name":"mi"[^}]*"insert_in":""' \
+   && [ "$(printf '%s\n' "$w180" | head -1)" -gt "$(( $(date +%s) + 50 ))" ] && [ "$(printf '%s\n' "$w180" | tail -1)" = 0 ]; then
+    ok "listreplicas U180: a waiting inserted disk gives its replica insert_in; expired / other pool -> empty; run-replicas writes the record and drops it"
+else
+    bad "listreplicas U180: insert_in" "l4: $l4" "l5: $l5" "writer: $w180"
+fi
+rm -rf "$MG/st" "$MG/dev"
+# U169/U178: remove-replica asks the gate whether a copy runs (NOTE in the plan) and, once
+# installed, has it forget the replica's state files. Control: a plan alone forgets nothing,
+# and with no copy running there is no NOTE.
+cat > "$MG/gd/zfs-media-gate.sh" <<'GATE'
+#!/bin/sh
+echo "$*" >> "$U169_LOG"
+[ "$1" = running ] || exit 0
+[ "${U169_RUN:-1}" = 0 ] && { echo "2026-11-11 10:00:00 - a copy of '$3' is running since 2026-11-11 09:00 (pid 42)." >&2; exit 0; }
+exit 1
+GATE
+chmod +x "$MG/gd/zfs-media-gate.sh"
+u169() { ( source "$ZFSBACKUP"; SCRIPT_DIR="$MG/gd"
+    cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE="$MG/c.conf"; }
+    show_activation_proposal() { :; }; atomic_replace_and_install() { mv -f "$2" "$1"; }
+    cmd_remove_replica "$@" ) 2>&1; }
+export U169_LOG="$MG/gate.log"; : > "$U169_LOG"
+p1=$(U169_RUN=0 u169 mg); g1=$(cat "$U169_LOG"); : > "$U169_LOG"
+p2=$(U169_RUN=1 u169 mi --install --yes); g2=$(cat "$U169_LOG")
+if printf '%s' "$p1" | grep -q "NOTE: a copy of 'mg' is running since 2026-11-11 09:00" && [ "$g1" = "running repl mg" ] \
+   && ! printf '%s' "$p2" | grep -q 'NOTE:' && printf '%s\n' "$g2" | grep -qx 'forget repl2 mi' \
+   && ! grep -qxF '[replica:mi]' "$MG/c.conf" && grep -qxF '[replica:mg]' "$MG/c.conf"; then
+    ok "removereplica U169/U178: running copy named in the plan; --install has the gate forget the state files; plan alone forgets nothing"
+else
+    bad "removereplica U169/U178" "plan: $p1" "gate1: $g1" "install: $p2" "gate2: $g2"
+fi
+unset U169_LOG
 rm -rf "$MG"
 
 # add-replica --passive (owner note 20, 2026-10-08): the section says passive = yes
@@ -15117,6 +15260,46 @@ case "$(readlink -f "$FSB/block/sdb" 2>/dev/null)" in
     ;;
 *) echo "SKIP prepare-media USB queue: this host cannot make symlinks into a fake /sys/block" ;;
 esac
+
+# U185 (Site-C 2026-11-10): after the export the plain `zpool import` scan did not
+# list the new pool for over a minute. prepare-media must not report the medium
+# ready until the plain scan shows THIS pool's GUID: udev settle, one change
+# trigger, then a refusal naming the pool. PM_SEEN = how many scans miss it first.
+if [ -n "$PMBD" ]; then
+    pm_scan() {   # <misses> -> "out rc" ; udevadm calls logged to $PMD/udev.log
+        : > "$PMD/udev.log"; echo 0 > "$PMD/scans"
+        ( source "$ZFSBACKUP"
+          media_disk_in_use() { return 1; }
+          lsblk() { :; }; usb_queue_raise() { :; }
+          zfs() { return 0; }
+          udevadm() { echo "udevadm $1" >> "$PMD/udev.log"; return 0; }
+          zpool() {
+              case "$1" in
+                  list) return 1 ;;
+                  create|export) return 0 ;;
+                  get) echo 777123 ;;
+                  import) local n; n=$(cat "$PMD/scans"); echo $((n + 1)) > "$PMD/scans"
+                          [ "$n" -ge "$PM_MISS" ] \
+                              && printf '   pool: pm3\n     id: 777123\n' || printf '   pool: pm3\n     id: 555\n' ;;
+              esac
+          }
+          MEDIA_KEY_DIR="$PMD/keys"
+          cmd_prepare_media pm3 "$PMBD" --yes ) 2>&1
+    }
+    # The plan's own "another disk is in the slot" scan runs before --yes; count it.
+    o0=$(PM_MISS=0 pm_scan); r0=$?
+    o1=$(PM_MISS=2 pm_scan); r1=$?; u1=$(tr '\n' ' ' < "$PMD/udev.log")
+    o2=$(PM_MISS=99 pm_scan); r2=$?; u2=$(tr '\n' ' ' < "$PMD/udev.log")
+    if [ "$r0" -eq 0 ] && printf '%s' "$o0" | grep -q 'medium ready' \
+       && [ "$r1" -eq 0 ] && printf '%s' "$o1" | grep -q 'medium ready' && [ -n "$u1" ] \
+       && [ "$r2" -ne 0 ] && printf '%s' "$o2" | grep -q "does not list pool 'pm3' (guid 777123)" \
+       && ! printf '%s' "$o2" | grep -q 'medium ready' \
+       && printf '%s' "$u2" | grep -q 'udevadm trigger'; then
+        ok "prepare-media: ready only when a plain zpool import scan lists the new GUID; udev settle/trigger once, else a refusal (U185)"
+    else
+        bad "prepare-media: plain scan after export (U185)" "r0=$r0 r1=$r1 u1=[$u1] r2=$r2 u2=[$u2]" "$o0" "$o1" "$o2"
+    fi
+fi
 rm -rf "$PMD"
 fi   # --- koniec sekcji runreplicas ---
 
