@@ -11,8 +11,9 @@ when they change how the tool is used.
   `[ZFS GROWTH]`), `[ZFS][ALERT]` a failed run. Mail rules matching `[ZFS]` keep working;
   rules matching `[ZFS CAPACITY]` or `[ZFS GROWTH]` need the new subject.
 - **GUI, from the lab walk:** F2 opens on the newest finished run once the run history arrives
-  (it stayed on the last upcoming run); F4 shows a replica's medium in F6's words -- "NOT THIS
-  DISK" or "Connected" (pool not imported) instead of "medium not connected".
+  (it stayed on the last upcoming run); F4 shows a replica's medium in F6's words -- "WRONG
+  DISK" or "CONNECTED" (pool not imported) instead of "medium not connected"; F2 shows a
+  source-retention tier as "hourly", not "src_hourly".
 - **A quiesced tier of a dataset that is not a guest disk no longer fails every night** (U188):
   the remote quiesce run used to check the account's privileges before looking for a guest,
   so a delegated account without `--allow-quiesce` turned every such snapshot into a `_crash_`

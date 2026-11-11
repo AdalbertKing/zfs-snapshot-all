@@ -1854,8 +1854,9 @@ def build_jobs(data, now):
         tier = j.get("tier", "")
         if "__" in tier:
             tier = tier.rsplit("__", 1)[-1]
-        # U143: wewnetrzny przedrostek zrodla relacji lokalnej (lsrc_) to nie nazwa szczebla.
-        tier = re.sub(r"^lsrc_", "", tier)
+        # U143: wewnetrzny przedrostek zrodla relacji lokalnej (lsrc_) to nie nazwa szczebla;
+        # L4 (lab pve11 2026-11-11): tak samo src_ retencji zrodla ("remote prune src_hourly").
+        tier = re.sub(r"^l?src_", "", tier)
         kind = j.get("section_kind", "")
         ret = j.get("retain") or j.get("keep") or ""
         # R4-4 (wlasciciel 2026-09-24): Zadanie to SAMO slowo; rodzina, retencja

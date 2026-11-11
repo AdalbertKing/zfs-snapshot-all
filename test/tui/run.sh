@@ -198,6 +198,10 @@ sj = copy.deepcopy(hj)
 sj.update(label="lab-vm101", direction="snapshot", tier="profile__relacja-lab__lsrc_hourly", schedule="7 * * * *",
           prefix="automated_hourly_", scope="hdd/lab/vm-101")
 jobs["jobs"].append(sj)
+# L4 (lab pve11 2026-11-11): retencja zrodla ma szczebel src_<szczebel> -- F2 bez przedrostka.
+rj = copy.deepcopy(sj)
+rj.update(tier="profile__relacja-lab__src_daily", schedule="41 * * * *", prefix="automated_daily_")
+jobs["jobs"].append(rj)
 json.dump(jobs, open(out + "/list-jobs.json", "w", encoding="utf-8"))
 PYEOF
 S4W="$(screen relacje down,down,down,down --width 260 --height 40 --monitors "$C3D/monitor.json" --jobs "$C3D/list-jobs.json")"
@@ -205,7 +209,7 @@ F2W="$(screen zadania '' --width 220 --height 400 --monitors "$C3D/monitor.json"
 # W2 (kampania 2026-11-03): szczebel chodzi, drugi czeka -- relacja "aktualne", nie "czeka".
 if hasE "$S4W" 'Kopie +aktualne' && hasE "$S4W" 'hourly +aktualne   alarm po 150m' \
    && hasE "$S4W" 'daily +czeka na pierwszy termin   pierwsza: .*alarm po 48h' && ! hasE "$S4W" 'daily +.*najnowsza sprzed' \
-   && has "$F2W" 'tylko migawka' && ! has "$F2W" 'lsrc_' && ! hasE "$S4" 'czeka na pierwszy'; then
+   && has "$F2W" 'tylko migawka' && ! has "$F2W" 'src_' && ! hasE "$S4" 'czeka na pierwszy'; then
     ok "U137 C3: szczebel przed pierwszym biegiem -- 'czeka na pierwszy termin' z data najblizszego biegu z crona, kazdy szczebel osobno z progiem; F2: 'tylko migawka' bez lsrc_; kontrola bez WAITING -- bez 'czeka'"
 else
     bad "U137 C3: stan czeka / F2" "$(printf '%s' "$S4W" | grep -E 'Kopie|hourly|daily' | head -6)" "$(printf '%s' "$F2W" | grep -E 'migawk|lsrc|transfer' | head -4)"
