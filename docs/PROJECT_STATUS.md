@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 718aabf8514cacc5 -->
+<!-- status-covers-digest: 5d2e3657d6319330 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,7 +20,16 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **Paczka GUI 1.0.18 (2026-11-11, NIEWYDANE, gałąź `batch/gui-1-0-18`).** U166–U188 poza U181(b):
+- **Niewydane po 1.0.18 (gałąź `fix/bookmark-base-shadowed`):** bookmark nowszy od wspólnej
+  migawki jest bazą przyrostu. Dotąd, gdy najnowszej migawki celu nie było już na źródle, a starsza
+  była wspólna, `recv -F` kasował na celu nowsze migawki (zmierzone 2026-11-11: kopia po przerwie
+  kolektora na pve9, nośnik repliki w trybie keep na CT 990). Teraz `-i` z bookmarka do najstarszej
+  migawki po nim, potem `-I` do najnowszej. Testy `bm3`/`bm4` w suicie snapsend.
+- **1.0.18 wydane (2026-11-11 ~22:20; repo wydań zfsbackup f5adf7f, z `main` dcd474d6, PR #1174).**
+  Lab ręcznie: pve9 (`lab-dev.sh off`, konto bkp wróciło z gałęzi dev, `deploy.sh` rc 0), pve9b
+  (`--self-update`, rc 0), pve11 (`lab-dev.sh off` + `--resume-updates`); reszta floty z crona o :15.
+  Zawartość: paczka GUI (niżej), U189, REV-20261111-B01, REV-20261109-193, PR #1155, #1157.
+- **Paczka GUI 1.0.18 (2026-11-11, wydana w 1.0.18).** U166–U188 poza U181(b):
   F2 malejąco z łączeniem biegów jednej minuty i „PADŁ k/n” (U166/U171), F4 „kopia trwa” /
   „przerwana, wznowi się” (U170), F6 bieg w toku, zajętość nośnika i „kopia za ~N s” po
   podłączeniu (U174, U180, U186), tematy maili `[ZFS][REPORT]`/`[ZFS][WARNING]`/`[ZFS][ALERT]`
@@ -177,7 +186,7 @@
   nie ma (żywy GUID nadal ma pierwszeństwo). A21: brak datasetu celu przy pierwszej kopii to pusta
   lista, nie „Could not list ... failure” (lokalna gałąź `get_sorted_snapshots`, jak zdalna).
   Test A20 wycięty: na gałęzi przechodzi, na `main` pada; A21 w suicie snapsend (CI, ZFS).
-- **Niewydane po 1.0.17 (2026-11-09):**
+- **Po 1.0.17 (2026-11-09), wydane w 1.0.18:**
   - REV-20261109-193 F1 (gałąź `fix/rev-193`): dysk ZFS, którego `blkid` nie odczyta ani
     nazwy, ani GUID puli, przy wpięciu nie uruchamia żadnej repliki (1.0.17 uruchamiał
     wszystkie). Test w suicie zfsbackup; na żywo z prawdziwym dyskiem nie sprawdzone.
