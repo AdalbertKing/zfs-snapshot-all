@@ -3460,6 +3460,44 @@ exclusion_step_plan() {
         }'
 }
 
+# BOOKMARK BRIDGE (2026-11-11). `zfs send -I` cannot start at a bookmark --
+# measured on pve9, ZFS 2.1.11: "multiple snapshots cannot be sent from a
+# bookmark" -- so an increment anchored by a bookmark carries only its two ends,
+# and every snapshot the source made after the bookmark and before <latest>
+# (the dailies of a long collector outage) would never reach the target. This
+# names the bridge: the OLDEST snapshot of <dataset> created after the bookmark
+# and before <latest> that -E does not exclude (EXCLUDE_SNAPS prefixes, as in
+# exclusion_step_plan). The caller sends `-i #bookmark @bridge`, then the usual
+# `-I @bridge @latest`. Prints nothing when there is none: the single -i is then
+# the whole interval. rc 1 only when the list itself could not be read.
+# Usage: bookmark_bridge_snap <dataset> <dataset#bookmark> <latest> [user host]
+bookmark_bridge_snap() {
+    local ds="$1" bm="$2" latest="$3" ruser="${4:-}" rhost="${5:-}" out
+    if [ -n "$rhost" ]; then
+        out=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" \
+            "zfs list -H -p -o name,createtxg -t snapshot,bookmark -d 1 '$ds'") || return 1
+    else
+        out=$(zfs list -H -p -o name,createtxg -t snapshot,bookmark -d 1 "$ds") || return 1
+    fi
+    printf '%s\n' "$out" | awk -F'\t' -v b="$bm" -v l="${ds}@${latest}" \
+        -v xs="${EXCLUDE_SNAPS[*]}" '
+        BEGIN { nx = split(xs, X, " ") }
+        { N[NR] = $1; T[NR] = $2 + 0; if ($1 == b) bt = T[NR]; if ($1 == l) lt = T[NR] }
+        END {
+            if (bt == "" || lt == "" || lt <= bt) exit 0
+            best = ""
+            for (i = 1; i <= NR; i++) {
+                at = index(N[i], "@"); if (at == 0) continue
+                if (T[i] <= bt || T[i] >= lt) continue
+                s = substr(N[i], at + 1); x = 0
+                for (k = 1; k <= nx; k++) if (index(s, X[k]) == 1) { x = 1; break }
+                if (x) continue
+                if (best == "" || T[i] < bestt) { best = s; bestt = T[i] }
+            }
+            if (best != "") print best
+        }'
+}
+
 # EXCLUSION-SAFE BASE FOR A FIRST FULL -R STREAM (REV-20261107-191, round 4).
 # `zfs send -R root@x` carries every snapshot up to @x, in the root and in every
 # descendant -- the -E families included; there is no per-snapshot filter in a

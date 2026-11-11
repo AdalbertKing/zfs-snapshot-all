@@ -1823,6 +1823,20 @@ process_dataset() {
             tgt_head_guid=$(get_snapshot_guid "$tgt_dataset" "${tgt_snaps[-1]}" "$remote_user" "$remote_host")
         fi
         bookmark_base=$(find_bookmark_base "$src_dataset" "$tgt_head_guid")
+    elif [[ "$common_snapshot" != "null" ]] && [ $RECURSIVE -ne 1 ] \
+         && [ ${#tgt_snaps[@]} -gt 0 ] && [ "${tgt_snaps[-1]}" != "$common_snapshot" ]; then
+        # A BOOKMARK NEWER THAN THE COMMON SNAPSHOT WINS (2026-11-11), as in
+        # snapget.sh -- keep the two in step. The target's newest snapshot is
+        # gone from the source while an older one is common to both; a bookmark
+        # carrying the target head's GUID continues from there instead of the
+        # landing below discarding the target's newer snapshots with recv -F.
+        local tgt_head_guid
+        tgt_head_guid=$(get_snapshot_guid "$tgt_dataset" "${tgt_snaps[-1]}" "$remote_user" "$remote_host")
+        bookmark_base=$(find_bookmark_base "$src_dataset" "$tgt_head_guid")
+        if [ -n "$bookmark_base" ]; then
+            log 1 "The target's newest snapshot @${tgt_snaps[-1]} is gone from the source, but bookmark $bookmark_base still marks it -- continuing from the bookmark, not from the older common snapshot @${common_snapshot} (that would discard the target's newer snapshot(s))"
+            common_snapshot="null"
+        fi
     fi
 
     if [[ "$common_snapshot" != "null" ]]; then
@@ -1950,6 +1964,27 @@ process_dataset() {
 
     log 4 "RAW ZFS SEND COMMAND: $send_cmd"
     log 4 "RAW ZFS RECV COMMAND: $recv_cmd"
+
+    # A BOOKMARK INCREMENT CARRIES THE SNAPSHOTS IN BETWEEN TOO (2026-11-11), as
+    # in snapget.sh -- keep the two in step. `-I` cannot start at a bookmark:
+    # -i to the oldest snapshot after it, then the ordinary -I from there.
+    if [[ "$common_snapshot" == "null" ]] && [ -n "$bookmark_base" ] && [ "$SKIP_INTERMEDIATES" -eq 0 ]; then
+        local _bridge
+        if _bridge=$(bookmark_bridge_snap "$src_dataset" "$bookmark_base" "$latest_snap"); then
+            if [ -n "$_bridge" ]; then
+                log 1 "Bookmark increment in two steps: $bookmark_base -> @${_bridge}, then every snapshot up to @${latest_snap} (-I cannot start at a bookmark)"
+                transfer_data "zfs send $raw_send_flag $comp_send_flag $EXTRA_SEND_OPTS -i $bookmark_base ${src_dataset}@${_bridge}" "$recv_cmd" "$remote_host" "$remote_user" || {
+                    log 0 "Transfer failed (bookmark step $bookmark_base -> @${_bridge})"
+                    abort_held_snapshot "$snapshot" "$tgt_dataset"
+                    return 1
+                }
+                common_snapshot="$_bridge"
+                send_cmd="zfs send $raw_send_flag $comp_send_flag $EXTRA_SEND_OPTS -I ${src_dataset}@${_bridge} $snapshot"
+            fi
+        else
+            log 1 "Could not list the snapshots after bookmark $bookmark_base -- sending its single diff to @${latest_snap}; the snapshots in between are not carried this run"
+        fi
+    fi
 
     # -E AND A FIRST FULL -R STREAM (REV-20261107-191, round 4), as in snapget.sh
     # -- keep the two in step. Under atomic -r (and -H) the first copy is one -R
