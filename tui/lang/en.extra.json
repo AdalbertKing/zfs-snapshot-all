@@ -946,5 +946,6 @@
 "pula spoza relacji i replik -- Enter wybiera": "a pool outside relations and replicas -- Enter picks it",
 "datasetów": "datasets",
 "PADŁ": "FAILED",
-"PADŁ %d/%d": "FAILED %d/%d"
+"PADŁ %d/%d": "FAILED %d/%d",
+"dysk podłączony, kopia za ~%s": "disk connected, copy in ~%s"
 }

@@ -15014,6 +15014,29 @@ if printf '%s' "$l3" | grep -qE '"name":"mg"[^}]*"running_since":"2026-11-09 22:
 else
     bad "listreplicas U174: running_since" "$l3"
 fi
+# U180: a disk just inserted, its copy waiting -- run-replicas --on-insert records the wait per
+# device; list-replicas gives insert_in (seconds) to the replica whose pool that device carries
+# (blkid LABEL). Controls: an expired record and a device of another pool -> empty.
+mkdir -p "$MG/st" "$MG/dev"; : > "$MG/dev/sdz"; : > "$MG/dev/sdy"
+u180() { ( source "$ZFSBACKUP"; SCRIPT_DIR="$MG/gd"; export MEDIA_STATE_DIR="$MG/st" REPLICA_DEV_DIR="$MG/dev"
+    zpool() { return 1; }
+    blkid() { case "$*" in *"/sdz") echo repl2 ;; *"/sdy") echo other ;; esac; }
+    cmd_list_replicas --json --config="$MG/c.conf" ) 2>&1; }
+rm -f "$MG/st"/insert-wait.*; echo $(( $(date +%s) + 40 )) > "$MG/st/insert-wait.sdz"; echo $(( $(date +%s) + 40 )) > "$MG/st/insert-wait.sdy"
+l4=$(u180)
+echo $(( $(date +%s) - 5 )) > "$MG/st/insert-wait.sdz"; l5=$(u180)
+# the writer: run-replicas --on-insert records "until" before its wait and drops it after
+w180=$( ( source "$ZFSBACKUP"; export MEDIA_STATE_DIR="$MG/st" REPLICA_DEV_DIR="$MG/dev"; rm -f "$MG/st"/insert-wait.*
+    insert_wait() { echo 60; }; sleep() { cat "$MG/st/insert-wait.sdx" > "$MG/w180" 2>/dev/null || echo none > "$MG/w180"; }
+    cmd_run_replicas --on-insert --device=sdx --config="$MG/c.conf" >/dev/null 2>&1; cat "$MG/w180"; ls "$MG/st" | grep -c insert-wait ) 2>&1 )
+if printf '%s' "$l4" | grep -qE '"name":"mi"[^}]*"insert_in":"(3[0-9]|40)"' && printf '%s' "$l4" | grep -qE '"name":"mg"[^}]*"insert_in":""' \
+   && printf '%s' "$l5" | grep -qE '"name":"mi"[^}]*"insert_in":""' \
+   && [ "$(printf '%s\n' "$w180" | head -1)" -gt "$(( $(date +%s) + 50 ))" ] && [ "$(printf '%s\n' "$w180" | tail -1)" = 0 ]; then
+    ok "listreplicas U180: a waiting inserted disk gives its replica insert_in; expired / other pool -> empty; run-replicas writes the record and drops it"
+else
+    bad "listreplicas U180: insert_in" "l4: $l4" "l5: $l5" "writer: $w180"
+fi
+rm -rf "$MG/st" "$MG/dev"
 # U169/U178: remove-replica asks the gate whether a copy runs (NOTE in the plan) and, once
 # installed, has it forget the replica's state files. Control: a plan alone forgets nothing,
 # and with no copy running there is no NOTE.

@@ -7134,7 +7134,12 @@ cmd_run_replicas() {
         # no import, no alert (a quick re-plug fires the rule again anyway).
         local wsec; wsec="$(insert_wait)"
         log "run-replicas: disk inserted${device:+ ($device)} -- waiting ${wsec}s before anything touches it"
+        # U180 (lab 2026-11-09): F6 said "disconnected / IN VAULT" through this wait. The
+        # wait is recorded (until when, per device); list-replicas turns it into insert_in.
+        local _iw="${MEDIA_STATE_DIR:-/var/lib/zfs-snapshot-all/media}/insert-wait.${device:-}"
+        [ -n "$device" ] && { printf '%s\n' "$(( $(date +%s) + wsec ))" > "$_iw"; } 2>/dev/null
         sleep "$wsec"
+        [ -n "$device" ] && rm -f "$_iw" 2>/dev/null
         if [ -n "$device" ]; then
             local dp="${REPLICA_DEV_DIR:-/dev}/$device" fst
             if ! [ -e "$dp" ]; then
@@ -8980,6 +8985,18 @@ cmd_list_replicas() {
         # F6 showed the last finished run instead.
         local rsince=""
         [ -x "$gate" ] && rsince=$("$gate" running "$pool" "$name" 2>&1 | sed -n 's/.* running since \(.*\) (pid .*/\1/p')
+        # U180: a disk of this pool just inserted, its copy waiting (run-replicas --on-insert
+        # records the wait per device; the device's pool name by blkid, read-only).
+        local insin="" _iwf _iwu _iwl
+        if [ "$present" != here ] && [ -z "$rsince" ]; then
+            for _iwf in "${MEDIA_STATE_DIR:-/var/lib/zfs-snapshot-all/media}"/insert-wait.*; do
+                [ -f "$_iwf" ] || continue
+                _iwu="$(head -c 20 "$_iwf" 2>/dev/null | tr -cd 0-9)"
+                [ -n "$_iwu" ] && [ "$_iwu" -gt "$(date +%s)" ] || continue
+                _iwl="$(blkid -o value -s LABEL "${REPLICA_DEV_DIR:-/dev}/${_iwf##*/insert-wait.}" 2>/dev/null)"
+                [ "$_iwl" = "$pool" ] && { insin=$(( _iwu - $(date +%s) )); break; }
+            done
+        fi
         local msize="" malloc=""
         [ "$present" = "here" ] \
             && IFS=' ' read -r msize malloc < <(zpool list -Hp -o size,alloc "$pool" 2>/dev/null | tr '\t' ' ')
@@ -9017,8 +9034,8 @@ JSRC
             # media_key (W19b): the key file of an encrypted medium, by the pool name of
             # dst -- known without the disk in the slot.
             local _mk="$MEDIA_KEY_DIR/${dst%%/*}.key"; [ -s "$_mk" ] || _mk=""
-            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"exclude_family":"%s","media_guids":"%s","on_insert":"%s","keep":"%s","raw":"%s","media_key":"%s","medium_size":"%s","medium_alloc":"%s","running_since":"%s"}' \
-                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$(json_escape "$_xfam")" "$mg" "${oi:-no}" "$kp" "${rw:-no}" "$_mk" "$msize" "$malloc" "$rsince"
+            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"exclude_family":"%s","media_guids":"%s","on_insert":"%s","keep":"%s","raw":"%s","media_key":"%s","medium_size":"%s","medium_alloc":"%s","running_since":"%s","insert_in":"%s"}' \
+                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$(json_escape "$_xfam")" "$mg" "${oi:-no}" "$kp" "${rw:-no}" "$_mk" "$msize" "$malloc" "$rsince" "$insin"
         else
             printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
             [ -n "$last" ] && printf '%-14s   last seen: %s\n' "" "$last"

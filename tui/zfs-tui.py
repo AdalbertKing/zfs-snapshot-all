@@ -232,7 +232,7 @@ def replica_type_word(r):
     if (r.get("media") or "") == "fixed":
         return _(u"wewnętrzny")
     p = r.get("present") or "unknown"
-    if p in ("here", "available"):
+    if p in ("here", "available") or insert_wait(r):
         return _(u"podłączony")
     if p == "away":
         return _(u"odłączony")
@@ -256,9 +256,21 @@ def medium_usage_words(r):
     return _(u"zajęte %s (%s z %s)") % (pct, human_bytes(r.get("medium_alloc")), human_bytes(r.get("medium_size")))
 
 
+def insert_wait(r):
+    """U180 (lab 2026-11-09): dysk wlasnie wpiety, kopia czeka (replica.insert_wait) --
+    list-replicas: insert_in = sekundy do startu. Pusto, gdy nie czeka."""
+    try:
+        n = int(r.get("insert_in") or 0)
+    except (TypeError, ValueError):
+        return u""
+    return (_(u"dysk podłączony, kopia za ~%s") % fmt_dur(n)) if n > 0 else u""
+
+
 def media_state_line(r, st):
     """Stan nosnika w panelu repliki (uwaga 17, 2026-10-08). Dysk w maszynie mowi tez,
     czy kopia na nim jest aktualna -- "w slocie" samo nie mowilo nic o kopii."""
+    if insert_wait(r):
+        return insert_wait(r)
     if r.get("running_since"):
         # U174: kopia biegnie (rekord biegu bramy, zywy PID) -- nie ostatni zakonczony bieg.
         u = medium_usage_words(r)
@@ -3237,7 +3249,9 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
             one = dict(it)
             one["jobs"] = run_jobs(r)
             one["job"] = one["jobs"][0]
-            if r.get("label") and r["label"] != it.get("clabel"):
+            # U171: wiersz zbiorczy ma etykiety wszystkich swoich linii -- panel liczy jak
+            # zadanie (bledy, wyrzucone migawki ze wszystkich), nie po sklejonej etykiecie.
+            if r.get("label") and r["label"] != it.get("clabel") and not r.get("agg"):
                 # panel liczy przebiegi TEJ linii crona, nie pierwszej z wiersza zadania
                 srow, vol = job_stats_for(data, one["job"], r["label"])
                 one.update({"clabel": r["label"], "srow": srow, "srows": [srow] if srow else [], "vol": vol, "fails": [], "discards": []})
@@ -4722,7 +4736,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
         s = r.get("schedule") or "?"
         cells.append([r.get("name") or "?", replica_type_word(r), medium_usage_pct(r), dshow((r.get("last_current") or _(u"brak"))[:16]),
                       (_(u"kopia trwa od %s") % dshow(r["running_since"])) if r.get("running_since")
-                      else replica_last_run(replica_stats_row(data, r.get("name")), data.failed("stats")),
+                      else insert_wait(r) or replica_last_run(replica_stats_row(data, r.get("name")), data.failed("stats")),
                       _(u"po podłączeniu") if s == "on-insert" else cron_words(s) + (_(u" + po podłączeniu") if r.get("on_insert") == "yes" else "")])
     det_title, det, child = u"", [], None
     if reps and 0 <= cursor < len(reps):
