@@ -2681,16 +2681,25 @@ iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(t))
 now = int(sys.argv[3]); st = json.load(open(sys.argv[7], encoding="utf-8"))
 st["runs"] = [{"label": r["label"], "start": iso(now - 3600 * k - 40), "end": iso(now - 3600 * k - 30), "rc": 0}
               for r in ui.runrows if r.get("label") for k in (1, 2)]
+# L1 (lab pve11 2026-11-11): kursor NIERUSZONY -> po drugim etapie na najswiezszy wykonany
+# (zaraz pod "teraz"); kursor RUSZONY przez uzytkownika -> zostaje na swoim biegu.
 ui.data.stats = st
 ui.apply_data(ui.data, full=False)
 i1 = ui.cursor["zadania"]; r1 = ui.runrows[i1]
-print("moved=%s same=%s upcoming=%s" % (i1 != i0, (r1.get("label"), r1.get("at")) == (r0.get("label"), r0.get("at")),
-                                         not r1.get("past")))
+first_past = next(i for i, r in enumerate(ui.runrows) if r.get("kind") == "run" and r.get("past") and not r.get("static"))
+ui2 = m.UI(sys.argv[2], files, m.Chars(False), int(sys.argv[3]), None)
+up = [i for i, r in enumerate(ui2.runrows) if r.get("kind") == "run" and r.get("at")]
+ui2.cursor["zadania"] = up[0]; ru = ui2.runrows[up[0]]
+ui2.data.stats = st
+ui2.apply_data(ui2.data, full=False)
+r2 = ui2.runrows[ui2.cursor["zadania"]]
+print("untouched_on_newest_past=%s moved_keeps=%s" % (r1.get("past") is True and i1 == first_past and r0 is not None,
+      (r2.get("label"), r2.get("at")) == (ru.get("label"), ru.get("at"))))
 PYEOF
 )"
 Z4="$(printf '%s' "$Z4" | tr -d '\r')"
-if hasE "$Z4" 'moved=(True|False) same=True upcoming=True'; then   # U166: wykonane dochodza POD kursorem
-    ok "przebiegi: gdy job-stats dochodzi drugim etapem, kursor zostaje na tym samym nadchodzacym biegu"
+if hasE "$Z4" 'untouched_on_newest_past=True moved_keeps=True'; then
+    ok "przebiegi: job-stats drugim etapem -- nieruszony kursor na najswiezszy wykonany (pod 'teraz'), ruszony zostaje na swoim biegu"
 else
     bad "przebiegi: kursor po drugim etapie" "$Z4"
 fi

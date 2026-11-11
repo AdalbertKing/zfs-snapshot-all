@@ -5762,12 +5762,16 @@ class UI(object):
                 self.ensure_profiles()
         prz = getattr(self, "runrows", None) or []
         old_run = prz[self.cursor["zadania"]] if self.cursor["zadania"] < len(prz) else None
+        # L1 (lab pve11, 2026-11-11): kursor nieruszony (miejsce domyslne) zostaje domyslny. Bez
+        # tego pierwszy odczyt bez wykonanych biegow stawial go na ostatnim nadchodzacym, a drugi
+        # etap (wykonane) trzymal go tam -- pod kreska "teraz" byl juz bieg 15:56.
+        at_default = bool(prz) and self.cursor["zadania"] == self.run_cursor_for(None)
         self.rows = mark_pending(build_relations(self.data, self.now()), self.data)
         self.jobrows = sort_zad_rows(mark_pending(build_jobs(self.data, self.now()), self.data), self.zad_sort, self.data)
         self.runrows = build_runs(self.data, self.jobrows, self.now(), self.prz_done, self.prz_group, opened=self.prz_open)
         # F2: kursor na TYM SAMYM biegu, nie na tym samym numerze wiersza. Drugi etap (job-stats)
         # dokłada wykonane biegi NAD nim -- start na pve10, 2026-10-29: "teraz" uciekło na 08:13.
-        self.cursor["zadania"] = self.run_cursor_same(old_run)
+        self.cursor["zadania"] = self.run_cursor_for(None) if at_default else self.run_cursor_same(old_run)
         for k in self.cursor:
             # F4 liczy wiersze z drzewa kopii (zfs-tree) -- poza F4 nie czytamy go tu w glownym
             # watku: na pve10 to bylo 5 s zamrozonego "Wczytuję… 0 s" po KAZDYM oknie (zrzut stosu,
