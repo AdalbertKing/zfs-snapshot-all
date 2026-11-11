@@ -14947,6 +14947,32 @@ if printf '%s' "$l1" | grep -qE '"name":"mg"[^}]*"present":"here"[^}]*"medium_si
 else
     bad "listreplicas U186: medium usage" "here: $l1" "away: $l2"
 fi
+# U169/U178: remove-replica asks the gate whether a copy runs (NOTE in the plan) and, once
+# installed, has it forget the replica's state files. Control: a plan alone forgets nothing,
+# and with no copy running there is no NOTE.
+cat > "$MG/gd/zfs-media-gate.sh" <<'GATE'
+#!/bin/sh
+echo "$*" >> "$U169_LOG"
+[ "$1" = running ] || exit 0
+[ "${U169_RUN:-1}" = 0 ] && { echo "2026-11-11 10:00:00 - a copy of '$3' is running since 2026-11-11 09:00 (pid 42)." >&2; exit 0; }
+exit 1
+GATE
+chmod +x "$MG/gd/zfs-media-gate.sh"
+u169() { ( source "$ZFSBACKUP"; SCRIPT_DIR="$MG/gd"
+    cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE="$MG/c.conf"; }
+    show_activation_proposal() { :; }; atomic_replace_and_install() { mv -f "$2" "$1"; }
+    cmd_remove_replica "$@" ) 2>&1; }
+export U169_LOG="$MG/gate.log"; : > "$U169_LOG"
+p1=$(U169_RUN=0 u169 mg); g1=$(cat "$U169_LOG"); : > "$U169_LOG"
+p2=$(U169_RUN=1 u169 mi --install --yes); g2=$(cat "$U169_LOG")
+if printf '%s' "$p1" | grep -q "NOTE: a copy of 'mg' is running since 2026-11-11 09:00" && [ "$g1" = "running repl mg" ] \
+   && ! printf '%s' "$p2" | grep -q 'NOTE:' && printf '%s\n' "$g2" | grep -qx 'forget repl2 mi' \
+   && ! grep -qxF '[replica:mi]' "$MG/c.conf" && grep -qxF '[replica:mg]' "$MG/c.conf"; then
+    ok "removereplica U169/U178: running copy named in the plan; --install has the gate forget the state files; plan alone forgets nothing"
+else
+    bad "removereplica U169/U178" "plan: $p1" "gate1: $g1" "install: $p2" "gate2: $g2"
+fi
+unset U169_LOG
 rm -rf "$MG"
 
 # add-replica --passive (owner note 20, 2026-10-08): the section says passive = yes

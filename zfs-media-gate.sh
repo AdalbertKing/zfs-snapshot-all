@@ -56,7 +56,7 @@ source "$_GATE_DIR/lib-backup-common.sh"
 
 usage() {
     cat >&2 <<'EOF'
-Usage: zfs-media-gate.sh <attach|detach|status|age> <pool> <label> [--dataset D] [--dir DIR]...
+Usage: zfs-media-gate.sh <attach|detach|status|age|forget|running> <pool> <label> [--dataset D] [--dir DIR]...
                          [--source DS]... [--prefix P|-] [--stats FILE] [--quiet]
 
   --prefix - means ANY snapshot: a passive replica takes none of its own.
@@ -75,6 +75,10 @@ Usage: zfs-media-gate.sh <attach|detach|status|age> <pool> <label> [--dataset D]
            proved current. 0 ok, 1 warning, 2 critical, 3 cannot tell --
            the exit codes of check-snap-age, so a monitor line reads it the
            same way.
+  running  is a copy of this replica running now? 0 yes (says since when),
+           1 no. Changes nothing.
+  forget   remove this replica's state files (remove-replica). 0 done; 75 a
+           copy is running -- its own run records stay for its detach.
 EOF
     exit 2
 }
@@ -166,7 +170,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ "$PREFIX" = "-" ] && { PREFIX=""; PREFIX_ANY=1; }
 [ -n "$VERB" ] && [ -n "$POOL" ] && [ -n "$LABEL" ] || usage
-case "$VERB" in attach|detach|status|age) ;; *) echo "unknown verb: $VERB" >&2; usage ;; esac
+case "$VERB" in attach|detach|status|age|forget|running) ;; *) echo "unknown verb: $VERB" >&2; usage ;; esac
 
 # SOURCE is the first one, for the messages that name a dataset.
 [ "${#SOURCES[@]}" -gt 0 ] && SOURCE="${SOURCES[0]}"
@@ -451,6 +455,33 @@ check_dataset() {
 }
 
 case "$VERB" in
+
+running)
+    # U178 (owner 2026-11-09): Del on F6 says so when a copy of this replica is running.
+    h=$(running_holder)
+    [ -n "$h" ] || exit 1
+    say "a copy of '$LABEL' is running since $(running_since "$h") (pid ${h%% *})."
+    exit 0
+    ;;
+
+forget)
+    # U169 (owner 2026-11-09): remove-replica left <label>.current/.synced/.last-seen/
+    # .running(.lock)/.imported-by-us behind, and a new replica of the same name would
+    # read the old .current and .synced as its own. The copy on the medium and the
+    # medium key are not touched. A RUNNING copy keeps the records its detach reads
+    # (.running, .imported-by-us, the lock); an imported pool keeps the marker that
+    # lets a later export call it ours.
+    h=$(running_holder)
+    rm -f "$SEEN" "$SYNCED" "$CURRENT" 2>/dev/null
+    if [ -n "$h" ]; then
+        say "a copy of '$LABEL' is running since $(running_since "$h") (pid ${h%% *}); its run records in $STATE_DIR stay until it ends."
+        emit forget_running; exit 75
+    fi
+    rm -f "$RUNNING" "$RUNNING.lock" 2>/dev/null
+    imported || rm -f "$OURS" 2>/dev/null
+    say "state files of '$LABEL' in $STATE_DIR removed; the copy on the medium is not touched."
+    emit forgotten; exit 0
+    ;;
 
 status)
     # THE ONE SENTENCE AN OPERATOR STANDING AT THE MACHINE NEEDS.

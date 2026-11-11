@@ -4400,6 +4400,34 @@ else
     bad "okno usuwania: komunikat po zatrzymaniu" "$DROUT" "$(cat "$DRD/err")"
 fi
 
+# U178 (wlasciciel 2026-11-09): Del na F6 przy biegnacej kopii -- okno to mowi (brama: running).
+# Kontrola: brama mowi "nie biegnie" -> bez UWAGI. Wstecz w obu, nic nie usuwa.
+cat > "$NR/bin/zb-rdel" <<'EOF'
+#!/bin/bash
+[ "$1" = list-replicas ] && { echo '{"replicas":[{"name":"usb1","dst":"repl/replica","sources":["hdd/data"],"present":"here","schedule":"0 22 * * *"}]}'; exit 0; }
+echo "$*" >> "$NR_DIR/zb.log"; exit 0
+EOF
+cat > "$NR/bin/gate-run" <<'EOF'
+#!/bin/sh
+[ "$1" = running ] && [ "$3" = usb1 ] && [ "$2" = repl ] || exit 2
+echo "2026-11-11 10:00:00 - a copy of 'usb1' is running since 2026-11-11 09:00 (pid 42)." >&2; exit 0
+EOF
+printf '#!/bin/sh\nexit 1\n' > "$NR/bin/gate-idle"
+chmod +x "$NR/bin/zb-rdel" "$NR/bin/gate-run" "$NR/bin/gate-idle"
+for g in run idle; do
+    rm -rf "$DRD"; mkdir -p "$DRD"; printf '1\t\n' > "$DRD/answers"
+    ( export NR_DIR="$DRD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-rdel" ZFS_MEDIA_GATE="$NR/bin/gate-$g"
+      bash "$REPO/tui/replica-delete.sh" usb1 ) >/dev/null 2>"$DRD/err" </dev/null
+    cp "$DRD/wt.log" "$NR/rdel-$g.log" 2>/dev/null; [ -e "$DRD/zb.log" ] && cp "$DRD/zb.log" "$NR/rdel-$g.zb"
+done
+RDR="$(cat "$NR/rdel-run.log" 2>/dev/null)"; RDI="$(cat "$NR/rdel-idle.log" 2>/dev/null)"
+if has "$RDR" "UWAGA: kopia tej repliki właśnie biegnie (od 2026-11-11 09:00)" && has "$RDR" "dobiegnie do końca i odłączy dysk" \
+   && has "$RDI" "Replika usb1 przestanie działać" && ! has "$RDI" "UWAGA: kopia" && [ ! -e "$NR/rdel-run.zb" ] && [ ! -e "$NR/rdel-idle.zb" ]; then
+    ok "okno usuwania repliki U178: biegnaca kopia -- UWAGA z czasem startu; bez biegu bez UWAGI; Wstecz nic nie usuwa"
+else
+    bad "okno usuwania repliki U178" "run: $(printf '%s\n' "$RDR" | head -20)" "idle: $(printf '%s\n' "$RDI" | head -8)" "$(cat "$DRD/err")"
+fi
+
 # 3i2 (kampania 2026-10-22): relacja LOKALNA bez kopii -- okno mowilo "Zrodlo (?): bez zmian --
 #      a local relationship ..." i "Kopii domyslnie NIE ruszam." przy relacji, ktora kopii nie ma.
 cat > "$NR/bin/zb-del3" <<'EOF'

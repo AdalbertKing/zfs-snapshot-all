@@ -18,6 +18,10 @@ when they change how the tool is used.
 - **A connected replica disk shows how full it is** (U186): F6 has a `Used` column and the
   medium line says `used N% (X of Y)`; `list-replicas --json` carries `medium_size` and
   `medium_alloc` in bytes while the disk's pool is imported (empty otherwise).
+- **Removing a replica removes its state files** (U169, U178): `remove-replica --install`
+  has the gate (new verb `forget`) delete the replica's files in `/var/lib/zfs-snapshot-all/media/`;
+  a copy running at that moment is named in the plan and in the Del window (new gate verb
+  `running`) and is not stopped.
 - **A replica copy stopped by SIGTERM still exports its disk** (U182): the cron line runs the
   gate's `detach` even when the whole job's process group is killed.
 - **A first copy that cannot fit on the disk is refused** (U183): before writing, the gate adds

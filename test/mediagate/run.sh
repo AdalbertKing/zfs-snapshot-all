@@ -1294,6 +1294,16 @@ else
     printf '%s %s %s\n' "$RU_PID" "$RU_ST" "$(( $(date +%s) - 6 * 86400 ))" > "$STATE/rep.running"
     out="$(g age rotpool rep --warn 3d --crit 5d)"; rc=$?
     check "RU4: a copy running longer than crit is a WARNING" "1" "$rc"
+    # U178: `running` says so; U169: `forget` under a running copy keeps that run's records.
+    out="$(g running rotpool rep)"; rc=$?
+    check "RU-F1: running -- a live copy is 0" "0" "$rc"
+    has "is running since" "$out" && ok "RU-F1: ...and says since when" || bad "RU-F1: ...says since when" "$out"
+    for f in current synced last-seen; do echo x > "$STATE/rep.$f"; done
+    : > "$STATE/rep.running.lock"
+    out="$(g forget rotpool rep)"; rc=$?
+    check "RU-F2: forget during a running copy is 75" "75" "$rc"
+    check "RU-F2: ...the run's records stay, the rest is gone" "rep.imported-by-us rep.running rep.running.lock" \
+        "$(cd "$STATE" && ls rep.* 2>/dev/null | sort | tr '\n' ' ' | sed 's/ $//')"
     # Control: the holder dies -- its record is a dead run's and blocks nothing.
     kill "$RU_PID" 2>/dev/null; wait "$RU_PID" 2>/dev/null
     rm -f "$STATE/rep.imported-by-us"
@@ -1304,6 +1314,20 @@ else
     POOLS="hdd rotpool"; IMPORTABLE=""
     g detach rotpool rep >/dev/null
     rm -f "$STATE"/rep.running "$STATE"/rep.imported-by-us
+    # U169: no live copy -- running is 1, forget removes every state file of the label;
+    # an imported pool keeps its imported-by-us marker. Another label's files stay.
+    out="$(g running rotpool rep)"; rc=$?
+    check "RU-F3: running -- no live copy is 1" "1" "$rc"
+    for f in current synced last-seen running running.lock imported-by-us; do echo x > "$STATE/rep.$f"; done
+    echo x > "$STATE/other.current"
+    POOLS="hdd"; out="$(g forget rotpool rep)"; rc=$?
+    check "RU-F4: forget with no copy running is 0" "0" "$rc"
+    check "RU-F4: ...every state file of the label is gone" "" "$(cd "$STATE" && ls rep.* 2>/dev/null)"
+    check "RU-F4: ...another label's file stays" "x" "$(cat "$STATE/other.current" 2>/dev/null)"
+    printf 'guid=%s\n' "$POOL_GUID" > "$STATE/rep.imported-by-us"
+    POOLS="hdd rotpool"; out="$(g forget rotpool rep)"; rc=$?
+    check "RU-F5: forget keeps imported-by-us while the pool is imported" "rep.imported-by-us" "$(cd "$STATE" && ls rep.* 2>/dev/null)"
+    rm -f "$STATE/rep.imported-by-us" "$STATE/other.current"
 
     # FAIL CLOSED (REV-20261106-189). A claim that cannot be written (a directory
     # where rep.running belongs) or a lock that cannot be created must stop

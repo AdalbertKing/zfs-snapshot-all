@@ -488,6 +488,12 @@ ponów to samo polecenie.
 i mówi o tym wprost. Żaden z tych czasowników nie kasuje datasetów ani kopii na
 nośniku: „unpairing ends the relationship, not the backup".
 
+`remove-replica --install` usuwa też pliki stanu repliki w
+`/var/lib/zfs-snapshot-all/media/` (`<nazwa>.current`, `.synced`, `.last-seen` i rekordy
+biegu), więc nowa replika o tej samej nazwie zaczyna od zera. Kopia, która właśnie biegnie,
+jest wymieniona w planie i nie jest przerywana: dobiega do końca, odłącza dysk i do tego
+czasu zachowuje własne rekordy biegu.
+
 **Kopii na nośniku pakiet nie kasuje** — nie ma na to osobnego czasownika. Dysk
 czyści się formatowaniem: w GUI zmiana repliki -> „Dodaj dysk".
 

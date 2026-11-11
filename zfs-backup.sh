@@ -9201,6 +9201,18 @@ cmd_remove_replica() {
 
     local empties_schedule=0
     config_has_job_sections "$cand" || empties_schedule=1
+    # U169/U178 (owner 2026-11-09): the gate keeps state files per replica name; they go
+    # with the section. A copy running now is said, not stopped: it finishes and exports.
+    local _rdst _rpool _gate="$SCRIPT_DIR/zfs-media-gate.sh" _rrun=""
+    _rdst=$(awk -v want="[replica:$name]" '
+        $0 == want { in_s=1; next }  in_s && /^[[]/ { exit }
+        in_s { k=$1; sub(/=.*/, "", k); gsub(/[ \t]/, "", k); if (k == "dst") { v=$0; sub(/^[^=]*=[ \t]*/, "", v); sub(/[ \t\r]+$/, "", v); print v; exit } }
+    ' "$config")
+    _rpool="${_rdst%%/*}"
+    if [ -n "$_rpool" ] && [ -x "$_gate" ]; then
+        _rrun=$("$_gate" running "$_rpool" "$name" 2>&1) || _rrun=""
+        [ -n "$_rrun" ] && echo "NOTE: ${_rrun#* - } Removing the replica does not stop it: it runs to its end and exports the disk."
+    fi
 
     if [ "$empties_schedule" -eq 1 ]; then
         echo
@@ -9236,6 +9248,9 @@ cmd_remove_replica() {
     else
         atomic_replace_and_install "$config" "$cand" \
             || die "remove-replica: the install failed -- see above. The config and crontab were rolled back together."
+    fi
+    if [ -n "$_rpool" ] && [ -x "$_gate" ]; then
+        "$_gate" forget "$_rpool" "$name" 2>&1 | sed 's/^[0-9-]* [0-9:]* - //' || :
     fi
     log "replica '$name' removed from the schedule. The COPY on that medium was not touched -- it is still a copy; deleting it is a separate, deliberate act."
 }

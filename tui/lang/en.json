@@ -2195,5 +2195,6 @@
 "relacja %s (pvesr)": "relation %s (pvesr)",
 "migawki tylko na źródle %s, bez kopii na tym hoście": "snapshots on the source %s only, no copies on this host",
 "Zajęte": "Used",
-"zajęte %s (%s z %s)": "used %s (%s of %s)"
+"zajęte %s (%s z %s)": "used %s (%s of %s)",
+"UWAGA: kopia tej repliki właśnie biegnie (od $SINCE). Usunięcie jej nie przerywa: dobiegnie do końca i odłączy dysk.": "NOTE: a copy of this replica is running now (since $SINCE). Removing the replica does not stop it: it runs to its end and exports the disk."
 }
