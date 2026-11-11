@@ -232,6 +232,12 @@ if gate REV-20990101-003,REV-20990101-004 && [ "$(grep -c '^accepted: ' "$WORK/g
 else
     bad "gate: the Owner's named acceptance of every open review passes" "$(cat "$WORK/gate.out")"
 fi
+if printf '| REV | State |\n| REV-20990101-001 | CLOSED |\n| REV-20990101-B01 | IMPLEMENTED | Reviewer |\n' | bash "$GATE" > "$WORK/gate.out" 2>&1; then
+    bad "gate: a V3.14 batch submission awaiting its verdict refuses a release" "$(cat "$WORK/gate.out")"
+else
+    grep -q 'REV-20990101-B01' "$WORK/gate.out" && ok "gate: a V3.14 batch submission awaiting its verdict refuses a release and is named" \
+        || bad "gate: a V3.14 batch submission is named" "$(cat "$WORK/gate.out")"
+fi
 if ! gate REV-20990101-00 && ! gate REV-20990101-0033,REV-20990101-004; then
     ok "gate: an acceptance list matches whole REV ids only (no prefix match)"
 else

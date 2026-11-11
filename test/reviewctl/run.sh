@@ -107,6 +107,20 @@ expect "two files claiming one REV identity -> refused" $R FAILED
 world j; respond $R IMPLEMENTED $sha1
 expect "orphan response with no review -> refused" $R FAILED
 
+# V3.14 batch submission: the same response WITH 'submission: batch' and no review is a
+# request for a verdict -> IMPLEMENTED (Reviewer's move); the Reviewer's REV under the same
+# id then routes it like any REV. Control: world j above (no header) is still refused.
+B=REV-20261111-B01
+bsubmit() { printf '<!-- rev: %s -->\n<!-- submission: batch -->\n<!-- response-status: IMPLEMENTED -->\n<!-- implementation: %s -->\n\n# t\n' "$1" "$2" > "$W/docs/internal/reviews/responses/$1.md"; }
+world jb; bsubmit $B $sha1
+expect "batch submission without a review -> IMPLEMENTED (Reviewer)" $B IMPLEMENTED
+world jc; bsubmit $B $sha1; review $B CHANGES-REQUIRED $sha1
+expect "batch rejected on the submitted sha -> OPEN (Claude)" $B OPEN
+world jd; bsubmit $B $sha1; review $B APPROVED $sha1
+expect "batch approved on the submitted sha -> APPROVED" $B APPROVED
+world je; bsubmit REV-20261111-001 $sha1
+expect "batch submission under a plain REV id -> refused" REV-20261111-001 FAILED
+
 world k; review $R CHANGES-REQUIRED -; closure $R $deadbeef
 out="$(REVIEWCTL_REPO="$W" "$CTL" --generate 2>&1)"; rc=$?
 [ "$rc" -ne 0 ] && ok "orphan-ish closure without approval refuses" || bad "orphan-ish closure without approval refuses" "$out"

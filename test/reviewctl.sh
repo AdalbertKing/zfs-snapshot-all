@@ -306,7 +306,17 @@ collect() {
         rev="$(hdr "$f" rev)"
         [ -z "$rev" ] && continue          # pre-V2, see the note above
         [ -n "${P_FILE[$rev]:-}" ] && { err "duplicate response for $rev"; continue; }
-        [ -n "${R_FILE[$rev]:-}" ] || err "orphan response: ${f#$REPO/} has no review"
+        # PROTOCOL V3.14: a batch submission is the implementer's own request
+        # for a verdict on merged work no REV covers. It has no review artifact
+        # until the Reviewer writes one under the same id.
+        if [ "$(hdr "$f" submission)" = batch ]; then
+            case "$rev" in
+                REV-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-B[0-9][0-9]) ;;
+                *) err "$rev: a batch submission needs an id REV-YYYYMMDD-BNN (${f#$REPO/})" ;;
+            esac
+        elif [ -z "${R_FILE[$rev]:-}" ]; then
+            err "orphan response: ${f#$REPO/} has no review"
+        fi
         P_FILE[$rev]="$f"
         P_STATUS[$rev]="$(hdr "$f" response-status)"
         P_IMPL[$rev]="$(hdr "$f" implementation)"
@@ -594,7 +604,8 @@ tx_expect_parent() {   # <sha>
 tx_rev_id() {   # <rev>
     case "$1" in
         REV-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9]) ;;
-        *) tx_die "'$1' is not a REV id (expected REV-YYYYMMDD-NNN)" ;;
+        REV-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-B[0-9][0-9]) ;;   # V3.14 batch submission
+        *) tx_die "'$1' is not a REV id (expected REV-YYYYMMDD-NNN, or REV-YYYYMMDD-BNN for a batch)" ;;
     esac
 }
 

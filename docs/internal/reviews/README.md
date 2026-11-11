@@ -172,6 +172,9 @@ Never infer the active review from chat memory, the largest REV number,
 - **Merge and release:** an implementation is merged on green CI, and that merge is the submission.
   `release/publish.sh --push` refuses while any REV is `OPEN` or `IMPLEMENTED`, unless the Owner names it
   in `--accept-open-review` (V3.13).
+- **Batch submission:** merged work that no REV covers is submitted as
+  `responses/REV-YYYYMMDD-BNN.md` with `<!-- submission: batch -->`. The ledger shows
+  `IMPLEMENTED | Reviewer`, and the Reviewer answers under the same id (V3.14).
 - **Handoff line:** `REV-... IMPLEMENTED @ <sha>, PR #n, CI <run-url>` is a notification only.
   Verdict PR titles say `approve` / `reject` and the REV (V3.10).
 - **Delegation to cheaper agents** is a duty for both sides. Every response and verdict ends with
