@@ -7370,6 +7370,15 @@ else
     bad "odświeżanie w tle: prośba w trakcie odczytu przepada (U185)" "$brq_out"
 fi
 
+# U176: wiersz F2/F3 bierze etykiete WLASNEJ linii crona -- migawka snaponly (snapget -s), szczebel
+# daily/weekly, lokalny prune z kilku sekcji [dataset:]. Kontrola: pobranie bierze snapget.
+rlb_out="$("$PY" "$REPO/test/tui/run_labels.py" "$TUI" 2>&1 | tr -d '\r')"
+if [ "$(printf '%s\n' "$rlb_out" | grep -c '^ok ')" -eq 4 ] && ! printf '%s\n' "$rlb_out" | grep -q '^bad '; then
+    ok "F2/F3: etykieta biegu z wlasnej linii crona -- migawka snaponly, szczebel, lokalny prune; pobranie bez zmian (U176)"
+else
+    bad "F2/F3: etykieta biegu (U176)" "$rlb_out"
+fi
+
 # U180: wejscie w F6 czyta liste replik od nowa (stan nosnika z chwili wejscia); inny ekran -- nie.
 f6r_out="$("$PY" "$REPO/test/tui/f6_refresh.py" "$TUI" 2>&1 | tr -d '\r')"
 if [ "$(printf '%s\n' "$f6r_out" | grep -c '^ok ')" -eq 2 ] && ! printf '%s\n' "$f6r_out" | grep -q '^bad '; then

@@ -18,6 +18,10 @@ when they change how the tool is used.
 - **A connected replica disk shows how full it is** (U186): F6 has a `Used` column and the
   medium line says `used N% (X of Y)`; `list-replicas --json` carries `medium_size` and
   `medium_alloc` in bytes while the disk's pool is imported (empty otherwise).
+- **F2/F3 show every run of every job** (U176): a row finds its runs by the label of its own
+  cron line. A snapshot-only relation's snapshot rows, the daily/weekly/monthly rows, and a local
+  prune row made of several datasets took another line's label and showed no runs (or another
+  line's runs).
 - **F6 shows a running copy and the current medium state** (U174, U180): `list-replicas --json`
   has `running_since` (the gate's run record, live pid); the row and the medium line say
   `kopia trwa od ...` (`copy running since ...`) instead of the last finished run. F6 reads the

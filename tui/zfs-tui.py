@@ -741,11 +741,17 @@ def times_cell(last, avg, mx):
     return "/".join("-" if v < 0 else "%.1f" % (v / 3600.0) for v in vals) + "h"
 
 
-def job_cron_label(j):
+def job_cron_label(j, prune=None):
     """Etykieta zadania w cronie -- to, co zfs-job.sh dostaje w cudzyslowie --
-    BEZ pierwszego slowa (hosta), bo tak liczy ja digest (pola od 5.)."""
+    BEZ pierwszego slowa (hosta), bo tak liczy ja digest (pola od 5.).
+    prune: wiersz porzadkow (linia delsnaps); None = z rodzaju sekcji."""
     kind = j.get("section_kind", "")
-    want = ("snapsend.sh", "snapget.sh") if kind == "dataset" else ("delsnaps.sh",)
+    if prune is None:
+        prune = kind not in ("dataset", "snaponly")
+    # U176 (lab pve11 2026-11-09): migawka relacji snaponly to linia snapget -s, nie
+    # delsnaps -- F2/F3 nie mialy jej biegow; wiersz "lokalny prune" zlozony z kilku
+    # sekcji [dataset:] bral etykiete pobrania.
+    want = ("delsnaps.sh",) if prune else ("snapsend.sh", "snapget.sh")
     scope = j.get("scope", "")
     # The line quotes the scope OR the other end: a pull names its SOURCE
     # ("konto@host:dataset") and, for a mirror, no local path at all. Matching
@@ -754,6 +760,11 @@ def job_cron_label(j):
     # ct-201, and a refused pull of another dataset stayed "aktualne"
     # (measured 2026-10-08).
     ends = ['"%s"' % x for x in (scope, j.get("other_end") or "") if x]
+    # U176: the block carries a line per tier; the label's first word is the tier
+    # ("<tier> snapshot (...)", a snaponly line only its last "__" part). Every
+    # daily/weekly row took the hourly line's label and its runs.
+    tier = j.get("tier") or ""
+    tiers = {tier, tier.rsplit("__", 1)[-1]} - {""}
     cands = []
     for ln in j.get("cron_lines") or []:
         if not any(w in ln for w in want):
@@ -761,12 +772,13 @@ def job_cron_label(j):
         m = re.search(r'zfs-job\.sh "([^"]+)"', ln)
         if not m:
             continue
-        cands.append((any(e in ln for e in ends), m.group(1)))
+        parts = m.group(1).split(" ", 1)
+        lb = parts[1] if len(parts) > 1 else parts[0]
+        cands.append((any(e in ln for e in ends), lb.split(" ", 1)[0] in tiers, lb))
     if not cands:
         return ""
-    cands.sort(key=lambda c: 0 if c[0] else 1)
-    parts = cands[0][1].split(" ", 1)
-    return parts[1] if len(parts) > 1 else parts[0]
+    cands.sort(key=lambda c: (0 if c[0] else 1, 0 if c[1] else 1))
+    return cands[0][2]
 
 
 def job_stats_for(data, j, label):
@@ -2388,7 +2400,7 @@ def build_runs(data, jobrows, now, show_done=True, grouped=False, past_h=PRZ_PAS
         else:
             parts = []
             for j in it.get("jobs") or [it["job"]]:
-                lb = it.get("clabel") if len(it.get("jobs") or [1]) == 1 else job_cron_label(j)
+                lb = it.get("clabel") if len(it.get("jobs") or [1]) == 1 else job_cron_label(j, run_is_prune(it))
                 parts.append((lb or "", j))
         for lbl, j in parts:
             key = (lbl, it.get("schedule") or "") if lbl else ("\0", id(it), id(j))
