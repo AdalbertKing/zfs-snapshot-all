@@ -4801,7 +4801,7 @@ def kopie_groups(rows, data, now, ch):
                 roots.append(d)
         groups.append({"kind": "pvesr", "name": r["name"], "word": _(u"relacja %s (pvesr)") % r["name"],
                        "what": u"pvesr", "roots": roots, "typ": u"pvesr", "dir": r.get("dir") or "",
-                       "note": _(u"brak kopii pvesr na tym hoście"), "pvesr_only": True})
+                       "note": _(u"migawki tylko na źródle %s, bez kopii na tym hoście") % (rel.get("peer") or r["name"]), "pvesr_only": True})
     for r in ((data.replicas or {}).get("replicas") or []) if data is not None else []:
         here = r.get("present") == "here"
         srcs = r.get("sources") or [s for s in (r.get("source") or "").split(",") if s]

@@ -14920,6 +14920,20 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'a pool GUID is digits'; then
 else
     bad "addreplica: --media-guid validation" "rc=$rc" "$out"
 fi
+# U179(6): the wizard formats a disk, then adds the replica naming it by GUID -- the plan
+# must not warn "in the slot but not imported ... not checked" about its own work.
+# Control: the same disk in the slot, not named by GUID, is still warned about.
+u1796() { ( source "$ZFSBACKUP"
+    zfs() { case "$*" in "list -H -o name hdd/data") return 0 ;; esac; return 1; }
+    zpool() { case "$1" in list) return 1 ;; import) printf '   pool: repl\n     id: 999\n' ;; esac; }
+    cmd_add_replica rr --source=hdd/data --dst=repl/replica --config="$MG/u.conf" "$@" ) 2>&1; }
+printf '[defaults]\n\thost_label = h\n' > "$MG/u.conf"
+o1=$(u1796 --media-guid=999); o2=$(u1796)
+if ! printf '%s' "$o1" | grep -q 'is in the slot but not imported' && printf '%s' "$o2" | grep -q 'is in the slot but not imported'; then
+    ok "addreplica: no 'not checked' warning for the disk named by --media-guid (U179-6); control: an unnamed disk in the slot still warned"
+else
+    bad "addreplica: not-checked warning (U179-6)" "named: $o1" "unnamed: $o2"
+fi
 rm -rf "$MG"
 
 # add-replica --passive (owner note 20, 2026-10-08): the section says passive = yes

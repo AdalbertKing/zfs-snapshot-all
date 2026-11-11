@@ -8338,7 +8338,7 @@ cmd_prepare_media() {
     if [ "$enc" -eq 1 ]; then
         echo "  2. zfs create -o encryption=aes-256-gcm -o keyformat=hex -o keylocation=file://$keyfile $pool/$base"
         echo "              -- ENCRYPTED: without the key nobody reads the disk; marks it as this replica's medium"
-        if [ "$keynew" -eq 1 ]; then echo "     key:     NEW, $keyfile (0600 root) -- shown once after formatting: write it down OFF this host"
+        if [ "$keynew" -eq 1 ]; then echo "     key:     NEW, $keyfile (0600 root) -- shown after formatting, and again any time on F6 (F8): write it down OFF this host"
         else echo "     key:     EXISTING $keyfile (the other disk of this pool uses it too)"; fi
     else
         echo "  2. zfs create $pool/$base   -- marks it as this replica's medium (NOT encrypted)"
@@ -8692,7 +8692,13 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
     elif zpool import 2>/dev/null | awk -v p="$pool" '$1=="pool:" && $2==p {found=1} END{exit !found}'; then
         # In the slot, just not imported. Saying "not here" about a disk the
         # operator can see would be the same falsehood the listing used to tell.
-        warn "medium '$pool' is in the slot but not imported, so '$dst' was not checked. The job imports it itself; if that dataset is not on it, the first run will refuse it as the wrong medium."
+        # U179(6): not for the disk this replica names by GUID -- the wizard has just
+        # formatted it with that very dataset, and the "!!!" was noise on its own work.
+        local _slot_ids; _slot_ids=$(zpool import 2>/dev/null | awk -v p="$pool" '$1=="pool:" {inp=($2==p)} inp && $1=="id:" {print $2}')
+        local _named=0 _i
+        for _i in $_slot_ids; do case " ${mguids[*]} " in *" $_i "*) _named=1 ;; esac; done
+        [ "$_named" -eq 1 ] \
+            || warn "medium '$pool' is in the slot but not imported, so '$dst' was not checked. The job imports it itself; if that dataset is not on it, the first run will refuse it as the wrong medium."
     else
         warn "medium '$pool' is not here, so '$dst' could not be checked. That is normal for a disk in a safe -- but if it was never prepared, the first run will refuse it as the wrong medium. Prepare it once: zpool create $pool <device> && zfs create $dst"
     fi

@@ -1349,7 +1349,7 @@
 "Udostępniam dysk VM z migawki tylko do odczytu...": "Exposing the VM disk from the snapshot read-only...",
 "Ukryj usunięte": "Hide deleted",
 "Uprawnienia": "Permissions",
-"Uruchamiać kopię także po podłączeniu dysku tej repliki?\\n\\nTak: podłączony dysk -- kopia minutę po podłączeniu (czas na wyjęcie złego dysku),\\npotem dalej wg harmonogramu.\\nNie: tylko wg harmonogramu. Inny dysk -- nic się nie dzieje.": "Also run the copy when this replica's disk is connected?\\n\\nYes: disk connected -- copy one minute after connect (time to pull out a wrong disk),\\nthen on by the schedule.\\nNo: by the schedule only. Another disk -- nothing happens.",
+"Uruchamiać kopię także po podłączeniu dysku tej repliki?\\n\\nTak: podłączony dysk -- kopia minutę po podłączeniu (czas na wyjęcie złego dysku),\\npotem dalej wg harmonogramu.\\nNie: tylko wg harmonogramu. Inny dysk -- nic się nie dzieje.": "Also run the copy when this replica's disk is connected?\\n\\nYes: disk connected -- copy one minute after connect (time to pull out a wrong disk),\\nthen by the schedule.\\nNo: by the schedule only. Another disk -- nothing happens.",
 "Uruchom": "Run",
 "Uruchom teraz": "Run now",
 "Urządzenie $DEV nie pojawiło się (udev). Nic nie zostało zmienione w kopii.": "Device $DEV did not appear (udev). Nothing in the copy was changed.",
@@ -2193,5 +2193,5 @@
 "Tak, teraz": "Yes, now",
 "Dysk $POOL jest podłączony. Zacząć pierwszą kopię teraz?\\n\\nKopia biegnie w tle, także po wyjściu z programu. Stan: F2 Przebiegi.": "Disk $POOL is connected. Start the first copy now?\\n\\nThe copy runs in the background, also after you leave the program. Progress: F2 Runs.",
 "relacja %s (pvesr)": "relation %s (pvesr)",
-"brak kopii pvesr na tym hoście": "no pvesr copies on this host"
+"migawki tylko na źródle %s, bez kopii na tym hoście": "snapshots on the source %s only, no copies on this host"
 }
