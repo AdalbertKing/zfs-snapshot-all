@@ -135,7 +135,7 @@ jednorazowo: `ZFS_TUI_LANG=pl zfs-backup gui` albo `--lang=pl`.
 | Klawisz | Okno lub akcja |
 |---|---|
 | F1 | Pomoc |
-| F2 | Przebiegi: nadchodzące z 6 h na górze, kreska „teraz”, wykonane pod nią; linie crona jednej relacji o tej samej porze to jeden wiersz „N datasety” (Enter rozwija) |
+| F2 | Przebiegi: nadchodzące z 6 h na górze, kreska „teraz”, wykonane pod nią; linie crona jednej relacji, czynności i szczebla startujące najwyżej 5 min po sobie (kreator rozrzuca je po wolnych minutach) to jeden wiersz „N datasety” (Enter rozwija) |
 | F3 | Relacje (Ins = nowa, Del = usuń, Enter = otwórz, `e` = edytuj w oknie relacji) |
 | F4 | Kopie (Enter/Tab do migawek, Enter na migawce albo F7 przegląda pliki, F9 przywraca) |
 | F5 | Szablony |

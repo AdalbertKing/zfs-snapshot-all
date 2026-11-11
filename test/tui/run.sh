@@ -7500,8 +7500,8 @@ fi
 # nadchodzace tylko 6 h; trzy linie crona relacji o jednej porze = jeden wiersz "3 datasety",
 # PADŁ 1/3, Enter rozwija/zwija. Kontrola: relacja z jednym datasetem to zwykly wiersz.
 f2m_out="$("$PY" "$REPO/test/tui/f2_merge.py" "$TUI" 2>&1 | tr -d '\r')"
-if [ "$(printf '%s\n' "$f2m_out" | grep -c '^ok ')" -eq 14 ] && ! printf '%s\n' "$f2m_out" | grep -q '^bad '; then
-    ok "F2: czas malejaco, kursor pod 'teraz', 6 h naprzod; wiersz zbiorczy relacji, PADŁ 1/3, Enter rozwija (U166/U171)"
+if [ "$(printf '%s\n' "$f2m_out" | grep -c '^ok ')" -eq 16 ] && ! printf '%s\n' "$f2m_out" | grep -q '^bad '; then
+    ok "F2: czas malejaco, kursor pod 'teraz', 6 h naprzod; wiersz zbiorczy relacji, PADŁ 1/3, Enter rozwija; linie rozrzucone do 5 min = jeden wiersz (U166/U171/U189)"
 else
     bad "F2: kolejnosc i wiersz zbiorczy (U166/U171)" "$(printf '%s\n' "$f2m_out" | grep -v '^ok ' | head -20)"
 fi

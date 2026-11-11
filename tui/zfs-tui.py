@@ -2126,6 +2126,7 @@ PRZ_PAST_H = 72
 # F2 nadal pokazuje PRZ_PAST_H.
 PRZ_RUNS_H = 72
 PRZ_AHEAD_H = 6
+RUN_MERGE_GAP_S = 5 * 60   # U189: linie jednej paczki rozrzucone po wolnych minutach (runs_merge)
 
 # ---------------------------------------------------------------------------
 # PORZADEK PANELI (U21, wlasciciel 2026-10-19, symulacja zaakceptowana): LISTA =
@@ -2517,21 +2518,37 @@ def runs_merge(rows):
     """U171 (pve1 SITE-C 2026-11-09): trzy linie crona relacji o tej samej porze (snapget -s
     na hdd/data, rpool/ROOT, rpool/data) daja JEDEN wiersz "3 datasety": wynik najgorszy,
     czas najdluzszy, przy bledzie "PADŁ 1/3". Cron bez zmian -- kazda linia ma swoj wynik,
-    log i alarm; Enter rozwija wiersz na datasety. Klucz: relacja + czynnosc + szczebel +
-    minuta startu (bieg wykonany) albo terminu (nadchodzacy)."""
-    buckets, order = {}, []
-    for r in rows:
+    log i alarm; Enter rozwija wiersz na datasety. Klucz: relacja + czynnosc + szczebel;
+    U189 (wlasciciel 2026-11-11): w jeden wiersz ida biegi, z ktorych kazdy startuje (wykonany)
+    albo ma termin (nadchodzacy) najwyzej RUN_MERGE_GAP_S po poprzednim. Kreator rozrzuca
+    linie relacji po pierwszych WOLNYCH minutach (schedule_take: :00 :01 :02, a gdy minuta
+    jest zajeta -- dziura), zeby nie obciazac pasma; kolejny cykl tej samej linii jest
+    najwczesniej 15 min dalej, wiec sie nie skleja."""
+    keyed, chain_of = {}, {}
+    for i, r in enumerate(rows):
         it = r["item"]
         if it.get("kind") != "job" or r.get("at") is None:
-            order.append([r])
             continue
         t0 = r.get("start") if r.get("past") and r.get("start") else r["at"]
-        k = (r["name"], it.get("task") or u"", it.get("tier") or u"", run_is_prune(it), bool(r["past"]), int(t0 // 60))
-        if k in buckets:
-            buckets[k].append(r)
-        else:
-            buckets[k] = [r]
-            order.append(buckets[k])
+        k = (r["name"], it.get("task") or u"", it.get("tier") or u"", run_is_prune(it), bool(r["past"]))
+        keyed.setdefault(k, []).append((t0, i, r))
+    for lst in keyed.values():
+        lst.sort(key=lambda x: (x[0], x[1]))
+        cur, last = None, None
+        for t0, i, r in lst:
+            if cur is None or t0 - last > RUN_MERGE_GAP_S:
+                cur = []
+            cur.append(r)
+            chain_of[i] = cur
+            last = t0
+    order, seen = [], set()
+    for i, r in enumerate(rows):
+        b = chain_of.get(i)
+        if b is None:
+            order.append([r])
+        elif id(b) not in seen:
+            seen.add(id(b))
+            order.append(b)
     out = []
     for ms in order:
         if len(ms) < 2:
@@ -2544,10 +2561,12 @@ def runs_merge(rows):
         for r in ms:
             items += [x for x in r["items"] if all(x is not y for y in items)]
             jobs += [j for j in run_jobs(r) if all(j is not y for y in jobs)]
-        agg.update({"agg": ms, "items": items, "jobs": jobs, "at": max(r["at"] for r in ms),
+        # Nadchodzacy: termin najwczesniejszej linii paczki (U189); wykonany: koniec ostatniej.
+        agg.update({"agg": ms, "items": items, "jobs": jobs,
+                    "at": max(r["at"] for r in ms) if agg["past"] else min(r["at"] for r in ms),
                     "label": u"\0".join(sorted(r.get("label") or u"" for r in ms)),
                     "agg_bad": len([r for r in ms if run_failed(r)]), "fold_n": None})
-        t0 = ms[0].get("start") if ms[0].get("past") and ms[0].get("start") else ms[0]["at"]
+        t0 = min(r.get("start") if r.get("past") and r.get("start") else r["at"] for r in ms)
         agg["agg_key"] = agg["label"] + u"\0%d" % (t0 // 60)   # stały, gdy bieg się kończy
         if agg["past"]:
             agg["rc"] = worst.get("rc")

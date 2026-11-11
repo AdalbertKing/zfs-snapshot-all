@@ -131,6 +131,32 @@ def main():
     check("u171-enter-collapses", not any(x.get("child") for x in ui.runrows) and ui.runrows[ui.cursor["zadania"]].get("agg"),
           "rows=%r" % [x["kind"] for x in ui.runrows])
 
+    # U189 (lab pve11 2026-11-11, Owner: 5-minute threshold): lines of one relation spread over
+    # the first FREE minutes (:00 :01 :03 -- :02 taken by another job) are ONE row, the time of
+    # an upcoming row is the earliest line's. Control: the same relation's line at :20
+    # (17 minutes after :03) stays its own row.
+    sp = [(0, "hdd/data"), (1, "hdd/docs"), (3, "hdd/mail"), (20, "hdd/fz0a")]
+    jr = [jobrow("pve9b", "pull", "hourly", d, "%d * * * *" % mi, NOW - 22 * 60 + (60 + mi) * 60) for mi, d in sp]
+    runs = [{"label": j["clabel"], "start": iso(h, mi, 1), "end": iso(h, mi, 3), "rc": 0}
+            for (mi, _d), j in zip(sp, jr) for h in (18, 19)]
+    ui.data.stats = {"runs": runs}
+    ui.jobrows = jr
+    ui.prz_open = set()
+    try:
+        ui.runrows = m.build_runs(ui.data, jr, NOW, True, False, opened=ui.prz_open)
+    except TypeError:
+        ui.runrows = m.build_runs(ui.data, jr, NOW, True, False)
+    rr = [r for r in ui.runrows if r["kind"] == "run"]
+    past = [r for r in rr if r["past"]]
+    upc = [r for r in rr if not r["past"]]
+    big = [r for r in rr if len(r.get("agg") or ()) == 3]
+    fz = [r for r in rr if not r.get("agg") and r["jobs"][0]["scope"].endswith("hdd/fz0a")]
+    first_up = [r for r in upc if r.get("agg")][:1]
+    check("u189-spread-minutes-one-row", len(past) == 4 and len(big) >= 3 and len(fz) >= 3,
+          "rows=%r" % [(r["at"], len(r.get("agg") or ()), r["past"]) for r in rr])
+    check("u189-upcoming-time-is-earliest", bool(first_up) and first_up[0]["at"] % 3600 == 0,
+          "at=%r" % [r["at"] % 3600 for r in first_up])
+
 
 if __name__ == "__main__":
     main()
