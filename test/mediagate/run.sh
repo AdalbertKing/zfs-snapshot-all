@@ -102,6 +102,14 @@ case "$*" in
       v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
       eval "s=\${SRC_SNAP_$v-__u__}"; [ "$s" = "__u__" ] && s="${SRC_SNAP:-}"
       [ -n "$s" ] && echo "$last@${s}"; exit 0 ;;
+  # B01: GUIDs for the lineage check's bookmark anchor. SNAP_GUID_<ds> = the guid of
+  # that dataset's snapshot, BM_GUID_<ds> = the guid of its bookmark. Unset = none.
+  *"list -H -t snapshot -o guid -d 1"*)
+      v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
+      eval "s=\${SNAP_GUID_$v-}"; [ -n "$s" ] && echo "$s"; exit 0 ;;
+  *"list -H -t bookmark -o guid -d 1"*)
+      v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
+      eval "s=\${BM_GUID_$v-}"; [ -n "$s" ] && echo "$s"; exit 0 ;;
   *"get -H -p -o value written@"*)
       v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
       eval "w=\${SRC_WRITTEN_$v-__u__}"; [ "$w" = "__u__" ] && w="${SRC_WRITTEN:-0}"
@@ -1206,6 +1214,23 @@ has "DO NOT UNPLUG" "$out" && ok "N1b: ...and the operator is warned the pool is
 POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
 POOLS="hdd"; IMPORTABLE="rotpool"
 rm -f "$STATE/rep.imported-by-us"
+
+# N1c. REV-20261111-B01 (found during F2): the medium came back after retention pruned its
+#      snapshot on the source. The source still has the BOOKMARK with that snapshot's guid,
+#      and the engine sends the increment from it. This is the same lineage, so it is not
+#      refused. Control (N1d): a bookmark with a DIFFERENT guid is still refused.
+export SNAP_GUID_rotpool_replica_tank_src=777 BM_GUID_tank_src=777
+: > "$EXPORTED_LOG"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "N1c: a medium whose snapshot survives only as a source BOOKMARK is not refused" "0" "$rc"
+has "REFUSING" "$out" && bad "N1c: ...and nothing is said about lineage" "$out" || ok "N1c: ...and nothing is said about lineage"
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+POOLS="hdd"; IMPORTABLE="rotpool"; rm -f "$STATE/rep.imported-by-us"
+export BM_GUID_tank_src=778
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "N1d: control -- a bookmark of another guid does not count, still refused" "2" "$rc"
+unset SNAP_GUID_rotpool_replica_tank_src BM_GUID_tank_src
+POOLS="hdd"; IMPORTABLE="rotpool"; rm -f "$STATE/rep.imported-by-us"
 
 # N2. THE CONTROL. Same shape, but the medium's newest snapshot IS one the
 #     source still has -- an ordinary incremental, which must proceed.

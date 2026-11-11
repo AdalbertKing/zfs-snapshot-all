@@ -846,6 +846,19 @@ $_one
             done <<EOF
 $_tsnaps
 EOF
+            # REV-20261111-B01 (found during F2): a medium that returns after the collector's
+            # retention has pruned the snapshot it holds still shares the lineage, because a
+            # source BOOKMARK carries that snapshot's GUID. The engine sends the increment
+            # from it ("a bookmark still anchors an incremental"), and that bookmark is why
+            # the anchor exists at all. Before this, the gate refused this medium as "a
+            # DIFFERENT lineage". Measured on pve9 2026-11-11: with the gate bypassed, the
+            # engine sent `-i src#tgt-...` and the copy succeeded.
+            if [ "$_common" = no ]; then
+                _bg=" $(zfs list -H -t bookmark -o guid -d 1 "$_src" 2>/dev/null | tr '\n' ' ') "
+                for _one in $(zfs list -H -t snapshot -o guid -d 1 "$_tgt" 2>/dev/null); do
+                    case "$_bg" in *" $_one "*) _common=yes; break ;; esac
+                done
+            fi
             [ "$_common" = yes ] && continue
             say "REFUSING: '$_tgt' on this medium holds '$PREFIX' snapshots that '$_src' does not have, and they share none at all -- so this is a copy of a DIFFERENT lineage, not an older state of this one. The engine can neither send an increment (no common snapshot) nor seed over it (the target has snapshots), and would fail every run with a ZFS receive error."
             say "  the medium holds:  $(printf '%s' "$_tsnaps" | tail -1)"

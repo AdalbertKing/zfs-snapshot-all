@@ -2924,6 +2924,11 @@ fi
 # ControlMaster=auto falls back to an ordinary connection on failure.
 tune_ssh_enable "$REMOTE_HOST"
 trap 'tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
+# REV-20261111-B01 F1: killed as a whole, close this run's progress records as
+# "interrupted". The exit then runs the EXIT trap (thaw, ssh close) as before.
+# _pg_pid is the active transfer's watcher; bash resolves it in the function that is
+# running when the signal arrives.
+trap 'progress_interrupt_own "${_pg_pid:-}"; exit 143' TERM INT HUP
 
 # -K/-O were already prepended in section 5A above, before the -R expansion --
 # see the note there. snapsend.sh still does it at this point because its own

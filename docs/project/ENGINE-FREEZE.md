@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 2ed93ceb4bb9aa0074ca245330ffbd13b9d658ae -->
-<!-- frozen: snapget.sh 100755 129989aeaaad593c0af95298681e9424d7aaa231 -->
+<!-- frozen: snapsend.sh 100755 a1be796eede917ce76d4c7b35c1cd021004587d2 -->
+<!-- frozen: snapget.sh 100755 eb843fff88683f1ba0dac91528f7b7395066201c -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
-<!-- frozen: lib-zfs-snap.sh 100644 b1f187f081863319fd2789b42f0e3874893154a9 -->
+<!-- frozen: lib-zfs-snap.sh 100644 6d7f45efc7c97311ef99109de18b08d30ba0e57d -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -1382,6 +1382,18 @@ Owner-authorized refreezes:
   deadman. A scope with a guest disk is unchanged (still rc 3 without privilege). Tests:
   test/quiesce U188 case, 268/0 on pve9 as `zfsbackup`; negative control (HEAD) rc 3.
   twin: lib-zfs-snap.sh is the library both engines source; no twin copy of this script.
+
+- 2026-11-11 (snapsend.sh, snapget.sh, lib-zfs-snap.sh): **a killed engine closes its own
+  progress records as `interrupted` (REV-20261111-B01 F1).** A group TERM (U182) never
+  reached `progress_done`, so the records stayed `running`, and `check-pool-capacity` raised
+  the orphan alarm 30 minutes later. Reviewer finding, fixed under the Owner's standing order
+  (2026-11-06). Change: both engines `trap 'progress_interrupt_own "${_pg_pid:-}"; exit 143'
+  TERM INT HUP`. The new lib function stops the active watcher, then marks only the running
+  records with `"pid":<this engine's $$>`. EXIT traps (thaw, ssh close) still run. Tests:
+  test/snapsend `B01 F1` (real pool, rate-capped send, group TERM). Live on pve9 through the
+  U182 bracket: on origin/main the pool is exported but the record stays `running`; on the
+  fix it reads `interrupted`, and another run's record is untouched.
+  twin: the same trap block, word for word, in both engines.
 
 ## How it is enforced
 

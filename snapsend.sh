@@ -2699,6 +2699,11 @@ fi
 # to an ordinary connection if the master cannot be set up.
 tune_ssh_enable "$REMOTE_HOST"
 trap 'tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
+# REV-20261111-B01 F1: killed as a whole, close this run's progress records as
+# "interrupted". The exit then runs the EXIT trap (thaw, ssh close) as before.
+# _pg_pid is the active transfer's watcher; bash resolves it in the function that is
+# running when the signal arrives.
+trap 'progress_interrupt_own "${_pg_pid:-}"; exit 143' TERM INT HUP
 
 # -K/-O go at the FRONT of the whole option list, added last so nothing appended
 # above (base StrictHostKeyChecking/UserKnownHostsFile/-p, -c, and tune_ssh_enable's

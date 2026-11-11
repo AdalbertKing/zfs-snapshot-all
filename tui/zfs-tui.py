@@ -211,6 +211,8 @@ TRANSFER_STATES = {
     "ok":       ("OK", 2),
     "verified": ("OK", 2),
     "failed":   (u"BŁĄD", 1),
+    "interrupted": ("PRZERWANY", 1),   # REV-20261111-B01 F1: the engine was killed by a signal
+    "dead":     ("PRZERWANY", 1),      # A19: closed by check-pool-capacity, its engine was gone
 }
 
 # Cztery stany nosnika, nie flaga. Boolean obecny/nieobecny splaszczylby dwa

@@ -6,6 +6,15 @@ when they change how the tool is used.
 
 ## [Unreleased]
 
+- **A replica disk that comes back after retention gets an increment again** (REV-20261111-B01):
+  once the collector's retention had pruned the snapshot the disk holds, the media gate refused
+  the disk as "a DIFFERENT lineage", though the source bookmark still anchors the increment.
+  The gate now counts a source bookmark with the disk snapshot's GUID as the shared point.
+- **A copy killed as a whole leaves no false orphan alarm** (REV-20261111-B01): on
+  TERM/INT/HUP the engine closes its own progress records as interrupted (F4: PRZERWANY).
+  Before, they stayed "running", and 30 minutes later the pool-capacity check reported an
+  orphan.
+
 - **Mail subjects say what kind of mail it is** (U184): `[ZFS][REPORT]` the daily summary,
   `[ZFS][WARNING]` a warning, pool capacity or data growth (formerly `[ZFS CAPACITY]`,
   `[ZFS GROWTH]`), `[ZFS][ALERT]` a failed run. Mail rules matching `[ZFS]` keep working;
