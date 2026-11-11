@@ -14968,6 +14968,30 @@ if ! printf '%s' "$o1" | grep -q 'is in the slot but not imported' && printf '%s
 else
     bad "addreplica: not-checked warning (U179-6)" "named: $o1" "unnamed: $o2"
 fi
+# U183 (Site-A 2026-11-09): the plan says how big the first copy is, next to the medium's
+# free space -- the wizard shows it before EXECUTE. Too small: "!!!" with both numbers.
+# Controls: room enough -> ">>>" line, no "!!!"; pool not imported -> size only, free checked
+# at start; the source already on the medium -> no first copy, no line.
+u183p() { ( source "$ZFSBACKUP"
+    zfs() { case "$*" in
+        "list -H -o name hdd/data"|"list -H -o name repl/replica") return 0 ;;
+        "list -H -o name repl/replica/hdd/data") [ -n "${U183_ON:-}" ] ;;
+        "get -H -p -o value used hdd/data") echo 2147483648 ;;
+        "get -H -p -o value available repl/replica") echo "$U183_FREE" ;;
+        *) return 1 ;; esac; }
+    zpool() { case "$1" in list) [ -n "${U183_IMP:-}" ] ;; *) return 1 ;; esac; }
+    cmd_add_replica rr --source=hdd/data --dst=repl/replica --config="$MG/u.conf" ) 2>&1; }
+p1=$(U183_IMP=1 U183_FREE=1073741824 u183p); p2=$(U183_IMP=1 U183_FREE=3221225472 u183p); p3=$(U183_FREE=1 u183p)
+p4=$(U183_IMP=1 U183_ON=1 U183_FREE=1 u183p)
+if printf '%s' "$p1" | grep -qE "^!!! the first copy of hdd/data needs about 2\.0G and 'repl/replica' has 1\.0G free" \
+   && printf '%s' "$p2" | grep -qE "^>>> first copy: hdd/data -- about 2\.0G, 'repl/replica' has 3\.0G free" && ! printf '%s' "$p2" | grep -q 'cannot fit' \
+   && printf '%s' "$p3" | grep -qE "^>>> first copy: hdd/data -- about 2\.0G; the medium's free space is checked when the copy starts" \
+   && ! printf '%s' "$p4" | grep -q 'first copy'; then
+    ok "addreplica U183: the plan sizes the first copy -- too small '!!!' with both numbers; room enough '>>>'; not imported: size only; already on the medium: nothing"
+else
+    bad "addreplica U183: first copy size in the plan" "small: $(printf '%s' "$p1" | grep -i 'first copy')" "room: $(printf '%s' "$p2" | grep -i 'first copy')" \
+        "away: $(printf '%s' "$p3" | grep -i 'first copy')" "on medium: $(printf '%s' "$p4" | grep -i 'first copy')"
+fi
 # U186: list-replicas carries the medium's size and allocation while its pool is imported
 # (gate status 0 = here). Control: the gate says away -> both fields empty, zpool list unread.
 mkdir -p "$MG/gd"; printf '#!/bin/sh\nexit "${U186_GATE:-0}"\n' > "$MG/gd/zfs-media-gate.sh"; chmod +x "$MG/gd/zfs-media-gate.sh"

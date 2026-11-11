@@ -876,27 +876,21 @@ EOF
 
     # U183 (Site-A 2026-11-09): a first copy started onto a disk far too small for its
     # sources and ran until the owner killed it. Before the engine starts, a source with
-    # no copy on this medium yet is a full send: about its `used` (the whole tree with
-    # snapshots, for a recursive replica) or `usedbydataset + usedbysnapshots` (that one
-    # dataset), compressed on the wire as on disk. If the sum exceeds what the medium
-    # has free, refuse with both numbers -- rc 2, an alert -- and put the disk away.
+    # no copy on this medium yet is a full send (first_copy_bytes, lib-backup-common.sh).
+    # If the sum exceeds what the medium has free, refuse with both numbers -- rc 2, an
+    # alert -- and put the disk away.
     # Unreadable numbers skip the check rather than block a copy on a guess.
     if [ "${#SOURCES[@]}" -gt 0 ] && [ -n "$DATASET" ]; then
         _need=0; _new=""; _ok=yes
         for _src in "${SOURCES[@]}"; do
             zfs list -H -o name "$DATASET/$_src" >/dev/null 2>&1 && continue
-            if [ "$RECURSIVE" = 1 ]; then
-                _b="$(zfs get -H -p -o value used "$_src" 2>/dev/null)"
-            else
-                _b="$(zfs get -H -p -o value usedbydataset,usedbysnapshots "$_src" 2>/dev/null | awk '{s += $1} END {if (NR == 2) printf "%d", s}')"
-            fi
-            case "$_b" in ''|*[!0-9]*) _ok=no; break ;; esac
+            _b="$(first_copy_bytes "$RECURSIVE" "$_src")" || { _ok=no; break; }
             _need=$(( _need + _b )); _new="$_new $_src"
         done
         _free="$(zfs get -H -p -o value available "$DATASET" 2>/dev/null)"
         case "$_free" in ''|*[!0-9]*) _ok=no ;; esac
         if [ "$_ok" = yes ] && [ -n "$_new" ] && [ "$_need" -gt "$_free" ]; then
-            say "REFUSING: the first copy of$_new needs about $(numfmt --to=iec "$_need" 2>/dev/null || echo "$_need bytes") (zfs used on the source$([ "$RECURSIVE" = 1 ] && echo ", whole tree")), and '$DATASET' has $(numfmt --to=iec "$_free" 2>/dev/null || echo "$_free bytes") free. It cannot fit; not starting it. Use a bigger disk, or fewer sources for this replica."
+            say "REFUSING: the first copy of$_new needs about $(iec_bytes "$_need") (zfs used on the source$([ "$RECURSIVE" = 1 ] && echo ", whole tree")), and '$DATASET' has $(iec_bytes "$_free") free. It cannot fit; not starting it. Use a bigger disk, or fewer sources for this replica."
             if bounded_export >/dev/null 2>&1; then
                 rm -f "$OURS" 2>/dev/null || :
             else

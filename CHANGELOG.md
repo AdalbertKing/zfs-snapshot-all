@@ -49,7 +49,9 @@ when they change how the tool is used.
   gate's `detach` even when the whole job's process group is killed.
 - **A first copy that cannot fit on the disk is refused** (U183): before writing, the gate adds
   up the sources that have no copy on the medium yet, compares that with the free space, and
-  exports the disk when it is short.
+  exports the disk when it is short. The `add-replica` plan (and the replica wizard before
+  EXECUTE) says how big the first copy is and, with the medium's pool imported, how much is
+  free, with `!!!` when it cannot fit.
 
 - **A ZFS disk whose pool name and GUID cannot be read starts no replica on insertion**
   (REV-20261109-193). In 1.0.17 such a disk ran every on-insert replica; now the insertion is

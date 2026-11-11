@@ -8703,6 +8703,28 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
         warn "medium '$pool' is not here, so '$dst' could not be checked. That is normal for a disk in a safe -- but if it was never prepared, the first run will refuse it as the wrong medium. Prepare it once: zpool create $pool <device> && zfs create $dst"
     fi
 
+    # U183 (Site-A 2026-11-09): a first copy ran onto a disk far too small for it. Say its
+    # size here, next to the medium's free space when the pool is imported -- the wizard
+    # shows these lines before EXECUTE. Only sources with no copy on the medium yet (the
+    # gate refuses at attach with the same numbers, first_copy_bytes).
+    local _need=0 _new="" _nb _free=""
+    for _s2 in "${sources[@]}"; do
+        zfs list -H -o name "$dst/$_s2" >/dev/null 2>&1 && continue
+        _nb="$(first_copy_bytes "$rec" "$_s2")" || { _new=""; break; }
+        _need=$(( _need + _nb )); _new="$_new $_s2"
+    done
+    if [ -n "$_new" ]; then
+        zpool list -H -o name "$pool" >/dev/null 2>&1 && _free="$(zfs get -H -p -o value available "$dst" 2>/dev/null)"
+        case "$_free" in *[!0-9]*) _free="" ;; esac
+        if [ -z "$_free" ]; then
+            echo ">>> first copy:$_new -- about $(iec_bytes "$_need"); the medium's free space is checked when the copy starts"
+        elif [ "$_need" -gt "$_free" ]; then
+            warn "the first copy of$_new needs about $(iec_bytes "$_need") and '$dst' has $(iec_bytes "$_free") free. It cannot fit: the run will refuse to start it. Use a bigger disk, or fewer sources."
+        else
+            echo ">>> first copy:$_new -- about $(iec_bytes "$_need"), '$dst' has $(iec_bytes "$_free") free"
+        fi
+    fi
+
     local resolver_user; resolver_user="$(cron_target_user)"
     cron_context_resolve adopt "$config" "$resolver_user" "" ""
     config="$CRON_CTX_FILE"

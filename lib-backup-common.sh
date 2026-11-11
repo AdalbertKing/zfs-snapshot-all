@@ -117,6 +117,23 @@ usb_queue_raise() {   # [whole-disk name ...]
     return 0
 }
 
+# FIRST COPY SIZE (U183): a source with no copy on the medium yet goes as a full send,
+# about its `used` (the whole tree with snapshots, recursive) or `usedbydataset +
+# usedbysnapshots` (that one dataset) -- compressed on the wire as on disk. Prints bytes;
+# rc 1 and nothing when zfs gives no number. One definition, here, because two programs
+# use it: the gate refuses a disk too small at attach, add-replica shows it in its plan.
+first_copy_bytes() {   # <recursive 0|1> <source dataset>
+    local b
+    if [ "$1" = 1 ]; then
+        b="$(zfs get -H -p -o value used "$2" 2>/dev/null)"
+    else
+        b="$(zfs get -H -p -o value usedbydataset,usedbysnapshots "$2" 2>/dev/null | awk '{s += $1} END {if (NR == 2) printf "%d", s}')"
+    fi
+    case "$b" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s\n' "$b"
+}
+iec_bytes() { numfmt --to=iec "$1" 2>/dev/null || echo "$1 bytes"; }
+
 # ------------------------------------------------------------------------------
 # The server-side config once written by `zfs-backup.sh setup-server` (removed
 # 2026-10-20, U39 -- the wizard and F10 record these facts now) and still READ by
