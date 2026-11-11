@@ -810,19 +810,21 @@ PYEOF
             if [ "$SCHED" = on-insert ]; then _first="$(T 'ruszy opóźniona po podłączeniu dysku')"
             elif [ "$MEDIA" = removable ] && [ "$ONINS" = yes ]; then _first="$(T 'ruszy opóźniona po podłączeniu dysku albo o czasie z harmonogramu')"
             else _first="$(T 'ruszy o czasie z harmonogramu')"; fi
+            # U179(1): the "start now" question below says it already -- the F6/F7 hint only without it.
+            _pool="${DST%%/*}"; _ask_now=0
+            if [ "$EDIT" -eq 0 ] && [ "$MEDIA" = removable ] \
+               && { zpool list -H -o name "$_pool" >/dev/null 2>&1 \
+                    || zpool import 2>/dev/null | awk -v p="$_pool" '$1 == "pool:" && $2 == p {f=1} END {exit !f}'; }; then _ask_now=1; fi
             { if [ "$EDIT" -eq 1 ]; then Tv 'GOTOWE: replika '\''$NAME'\'' zmieniona (rc=$RC).' '$NAME' "$NAME" '$RC' "$RC"; echo; Tv '    Następna kopia $_first.' '$_first' "$_first"; echo
               else Tv 'GOTOWE: replika '\''$NAME'\'' zainstalowana (rc=$RC).' '$NAME' "$NAME" '$RC' "$RC"; echo; Tv '    Pierwsza kopia $_first.' '$_first' "$_first"; echo; fi
-              Tv '    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '\''$NAME'\'' i naciśnij F7 (Uruchom teraz).' '$NAME' "$NAME"; echo
+              [ "$_ask_now" -eq 1 ] || { Tv '    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '\''$NAME'\'' i naciśnij F7 (Uruchom teraz).' '$NAME' "$NAME"; echo; }
             } >"$TMPD/result.txt"
             result_box "$(Tv 'Replika $NAME: GOTOWE' '$NAME' "$NAME")" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
             # A8 (field 2026-11-05): dysk był podłączony przy instalacji, a pierwsza kopia
             # ruszyła dopiero następnej nocy -- udev reaguje tylko na WŁOŻENIE. Nowa replika
             # na dysku, który już jest: pytanie, czy zacząć teraz. Bieg w tle, ten sam
             # czasownik co F7, przeżywa wyjście z GUI.
-            _pool="${DST%%/*}"
-            if [ "$EDIT" -eq 0 ] && [ "$MEDIA" = removable ] \
-               && { zpool list -H -o name "$_pool" >/dev/null 2>&1 \
-                    || zpool import 2>/dev/null | awk -v p="$_pool" '$1 == "pool:" && $2 == p {f=1} END {exit !f}'; } \
+            if [ "$_ask_now" -eq 1 ] \
                && wt --title "$(Tv 'Replika $NAME' '$NAME' "$NAME")" --yes-button "$(T 'Tak, teraz')" --no-button "$(T 'Nie')" \
                      --yesno "$(Tv 'Dysk $POOL jest podłączony. Zacząć pierwszą kopię teraz?\n\nKopia biegnie w tle, także po wyjściu z programu. Stan: F2 Przebiegi.' '$POOL' "$_pool")" 10 "$W"; then
                 setsid -f "$ZB" run-replicas --name="$NAME" </dev/null >/dev/null 2>&1 || :

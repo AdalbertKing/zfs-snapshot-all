@@ -2553,8 +2553,8 @@ else
     bad "nosniki: wyjasnienie stanu" "$NB"
 fi
 NE="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --screen nosniki 2>&1)"
-if has "$NE" 'Brak sekcji [replica:]' && has "$NE" 'NIE TEN DYSK' && has "$NE" 'add-replica NAZWA'; then
-    ok "nosniki: bez replik -- powiedziane, ze to brak konfiguracji, z legenda czterech stanow i komenda"
+if has "$NE" 'Na tym hoście nie ma jeszcze replik.' && has "$NE" 'NIE TEN DYSK' && ! has "$NE" 'Brak sekcji [replica:]' && ! has "$NE" 'add-replica NAZWA'; then
+    ok "nosniki: bez replik -- jedno zdanie (U179-3), legenda czterech stanow; bez powtorzen i ucietej komendy"
 else
     bad "nosniki: pusty" "$NE"
 fi

@@ -4596,9 +4596,8 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
         ti = ti % len(tabs)
         child = rep_children(tabs[ti][0], r, data, now, ch, jobrows)
         child.update({"name": r.get("name"), "tabs": tabs, "ti": ti})
-    empty = [_(u"Brak sekcji [replica:] w configu tego kolektora."),
-             _(u"Brak skonfigurowanych replik dla tego kolektora"),
-             _(u"Ins dodaje ją w oknach; komendą wsadową: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA")]
+    # U179(3): one line -- the three said the same, and the command was cut off mid-way.
+    empty = [_(u"Na tym hoście nie ma jeszcze replik.")]
     if not reps:
         det_title = _(u"stany nośnika")
         det = [(_(MEDIA_STATES[k][0]), _(MEDIA_STATES[k][2])) for k in ("here", "available", "away", "wrong_medium")]
@@ -5798,7 +5797,8 @@ class UI(object):
 
     def output_lines(self, obj, width):
         """Ogon pliku wyjscia + stan procesu. Czytane przy kazdym rysowaniu."""
-        out = wrap(u"$ " + obj["shell"], width - 4) + [""]
+        # U179(7): a window that only shows something (the medium key) ran no command -- no "$" line.
+        out = (wrap(u"$ " + obj["shell"], width - 4) + [""]) if obj.get("shell") else []
         if obj.get("lines") is not None:
             body = list(obj["lines"])
         else:
@@ -6039,7 +6039,8 @@ class UI(object):
             return
         c = self.cursor["nosniki"]
         if not reps or not (0 <= c < len(reps)):
-            self.message = _(u"brak replik -- nie ma czego uruchomić (Ins dodaje)") if k == "F7" else _(u"brak replik")
+            self.message = {"F7": _(u"brak replik -- nie ma czego uruchomić"),
+                            "F8": _(u"brak replik -- nie ma klucza nośnika do pokazania")}.get(k, _(u"brak replik"))
             return
         n = reps[c].get("name")
         if k == "F7":
@@ -6065,7 +6066,7 @@ class UI(object):
                 self.message = _(u"nie da się przeczytać klucza %s: %s") % (kf, e)
                 return
             self.window = ("output", {"title": _(u"Klucz nośnika repliki %s") % n, "path": None, "proc": None, "shell": "",
-                                      "lines": [u"Klucz (64 znaki hex):", u"", u"  " + key, u"",
+                                      "lines": [_(u"Klucz (64 znaki hex):"), u"", u"  " + key, u"",
                                                 _(u"Zapisz go gdzieś POZA tym serwerem. Gdy serwer przepadnie, bez klucza"),
                                                 _(u"kopii z dysku nie odczytasz."), _(u"Plik: ") + kf], "rc": 0})
             self.scroll = 0
