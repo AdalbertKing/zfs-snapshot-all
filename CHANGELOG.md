@@ -9,10 +9,12 @@ when they change how the tool is used.
 - **A copy no longer loses snapshots the source pruned while the collector was away.** When the
   target's newest snapshot was gone from the source but an older one was common to both, the
   older one became the base and `zfs recv -F` discarded the newer snapshots on the target, even
-  though the source's `tgt-` bookmark still marked them. The bookmark is now the base; the
+  though the source's `tgt-` bookmark still marked them. For a single dataset (not `-r`) the bookmark
+  is now the base; the
   increment goes `-i` bookmark → the oldest snapshot after it not excluded by `-E`, then `-I` to
-  the newest, so the snapshots made in between arrive too. The same loss was measured on a replica
-  disk that keeps N versions; the same code path serves it.
+  the newest, so the snapshots made in between arrive too (with `-i`: the single diff only). Proxmox `__replicate_` snapshots are
+  never the first step. A dry run (`-n`) plans the same base. The same loss was measured on a
+  replica disk that keeps N versions; the same code path serves it.
 
 ## [1.0.18] — 2026-11-11
 

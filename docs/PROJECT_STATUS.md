@@ -24,7 +24,8 @@
   migawki jest bazą przyrostu. Dotąd, gdy najnowszej migawki celu nie było już na źródle, a starsza
   była wspólna, `recv -F` kasował na celu nowsze migawki (zmierzone 2026-11-11: kopia po przerwie
   kolektora na pve9, nośnik repliki w trybie keep na CT 990). Teraz `-i` z bookmarka do najstarszej
-  migawki po nim, potem `-I` do najnowszej. Testy `bm3`/`bm4` w suicie snapsend.
+  migawki po nim nie wykluczonej przez `-E` (nigdy `__replicate_`), potem `-I` do najnowszej. Plan `-n` liczy tę samą bazę.
+  Testy `bm3`/`bm4`/`bm5` w suicie snapsend.
 - **1.0.18 wydane (2026-11-11 ~22:20; repo wydań zfsbackup f5adf7f, z `main` dcd474d6, PR #1174).**
   Lab ręcznie: pve9 (`lab-dev.sh off`, konto bkp wróciło z gałęzi dev, `deploy.sh` rc 0), pve9b
   (`--self-update`, rc 0), pve11 (`lab-dev.sh off` + `--resume-updates`); reszta floty z crona o :15.

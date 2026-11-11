@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 2a4c09273a9f91c2c5bb662f3a46a88701ae86a4 -->
-<!-- frozen: snapget.sh 100755 eb3132d329e42a7ea89b6c93e77e5714ec632b7f -->
+<!-- frozen: snapsend.sh 100755 535c2f43ac22687c7e53beae3bbd327a08e86bb8 -->
+<!-- frozen: snapget.sh 100755 34befbb13d1962627fc161aa96426e0d40add08c -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
-<!-- frozen: lib-zfs-snap.sh 100644 b844119c5048505f939305efa0ad84ea82f32538 -->
+<!-- frozen: lib-zfs-snap.sh 100644 c9b3dfed07a6d60f1d2d7558ea06298ef4cd06f0 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -1408,6 +1408,11 @@ Owner-authorized refreezes:
   then `-I @bridge @latest`, which the -E step plan may still split. Tests: test/snapsend
   `bm3` (push), `bm4` (pull). Live on pve9/pve9b, both engines: on origin/main the copy loses
   @h1 @h2; on the fix it keeps them and gains the outage daily and the new hourly.
+  After `/code-review`: new function `bookmark_beats_common` holds the rule for the run and the
+  `-n` plan of both engines (the plan used to name the older common snapshot); it compares GUIDs,
+  so a target head that is the common snapshot under another name keeps the plain `-I`; the bridge
+  never picks a `__replicate_` snapshot. Test `bm5` (plan names the bookmark; bridge skips
+  `__replicate_`).
   twin: the same lookup and bridge block in both engines, remote arguments on the remote side.
 
 ## How it is enforced
