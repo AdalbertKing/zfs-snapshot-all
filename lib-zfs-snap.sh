@@ -2753,7 +2753,26 @@ while [ "$i" -lt "$nsnap" ]; do snaps+=("$1"); shift; i=$((i+1)); done
 # never start freezing. `sudo -n` so a missing rule fails immediately instead of
 # blocking on a password prompt that nothing will ever answer.
 QHELPER=/usr/local/sbin/zfs-quiesce-helper
-if [ "$(id -u)" = "0" ]; then
+guest_id() {
+    local leaf=${1##*/}
+    case "$leaf" in
+        vm-*-disk-*|subvol-*-disk-*)
+            leaf=${leaf#vm-}; leaf=${leaf#subvol-}
+            printf '%s' "${leaf%%-disk-*}" ;;
+        *) return 1 ;;
+    esac
+}
+# U188 (lab pve11, 2026-11-11): only a scope that names a guest disk can freeze anything
+# (prep_one below skips every other one). Without one there is nothing to freeze, so no
+# privilege, no setsid and no deadman are needed -- before this, a delegated account
+# without the helper refused here (rc 3) and every quiesced tier of a plain dataset
+# degraded to a '_crash_' set with rc 8, every night.
+any_guest=0
+for _s in "${scopes[@]}"; do guest_id "$_s" >/dev/null && { any_guest=1; break; }; done
+if [ "$any_guest" -eq 0 ]; then
+    QVIA=none
+    echo "QLOG no guest disk in scope -- nothing to freeze"
+elif [ "$(id -u)" = "0" ]; then
     QVIA=direct
     if ! qm list >/dev/null 2>&1 && ! pct list >/dev/null 2>&1; then
         echo "QERR running as root on the source host but neither qm nor pct works here -- is this a Proxmox host?" >&2
@@ -2886,11 +2905,11 @@ deadman_pid=""
 # missing. The whole design rests on the thaw surviving a lost connection, so a
 # run that cannot arm the deadman must not freeze anything at all -- a warning
 # is not a safety net.
-if ! command -v setsid >/dev/null 2>&1; then
+if [ "$any_guest" -eq 1 ] && ! command -v setsid >/dev/null 2>&1; then
     echo "QERR setsid is not available on the source host, so the deadman cannot be detached -- refusing to freeze anything. Without it a dropped connection would leave a guest frozen indefinitely." >&2
     exit 3
 fi
-if true; then
+if [ "$any_guest" -eq 1 ]; then
     # Polls in short steps instead of one long `sleep $deadman`, for a reason
     # found in live testing (pve0->pve1, 2026-07-30): killing the setsid'd
     # wrapper does NOT kill its `sleep` child, so every quiesced run left a
@@ -2948,15 +2967,6 @@ if true; then
     fi
 fi
 
-guest_id() {
-    local leaf=${1##*/}
-    case "$leaf" in
-        vm-*-disk-*|subvol-*-disk-*)
-            leaf=${leaf#vm-}; leaf=${leaf#subvol-}
-            printf '%s' "${leaf%%-disk-*}" ;;
-        *) return 1 ;;
-    esac
-}
 handled=" "
 pending_vms=" "
 # PASS 1. Everything slow, and nothing that freezes a VM.

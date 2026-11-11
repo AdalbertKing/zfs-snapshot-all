@@ -794,6 +794,19 @@ case "$out" in
     *) check "remote: the refusal names the fix" "y" "n ($out)" ;;
 esac
 
+# U188 (lab pve11, 2026-11-11): the same account, but no guest disk in scope -- nothing to
+# freeze, so no privilege is needed. It used to refuse (3) here, and every quiesced tier of a
+# plain dataset degraded to a '_crash_' set with rc 8 every night.
+: > "$RQ_D/trace"
+out=$(TRACE="$RQ_D/trace" QSTATE="$RQ_D/qs" PATH="$RQ_D/bin:$PATH" \
+      bash "$RQ_D/rq.sh" auto 30 "" 30 1 hdd/u172/docs 1 hdd/u172/docs@t 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && grep -q '^zfs snapshot hdd/u172/docs@t' "$RQ_D/trace" \
+   && ! grep -q '^sudo ' "$RQ_D/trace" && case "$out" in *"no guest disk in scope"*) true ;; *) false ;; esac; then
+    check "remote U188: no guest disk in scope -- plain snapshot, no privilege probe" "y" "y"
+else
+    check "remote U188: no guest disk in scope -- plain snapshot, no privilege probe" "y" "n (rc=$rc $out | $(tr '\n' ' ' < "$RQ_D/trace"))"
+fi
+
 # ---- REV-20260730-006 §5: the ERROR branches -------------------------------
 #
 # The happy path and the SIGKILL+deadman case were verified live, but every

@@ -10,6 +10,11 @@ when they change how the tool is used.
   `[ZFS][WARNING]` a warning, pool capacity or data growth (formerly `[ZFS CAPACITY]`,
   `[ZFS GROWTH]`), `[ZFS][ALERT]` a failed run. Mail rules matching `[ZFS]` keep working;
   rules matching `[ZFS CAPACITY]` or `[ZFS GROWTH]` need the new subject.
+- **A quiesced tier of a dataset that is not a guest disk no longer fails every night** (U188):
+  the remote quiesce run used to check the account's privileges before looking for a guest,
+  so a delegated account without `--allow-quiesce` turned every such snapshot into a `_crash_`
+  set with exit 8. With no `vm-N-disk-M`/`subvol-N-disk-M` in scope it now takes a plain
+  snapshot and exits 0; a scope with a guest disk is checked as before.
 - **The growth guard also watches sources of "snapshots on the source only" relations**
   (U172): on the collector, `growth-guard.sh` reads the remote entries of its retention lines
   and measures the source's increments over ssh with that line's own options (key, known

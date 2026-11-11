@@ -349,7 +349,8 @@ job cannot leave a guest frozen. It needs privilege on the source: pair with `--
 the delegated account and run `deploy.sh --join <package> --allow-quiesce` on the source, which
 installs `zfs-quiesce-helper.sh` and a sudo rule for that one script. With neither, the default
 degrade policy applies: a `_crash_` snapshot and exit 8 (see above); with `,strict` the job fails
-without a snapshot. A local source freezes the guests
+without a snapshot. A scope with no guest disk (`vm-N-disk-M`, `subvol-N-disk-M`) has nothing to
+freeze and needs no privilege: a plain snapshot, exit 0 (U188). A local source freezes the guests
 on this host.
 
 Filesystem-consistent is not application-consistent. For a database-consistent snapshot, put the

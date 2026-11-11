@@ -354,7 +354,8 @@ połączenie lub zabite lokalne zadanie nie zostawi gościa zamrożonego. Potrze
 `deploy.sh --join <pakiet> --allow-quiesce`, co instaluje `zfs-quiesce-helper.sh` i regułę sudo
 dla tego jednego skryptu. Gdy nie zrobisz żadnego z tych dwóch, obowiązuje domyślna polityka
 degradacji: migawka `_crash_` i kod wyjścia 8 (zobacz wyżej); z `,strict` zadanie kończy się
-błędem bez migawki. Źródło lokalne zamraża gości na tym hoście.
+błędem bez migawki. Zakres bez dysku gościa (`vm-N-disk-M`, `subvol-N-disk-M`) nie ma czego
+zamrażać i uprawnień nie potrzebuje: zwykła migawka, kod 0 (U188). Źródło lokalne zamraża gości na tym hoście.
 
 Spójność systemu plików to nie spójność aplikacji. Dla migawki spójnej z bazą danych umieść własną
 logikę zamrażania silnika bazy (`FLUSH TABLES WITH READ LOCK`, tryb backupu Postgresa, ...) w
