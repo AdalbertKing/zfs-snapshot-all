@@ -1352,15 +1352,6 @@ process_dataset() {
             [ ${#_dry_tgt_snaps[@]} -gt 0 ] && _dry_head=$(get_snapshot_guid "$tgt_dataset" "${_dry_tgt_snaps[-1]}" "$remote_user" "$remote_host")
             [ -n "$_dry_head" ] && _dry_bm=$(find_bookmark_base "$src_dataset" "$_dry_head")
             [ -n "$_dry_bm" ] && common_snapshot="$_dry_bm"
-        elif [ $RECURSIVE -ne 1 ]; then
-            # The run's bookmark-wins rule (2026-11-11), planned the same way.
-            local _dry_ts=() _dry_bw=""
-            _dry_ts=($(get_sorted_snapshots "$tgt_dataset" "$remote_user" "$remote_host" 2>/dev/null))
-            if [ ${#_dry_ts[@]} -gt 0 ] && [ "${_dry_ts[-1]}" != "$common_snapshot" ]; then
-                _dry_bw=$(bookmark_beats_common "$src_dataset" "$common_snapshot" \
-                    "$(get_snapshot_guid "$tgt_dataset" "${_dry_ts[-1]}" "$remote_user" "$remote_host")")
-                [ -n "$_dry_bw" ] && common_snapshot="$_dry_bw"
-            fi
         fi
         if [ -n "$common_snapshot" ]; then
             printf 'PLAN=INCREMENTAL base=%s src=%s tgt=%s\n' "$common_snapshot" "$src_dataset" "$tgt_dataset"

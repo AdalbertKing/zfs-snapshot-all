@@ -3508,7 +3508,6 @@ bookmark_bridge_snap() {
                 s = substr(N[i], at + 1); x = 0
                 # never pvesr'\''s own: it renames or destroys them every sync,
                 # and a send from one blocks its receive (handoff test B)
-                if (index(s, "__replicate_") == 1) continue
                 for (k = 1; k <= nx; k++) if (index(s, X[k]) == 1) { x = 1; break }
                 if (x) continue
                 if (best == "" || T[i] < bestt) { best = s; bestt = T[i] }
