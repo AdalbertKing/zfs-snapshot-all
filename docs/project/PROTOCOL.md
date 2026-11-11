@@ -257,8 +257,29 @@ Reviewer's verdict. The Owner decided otherwise, within Owner authority over mer
 - A rejection after the merge is fixed under the same REV (V3.9). V3.3 decides what blocks the
   batch. The release stays gated until the verdict.
 
+## V3.14 Batch submission: merged work that no REV covers (Owner, 2026-11-11)
+
+Problem removed: a batch of fixes taken from the backlog, not from a REV, had no row in the
+ledger. The Reviewer could not see that a verdict was wanted, and `release/review-gate.sh`
+let such a batch through without one. The Owner had to carry the request by hand.
+
+- After the batch is merged, the Implementer adds `responses/REV-YYYYMMDD-BNN.md`. It has the
+  usual headers plus `<!-- submission: batch -->`, and `implementation:` names the merged `main`
+  commit. The body gives the scope (`git diff <last released main>..<sha>`), the backlog items,
+  the riskiest files and the evidence.
+- `reviewctl` accepts this response without a review artifact, and only with that header.
+  The ledger shows it as `IMPLEMENTED | Reviewer`, so the Reviewer picks it up from the
+  ledger like any submission, and the release gate refuses to publish until the verdict.
+- The Reviewer answers with `REV-YYYYMMDD-BNN.md` under the same id: `verdict:` and
+  `reviewed-implementation:` as for any REV, with findings in the V2 format. From there
+  the FSM is unchanged: rejection → `OPEN | Claude`, approval → `APPROVED`, then closure.
+- When the Owner orders work without the Reviewer, the batch is still submitted. Publishing
+  then needs the Owner's `--accept-open-review=REV-...-BNN` (V3.13).
+
 ### Amendment log
 
+- V3.14, 2026-11-11: batch submission (`submission: batch`, id `REV-YYYYMMDD-BNN`). The ledger
+  routes a batch to the Reviewer, and the release gate holds it until the verdict.
 - V3.0 revision 2, 2026-11-07: V3.13. The Owner decided F1's merge timing: merge on green,
   with the Reviewer's verdict gating publication (`release/review-gate.sh`).
 - V3.0 revision 1, 2026-11-07, after the Reviewer's check of PR #1127, done in the same PR:
