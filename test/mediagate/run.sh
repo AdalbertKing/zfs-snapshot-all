@@ -839,10 +839,24 @@ POOLS="hdd"; IMPORTABLE="rotpool"; DATASETS="hdd rotpool/replica tank/src tank/s
 g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
 POOLS="hdd rotpool"; IMPORTABLE=""
 out="$(SRC_TREE_tank_empty=tank/empty SRC_SNAP_tank_empty= g detach rotpool rep --source tank/src --source tank/empty --prefix - --engine-rc 0)"
-if [ -e "$STATE/rep.current" ] && [ ! -f "$SYNCFILE" ] && has "could not record" "$out"; then
-    ok "L8c: a source with no snapshot of its own -- no skip record (all-or-nothing), but the medium is marked current"
+# U187 (Site-C 2026-11-11): a passive replica never skips, so the missing skip record
+# is no failure and gets no "could not record" note -- every good run printed one.
+if [ -e "$STATE/rep.current" ] && [ ! -f "$SYNCFILE" ] && ! has "could not record" "$out"; then
+    ok "L8c: a source with no snapshot of its own -- no skip record (all-or-nothing), the medium marked current, and a passive replica says nothing about a record it never uses (U187)"
 else
     bad "L8c: container source" "current: $(ls "$STATE")" "$(cat "$SYNCFILE" 2>/dev/null)" "$out"
+fi
+rm -f "$SYNCFILE" "$STATE/rep.current" "$STATE/rep.imported-by-us"
+# L8c2. The same container source on an OWN-family replica: there the record is what a
+#       later run skips on, so its absence is still said (control for L8c).
+POOLS="hdd"; IMPORTABLE="rotpool"
+g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
+POOLS="hdd rotpool"; IMPORTABLE=""
+out="$(SRC_TREE_tank_empty=tank/empty SRC_SNAP_tank_empty= g detach rotpool rep --source tank/src --source tank/empty --prefix replica_ --engine-rc 0)"
+if [ -e "$STATE/rep.current" ] && [ ! -f "$SYNCFILE" ] && has "could not record" "$out"; then
+    ok "L8c2: an own-family replica that cannot write its skip record still says so (control for L8c)"
+else
+    bad "L8c2: own-family container source" "current: $(ls "$STATE")" "$(cat "$SYNCFILE" 2>/dev/null)" "$out"
 fi
 rm -f "$SYNCFILE" "$STATE/rep.current" "$STATE/rep.imported-by-us"
 DATASETS="hdd rotpool/replica tank/src tank/src/a"

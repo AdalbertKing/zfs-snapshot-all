@@ -258,6 +258,14 @@ record_snap_for() {   # <dataset> -> the snapshot this medium was recorded holdi
     awk -v ds="snap:$_rds=" 'index($0, ds)==1 { print substr($0, length(ds)+1); found=1; exit } END{ exit !found }' "$SYNCED"
 }
 
+# U187 (Site-C 2026-11-11): the skip record exists only to let a later run SKIP,
+# and a passive replica (--prefix -) never skips (see "NOT FOR A PASSIVE REPLICA"
+# at the skip check). Its sources are often containers with no snapshot of their
+# own, so the all-or-nothing record often cannot be written, and every good run
+# said "could not record" -- a failure that was not one. The record is still
+# written when it can be (L8p); its absence is reported only where a skip needs it.
+skip_record_kept() { [ -n "$PREFIX" ]; }
+
 record_write() {   # <guid> -- every source, or nothing at all
     local _wg="$1" _wds _ws _wtmp
     [ -n "$_wg" ] || return 1
@@ -922,7 +930,7 @@ detach)
                 _now_guid="$(pool_guid)"
                 # The copy itself proves the medium current; the skip record is extra.
                 mark_current
-                if [ -z "$_now_guid" ] || ! record_write "$_now_guid"; then
+                if { [ -z "$_now_guid" ] || ! record_write "$_now_guid"; } && skip_record_kept; then
                     say "note: could not record what '$POOL' now holds ($SYNCED) -- the next run will copy rather than skip on a record it does not have."
                 fi
             fi
@@ -953,7 +961,7 @@ detach)
         # brought up. The engine's success proves the medium current; the record only lets
         # a later run SKIP, and stays all-or-nothing for that.
         mark_current
-        if [ -z "$_now_guid" ] || ! record_write "$_now_guid"; then
+        if { [ -z "$_now_guid" ] || ! record_write "$_now_guid"; } && skip_record_kept; then
             say "note: could not record what '$POOL' now holds ($SYNCED) -- the next run will import it rather than skip on a record it does not have."
         fi
     fi
