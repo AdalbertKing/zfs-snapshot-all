@@ -34,7 +34,7 @@ if [ "${ZFS_WARN_MODE:-daily}" = "immediate" ]; then
         printf '\nHost: %s   czas: %s\nZadanie: %s\n' "${HOST}" "$(date '+%Y-%m-%d %H:%M:%S')" "${JOB}"
         [ -n "$DETAIL" ] && { printf '\nSzczegoly:\n\n'; printf '%s\n' "$DETAIL" | sed 's/^/    /'; }
         printf '\nPelny log: %s/cron.log na %s\n' "$(cd "$(dirname "$0")" && pwd)" "${HOST}"
-    } | alert_mail "[ZFS] $(zfs_mail_host): ${AW_REL:+$AW_REL -- }${AW_WHAT} ($(date '+%d.%m %H:%M'))" "${ZFS_ALERT_EMAIL:-root}"
+    } | alert_mail "[ZFS][WARNING] $(zfs_mail_host): ${AW_REL:+$AW_REL -- }${AW_WHAT} ($(date '+%d.%m %H:%M'))" "${ZFS_ALERT_EMAIL:-root}"
     exit 0
 fi
 # See notify-fail.sh: keep a recreated queue writable by BOTH accounts.

@@ -58,7 +58,7 @@ say() { echo "$(date '+%Y-%m-%d %H:%M:%S') growth-guard: $*"; }
 alert() {   # <temat> <treść>
     [ "$PLAN" -eq 1 ] && return 0
     if [ -x "$NOTIFY" ]; then "$NOTIFY" "$1" "$2" 2>/dev/null && return 0; fi
-    command -v mail >/dev/null 2>&1 && printf '%s\n' "$2" | mail -s "[ZFS GROWTH] $1" "${ZFS_ALERT_EMAIL:-root}" 2>/dev/null && return 0
+    command -v mail >/dev/null 2>&1 && printf '%s\n' "$2" | mail -s "[ZFS][WARNING] $1" "${ZFS_ALERT_EMAIL:-root}" 2>/dev/null && return 0
     say "NIE DAŁO SIĘ wysłać alertu: $1"
     return 1     # alarm pary nie jest zapisany jako oceniony -- następny bieg spróbuje znowu
 }

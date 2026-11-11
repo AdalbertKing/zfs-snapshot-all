@@ -27,7 +27,7 @@ alert() {
         # beside this script), root if neither is there.
         # shellcheck disable=SC1091
         . "$(dirname "$0")/alert-env.sh" 2>/dev/null || :
-        echo "$2" | mail -s "[ZFS CAPACITY] $1" "${ZFS_ALERT_EMAIL:-root}"
+        echo "$2" | mail -s "[ZFS][WARNING] $1" "${ZFS_ALERT_EMAIL:-root}"
     fi
 }
 

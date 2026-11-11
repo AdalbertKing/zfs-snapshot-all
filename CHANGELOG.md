@@ -6,6 +6,16 @@ when they change how the tool is used.
 
 ## [Unreleased]
 
+- **Mail subjects say what kind of mail it is** (U184): `[ZFS][REPORT]` the daily summary,
+  `[ZFS][WARNING]` a warning, pool capacity or data growth (formerly `[ZFS CAPACITY]`,
+  `[ZFS GROWTH]`), `[ZFS][ALERT]` a failed run. Mail rules matching `[ZFS]` keep working;
+  rules matching `[ZFS CAPACITY]` or `[ZFS GROWTH]` need the new subject.
+- **A freshly formatted replica disk is checked before it is called ready** (U185):
+  `prepare-media` waits until a plain `zpool import` lists the new pool, and refuses otherwise.
+  The GUI no longer drops a refresh asked for while another one is running.
+- **A passive replica no longer reports "could not record what ... now holds"** after every
+  good run (U187). It never skips by design, so the record was never needed.
+
 - **A ZFS disk whose pool name and GUID cannot be read starts no replica on insertion**
   (REV-20261109-193). In 1.0.17 such a disk ran every on-insert replica; now the insertion is
   logged and nothing runs. Runs by schedule or by hand are unchanged.
