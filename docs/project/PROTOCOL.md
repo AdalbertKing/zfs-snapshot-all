@@ -278,6 +278,11 @@ let such a batch through without one. The Owner had to carry the request by hand
 - Every response states its range: `implementation:` and `<!-- base: <sha> -->`, the commit
   the reviewed diff starts from (for a batch, the last released `main`). The Reviewer reviews
   `git diff <base>..<implementation>`.
+- A resubmission of the same REV names its new, smaller range in `base:` and keeps every
+  earlier submitted range as its own line, `<!-- submitted: <base> <implementation> -->`.
+  Narrowing `base:` alone would make the earlier work look unsubmitted. The coverage gate counts
+  an earlier range only when its implementation is an ancestor of the row's current one, so a
+  `submitted:` line cannot reach another line of work.
 - `release/publish.sh --push` also runs `release/coverage-gate.sh` (REV-20261112-195 F4). It
   compares the run-time package of the PUBLISHED release (`RELEASE-OF` on the release repo's
   `origin/main`, not the checkout's working copy) with the candidate. Each shipped file that
@@ -296,6 +301,8 @@ let such a batch through without one. The Owner had to carry the request by hand
 
 ### Amendment log
 
+- V3.14 revision 4, 2026-11-12 (REV-20261112-195 F4g, Reviewer round 3 verdict): a
+  resubmission keeps its earlier ranges as `<!-- submitted: <base> <implementation> -->`.
 - V3.14 revision 3, 2026-11-12 (REV-20261112-195 F4e-f, Reviewer round 3): a file's state
   is its mode and its bytes after the scrub, not its source blob alone.
 - V3.14 revision 2, 2026-11-12 (REV-20261112-195 F4a-d, Reviewer round 2): coverage by

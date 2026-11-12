@@ -14,7 +14,11 @@
 #
 # A submission is a ledger row whose response names its range: `implementation:` (the row's
 # Implementation column) and `<!-- base: <sha> -->` in the response file. It covers a file only
-# where its own range changed that file: the file's state at <base> -> its state at <impl>
+# where its own range changed that file: the file's state at <base> -> its state at <impl>.
+# A resubmission of the same REV names its new, smaller range in `base:` and keeps every earlier
+# one as `<!-- submitted: <base> <impl> -->` (round 4, F4g): narrowing `base:` alone would make
+# the earlier submitted work look unsubmitted. An earlier range counts only when its <impl> is
+# an ancestor of the row's implementation -- no other REV's work and no ancestry-wide range.
 # A file's STATE in a revision is what hosts receive from that revision's publish: its tree
 # mode (executable bit, symlink) and the hash of its bytes AFTER that revision's scrub
 # (`release/scrub.sed`, applied by that revision's `release/scrub-file.sh`), or "not shipped"
@@ -104,6 +108,23 @@ while IFS='|' read -r _ r _ _ impl _ resp _; do
     base=$(git -C "$dev" rev-parse "$base^{commit}")
     pkg "$base" && pkg "$impl" || { echo "coverage-gate: cannot read the package of $r's range" >&2; exit 2; }
     subs+=("$r $base $impl")
+    # Earlier rounds of the same REV (round 4, F4g): each `<!-- submitted: <base> <impl> -->`
+    # keeps its own range. It counts only on this REV's line of work -- its implementation is
+    # an ancestor of the current one -- and only while it is unpublished.
+    while read -r eb ei; do
+        if ! git -C "$dev" cat-file -e "$eb^{commit}" 2>/dev/null \
+           || ! git -C "$dev" cat-file -e "$ei^{commit}" 2>/dev/null \
+           || ! git -C "$dev" merge-base --is-ancestor "$eb" "$ei" \
+           || ! git -C "$dev" merge-base --is-ancestor "$ei" "$impl"; then
+            echo "coverage-gate: note: $r: 'submitted: ${eb:0:12} ${ei:0:12}' is not an earlier range of $impl, so it covers nothing" >&2
+            continue
+        fi
+        git -C "$dev" merge-base --is-ancestor "$ei" "$prev" && continue
+        eb=$(git -C "$dev" rev-parse "$eb^{commit}"); ei=$(git -C "$dev" rev-parse "$ei^{commit}")
+        pkg "$eb" && pkg "$ei" || { echo "coverage-gate: cannot read the package of $r's earlier range" >&2; exit 2; }
+        subs+=("$r $eb $ei")
+    done < <(git -C "$dev" show "$rev:docs/internal/reviews/$resp" 2>/dev/null \
+             | sed -n 's/^<!-- submitted: \([0-9a-f]\{7,40\}\) \([0-9a-f]\{7,40\}\) -->[[:space:]]*$/\1 \2/p')
 done <<< "$ledger"
 
 uncovered=0
