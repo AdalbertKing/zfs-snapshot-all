@@ -47,8 +47,12 @@
   (`implementation:` + `<!-- base: -->` w odpowiedzi), także zmiana zrobiona przy scalaniu.
   Runda 3 (F4e-f): stan pliku to tryb (bit wykonywalny) i bajty po scrubie wydania, więc chmod
   albo zmiana `release/scrub.sed`, która zmienia wydawany plik, też wymaga zgłoszenia.
-  Gałęzie: runda 2 `fix/rev-195-r2-coverage`, runda 3 `fix/rev-195-r3-state`. Wydanie po
-  werdykcie recenzenta albo za akceptacją właściciela z numerem REV (bramka recenzji). Bramka pokrycia nie ma obejścia: zmiana musi być zgłoszona.
+  Runda 4 (F4g): ponowne zgłoszenie tego samego REV zachowuje wcześniejsze zakresy jako
+  `<!-- submitted: <base> <impl> -->`. Bramka liczy taki zakres tylko wtedy, gdy leży na linii
+  bieżącej implementacji. Wcześniej samo zawężenie `base:` gubiło zgłoszoną pracę silnika.
+  Gałęzie: runda 2 `fix/rev-195-r2-coverage`, runda 3 `fix/rev-195-r3-state`, runda 4
+  `fix/rev-195-r4-cumulative`. Wydanie wymaga werdyktu recenzenta albo akceptacji właściciela
+  z numerem REV (bramka recenzji). Bramka pokrycia nie ma obejścia: zmiana musi być zgłoszona.
 - **1.0.19 wydane (2026-11-12 ~10:35; repo wydań zfsbackup 47b5e09, z `main` 2e6f652b, PR #1175,
   #1176):** bookmark nowszy od wspólnej migawki jest bazą przyrostu, a most `-i` z bookmarka,
   potem `-I`, przenosi migawki pośrednie. Lab ręcznie (pve9, pve9b, pve11), Metropolis z crona
