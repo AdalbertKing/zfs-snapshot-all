@@ -35,13 +35,15 @@
   bookmarka przechodzi te same kontrole co ze wspólnej migawki. Push na cel `-t` z zapisem po
   najnowszej migawce odmawia (F1). Nieudana lista migawek między bookmarkiem a najnowszą to odmowa,
   a nie pojedyncza różnica (F2). `-T` działa też od bookmarka (F3). `publish.sh --push` odmawia
-  wydania, gdy zmiany w plikach uruchomieniowych od poprzedniego wydania nie pokrywa żaden REV (F4,
+  wydania, gdy żaden REV nie pokrywa zmian w plikach uruchomieniowych od poprzedniego wydania (F4,
   `release/coverage-gate.sh`). Druga runda recenzji (F4a-d): bramka porównuje paczkę wydaną
   (`RELEASE-OF` z `origin/main` repo wydań, nie z kopii roboczej) z kandydatem. Każdy zmieniony,
   dodany albo usunięty plik uruchomieniowy musi wynikać z zakresów zgłoszonych do recenzji
   (`implementation:` + `<!-- base: -->` w odpowiedzi), także zmiana zrobiona przy scalaniu.
-  Runda 2: gałąź `fix/rev-195-r2-coverage`. Wydanie po werdykcie recenzenta albo za akceptacją właściciela
-  z numerem REV (bramka recenzji). Bramka pokrycia nie ma obejścia: zmiana musi być zgłoszona.
+  Runda 3 (F4e-f): stan pliku to tryb (bit wykonywalny) i bajty po scrubie wydania, więc chmod
+  albo zmiana `release/scrub.sed`, która zmienia wydawany plik, też wymaga zgłoszenia.
+  Gałęzie: runda 2 `fix/rev-195-r2-coverage`, runda 3 `fix/rev-195-r3-state`. Wydanie po
+  werdykcie recenzenta albo za akceptacją właściciela z numerem REV (bramka recenzji). Bramka pokrycia nie ma obejścia: zmiana musi być zgłoszona.
 - **1.0.19 wydane (2026-11-12 ~10:35; repo wydań zfsbackup 47b5e09, z `main` 2e6f652b, PR #1175,
   #1176):** bookmark nowszy od wspólnej migawki jest bazą przyrostu, a most `-i` z bookmarka,
   potem `-I`, przenosi migawki pośrednie. Lab ręcznie (pve9, pve9b, pve11), Metropolis z crona

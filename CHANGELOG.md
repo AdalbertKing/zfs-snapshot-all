@@ -17,7 +17,9 @@ when they change how the tool is used.
   the run-time package of the published release (read from the release repo's `origin/main`) with
   the candidate. Every shipped file that changed, was newly shipped or stopped being shipped must
   be reached through submitted review ranges: each response names `implementation:` and
-  `<!-- base: <sha> -->`. That includes edits made inside a merge.
+  `<!-- base: <sha> -->`. That includes edits made inside a merge. A file's state is its mode
+  and its bytes after the release scrub, so a chmod or a scrub change that rewrites a shipped
+  file needs a review as well.
 - **Attaching a removable replica medium** (REV-20261112-194):
   - A replica source whose name holds `:` (`tank/data:part`) is copied as a local dataset.
     Before, the engine read the part before the `:` as an ssh host, while the media gate

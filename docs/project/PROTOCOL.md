@@ -288,9 +288,16 @@ let such a batch through without one. The Owner had to carry the request by hand
   refused. A mechanical merge of submitted work reproduces a submitted state and passes. Docs,
   Markdown and repository metadata are not compared. There is no override other than
   submitting.
+- A file's state is what hosts receive from that revision's publish: its mode in the tree
+  (executable bit, symlink) and the hash of its bytes after that revision's scrub
+  (`release/scrub.sed`, applied by that revision's `release/scrub-file.sh`). A chmod is a state
+  change. So is a scrub change that rewrites a shipped file, although no source blob changed.
+  A scrub change that rewrites no shipped file changes no state and needs no submission.
 
 ### Amendment log
 
+- V3.14 revision 3, 2026-11-12 (REV-20261112-195 F4e-f, Reviewer round 3): a file's state
+  is its mode and its bytes after the scrub, not its source blob alone.
 - V3.14 revision 2, 2026-11-12 (REV-20261112-195 F4a-d, Reviewer round 2): coverage by
   submitted ranges over the package (`<!-- base: -->` in every response), baseline from the
   published release. Revision 1 counted every ancestor of a named SHA as covered.

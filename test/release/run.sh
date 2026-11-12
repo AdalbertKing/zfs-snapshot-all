@@ -380,6 +380,66 @@ else
     bad "coverage: no ledger, or an unknown published revision, fails closed (rc 2)" "rc1=$rc1 rc2=$rc2"
 fi
 
+# Round 3, F4e: the executable bit is part of what hosts receive. The setup is asserted: the
+# same blob, only the mode differs.
+git -C "$CR" reset -q --hard "$P"
+git -C "$CR" update-index --chmod=+x a.sh; XM=$(cc "chmod +x a.sh only")
+if [ "$(git -C "$CR" ls-tree "$P" a.sh | cut -c1-6)" = 100644 ] \
+   && [ "$(git -C "$CR" ls-tree "$XM" a.sh | cut -c1-6)" = 100755 ] \
+   && [ "$(git -C "$CR" rev-parse "$P:a.sh")" = "$(git -C "$CR" rev-parse "$XM:a.sh")" ]; then
+    cov "$P" "$XM"
+    [ "$rc" -eq 1 ] && grep -q 'UNCOVERED a.sh (changed' "$WORK/cov.out" && grep -q "${XM:0:7}" "$WORK/cov.out" \
+        && ok "coverage F4e: an unsubmitted mode change (same blob, 100644 -> 100755) refuses, naming its commit" \
+        || bad "coverage F4e: an unsubmitted mode change" "rc=$rc" "$(cat "$WORK/cov.out")"
+    resp REV-20990101-021 "$P" "$XM"; XR=$(cc "submit the mode change")
+    cov "$P" "$XR" "$(row REV-20990101-021 "$XM")"
+    [ "$rc" -eq 0 ] && grep -q 'a.sh <- REV-20990101-021' "$WORK/cov.out" \
+        && ok "coverage F4e: control -- the submitted mode change passes" \
+        || bad "coverage F4e: a submitted mode change" "rc=$rc" "$(cat "$WORK/cov.out")"
+else
+    bad "coverage fixture: the chmod commit did not change the mode alone"
+fi
+git -C "$CR" reset -q --hard "$P"
+git -C "$CR" update-index --chmod=+x docs/x.md; XD=$(cc "chmod +x a docs file")
+if [ "$(git -C "$CR" ls-tree "$XD" docs/x.md | cut -c1-6)" = 100755 ]; then
+    cov "$P" "$XD"
+    [ "$rc" -eq 0 ] && ok "coverage F4e: control -- a mode change of a docs file needs no submission" \
+        || bad "coverage F4e: a docs mode change" "rc=$rc" "$(cat "$WORK/cov.out")"
+else
+    bad "coverage fixture: the docs chmod commit did not happen"
+fi
+
+# Round 3, F4f: the scrub rewrites shipped files after the blobs were compared. A file's state
+# is its bytes AFTER its revision's scrub, so a scrub-only change is a change of a.sh.
+git -C "$CR" reset -q --hard "$P"
+cw a.sh 'echo BEFORE'; cw release/scrub.sed 's/BEFORE/BEFORE/g'; PS=$(cc "published: identity scrub")
+cw release/scrub.sed 's/BEFORE/AFTER/g'; S1=$(cc "scrub-only change")
+if [ "$(git -C "$CR" diff --name-only "$PS" "$S1")" = release/scrub.sed ]; then
+    cov "$PS" "$S1"
+    [ "$rc" -eq 1 ] && grep -q 'UNCOVERED a.sh (changed' "$WORK/cov.out" && grep -q "${S1:0:7}" "$WORK/cov.out" \
+        && ok "coverage F4f: an unsubmitted scrub change that rewrites a shipped file refuses, its blob unchanged" \
+        || bad "coverage F4f: an unsubmitted scrub change" "rc=$rc" "$(cat "$WORK/cov.out")"
+    resp REV-20990101-022 "$PS" "$S1"; SR=$(cc "submit the scrub change")
+    cov "$PS" "$SR" "$(row REV-20990101-022 "$S1")"
+    [ "$rc" -eq 0 ] && grep -q 'a.sh <- REV-20990101-022' "$WORK/cov.out" \
+        && ok "coverage F4f: control -- the submitted scrub change passes" \
+        || bad "coverage F4f: a submitted scrub change" "rc=$rc" "$(cat "$WORK/cov.out")"
+else
+    bad "coverage fixture: the scrub-only commit changed more than release/scrub.sed"
+fi
+git -C "$CR" reset -q --hard "$PS"
+cw release/scrub.sed "$(printf 's/BEFORE/BEFORE/g\ns/NEVER-IN-A-SHIPPED-FILE/X/g')"; S2=$(cc "scrub rule that matches nothing")
+cov "$PS" "$S2"
+[ "$rc" -eq 0 ] && ok "coverage F4f: control -- a scrub change that rewrites no shipped file needs no submission" \
+    || bad "coverage F4f: a scrub change with no effect" "rc=$rc" "$(cat "$WORK/cov.out")"
+git -C "$CR" reset -q --hard "$PS"
+cw release/scrub.sed 's/BEFORE/AFTER/g'; PA=$(cc "published: a.sh ships as AFTER")
+cw release/scrub-file.sh 'exit 0'; SF=$(cc "the scrub's applier stops scrubbing")
+cov "$PA" "$SF"
+[ "$rc" -eq 1 ] && grep -q 'UNCOVERED a.sh (changed' "$WORK/cov.out" && grep -q "${SF:0:7}" "$WORK/cov.out" \
+    && ok "coverage F4f: an unsubmitted change of the scrub's applier (release/scrub-file.sh) refuses" \
+    || bad "coverage F4f: an unsubmitted applier change" "rc=$rc" "$(cat "$WORK/cov.out")"
+
 # publish.sh --push runs the gate on HEAD's own ledger BEFORE writing anything: when the gate
 # refuses, REL gets no new commit. (When it passes, publish commits locally and the push then
 # fails, because REL has no remote; that branch is not asserted here.) HEAD's own ledger decides
@@ -484,6 +544,29 @@ if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
         ok "publish F4a: control -- the submitted change pushes, and the gate names the REV that covers it"
     else
         bad "publish F4a: a submitted change pushes" "rc=$r" "$o"
+    fi
+    # Round 3, F4f, through the real prepare/push path: a scrub-only change rewrites every
+    # shipped text file (it appends a line), and no submission covers it.
+    printf '%s\n' '$a\' '# r195 scrub-only change' >> "$DEVW/release/scrub.sed"
+    git -C "$DEVW" commit -qam "fixture: scrub-only change" && d3="$(git -C "$DEVW" rev-parse HEAD)"
+    mkrel "$WORK/f4s" "$d2"; st="$(git -C "$WORK/f4s.git" rev-parse main)"
+    bash "$DEVW/release/publish.sh" "$d3" "$WORK/f4s" >/dev/null 2>&1      # prepare, no push
+    o="$(bash "$DEVW/release/publish.sh" "$d3" "$WORK/f4s" --push 2>&1)"; r=$?
+    if f4a_refused "$WORK/f4s" "$r" "$o" "$st" \
+       && [ "$(tail -1 "$WORK/f4s/zfs-job.sh")" = '# r195 scrub-only change' ]; then
+        ok "publish F4f: a scrub-only change that rewrites the prepared zfs-job.sh is refused at --push, nothing pushed"
+    else
+        bad "publish F4f: a scrub-only change reaches the release" "rc=$r" "$o"
+    fi
+    git -C "$DEVW" reset -q --hard "$d2"
+    printf '%s\n' 's/r195-NEVER-IN-A-SHIPPED-FILE/x/g' >> "$DEVW/release/scrub.sed"
+    git -C "$DEVW" commit -qam "fixture: a scrub rule with no effect" && d4="$(git -C "$DEVW" rev-parse HEAD)"
+    mkrel "$WORK/f4t" "$d2"
+    o="$(bash "$DEVW/release/publish.sh" "$d4" "$WORK/f4t" --push 2>&1)"; r=$?
+    if [ "$r" -eq 0 ] && [ "$(git -C "$WORK/f4t.git" show main:RELEASE-OF)" = "$d4" ]; then
+        ok "publish F4f: control -- a scrub change that rewrites nothing pushes"
+    else
+        bad "publish F4f: a scrub change with no effect" "rc=$r" "$o"
     fi
     git -C "$REPO" worktree remove --force "$DEVW" 2>/dev/null
 else
