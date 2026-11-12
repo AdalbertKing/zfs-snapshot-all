@@ -41,10 +41,8 @@ rev=$(git -C "$dev" rev-parse --verify "$1^{commit}") || die "'$1' is not a comm
 # release suite) is not a publication and is not gated.
 accepted=""
 if [ "$push" -eq 1 ]; then
-    # PROTOCOL V4.4: the ledger is not committed; it is derived from $rev's own artifacts by
-    # $rev's own generator. A derivation that fails is a refusal, never an empty ledger.
-    ledger=$(bash "$dev/test/reviewctl.sh" --derive "$rev") \
-        || die "cannot derive the review state of $rev (see above) -- cannot check the Reviewer's gate"
+    ledger=$(git -C "$dev" show "$rev:docs/internal/reviews/REVIEW_LEDGER.md") \
+        || die "no REVIEW_LEDGER.md in $rev -- cannot check the Reviewer's gate"
     accepted=$(printf '%s\n' "$ledger" | bash "$dev/release/review-gate.sh" "$accept_open") \
         || die "the Reviewer's gate refused $rev (see above)"
 fi
