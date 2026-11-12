@@ -2321,6 +2321,8 @@ cat > "$R197D/bin/zfs" <<'SHIM'
 case "${R197_FAIL:-}:$1" in
     bookmark:bookmark) echo "simulated: permission denied (bookmark)" >&2; exit 1 ;;
     bmdestroy:destroy) case "$*" in *'#'*) echo "simulated: permission denied (destroy bookmark)" >&2; exit 1 ;; esac ;;
+    tlist:list) case "$*" in *'-o guid -t snapshot'*) echo "simulated: cannot list target" >&2; exit 1 ;; esac ;;
+    slist:list) case "$*" in *'-o name,guid -s createtxg'*) echo "simulated: cannot list source" >&2; exit 1 ;; esac ;;
     race:bookmark) sleep 1; R197_FAIL= timeout 120 "$R197_SNAPGET" -i -m rep_ --source-keep=1 "$R197_SRC" "$R197_B" >"$R197_RACELOG" 2>&1 ;;
 esac
 exec "$R197_REAL" "$@"
@@ -2374,6 +2376,11 @@ check "REV-197 F1: B runs inside A's hold-to-bookmark window -- B rc 0, A's head
       "$(grep -q 'Transfer completed successfully' "$R197_RACELOG" && echo 0 || echo 1)|$(onsrc197 "$ah")|$ra"
 tick; k197 "$A7"
 check "REV-197 F1: ... and A's next run is incremental" "0|incr" "$RC|$(incr197)"
+# a failed listing of the target's or the source's snapshots prunes nothing (the copy itself stands)
+n0=$(own197); tick; k197f tlist "$B7"; rt=$RC; wt=$(printf '%s\n' "$OUT" | grep -c 'cannot list the snapshots of the target'); n1=$(own197)
+tick; k197f slist "$B7"; rs=$RC; ws=$(printf '%s\n' "$OUT" | grep -c 'cannot list the snapshots of'); n2=$(own197)
+check "REV-197 failed target / source listing: rc 0, said, nothing pruned (one more own snapshot each)" "0 0|1 1|1 1" \
+      "$rt $rs|$wt $ws|$((n1-n0)) $((n2-n1))"
 # own pruning still works: each medium's older own snapshots go; bounded at one head per medium
 tick; k197 "$B7"; tick; k197 "$C7"
 check "REV-197 retention: after every medium ran healthy, the source holds exactly one own snapshot per medium" "3" "$(own197)"
