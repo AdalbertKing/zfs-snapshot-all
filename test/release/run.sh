@@ -506,7 +506,7 @@ fi
 # which branch applies. The fixture cases above are what pin the gate itself.
 before="$(git -C "$REL" rev-parse HEAD)"
 out3="$(bash "$REPO/release/publish.sh" HEAD "$REL" --push 2>&1)"
-if git -C "$REPO" show HEAD:docs/internal/reviews/REVIEW_LEDGER.md | bash "$GATE" >/dev/null 2>&1; then
+if bash "$REPO/test/reviewctl.sh" --derive HEAD 2>/dev/null | bash "$GATE" >/dev/null 2>&1; then
     ok "publish --push: HEAD's ledger has a verdict for every review (gate not exercised here)"
 elif printf '%s\n' "$out3" | grep -q "Reviewer's gate refused" && [ "$(git -C "$REL" rev-parse HEAD)" = "$before" ]; then
     ok "publish --push: an open review in HEAD's ledger refuses before anything is written"
@@ -518,10 +518,28 @@ fi
 # exactly one open review, and release clones with a disposable local bare origin.
 DEVW="$WORK/dev"
 if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
+    # PROTOCOL V4.4: the ledger is derived, so a fixture state is made of ARTIFACTS. The real
+    # reviews are taken out of the throw-away commit first, so the fixture is the whole state,
+    # as the hand-written fixture ledger used to be.
+    git -C "$DEVW" rm -rq --ignore-unmatch docs/internal/reviews/responses docs/internal/reviews/closures
+    git -C "$DEVW" ls-files 'docs/internal/reviews/REV-*.md' | while IFS= read -r f; do git -C "$DEVW" rm -q "$f"; done
+    mkdir -p "$DEVW/docs/internal/reviews/responses"
+    printf '<!-- rev: REV-20990101-003 -->\n<!-- verdict: CHANGES-REQUIRED -->\n<!-- reviewed-implementation: - -->\n\n# t\n' \
+        > "$DEVW/docs/internal/reviews/REV-20990101-003.md"
+    # A stale ledger committed by hand (force-added past .gitignore) that claims the review is
+    # closed. The gates derive; they must never read this file (V4.4). With the pre-V4.4 publish
+    # the f3/f3b cases below fail, because that publish read exactly this file.
     printf '%s\n' '# REVIEW_LEDGER' '' '| REV | State | Owner | Implementation | Reviewed | Response | Next |' \
-        '|---|---|---|---|---|---|---|' '| REV-20990101-003 | OPEN | Claude | c | c | r | implement |' \
+        '|---|---|---|---|---|---|---|' '| REV-20990101-003 | CLOSED | - | - | - | - | - |' \
         > "$DEVW/docs/internal/reviews/REVIEW_LEDGER.md"
-    git -C "$DEVW" commit -qam "fixture: one open review" && devrev="$(git -C "$DEVW" rev-parse HEAD)"
+    git -C "$DEVW" add -f docs/internal/reviews/REVIEW_LEDGER.md
+    git -C "$DEVW" add -A docs/internal/reviews
+    git -C "$DEVW" commit -qm "fixture: one open review" && devrev="$(git -C "$DEVW" rev-parse HEAD)"
+    if bash "$DEVW/test/reviewctl.sh" --derive "$devrev" 2>/dev/null | grep -q '^| REV-20990101-003 | OPEN | Claude |'; then
+        ok "publish fixture: the derived state of the fixture commit is exactly one open review (control)"
+    else
+        bad "publish fixture: one open review" "$(bash "$DEVW/test/reviewctl.sh" --derive "$devrev" 2>&1 | tail -5)"
+    fi
     # <dir> [published-rev] -> release clone with a bare local origin. With a revision, the
     # pushed start commit carries it as RELEASE-OF: what hosts received last (round 2, F4a).
     mkrel() {
@@ -552,10 +570,8 @@ if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
     fi
     # Round 2, F4a: the baseline is the PUBLISHED release, not the checkout's working RELEASE-OF.
     # d0: a ledger with nothing open; d1: an unsubmitted run-time change; d2: its submission.
-    printf '%s\n' '# REVIEW_LEDGER' '' '| REV | State | Owner | Implementation | Reviewed | Response | Next |' \
-        '|---|---|---|---|---|---|---|' '| REV-20990101-004 | CLOSED | - | - | - | - | - |' \
-        > "$DEVW/docs/internal/reviews/REVIEW_LEDGER.md"
-    git -C "$DEVW" commit -qam "fixture: nothing open" && d0="$(git -C "$DEVW" rev-parse HEAD)"
+    git -C "$DEVW" rm -q docs/internal/reviews/REV-20990101-003.md
+    git -C "$DEVW" commit -qm "fixture: nothing open" && d0="$(git -C "$DEVW" rev-parse HEAD)"
     printf '# r195 fixture: an unsubmitted run-time change\n' >> "$DEVW/zfs-job.sh"
     git -C "$DEVW" commit -qam "fixture: run-time change" && d1="$(git -C "$DEVW" rev-parse HEAD)"
     f4a_refused() {   # <dir> <rc> <out> <origin main before>
@@ -591,10 +607,10 @@ if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
         bad "publish F4a: an unknown published baseline" "rc=$r $o" "rc=$rn $on"
     fi
     mkdir -p "$DEVW/docs/internal/reviews/responses"
-    printf '<!-- rev: REV-20990101-005 -->\n<!-- implementation: %s -->\n<!-- base: %s -->\n' "$d1" "$d0" \
+    printf '<!-- rev: REV-20990101-005 -->\n<!-- response-status: IMPLEMENTED -->\n<!-- implementation: %s -->\n<!-- base: %s -->\n' "$d1" "$d0" \
         > "$DEVW/docs/internal/reviews/responses/REV-20990101-005.md"
-    printf '| REV-20990101-005 | CLOSED | - | %s | %s | responses/REV-20990101-005.md | - |\n' "$d1" "$d1" \
-        >> "$DEVW/docs/internal/reviews/REVIEW_LEDGER.md"
+    printf '<!-- rev: REV-20990101-005 -->\n<!-- verdict: APPROVED -->\n<!-- reviewed-implementation: %s -->\n\n# t\n' "$d1" \
+        > "$DEVW/docs/internal/reviews/REV-20990101-005.md"
     git -C "$DEVW" add -A docs/internal/reviews && git -C "$DEVW" commit -qm "fixture: submitted" && d2="$(git -C "$DEVW" rev-parse HEAD)"
     mkrel "$WORK/f4d" "$d0"
     bash "$DEVW/release/publish.sh" "$d2" "$WORK/f4d" >/dev/null 2>&1      # prepared first, as in F4a
@@ -627,6 +643,20 @@ if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
         ok "publish F4f: control -- a scrub change that rewrites nothing pushes"
     else
         bad "publish F4f: a scrub change with no effect" "rc=$r" "$o"
+    fi
+    # V4.4: a candidate whose own generator refuses its artifacts is refused -- never an empty
+    # ledger that the gate would read as "nothing open".
+    git -C "$DEVW" reset -q --hard "$d2"
+    printf '<!-- rev: REV-20990101-006 -->\n<!-- response-status: IMPLEMENTED -->\n<!-- implementation: %s -->\n\n# t\n' \
+        0000000000000000000000000000000000000000 > "$DEVW/docs/internal/reviews/responses/REV-20990101-006.md"
+    git -C "$DEVW" add -A docs/internal/reviews && git -C "$DEVW" commit -qm "fixture: broken artifacts" && d5="$(git -C "$DEVW" rev-parse HEAD)"
+    mkrel "$WORK/f4u" "$d2"; st="$(git -C "$WORK/f4u.git" rev-parse main)"
+    o="$(bash "$DEVW/release/publish.sh" "$d5" "$WORK/f4u" --push 2>&1)"; r=$?
+    if [ "$r" -ne 0 ] && printf '%s\n' "$o" | grep -q 'cannot derive the review state' \
+       && [ "$(git -C "$WORK/f4u.git" rev-parse main)" = "$st" ]; then
+        ok "publish V4.4: a candidate whose artifacts do not derive is refused, nothing pushed (fail closed)"
+    else
+        bad "publish V4.4: underivable candidate" "rc=$r" "$o"
     fi
     git -C "$REPO" worktree remove --force "$DEVW" 2>/dev/null
 else

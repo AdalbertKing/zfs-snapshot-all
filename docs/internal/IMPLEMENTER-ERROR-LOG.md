@@ -183,7 +183,9 @@ Stated with their measurements in section 2b, because the case for them is the
 cost data rather than an argument:
 
 - **R9** — no suite runs on the Windows box, not even an edited one (Owner, 2026-11-03): here only
-  `bash -n` and the new cases cut out and run alone; the edited suite runs on pve9 or in CI. *(E120)*
+  `bash -n` and the new cases cut out and run alone; the edited suite runs on pve9 or in CI. A whole
+  `reviewctl --derive` took 11.5 minutes here and 31 s on pve9 (E130); `--generate` and `--verify`
+  run the same generator, so all three go to pve9 (`remote-suite.sh derive`) or CI. *(E120, E130)*
 - **R10** — verify a suite's targeted mode works before paying for the full run.
 - **R11** — never edit a suite that is running, or run one you are still editing. *(E11, E61, E81)*
 
@@ -2136,6 +2138,19 @@ written from memory instead of from `git log`, hours after this rule was written
 loop over every short SHA in the response with `git cat-file -e`, before the commit. That loop
 now runs on every response before its commit: the rule covers short SHAs in prose too, not only
 header values.
+
+### E130 — a whole derivation run on the Windows box, 11.5 minutes (2026-11-12, R9, repeat of E120)
+**2026-11-12, PROTOCOL V4.4 (branch `feat/v4-4-views`).**
+
+*Genesis.* To compare the new `reviewctl --derive origin/main` with the committed ledger I ran it
+here. It took 11m29s; the Owner: "Miałeś nie liczyć na windows". The same comparison was due
+on pve9 with the suites a few minutes later.
+
+*Cause.* R9 named suites; a whole `--derive` is not called a suite, so I treated it as a quick
+check. On this box it costs as much as one.
+
+*Rule.* R9 now names `reviewctl --generate`/`--derive`/`--verify` explicitly. A check that runs
+the whole generator goes to pve9 or CI with the suites.
 
 ### E128 — the heredoc ate the backslashes three more times (2026-11-11, R16 point 4, repeat of E124)
 **2026-11-11, batch 1.0.18 (`batch/gui-1-0-18`).**

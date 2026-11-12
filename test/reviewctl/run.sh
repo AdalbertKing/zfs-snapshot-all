@@ -138,14 +138,17 @@ REVIEWCTL_REPO="$W" "$CTL" --generate >/dev/null 2>&1
 REVIEWCTL_REPO="$W" "$CTL" --verify >/dev/null 2>&1
 [ $? -eq 0 ] && ok "freshly generated ledger verifies" || bad "freshly generated ledger verifies"
 
+# PROTOCOL V4.4: the views are derived, not committed. A local copy is a convenience that
+# nothing reads as state, so a hand-edited copy is irrelevant to --verify; broken FACTS are not.
 echo 'tampered' >> "$W/docs/internal/reviews/REVIEW_LEDGER.md"
-REVIEWCTL_REPO="$W" "$CTL" --verify >/dev/null 2>&1
-[ $? -ne 0 ] && ok "hand-edited ledger is refused" || bad "hand-edited ledger is refused"
-
-REVIEWCTL_REPO="$W" "$CTL" --generate >/dev/null 2>&1
 echo 'tampered' >> "$W/docs/project/OPEN-THREADS.md"
 REVIEWCTL_REPO="$W" "$CTL" --verify >/dev/null 2>&1
-[ $? -ne 0 ] && ok "hand-edited routing view is refused" || bad "hand-edited routing view is refused"
+[ $? -eq 0 ] && ok "V4.4: a hand-edited local copy of the views is not state -- --verify judges the artifacts" \
+    || bad "V4.4: --verify must not read the local copy"
+respond $R IMPLEMENTED 0000000000000000000000000000000000000000
+REVIEWCTL_REPO="$W" "$CTL" --verify >/dev/null 2>&1
+[ $? -ne 0 ] && ok "V4.4: an artifact naming an unknown commit fails --verify (fail closed)" \
+    || bad "V4.4: a broken artifact must fail --verify"
 
 # ---- legacy files are frozen, not broken -----------------------------------
 # A pre-V2 review has no machine header. It must be skipped in silence: it is
@@ -988,6 +991,90 @@ if tx respond "$RS" --implementation="$P2" --base="$P1" \
 else
     bad "respond RS13: duplicate submitted line" "$(rsf | head -8; cat "$TMPD/out")"
 fi
+
+# ==============================================================================
+# --derive SHA -- the state at one pinned commit (PROTOCOL V4.4, 2026-11-12).
+# A throw-away git repository, so the pinned commits, the generator they carry and
+# a dirty working tree can all be set up exactly. The caller's generator is $CTL;
+# a commit's own generator is whatever that commit carries.
+# ==============================================================================
+DG="$TMPD/dg"; DX=REV-20990101-601
+git init -q -b main "$DG"
+dgc() { git -C "$DG" add -A && git -C "$DG" -c user.name=t -c user.email=t@t commit -qm "$1" && git -C "$DG" rev-parse HEAD; }
+mkdir -p "$DG/test" "$DG/docs/internal/reviews/responses" "$DG/docs/internal/reviews/closures" "$DG/docs/project"
+cp "$CTL" "$DG/test/reviewctl.sh"
+C0="$(dgc c0)"
+printf '<!-- rev: %s -->\n<!-- verdict: CHANGES-REQUIRED -->\n<!-- reviewed-implementation: - -->\n\n# t\n' "$DX" \
+    > "$DG/docs/internal/reviews/$DX.md"
+C1="$(dgc c1)"
+printf '<!-- rev: %s -->\n<!-- response-status: IMPLEMENTED -->\n<!-- implementation: %s -->\n\n# t\n' "$DX" "$C1" \
+    > "$DG/docs/internal/reviews/responses/$DX.md"
+C2="$(dgc c2)"
+dg()    { REVIEWCTL_REPO="$DG" "$CTL" --derive "$@" > "$TMPD/dout" 2>"$TMPD/derr"; }
+dgst()  { awk -F'|' -v r=" $DX " '$2==r {gsub(/^ +| +$/,"",$3); print $3}' "$TMPD/dout"; }
+dgrefuses() {   # <name> <phrase> <args...>: nonzero, the reason, and NOTHING on stdout
+    local name="$1" phrase="$2"; shift 2
+    if dg "$@"; then bad "$name" "it succeeded: $(head -3 "$TMPD/dout")"
+    elif [ -s "$TMPD/dout" ]; then bad "$name" "refused but printed a ledger anyway"
+    elif ! grep -qF -- "$phrase" "$TMPD/derr"; then bad "$name" "wrong reason: $(head -2 "$TMPD/derr")"
+    else ok "$name"; fi
+}
+
+# DV1. Each pinned commit gives its own state.
+dg "$C1"; s1="$(dgst)"; dg "$C2"; s2="$(dgst)"; cp "$TMPD/dout" "$TMPD/dv1"
+[ "$s1" = OPEN ] && [ "$s2" = IMPLEMENTED ] && grep -q "derived at $C2 by its own generator" "$TMPD/derr" \
+    && ok "derive DV1: the state is the pinned commit's (c1 OPEN, c2 IMPLEMENTED)" \
+    || bad "derive DV1: per-commit state" "c1=$s1 c2=$s2 $(cat "$TMPD/derr")"
+# DV2. A dirty working tree is never mixed in.
+printf 'garbage\n' > "$DG/docs/internal/reviews/responses/$DX.md"; rm -f "$DG/docs/internal/reviews/$DX.md"
+dg "$C2"
+grep -q "^| $DX | IMPLEMENTED |" "$TMPD/dv1" && cmp -s "$TMPD/dout" "$TMPD/dv1" && ok "derive DV2: uncommitted changes in the working tree do not reach the derived state" \
+    || bad "derive DV2: dirty working tree leaked" "$(diff "$TMPD/dv1" "$TMPD/dout" | head -4)"
+git -C "$DG" checkout -q -- . 2>/dev/null || git -C "$DG" restore -q . 2>/dev/null
+# DV3. The commit's OWN generator renders it, not the caller's.
+sed -i 's|echo "# REVIEW_LEDGER"$|echo "# REVIEW_LEDGER (generator of C3)"|' "$DG/test/reviewctl.sh"
+C3="$(dgc c3)"
+dg "$C3"; m3=$?; grep -q '^# REVIEW_LEDGER (generator of C3)$' "$TMPD/dout"; h3=$?
+dg "$C2"; grep -q 'generator of C3' "$TMPD/dout"; h2=$?
+[ "$m3" -eq 0 ] && [ "$h3" -eq 0 ] && [ "$h2" -ne 0 ] \
+    && ok "derive DV3: each commit is rendered by its own generator (c3's marker at c3 only)" \
+    || bad "derive DV3: own generator" "rc=$m3 c3-marker=$h3 c2-marker=$h2"
+# DV4. A ref that is not a commit (read fails).
+dgrefuses "derive DV4: a ref that is not a commit refuses, nothing on stdout" "is not a commit" deadbeefdeadbeef
+# DV5. A commit with no generator of its own (empty): never fall back to the caller's.
+git -C "$DG" rm -q test/reviewctl.sh; C4="$(dgc c4)"
+dgrefuses "derive DV5: a commit without its own generator refuses (no fallback to the caller's)" "no test/reviewctl.sh" "$C4"
+# DV6. The commit's generator refuses its own artifacts (partial/foreign): fail closed. The
+#      response names a commit on a side branch -- reachable from the caller's view of the
+#      repository, but not from the pinned commit, which is the vantage point.
+git -C "$DG" branch -q side "$C0"
+git -C "$DG" -c user.name=t -c user.email=t@t commit -q --allow-empty -m s; git -C "$DG" switch -q side 2>/dev/null
+CS="$(git -C "$DG" -c user.name=t -c user.email=t@t commit -q --allow-empty -m side && git -C "$DG" rev-parse HEAD)"
+git -C "$DG" switch -q main
+git -C "$DG" reset -q --hard "$C3"
+printf '<!-- rev: %s -->\n<!-- response-status: IMPLEMENTED -->\n<!-- implementation: %s -->\n\n# t\n' "$DX" "$CS" \
+    > "$DG/docs/internal/reviews/responses/$DX.md"
+C5="$(dgc c5)"
+dgrefuses "derive DV6: artifacts the commit's own generator rejects (a SHA off its line) refuse, nothing on stdout" "refused its own artifacts" "$C5"
+# DV7. A view committed at the pinned commit is not trusted: it is derived afresh.
+git -C "$DG" reset -q --hard "$C2"
+printf '| REV | State |\n|---|---|\n| %s | CLOSED |\n' "$DX" > "$DG/docs/internal/reviews/REVIEW_LEDGER.md"
+C6="$(dgc c6)"
+dg "$C6"; [ "$(dgst)" = IMPLEMENTED ] && ! grep -q '| CLOSED |' "$TMPD/dout" \
+    && ok "derive DV7: a ledger committed at the commit is ignored; the state is derived (IMPLEMENTED, not its CLOSED)" \
+    || bad "derive DV7: committed view trusted" "$(cat "$TMPD/dout" | tail -3)"
+# DV8. Concurrent derivations share nothing.
+( REVIEWCTL_REPO="$DG" "$CTL" --derive "$C2" > "$TMPD/dc1" 2>/dev/null ) &
+( REVIEWCTL_REPO="$DG" "$CTL" --derive "$C2" > "$TMPD/dc2" 2>/dev/null ) &
+wait
+grep -q "^| $DX | IMPLEMENTED |" "$TMPD/dv1" && cmp -s "$TMPD/dc1" "$TMPD/dv1" && cmp -s "$TMPD/dc2" "$TMPD/dv1" \
+    && ok "derive DV8: two concurrent derivations give the same ledger" \
+    || bad "derive DV8: concurrent derivations differ" "$(diff "$TMPD/dv1" "$TMPD/dc1" | head -3)"
+# DV9. The routing view, and argument hygiene.
+dg "$C2" --threads; grep -q '^# Open threads' "$TMPD/dout" && grep -q "$DX" "$TMPD/dout" \
+    && ok "derive DV9: --threads gives the commit's routing view" \
+    || bad "derive DV9: --threads" "$(head -3 "$TMPD/dout")"
+dgrefuses "derive DV10: an unknown option refuses" "not '--bogus'" "$C2" --bogus
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

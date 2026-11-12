@@ -13,18 +13,22 @@ filenames or transitions, `PROTOCOL.md` wins.
 
 ## V2 authority model
 
-Current review workflow state is read from exactly one generated view:
+Current review workflow state is read from exactly one derived view, the ledger
+of one pinned commit:
 
-`docs/internal/reviews/REVIEW_LEDGER.md`
+`./test/reviewctl.sh --derive SHA`
 
-Nobody edits ledger rows manually.
+Nobody edits ledger rows manually; there is no committed ledger file to edit,
+and none is ever committed.
 
-The ledger is generated deterministically from small machine facts in the
+The ledger is derived deterministically from small machine facts in the
 role-owned review, response and closure artifacts. Those files preserve
 evidence and authorship; they are not competing current-state tables.
 
-`docs/project/OPEN-THREADS.md` is generated from the ledger and is never edited
-manually after V2 cutover.
+The routing view (`OPEN-THREADS.md`) is derived the same way
+(`./test/reviewctl.sh --derive SHA --threads`) and is never edited manually.
+`./test/reviewctl.sh --generate` writes an uncommitted local copy of both files
+for convenience only.
 
 ## Work pickup / handoff
 
@@ -33,15 +37,16 @@ publication, and the recipient must refresh and read it.
 
 For the publisher, a role branch or Pull Request is not a handoff — including a
 green and mergeable PR. Publication is complete only after the PR is merged and
-a fresh read of `main` shows both the intended artifact and the expected ledger
-row/state/next owner. If that read-back has not succeeded, report `PR open — not
+a fresh read of `main` shows the intended artifact, and the ledger derived from
+it (`./test/reviewctl.sh --derive origin/main`) shows the expected row/state/next
+owner. If that read-back has not succeeded, report `PR open — not
 published, no handoff yet`; never report `published`, `submitted`, `routed`, or
 `handed off`.
 
 For the recipient, routing is only useful if the next agent actually refreshes
 and reads it. Therefore **before either agent says it has no work / nothing from
-the other agent**, it must refresh the published `main` and inspect the generated
-`REVIEW_LEDGER.md`.
+the other agent**, it must refresh the published `main` and derive the ledger
+from it (`./test/reviewctl.sh --derive origin/main`).
 
 For Claude specifically:
 
@@ -60,7 +65,7 @@ For the Reviewer, the symmetric rule applies: fresh `IMPLEMENTED | Reviewer`
 means there is an exact submitted SHA to review.
 
 This is a **pickup rule**, not a second inbox or state model. Do not create a
-parallel handoff table. `OPEN-THREADS.md` remains convenience-only and
+parallel handoff table. The `--threads` view remains convenience-only and
 `PROJECT_STATUS.md` remains product/operational state, never workflow routing.
 
 ## Artifact layout
@@ -68,7 +73,7 @@ parallel handoff table. `OPEN-THREADS.md` remains convenience-only and
 ```text
 docs/internal/reviews/
 ├── README.md
-├── REVIEW_LEDGER.md                 # generated current-state view
+├── REVIEW_LEDGER.md                 # NOT committed: local --generate copy only
 ├── REV-YYYYMMDD-NNN.md              # reviewer evidence + machine facts
 ├── responses/
 │   └── REV-YYYYMMDD-NNN.md          # implementer evidence; exactly one
@@ -126,14 +131,14 @@ remembering two independent verification commands.
 Representative lifecycle:
 
 1. Reviewer merges the canonical `REV-YYYYMMDD-NNN.md` publication and reads
-   back `OPEN | Claude` from the ledger on `main`; only then is it handed off.
+   back `OPEN | Claude` from the ledger derived from `main`; only then is it handed off.
 2. Claude creates/extends exactly one matching response and submits an exact
    implementation SHA.
-3. Generated ledger shows `IMPLEMENTED`, owner `Reviewer`.
+3. The derived ledger shows `IMPLEMENTED`, owner `Reviewer`.
 4. Reviewer verifies the actual SHA, tests and required live evidence.
-5. Rejection records `CHANGES-REQUIRED` for that SHA; generated state becomes
+5. Rejection records `CHANGES-REQUIRED` for that SHA; derived state becomes
    `OPEN` and the same REV continues.
-6. Claude picks up that `OPEN | Claude` row from a fresh ledger read, opens the
+6. Claude picks up that `OPEN | Claude` row from a fresh derivation, opens the
    current reviewer file, and continues the same response with the next SHA.
 7. A new implementation SHA in the same response makes state `IMPLEMENTED`
    again.
@@ -143,7 +148,7 @@ Representative lifecycle:
     another attempt on the same finding does not.
 
 Never infer the active review from chat memory, the largest REV number,
-`PROJECT_STATUS.md`, or `OPEN-THREADS.md`.
+`PROJECT_STATUS.md`, or the `--threads` view.
 
 ## V3 in short (full text: PROTOCOL.md, "V3 amendments")
 

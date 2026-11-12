@@ -30,7 +30,7 @@ If evidence resolves the dispute, record the consensus in the existing REV/respo
 
 Escalation to the Owner is allowed only for a genuinely irreducible Owner choice such as product/architecture direction between technically valid alternatives, priority/scope, accepted risk, intentional compatibility break, defer-versus-fix, or release/deployment timing.
 
-Unresolved Owner choices are recorded concisely in `docs/project/OWNER-DECISIONS.md`. That file is an escalation queue, not review workflow state and never competes with `REVIEW_LEDGER.md`.
+Unresolved Owner choices are recorded concisely in `docs/project/OWNER-DECISIONS.md`. That file is an escalation queue, not review workflow state and never competes with the ledger derived by `./test/reviewctl.sh --derive SHA`.
 
 Do not escalate synchronization failures, wording disagreements, bookkeeping errors, or questions that can be decided by code/tests/evidence.
 
@@ -99,9 +99,10 @@ fresh read of canonical `main` and verifies all three facts:
 
 1. the PR was merged and `main` advanced to a commit carrying the intended
    role-owned artifact;
-2. the regenerated `REVIEW_LEDGER.md` and `OPEN-THREADS.md` are present on that
-   same published state;
-3. the ledger row names the expected state and next owner.
+2. the artifacts are present on that same published state (the ledger and the
+   routing view are not committed; they are derived from it);
+3. `./test/reviewctl.sh --derive origin/main` shows a ledger row that names the
+   expected state and next owner.
 
 Until then, the only truthful status is `PR open — not published, no handoff
 yet`. The publisher must not report `published`, `submitted`, `routed`, or
@@ -134,7 +135,7 @@ Canonical new artifacts:
 - Reviewer finding/evidence: `docs/internal/reviews/REV-YYYYMMDD-NNN.md`
 - Implementer response/evidence: `docs/internal/reviews/responses/REV-YYYYMMDD-NNN.md`
 - Reviewer closure fact: `docs/internal/reviews/closures/REV-YYYYMMDD-NNN.md`
-- Current workflow state view: `docs/internal/reviews/REVIEW_LEDGER.md` (generated after V2 cutover)
+- Current workflow state view: the ledger derived with `./test/reviewctl.sh --derive SHA` (not a committed file)
 
 New V2 artifact filenames carry no descriptive suffixes. A duplicate REV identity is a hard error even if filenames differ.
 
@@ -147,13 +148,13 @@ Exactly four V2 workflow states exist:
 - `APPROVED`
 - `CLOSED`
 
-They are derived from canonical machine facts in the role-owned artifacts. Nobody manually assigns state in the generated ledger.
+They are derived from canonical machine facts in the role-owned artifacts. Nobody manually assigns state in the derived ledger.
 
 The only rejection transition is `IMPLEMENTED -> OPEN`. A genuinely new finding after approval receives a new REV; clarification or a second implementation attempt does not.
 
 Terms such as `ACCEPTED`, `DISPUTED`, `NEEDS-DISCUSSION`, `DEFERRED` and `REJECTED` may be retained as evidence or resolution metadata but are not parallel workflow states.
 
-After cutover, agents do not manually edit `REVIEW_LEDGER.md` or `OPEN-THREADS.md`; the latter is generated from the ledger.
+Agents never write or commit `REVIEW_LEDGER.md` or `OPEN-THREADS.md`; there is no committed file to edit. The state is derived (`./test/reviewctl.sh --derive SHA`, `--threads` for the routing view), and `--generate` only writes an uncommitted local copy.
 
 Only the reviewer approves/closes a technical finding. Only the owner accepts operational risk or changes priority.
 
