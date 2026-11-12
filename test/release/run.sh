@@ -440,6 +440,66 @@ cov "$PA" "$SF"
     && ok "coverage F4f: an unsubmitted change of the scrub's applier (release/scrub-file.sh) refuses" \
     || bad "coverage F4f: an unsubmitted applier change" "rc=$rc" "$(cat "$WORK/cov.out")"
 
+# Round 4, F4g: a resubmission of the same REV. Round 1 submits engine A; round 2 is a repair B
+# of another file, its response naming the smaller range in `base:`. Narrowing `base:` alone
+# made A look unsubmitted; `<!-- submitted: <base> <impl> -->` keeps round 1's own range.
+resps() {   # <rev-id> <base> <impl> [<earlier-base> <earlier-impl>]...
+    local id="$1" b="$2" i="$3" t; shift 3
+    t=$(printf '<!-- rev: %s -->\n<!-- implementation: %s -->\n<!-- base: %s -->' "$id" "$i" "$b")
+    while [ $# -ge 2 ]; do t="$t$(printf '\n<!-- submitted: %s %s -->' "$1" "$2")"; shift 2; done
+    cw "docs/internal/reviews/responses/$id.md" "$t"
+}
+git -C "$CR" reset -q --hard "$P"
+cw a.sh a2; GA=$(cc "REV round 1: engine A")
+resp REV-20990101-031 "$P" "$GA"; GR1=$(cc "round 1 response")
+cw c.sh c2; GU=$(cc "unrelated work U, never submitted")
+cw b.sh b2; GB=$(cc "REV round 2: repair B, another file")
+resps REV-20990101-031 "$GU" "$GB"; GN=$(cc "round 2 response: narrowed base only")
+cov "$P" "$GN" "$(row REV-20990101-031 "$GB")"
+[ "$rc" -eq 1 ] && grep -q 'UNCOVERED a.sh' "$WORK/cov.out" && ! grep -q 'UNCOVERED b.sh' "$WORK/cov.out" \
+    && ok "coverage F4g: control -- a narrowed base alone leaves round 1's engine A uncovered (the reported defect)" \
+    || bad "coverage F4g: a narrowed base alone" "rc=$rc" "$(cat "$WORK/cov.out")"
+resps REV-20990101-031 "$GU" "$GB" "$P" "$GA"; GK=$(cc "round 2 response keeps round 1's range")
+cov "$P" "$GK" "$(row REV-20990101-031 "$GB")"
+[ "$rc" -eq 1 ] && grep -q 'a.sh <- REV-20990101-031' "$WORK/cov.out" && grep -q 'b.sh <- REV-20990101-031' "$WORK/cov.out" \
+    && grep -q 'UNCOVERED c.sh' "$WORK/cov.out" && ! grep -q 'UNCOVERED [ab].sh' "$WORK/cov.out" \
+    && ok "coverage F4g: round 1 kept as 'submitted:' covers A and B; unrelated unsubmitted U between them still refuses" \
+    || bad "coverage F4g: earlier range kept" "rc=$rc" "$(cat "$WORK/cov.out")"
+resp REV-20990101-032 "$GR1" "$GU"; GK2=$(cc "U submitted under its own REV")
+cov "$P" "$GK2" "$(row REV-20990101-031 "$GB")" "$(row REV-20990101-032 "$GU")"
+[ "$rc" -eq 0 ] && ok "coverage F4g: control -- with U submitted under its own REV the release passes" \
+    || bad "coverage F4g: all three submitted" "rc=$rc" "$(cat "$WORK/cov.out")"
+git -C "$CR" reset -q --hard "$P"; cw a.sh a9; GX=$(cc "a.sh change on another line of work")
+git -C "$CR" reset -q --hard "$GN"
+resps REV-20990101-031 "$GU" "$GB" "$P" "$GX"; GF=$(cc "round 2 response names a foreign earlier range")
+if ! git -C "$CR" merge-base --is-ancestor "$GX" "$GB"; then
+    cov "$P" "$GF" "$(row REV-20990101-031 "$GB")"
+    [ "$rc" -eq 1 ] && grep -q 'UNCOVERED a.sh' "$WORK/cov.out" && grep -q 'covers nothing' "$WORK/cov.out" \
+        && ok "coverage F4g: a 'submitted:' range off this REV's line of work covers nothing, and the gate says so" \
+        || bad "coverage F4g: a foreign earlier range" "rc=$rc" "$(cat "$WORK/cov.out")"
+else
+    bad "coverage fixture: the foreign range is on the implementation's line"
+fi
+# The same with a mode change in round 1 and a scrub change in round 2.
+git -C "$CR" reset -q --hard "$PS"
+git -C "$CR" update-index --chmod=+x b.sh; HA=$(cc "REV round 1: chmod +x b.sh")
+resp REV-20990101-033 "$PS" "$HA"; HR1=$(cc "round 1 response")
+cw release/scrub.sed 's/BEFORE/AFTER/g'; HB=$(cc "REV round 2: scrub change rewriting a.sh")
+resps REV-20990101-033 "$HR1" "$HB"; HN=$(cc "round 2 response: narrowed base only")
+if [ "$(git -C "$CR" ls-tree "$HA" b.sh | cut -c1-6)" = 100755 ]; then
+    cov "$PS" "$HN" "$(row REV-20990101-033 "$HB")"
+    [ "$rc" -eq 1 ] && grep -q 'UNCOVERED b.sh' "$WORK/cov.out" && ! grep -q 'UNCOVERED a.sh' "$WORK/cov.out" \
+        && ok "coverage F4g: control -- a narrowed base alone leaves round 1's mode change uncovered" \
+        || bad "coverage F4g: mode, narrowed base alone" "rc=$rc" "$(cat "$WORK/cov.out")"
+    resps REV-20990101-033 "$HR1" "$HB" "$PS" "$HA"; HK=$(cc "round 2 response keeps round 1's range")
+    cov "$PS" "$HK" "$(row REV-20990101-033 "$HB")"
+    [ "$rc" -eq 0 ] && grep -q 'b.sh <- REV-20990101-033' "$WORK/cov.out" && grep -q 'a.sh <- REV-20990101-033' "$WORK/cov.out" \
+        && ok "coverage F4g: round 1's mode change and round 2's scrub change both covered" \
+        || bad "coverage F4g: mode + scrub resubmission" "rc=$rc" "$(cat "$WORK/cov.out")"
+else
+    bad "coverage fixture: the round-1 chmod did not happen"
+fi
+
 # publish.sh --push runs the gate on HEAD's own ledger BEFORE writing anything: when the gate
 # refuses, REL gets no new commit. (When it passes, publish commits locally and the push then
 # fails, because REL has no remote; that branch is not asserted here.) HEAD's own ledger decides

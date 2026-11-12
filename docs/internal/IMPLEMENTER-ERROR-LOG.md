@@ -2130,6 +2130,13 @@ Also on 2026-11-12, a repeat of E128: two Python patches in Bash heredocs (`cove
 `test/twins/run.sh`) lost `\n` or failed their asserts. Caught by `bash -n`, a read-back and the
 assert, and redone with the Edit tool. R16 point 4 was known and not applied.
 
+Repeat, the same day, REV-20261112-195 round 4. In the response's commit list I typed
+`08b0c64a` for the metadata commit; the real one is `b6d7c1d3`. A short SHA in prose was
+written from memory instead of from `git log`, hours after this rule was written. Caught by a
+loop over every short SHA in the response with `git cat-file -e`, before the commit. That loop
+now runs on every response before its commit: the rule covers short SHAs in prose too, not only
+header values.
+
 ### E128 — the heredoc ate the backslashes three more times (2026-11-11, R16 point 4, repeat of E124)
 **2026-11-11, batch 1.0.18 (`batch/gui-1-0-18`).**
 

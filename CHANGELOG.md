@@ -23,7 +23,8 @@ when they change how the tool is used.
   be reached through submitted review ranges: each response names `implementation:` and
   `<!-- base: <sha> -->`. That includes edits made inside a merge. A file's state is its mode
   and its bytes after the release scrub, so a chmod or a scrub change that rewrites a shipped
-  file needs a review as well.
+  file needs a review as well. A resubmission of the same review keeps its earlier ranges as
+  `<!-- submitted: <base> <sha> -->` lines, so narrowing `base:` does not drop earlier work.
 - **Attaching a removable replica medium** (REV-20261112-194):
   - A replica source whose name holds `:` (`tank/data:part`) is copied as a local dataset.
     Before, the engine read the part before the `:` as an ssh host, while the media gate
