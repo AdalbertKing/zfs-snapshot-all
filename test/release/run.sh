@@ -249,45 +249,135 @@ if printf '| REV | State |\n| REV-20990101-001 | CLOSED |\n| REV-20990101-002 | 
 else
     bad "gate: only APPROVED/CLOSED passes; input that is not a ledger fails closed" ""
 fi
-# The review-coverage gate (REV-20261112-195 F4): a behaviour change since the previous release
-# with no review naming it refuses; docs-only commits and covered commits pass.
+# The review-coverage gate (REV-20261112-195 F4, round 2). A fixture dev repo with its own
+# MANIFEST; the gate compares the run-time PACKAGE of the published revision with the candidate's
+# and wants every difference reached by submitted ranges (`implementation:` + `<!-- base: -->`).
 COV="$REPO/release/coverage-gate.sh"
-CR="$WORK/covrepo"; mkdir -p "$CR"
-git -C "$CR" init -q && git -C "$CR" config user.email t@t && git -C "$CR" config user.name t
-cov_commit() { printf '%s\n' "$2" >> "$CR/$1"; git -C "$CR" add -- "$1"; git -C "$CR" commit -qm "$3"; git -C "$CR" rev-parse HEAD; }
-C0=$(cov_commit a.sh x "prev release")
-C1=$(cov_commit a.sh y "engine change 1")
-C2=$(cov_commit docs/n.md z "docs only")
-C3=$(cov_commit a.sh w "engine change 2")
-printf 'a.sh\n' > "$WORK/cov.paths"
-cov() { printf '%s\n' "$1" | bash "$COV" "$CR" "$C0" "$C3" "$WORK/cov.paths" > "$WORK/cov.out" 2>&1; }
-cov "| REV | State | Owner | Implementation | Reviewed | Response | Next |
-| REV-20990101-001 | CLOSED | - | $C1 | $C1 | r | - |"; rc=$?
-if [ "$rc" -eq 1 ] && grep -q "${C3:0:7}" "$WORK/cov.out" && ! grep -q "${C1:0:7}\|${C2:0:7}" "$WORK/cov.out"; then
-    ok "coverage: an engine commit after the last reviewed SHA refuses and is named; covered and docs-only commits are not"
+CR="$WORK/covrepo"; git init -q -b main "$CR"
+cw() {   # <path> <content>: write (creating directories); fails the suite on a setup error
+    mkdir -p "$CR/$(dirname "$1")" && printf '%s\n' "$2" > "$CR/$1" && git -C "$CR" add -- "$1" \
+        || bad "coverage fixture: could not write $1"
+}
+cc() { git -C "$CR" commit -qm "$1" && git -C "$CR" rev-parse HEAD; }
+LH='| REV | State | Owner | Implementation | Reviewed | Response | Next |'
+row() { printf '| %s | CLOSED | - | %s | %s | responses/%s.md | - |\n' "$1" "$2" "$2" "$1"; }   # <rev-id> <impl>
+resp() { cw "docs/internal/reviews/responses/$1.md" "$(printf '<!-- rev: %s -->\n<!-- implementation: %s -->\n<!-- base: %s -->' "$1" "$3" "$2")"; }   # <rev-id> <base> <impl>
+cov() {   # <prev> <rev> <ledger rows...>: rc in $rc, output in $WORK/cov.out
+    local p="$1" r="$2"; shift 2
+    printf '%s\n' "$LH" "$@" | bash "$COV" "$CR" "$p" "$r" > "$WORK/cov.out" 2>&1; rc=$?
+}
+cw release/MANIFEST "$(printf 'a.sh\nb.sh\nc.sh\ndocs/\n')"; cw a.sh a0; cw b.sh b0; cw c.sh c0; cw d.sh d0; cw docs/x.md x
+P=$(cc "published release")
+
+# Uncovered and covered engine change.
+cw a.sh a1; A=$(cc "engine change A")
+cov "$P" "$A"
+[ "$rc" -eq 1 ] && grep -q 'UNCOVERED a.sh (changed' "$WORK/cov.out" && grep -q "${A:0:7}" "$WORK/cov.out" \
+    && ok "coverage: an unsubmitted engine change refuses, naming the file and its commit" \
+    || bad "coverage: an unsubmitted engine change refuses" "rc=$rc" "$(cat "$WORK/cov.out")"
+resp REV-20990101-011 "$P" "$A"; RA=$(cc "response for A")
+cov "$P" "$RA" "$(row REV-20990101-011 "$A")"
+[ "$rc" -eq 0 ] && grep -q 'a.sh <- REV-20990101-011' "$WORK/cov.out" \
+    && ok "coverage: a submitted range covers the change and the gate names it" \
+    || bad "coverage: a submitted range covers the change" "rc=$rc" "$(cat "$WORK/cov.out")"
+
+# F4b: an unrelated review after an unsubmitted change launders nothing.
+git -C "$CR" reset -q --hard "$A"
+cw c.sh c1; B=$(cc "other file B"); resp REV-20990101-012 "$A" "$B"; RB=$(cc "response for B only")
+cov "$P" "$RB" "$(row REV-20990101-012 "$B")"
+[ "$rc" -eq 1 ] && grep -q 'UNCOVERED a.sh' "$WORK/cov.out" && ! grep -q 'UNCOVERED c.sh' "$WORK/cov.out" \
+    && ok "coverage F4b: a review of B (other file) does not cover the earlier unsubmitted change of a.sh" \
+    || bad "coverage F4b: a review of B launders A" "rc=$rc" "$(cat "$WORK/cov.out")"
+resp REV-20990101-013 "$P" "$B"; RB2=$(cc "batch response P..B")
+cov "$P" "$RB2" "$(row REV-20990101-013 "$B")"
+[ "$rc" -eq 0 ] && ok "coverage F4b: control -- one batch range P..B covers both files" \
+    || bad "coverage F4b: a batch range covers both" "rc=$rc" "$(cat "$WORK/cov.out")"
+
+# Docs only, with the setup asserted (round 2: the old fixture's docs commit never happened).
+git -C "$CR" reset -q --hard "$P"
+cw docs/n.md z; D=$(cc "docs only")
+if git -C "$CR" diff --name-only "$P" "$D" | grep -qx 'docs/n.md'; then
+    cov "$P" "$D"
+    [ "$rc" -eq 0 ] && ok "coverage: a docs-only change (docs/n.md really committed) needs no submission" \
+        || bad "coverage: a docs-only change needs no submission" "rc=$rc" "$(cat "$WORK/cov.out")"
 else
-    bad "coverage: an engine commit after the last reviewed SHA refuses and is named" "rc=$rc $(cat "$WORK/cov.out")"
+    bad "coverage fixture: the docs-only commit did not record docs/n.md"
 fi
-cov "| REV | State | Owner | Implementation | Reviewed | Response | Next |
-| REV-20990101-002 | OPEN | Claude | - | $C3 | - | implement |"; rc=$?
-if [ "$rc" -eq 0 ]; then
-    ok "coverage: a REV that reviewed the newest engine commit covers everything before it"
-else
-    bad "coverage: a REV that reviewed the newest engine commit covers everything before it" "rc=$rc $(cat "$WORK/cov.out")"
-fi
-cov "| REV | State | Owner | Implementation | Reviewed | Response | Next |
-| REV-20990101-003 | CLOSED | - | - | - | r | - |"; rc=$?
-if [ "$rc" -eq 1 ] && grep -q "${C1:0:7}" "$WORK/cov.out" && grep -q "${C3:0:7}" "$WORK/cov.out"; then
-    ok "coverage: a ledger naming no SHA covers nothing"
-else
-    bad "coverage: a ledger naming no SHA covers nothing" "rc=$rc $(cat "$WORK/cov.out")"
-fi
-printf 'not a ledger\n' | bash "$COV" "$CR" "$C0" "$C3" "$WORK/cov.paths" >/dev/null 2>&1; rc1=$?
-printf '| REV-20990101-001 | CLOSED | - | %s | %s | r | - |\n' "$C3" "$C3" | bash "$COV" "$CR" deadbeef "$C3" "$WORK/cov.paths" >/dev/null 2>&1; rc2=$?
+
+# F4c: merges.
+git -C "$CR" reset -q --hard "$P"
+git -C "$CR" switch -q -c s1; cw docs/s1.md s1; cc "docs s1" >/dev/null
+git -C "$CR" switch -q main;  cw docs/s2.md s2; cc "docs s2" >/dev/null
+git -C "$CR" merge -q --no-commit s1 >/dev/null 2>&1; cw a.sh merged-only; M=$(cc "merge with an engine edit")
+cov "$P" "$M"
+[ "$rc" -eq 1 ] && grep -q 'UNCOVERED a.sh' "$WORK/cov.out" \
+    && ok "coverage F4c: an engine edit made only inside a merge refuses" \
+    || bad "coverage F4c: a merge-only engine edit" "rc=$rc" "$(cat "$WORK/cov.out")"
+git -C "$CR" reset -q --hard "$P"; git -C "$CR" branch -q -D s1
+git -C "$CR" switch -q -c x1; cw a.sh x1; X1=$(cc "submitted engine X1")
+git -C "$CR" switch -q main;  cw docs/y.md y; cc "docs y" >/dev/null
+git -C "$CR" merge -q --no-edit x1 >/dev/null 2>&1; resp REV-20990101-014 "$P" "$X1"; MX=$(cc "response X1 after a mechanical merge")
+cov "$P" "$MX" "$(row REV-20990101-014 "$X1")"
+[ "$rc" -eq 0 ] && ok "coverage F4c: control -- a mechanical merge of submitted work passes" \
+    || bad "coverage F4c: a mechanical merge of submitted work" "rc=$rc" "$(cat "$WORK/cov.out")"
+git -C "$CR" reset -q --hard "$P"; git -C "$CR" branch -q -D x1
+cw a.sh "$(printf 'l1\nl2\nl3')"; P2=$(cc "published release 2")
+git -C "$CR" switch -q -c k1; cw a.sh "$(printf 'L1\nl2\nl3')"; K1=$(cc "submitted K1")
+git -C "$CR" switch -q main;  cw a.sh "$(printf 'l1\nl2\nL3')"; K2=$(cc "submitted K2")
+git -C "$CR" merge -q --no-commit k1 >/dev/null 2>&1; cw a.sh "$(printf 'L1\nl2\nL3x')"
+resp REV-20990101-015 "$P2" "$K1"; resp REV-20990101-016 "$P2" "$K2"; KM=$(cc "conflict resolution with an extra edit")
+cov "$P2" "$KM" "$(row REV-20990101-015 "$K1")" "$(row REV-20990101-016 "$K2")"
+[ "$rc" -eq 1 ] && grep -q 'UNCOVERED a.sh' "$WORK/cov.out" \
+    && ok "coverage F4c: a conflict resolution no submission reached refuses, though both sides were submitted" \
+    || bad "coverage F4c: an unsubmitted conflict resolution" "rc=$rc" "$(cat "$WORK/cov.out")"
+cw docs/internal/reviews/responses/REV-20990101-017.md "$(printf '<!-- base: %s -->' "$K2")"; KR=$(cc "submit the resolution")
+cov "$P2" "$KR" "$(row REV-20990101-015 "$K1")" "$(row REV-20990101-016 "$K2")" "$(row REV-20990101-017 "$KM")"
+[ "$rc" -eq 0 ] && ok "coverage F4c: control -- the resolution submitted as K2..merge passes" \
+    || bad "coverage F4c: a submitted resolution" "rc=$rc" "$(cat "$WORK/cov.out")"
+git -C "$CR" branch -q -D k1
+
+# F4d: package composition.
+git -C "$CR" reset -q --hard "$P"
+cw release/MANIFEST "$(printf 'a.sh\nb.sh\ndocs/\n')"; R1=$(cc "drop c.sh from the package")
+cov "$P" "$R1"
+[ "$rc" -eq 1 ] && grep -q 'UNCOVERED c.sh (no longer shipped' "$WORK/cov.out" \
+    && ok "coverage F4d: a script dropped from the package refuses" \
+    || bad "coverage F4d: a dropped script" "rc=$rc" "$(cat "$WORK/cov.out")"
+git -C "$CR" reset -q --hard "$P"
+cw release/MANIFEST "$(printf 'a.sh\nb.sh\nc.sh\nd.sh\ndocs/\n')"; R2=$(cc "ship the unchanged d.sh")
+cov "$P" "$R2"
+[ "$rc" -eq 1 ] && grep -q 'UNCOVERED d.sh (newly shipped' "$WORK/cov.out" \
+    && ok "coverage F4d: an unchanged, newly shipped script refuses" \
+    || bad "coverage F4d: a newly shipped script" "rc=$rc" "$(cat "$WORK/cov.out")"
+resp REV-20990101-018 "$P" "$R2"; R2R=$(cc "response for shipping d.sh")
+cov "$P" "$R2R" "$(row REV-20990101-018 "$R2")"
+[ "$rc" -eq 0 ] && ok "coverage F4d: control -- the submitted package change passes" \
+    || bad "coverage F4d: a submitted package change" "rc=$rc" "$(cat "$WORK/cov.out")"
+git -C "$CR" reset -q --hard "$P"
+cw release/MANIFEST "$(printf 'a.sh\nb.sh\nc.sh\ndocs/\n!b.sh\n')"; R3=$(cc "exclude b.sh")
+cov "$P" "$R3"
+[ "$rc" -eq 1 ] && grep -q 'UNCOVERED b.sh (no longer shipped' "$WORK/cov.out" \
+    && ok "coverage F4d: a changed exclusion refuses" \
+    || bad "coverage F4d: a changed exclusion" "rc=$rc" "$(cat "$WORK/cov.out")"
+git -C "$CR" reset -q --hard "$P"
+cw release/MANIFEST "$(printf '# the same package\na.sh\nb.sh\nc.sh\ndocs/\n')"; cw docs/new.md n; R4=$(cc "manifest comment, docs file")
+cov "$P" "$R4"
+[ "$rc" -eq 0 ] && ok "coverage F4d: control -- a manifest edit that leaves the run-time package alone passes" \
+    || bad "coverage F4d: an unchanged run-time package" "rc=$rc" "$(cat "$WORK/cov.out")"
+
+# A range without a base covers nothing; fail closed on bad input.
+git -C "$CR" reset -q --hard "$A"
+cw docs/internal/reviews/responses/REV-20990101-019.md '<!-- implementation: x -->'; NB=$(cc "response without base")
+cov "$P" "$NB" "$(row REV-20990101-019 "$A")"
+[ "$rc" -eq 1 ] && grep -q 'covers nothing' "$WORK/cov.out" \
+    && ok "coverage: a response without '<!-- base: -->' covers nothing, and the gate says so" \
+    || bad "coverage: a response without base" "rc=$rc" "$(cat "$WORK/cov.out")"
+printf 'not a ledger\n' | bash "$COV" "$CR" "$P" "$A" >/dev/null 2>&1; rc1=$?
+printf '%s\n' "$LH" | bash "$COV" "$CR" deadbeef "$A" >/dev/null 2>&1; rc2=$?
 if [ "$rc1" -eq 2 ] && [ "$rc2" -eq 2 ]; then
-    ok "coverage: no ledger, or an unknown previous release, fails closed (rc 2)"
+    ok "coverage: no ledger, or an unknown published revision, fails closed (rc 2)"
 else
-    bad "coverage: no ledger, or an unknown previous release, fails closed (rc 2)" "rc1=$rc1 rc2=$rc2"
+    bad "coverage: no ledger, or an unknown published revision, fails closed (rc 2)" "rc1=$rc1 rc2=$rc2"
 fi
 
 # publish.sh --push runs the gate on HEAD's own ledger BEFORE writing anything: when the gate
@@ -312,12 +402,18 @@ if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
         '|---|---|---|---|---|---|---|' '| REV-20990101-003 | OPEN | Claude | c | c | r | implement |' \
         > "$DEVW/docs/internal/reviews/REVIEW_LEDGER.md"
     git -C "$DEVW" commit -qam "fixture: one open review" && devrev="$(git -C "$DEVW" rev-parse HEAD)"
-    mkrel() {   # <dir> -> release clone with a bare local origin holding one start commit
+    # <dir> [published-rev] -> release clone with a bare local origin. With a revision, the
+    # pushed start commit carries it as RELEASE-OF: what hosts received last (round 2, F4a).
+    mkrel() {
         git init -q --bare "$1.git"
-        git init -q -b main "$1" && git -C "$1" commit -q --allow-empty -m start
+        git init -q -b main "$1"
+        if [ -n "${2:-}" ]; then printf '%s\n' "$2" > "$1/RELEASE-OF" && git -C "$1" add RELEASE-OF; fi
+        git -C "$1" commit -q --allow-empty -m start
         git -C "$1" remote add origin "$1.git" && git -C "$1" push -q origin main
     }
-    mkrel "$WORK/f3"
+    # The coverage gate compares with the published release; the parent of the fixture commit,
+    # so the only change in between is the ledger, not a run-time file.
+    mkrel "$WORK/f3" "$(git -C "$DEVW" rev-parse "$devrev^")"
     start="$(git -C "$WORK/f3.git" rev-parse main)"
     bash "$DEVW/release/publish.sh" "$devrev" "$WORK/f3" >/dev/null 2>&1      # run 1: commit, no push
     out4="$(bash "$DEVW/release/publish.sh" "$devrev" "$WORK/f3" --push --accept-open-review=REV-20990101-003 2>&1)"; rc4=$?
@@ -327,17 +423,67 @@ if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
     else
         bad "publish: a second run with --push and an override does not push the earlier, unaudited commit" "rc=$rc4" "$out4"
     fi
-    mkrel "$WORK/f3b"
-    # The coverage gate (REV-20261112-195 F4) reads the previous release from RELEASE-OF: the
-    # parent of the fixture commit, so the only commit in between touches the ledger, not a
-    # run-time file.
-    git -C "$DEVW" rev-parse "$devrev^" > "$WORK/f3b/RELEASE-OF"
-    git -C "$WORK/f3b" add RELEASE-OF && git -C "$WORK/f3b" commit -qm "previous release" && git -C "$WORK/f3b" push -q origin main
+    mkrel "$WORK/f3b" "$(git -C "$DEVW" rev-parse "$devrev^")"
     out5="$(bash "$DEVW/release/publish.sh" "$devrev" "$WORK/f3b" --push --accept-open-review=REV-20990101-003 2>&1)"; rc5=$?
     if [ "$rc5" -eq 0 ] && git -C "$WORK/f3b.git" log -1 --format=%B main | grep -q '^accepted: REV-20990101-003 '; then
         ok "publish: an override with a new release commit pushes, and the pushed commit records 'accepted: REV-...'"
     else
         bad "publish: an override with a new release commit pushes and records it" "rc=$rc5" "$out5"
+    fi
+    # Round 2, F4a: the baseline is the PUBLISHED release, not the checkout's working RELEASE-OF.
+    # d0: a ledger with nothing open; d1: an unsubmitted run-time change; d2: its submission.
+    printf '%s\n' '# REVIEW_LEDGER' '' '| REV | State | Owner | Implementation | Reviewed | Response | Next |' \
+        '|---|---|---|---|---|---|---|' '| REV-20990101-004 | CLOSED | - | - | - | - | - |' \
+        > "$DEVW/docs/internal/reviews/REVIEW_LEDGER.md"
+    git -C "$DEVW" commit -qam "fixture: nothing open" && d0="$(git -C "$DEVW" rev-parse HEAD)"
+    printf '# r195 fixture: an unsubmitted run-time change\n' >> "$DEVW/zfs-job.sh"
+    git -C "$DEVW" commit -qam "fixture: run-time change" && d1="$(git -C "$DEVW" rev-parse HEAD)"
+    f4a_refused() {   # <dir> <rc> <out> <origin main before>
+        [ "$2" -ne 0 ] && printf '%s\n' "$3" | grep -q 'UNCOVERED zfs-job.sh' \
+            && [ "$(git -C "$1.git" rev-parse main)" = "$4" ]
+    }
+    mkrel "$WORK/f4a" "$d0"; st="$(git -C "$WORK/f4a.git" rev-parse main)"
+    bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4a" >/dev/null 2>&1      # prepare, no push
+    o="$(bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4a" --push 2>&1)"; r=$?
+    if f4a_refused "$WORK/f4a" "$r" "$o" "$st"; then
+        ok "publish F4a: prepare without --push, then --push -- still refused against the PUBLISHED release, nothing pushed"
+    else
+        bad "publish F4a: prepare then push launders the change" "rc=$r" "$o"
+    fi
+    mkrel "$WORK/f4b" "$d0"; st="$(git -C "$WORK/f4b.git" rev-parse main)"
+    bash "$DEVW/release/publish.sh" "$d0" "$WORK/f4b" >/dev/null 2>&1
+    bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4b" >/dev/null 2>&1
+    o="$(bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4b" --push 2>&1)"; r=$?
+    if f4a_refused "$WORK/f4b" "$r" "$o" "$st"; then
+        ok "publish F4a: several prepared local commits -- all checked from the published release, refused"
+    else
+        bad "publish F4a: several prepared commits" "rc=$r" "$o"
+    fi
+    mkrel "$WORK/f4c"; st="$(git -C "$WORK/f4c.git" rev-parse main)"
+    o="$(bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4c" --push 2>&1)"; r=$?
+    git init -q -b main "$WORK/f4n" && git -C "$WORK/f4n" commit -q --allow-empty -m start
+    on="$(bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4n" --push 2>&1)"; rn=$?
+    if [ "$r" -ne 0 ] && printf '%s\n' "$o" | grep -q 'has no RELEASE-OF' \
+       && [ "$(git -C "$WORK/f4c.git" rev-parse main)" = "$st" ] \
+       && [ "$rn" -ne 0 ] && printf '%s\n' "$on" | grep -q 'what hosts received last is unknown'; then
+        ok "publish F4a: an unknown published baseline (no RELEASE-OF on origin, no origin at all) refuses"
+    else
+        bad "publish F4a: an unknown published baseline" "rc=$r $o" "rc=$rn $on"
+    fi
+    mkdir -p "$DEVW/docs/internal/reviews/responses"
+    printf '<!-- rev: REV-20990101-005 -->\n<!-- implementation: %s -->\n<!-- base: %s -->\n' "$d1" "$d0" \
+        > "$DEVW/docs/internal/reviews/responses/REV-20990101-005.md"
+    printf '| REV-20990101-005 | CLOSED | - | %s | %s | responses/REV-20990101-005.md | - |\n' "$d1" "$d1" \
+        >> "$DEVW/docs/internal/reviews/REVIEW_LEDGER.md"
+    git -C "$DEVW" add -A docs/internal/reviews && git -C "$DEVW" commit -qm "fixture: submitted" && d2="$(git -C "$DEVW" rev-parse HEAD)"
+    mkrel "$WORK/f4d" "$d0"
+    bash "$DEVW/release/publish.sh" "$d2" "$WORK/f4d" >/dev/null 2>&1      # prepared first, as in F4a
+    o="$(bash "$DEVW/release/publish.sh" "$d2" "$WORK/f4d" --push 2>&1)"; r=$?
+    if [ "$r" -eq 0 ] && [ "$(git -C "$WORK/f4d.git" show main:RELEASE-OF)" = "$d2" ] \
+       && printf '%s\n' "$o" | grep -q 'zfs-job.sh <- REV-20990101-005'; then
+        ok "publish F4a: control -- the submitted change pushes, and the gate names the REV that covers it"
+    else
+        bad "publish F4a: a submitted change pushes" "rc=$r" "$o"
     fi
     git -C "$REPO" worktree remove --force "$DEVW" 2>/dev/null
 else

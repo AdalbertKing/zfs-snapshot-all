@@ -275,15 +275,25 @@ let such a batch through without one. The Owner had to carry the request by hand
   the FSM is unchanged: rejection → `OPEN | Claude`, approval → `APPROVED`, then closure.
 - When the Owner orders work without the Reviewer, the batch is still submitted. Publishing
   then needs the Owner's `--accept-open-review=REV-...-BNN` (V3.13).
-- `release/publish.sh --push` also runs `release/coverage-gate.sh` (REV-20261112-195 F4). Every
-  commit since the previous release (`RELEASE-OF` of the release checkout) that touches a shipped
-  run-time file must be an ancestor of a SHA the ledger names (`Implementation` or `Reviewed`).
-  Otherwise the gate refuses and lists the commits. Merges and commits that touch only docs,
-  Markdown or tests do not count. An omitted submission therefore blocks the release instead of
-  passing by absence; there is no override other than submitting.
+- Every response states its range: `implementation:` and `<!-- base: <sha> -->`, the commit
+  the reviewed diff starts from (for a batch, the last released `main`). The Reviewer reviews
+  `git diff <base>..<implementation>`.
+- `release/publish.sh --push` also runs `release/coverage-gate.sh` (REV-20261112-195 F4). It
+  compares the run-time package of the PUBLISHED release (`RELEASE-OF` on the release repo's
+  `origin/main`, not the checkout's working copy) with the candidate. Each shipped file that
+  changed, was newly shipped or stopped being shipped must reach its candidate state through
+  submitted ranges: a range covers a file only where `<base>..<implementation>` changed that
+  file. Ancestry covers nothing. A review of other files does not cover an earlier change to
+  this one. A run-time edit made only inside a merge is a state no range reached, and is
+  refused. A mechanical merge of submitted work reproduces a submitted state and passes. Docs,
+  Markdown and repository metadata are not compared. There is no override other than
+  submitting.
 
 ### Amendment log
 
+- V3.14 revision 2, 2026-11-12 (REV-20261112-195 F4a-d, Reviewer round 2): coverage by
+  submitted ranges over the package (`<!-- base: -->` in every response), baseline from the
+  published release. Revision 1 counted every ancestor of a named SHA as covered.
 - V3.14 revision 1, 2026-11-12 (REV-20261112-195 F4): the review-coverage gate. 1.0.19 published
   an engine change no review covered; the release now refuses such a change.
 - V3.14, 2026-11-11: batch submission (`submission: batch`, id `REV-YYYYMMDD-BNN`). The ledger

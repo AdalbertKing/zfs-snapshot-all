@@ -2285,6 +2285,17 @@ ending in an early-exit reader: `grep -q`, `grep -m`, `head`, ...) stands in 72 
 where pipefail is in effect (repo-greper inventory, 2026-11-05); they are not proven broken one
 by one, and they are a separate sweep with a static check.
 
+*Repeat, 2026-11-12 (REV-20261112-194, PR #1181).* Two new `printf | grep -q` lines in
+`zfs-media-gate.sh` (pipefail): the F4 tree check (`grep -qxF -- "$_src"` over a whole
+`zfs list -r`) and the F2 GUID check. The U149-b static check in `test/evalfree` caught it on
+the full battery of `main` (`dc31ac30` red). It did not catch it on the PR, because
+`test/deps.conf` did not map the gate to `evalfree`, so the PR's impact selection never ran it.
+Under load the tree check would read a present source as "unknown". That fails open, but it is
+still wrong. Fix: `grep -c ... >/dev/null`. Root cause of the miss: the static check
+inventories the file, but no edit of that file selected it. The gate is now mapped to
+`evalfree` (`91bee74c`). The rule stands. A static check that covers a file must be mapped
+from that file.
+
 ### E116 — the digest again not refreshed after the last commit; the round-0 SHA had no CI run (2026-11-05, R6, repeat of E112/E114)
 **2026-11-05, PR #1072 and #1073, REV-20261104-187.**
 
