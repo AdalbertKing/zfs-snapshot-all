@@ -1550,6 +1550,95 @@ check "P -t write: push left the copy alone" "auto_1 manual auto_2" "$(snaps_of 
 check "P -t write: pull left the copy alone" "auto_1 manual auto_2" "$(snaps_of "$PLP/xg")"
 check "P -t write: push says it is not a backup landing" "yes" "$(said_s 'is not a backup landing')"
 
+# --- REV-20261112-195 ----------------------------------------------------------
+# Both engines, exact paths (-t: not a backup landing). The bookmark carries the
+# target head's GUID after the source pruned that head (@auto_2).
+r195_pair() {   # <src> <push target> <pull target> <args...> -> RC_S RC_G OUT_S OUT_G
+    local s="$1" ts="$2" tg="$3"; shift 3
+    run_send_out -t "$@" "$s" "$ts"; RC_S=$RC; OUT_S="$OUT"
+    run_get_out  -t "$@" "$s" "$tg"; RC_G=$RC; OUT_G="$OUT"
+}
+# F1: a write after the bookmarked head. The push used to skip its divergence
+# check on the bookmark path and roll the write back with recv -F (old code:
+# "0 1"); now both refuse and leave the copy as it was. Then the same with no
+# common snapshot at all (bookmark only), and the positive case with no write.
+zfs create -p "$POOL/rf1" || exit 1
+zfs snapshot "$POOL/rf1@auto_1"; r195_pair "$POOL/rf1" "$PBK/f1s" "$PLP/f1g" -e
+tick; zfs snapshot "$POOL/rf1@auto_2"; r195_pair "$POOL/rf1" "$PBK/f1s" "$PLP/f1g" -e
+zfs destroy "$POOL/rf1@auto_2"
+for _c in "$PBK/f1s" "$PLP/f1g"; do write_into_copy "$_c"; done
+tick; zfs snapshot "$POOL/rf1@auto_3"
+r195_pair "$POOL/rf1" "$PBK/f1s" "$PLP/f1g" -e
+check "R195 F1: write after the bookmarked head, -t: both refuse" "1 1" "$RC_S $RC_G"
+check "R195 F1: push left the copy alone" "auto_1 auto_2" "$(snaps_of "$PBK/f1s")"
+check "R195 F1: push says it is not a backup landing" "yes" "$(said_s 'is not a backup landing')"
+zfs destroy "$POOL/rf1@auto_1"
+r195_pair "$POOL/rf1" "$PBK/f1s" "$PLP/f1g" -e
+check "R195 F1: bookmark only (no common snapshot), -t write: both refuse" "1 1" "$RC_S $RC_G"
+check "R195 F1: bookmark only: push left the copy alone" "auto_1 auto_2" "$(snaps_of "$PBK/f1s")"
+zfs create -p "$POOL/rf1p" || exit 1
+zfs snapshot "$POOL/rf1p@auto_1"; r195_pair "$POOL/rf1p" "$PBK/f1ps" "$PLP/f1pg" -e
+tick; zfs snapshot "$POOL/rf1p@auto_2"; r195_pair "$POOL/rf1p" "$PBK/f1ps" "$PLP/f1pg" -e
+zfs destroy "$POOL/rf1p@auto_2"
+tick; zfs snapshot "$POOL/rf1p@auto_3"
+r195_pair "$POOL/rf1p" "$PBK/f1ps" "$PLP/f1pg" -e
+check "R195 F1: no write after the bookmarked head, -t: both continue" "0 0" "$RC_S $RC_G"
+check "R195 F1: no write: push" "auto_1 auto_2 auto_3" "$(snaps_of "$PBK/f1ps")"
+check "R195 F1: no write: pull" "auto_1 auto_2 auto_3" "$(snaps_of "$PLP/f1pg")"
+
+# F2: the list that names the bridge fails, or lacks the newest snapshot. Unknown
+# is not "none in between": both refuse (old code: a single diff, rc 0, and the
+# bookmark moved past @d2 for good). The next healthy run still carries @d2.
+R195D="$(mktemp -d)"; mkdir -p "$R195D/bin"
+export R195_REAL="$(command -v zfs)"
+cat > "$R195D/bin/zfs" <<'SHIM'
+#!/bin/bash
+if [ -n "${R195_DS:-}" ] && [ "$*" = "list -H -p -o name,createtxg -t snapshot,bookmark -d 1 $R195_DS" ]; then
+    case "${R195_MODE:-}" in
+        fail) echo "cannot open '$R195_DS': simulated I/O error" >&2; exit 1 ;;
+        nolatest) "$R195_REAL" "$@" | grep -v "@${R195_LATEST}	"; exit 0 ;;
+    esac
+fi
+exec "$R195_REAL" "$@"
+SHIM
+chmod +x "$R195D/bin/zfs"
+zfs create -p "$POOL/rf2" || exit 1
+zfs snapshot "$POOL/rf2@d1"; r195_pair "$POOL/rf2" "$PBK/f2s" "$PLP/f2g" -e
+tick; zfs snapshot "$POOL/rf2@h1"; r195_pair "$POOL/rf2" "$PBK/f2s" "$PLP/f2g" -e
+zfs destroy "$POOL/rf2@h1"
+tick; zfs snapshot "$POOL/rf2@d2"
+tick; zfs snapshot "$POOL/rf2@h2"
+export R195_DS="$POOL/rf2" R195_LATEST="h2"
+for R195_MODE in fail nolatest; do
+    export R195_MODE
+    PATH="$R195D/bin:$PATH" r195_pair "$POOL/rf2" "$PBK/f2s" "$PLP/f2g" -e
+    check "R195 F2: bridge list $R195_MODE: both refuse" "1 1" "$RC_S $RC_G"
+    check "R195 F2: bridge list $R195_MODE: push sent nothing" "d1 h1" "$(snaps_of "$PBK/f2s")"
+    check "R195 F2: bridge list $R195_MODE: pull sent nothing" "d1 h1" "$(snaps_of "$PLP/f2g")"
+done
+unset R195_DS R195_MODE R195_LATEST
+r195_pair "$POOL/rf2" "$PBK/f2s" "$PLP/f2g" -e
+check "R195 F2: the next healthy run carries @d2 too" "0 0 d1 h1 d2 h2 d1 h1 d2 h2" \
+      "$RC_S $RC_G $(snaps_of "$PBK/f2s") $(snaps_of "$PLP/f2g")"
+
+# F3: -T measures a bookmark-backed interval from the bookmark's creation. Over
+# the threshold: the single diff (old code: every snapshot, -T ignored).
+for _t in 1 1000; do
+    zfs create -p "$POOL/rf3t$_t" || exit 1
+    zfs snapshot "$POOL/rf3t$_t@d1"; r195_pair "$POOL/rf3t$_t" "$PBK/f3s$_t" "$PLP/f3g$_t" -e
+    tick; zfs snapshot "$POOL/rf3t$_t@h1"; r195_pair "$POOL/rf3t$_t" "$PBK/f3s$_t" "$PLP/f3g$_t" -e
+    zfs destroy "$POOL/rf3t$_t@h1"
+    tick; zfs snapshot "$POOL/rf3t$_t@m1"
+    tick; zfs snapshot "$POOL/rf3t$_t@m2"
+    tick; zfs snapshot "$POOL/rf3t$_t@m3"
+    tick
+    r195_pair "$POOL/rf3t$_t" "$PBK/f3s$_t" "$PLP/f3g$_t" -e -T "$_t"
+    _want="d1 h1 m1 m2 m3"; [ "$_t" = 1 ] && _want="d1 h1 m3"
+    check "R195 F3: -T $_t from a bookmark: exit 0" "0 0" "$RC_S $RC_G"
+    check "R195 F3: -T $_t from a bookmark: push" "$_want" "$(snaps_of "$PBK/f3s$_t")"
+    check "R195 F3: -T $_t from a bookmark: pull" "$_want" "$(snaps_of "$PLP/f3g$_t")"
+done
+
 # --- REV-20261104-186 F1/F4/F5/F6 ---------------------------------------------
 # F1: the protected-snapshot listing before a force-full destroy is fail-closed.
 # F4: the -F collision scan maps a nested target child by its FULL relative path.

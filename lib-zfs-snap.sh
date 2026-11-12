@@ -1971,11 +1971,15 @@ auto_skip_intermediates() {
         fi
     done
     if [ -z "$common_t" ]; then
+        # A bookmark base (REV-20261112-195 F3) comes as its full name,
+        # dataset#bookmark; a bookmark has its own creation time.
+        local base_full="${src_dataset}@${common_snapshot}"
+        case "$common_snapshot" in *'#'*) base_full="$common_snapshot" ;; esac
         if [ -n "$remote_host" ]; then
             common_t=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-                "zfs get -Hp -o value creation '${src_dataset}@${common_snapshot}'" 2>/dev/null)
+                "zfs get -Hp -o value creation '${base_full}'" 2>/dev/null)
         else
-            common_t=$(zfs get -Hp -o value creation "${src_dataset}@${common_snapshot}" 2>/dev/null)
+            common_t=$(zfs get -Hp -o value creation "${base_full}" 2>/dev/null)
         fi
     fi
     [ -n "$common_t" ] || { printf 'no'; return 0; }
@@ -3485,7 +3489,10 @@ exclusion_step_plan() {
 # and before <latest> that -E does not exclude (EXCLUDE_SNAPS prefixes, as in
 # exclusion_step_plan). The caller sends `-i #bookmark @bridge`, then the usual
 # `-I @bridge @latest`. Prints nothing when there is none: the single -i is then
-# the whole interval. rc 1 only when the list itself could not be read.
+# the whole interval -- printed only when the list was read AND holds both the
+# bookmark and <latest>. Anything less is unknown, not "none in between":
+# rc 1 when the list could not be read, rc 3 when it lacks either end
+# (REV-20261112-195 F2); the callers refuse rather than skip the snapshots.
 # Usage: bookmark_bridge_snap <dataset> <dataset#bookmark> <latest> [user host]
 bookmark_bridge_snap() {
     local ds="$1" bm="$2" latest="$3" ruser="${4:-}" rhost="${5:-}" out
@@ -3500,7 +3507,8 @@ bookmark_bridge_snap() {
         BEGIN { nx = split(xs, X, " ") }
         { N[NR] = $1; T[NR] = $2 + 0; if ($1 == b) bt = T[NR]; if ($1 == l) lt = T[NR] }
         END {
-            if (bt == "" || lt == "" || lt <= bt) exit 0
+            if (bt == "" || lt == "") exit 3
+            if (lt <= bt) exit 0
             best = ""
             for (i = 1; i <= NR; i++) {
                 at = index(N[i], "@"); if (at == 0) continue
