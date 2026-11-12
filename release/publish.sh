@@ -51,36 +51,24 @@ dst="$2"
 [ -z "$(git -C "$dst" status --porcelain)" ] || die "$dst has uncommitted changes -- refusing to mix them into a release"
 
 # --- the file list, from the MANIFEST of THAT revision -------------------------------------
-manifest=$(git -C "$dev" show "$rev:release/MANIFEST") || die "release/MANIFEST is not in $rev"
-files=$(printf '%s\n' "$manifest" | awk '
-    /^[ \t]*(#|$)/ { next }
-    { sub(/[ \t]+$/, ""); print }' | while IFS= read -r line; do
-        case "$line" in
-            '!'*) printf -- '-%s\n' "${line#!}" ;;
-            */)   git -C "$dev" ls-tree -r --name-only "$rev" -- "$line" | sed 's/^/+/' ;;
-            *)    git -C "$dev" cat-file -e "$rev:$line" 2>/dev/null || { echo "!missing $line"; continue; }
-                  printf '+%s\n' "$line" ;;
-        esac
-    done)
-missing=$(printf '%s\n' "$files" | sed -n 's/^!missing //p')
-[ -z "$missing" ] || die "MANIFEST names files that are not in $rev: $missing"
-list=$(printf '%s\n' "$files" | awk '
-    /^\+/ { keep[substr($0, 2)] = 1 }
-    /^-/  { drop[substr($0, 2)] = 1 }
-    END   { for (f in keep) { ok = 1; for (d in drop) if (f == d || index(f, d "/") == 1) ok = 0; if (ok) print f } }' | sort)
-[ -n "$list" ] || die "the MANIFEST resolves to no files"
+# release/package-list.sh: the same resolution coverage-gate.sh compares between revisions.
+list=$(bash "$dev/release/package-list.sh" "$dev" "$rev") || die "cannot resolve the package of $rev (see above)"
 
-# --- every behaviour change has a review (REV-20261112-195 F4) -----------------------------
+# --- every behaviour change was submitted (REV-20261112-195 F4) ---------------------------
 # review-gate.sh judges the ledger's rows; a change nobody submitted has none and passed by
-# absence (1.0.19). Run-time files only: docs, Markdown and repo metadata are not behaviour.
+# absence (1.0.19). coverage-gate.sh compares the run-time package of the PUBLISHED release with
+# this one. The published revision is read from the release repo's remote, never from the
+# checkout's working RELEASE-OF: a run without --push writes and commits the candidate there, so
+# a later --push would compare the candidate with itself (round 2, F4a). Every local commit not
+# yet pushed lies between the two, so all of them are checked.
 if [ "$push" -eq 1 ]; then
-    prev=$(head -n 1 "$dst/RELEASE-OF" 2>/dev/null) && [ -n "$prev" ] \
-        || die "$dst has no RELEASE-OF -- cannot tell what the previous release contained, so cannot check review coverage"
-    pathsf=$(mktemp)
-    printf '%s\n' "$list" | grep -vE '^docs/|\.md$|^LICENSE$|^\.gitattributes$' > "$pathsf"
+    git -C "$dst" fetch -q origin 2>/dev/null         || die "cannot fetch $dst's origin -- what hosts received last is unknown, so review coverage cannot be checked"
+    pub=$(git -C "$dst" rev-parse -q --verify "refs/remotes/origin/main^{commit}")         || die "$dst's origin has no main -- what hosts received last is unknown, so review coverage cannot be checked"
+    prev=$(git -C "$dst" show "$pub:RELEASE-OF" 2>/dev/null | head -n 1)
+    [ -n "$prev" ] || die "the published release (origin/main of $dst) has no RELEASE-OF -- cannot tell what hosts received last, so cannot check review coverage"
     cov_rc=0
-    printf '%s\n' "$ledger" | bash "$dev/release/coverage-gate.sh" "$dev" "$prev" "$rev" "$pathsf" || cov_rc=$?
-    rm -f "$pathsf"
+    printf '%s
+' "$ledger" | bash "$dev/release/coverage-gate.sh" "$dev" "$prev" "$rev" || cov_rc=$?
     [ "$cov_rc" -eq 0 ] || die "the review-coverage gate refused $rev (rc $cov_rc, see above)"
 fi
 
