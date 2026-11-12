@@ -25,8 +25,8 @@ branch visible on GitHub are still WIP. Publication is complete only when all of
 these facts have been read back from fresh GitHub state:
 
 1. the Pull Request is merged into canonical `main`;
-2. `main` contains the intended role-owned artifact and regenerated views;
-3. `REVIEW_LEDGER.md` on `main` shows the expected state and next owner.
+2. `main` contains the intended role-owned artifact;
+3. `./test/reviewctl.sh --derive origin/main` shows the expected state and next owner.
 
 The reviewer publishing a reviewer-owned artifact is responsible for carrying
 that boundary through merge/auto-merge after required checks, when authorised.

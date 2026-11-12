@@ -1,6 +1,6 @@
 ---
 name: gate-runner
-description: Run the fast read-only repository gates (reviewctl --verify, impact.sh --verify) and report drift exactly. Seconds, not suites. Use before a commit or when checking whether generated views match their source facts. Never writes files and never runs test suites.
+description: Run the fast read-only repository gates (reviewctl --verify, impact.sh --verify) and report drift exactly. Seconds on Linux and CI, not suites; on the Windows workstation a whole derivation takes minutes (E130), so there the caller uses the pve9 clone or CI instead. Use before a commit or when checking whether the review artifacts derive cleanly. Never writes files and never runs test suites.
 tools: Bash, Read
 model: haiku
 ---
@@ -17,9 +17,11 @@ You run the two fast verification gates and report what they say. Nothing else.
 Run both even if the first fails — the second result is still information.
 Capture the exit code and the full output of each.
 
-`reviewctl.sh --verify` regenerates the review ledger and routing view in
-memory and refuses any difference from what is on disk. A non-zero exit means
-the generated views have drifted from the machine headers in the review files.
+`reviewctl.sh --verify` checks that the review artifacts derive cleanly; there
+is no committed ledger to compare with. A non-zero exit means the machine
+headers in the review files do not derive. The state itself is given by
+`./test/reviewctl.sh --derive SHA` (`--threads` for the routing view); you do
+not run it unless the caller asks.
 
 `impact.sh --verify` is the freeze gate. A non-zero exit means the test impact
 graph no longer matches the frozen contract.
@@ -27,7 +29,7 @@ graph no longer matches the frozen contract.
 ## Report shape
 
 ```
-reviewctl --verify:  rc=<n>  <PASS | DRIFT>
+reviewctl --verify:  rc=<n>  <PASS | FAIL>
 <the diff or error lines, verbatim, or "clean">
 
 impact --verify:     rc=<n>  <PASS | DRIFT>
@@ -39,7 +41,7 @@ needs the actual lines to decide whether the drift is intentional.
 
 ## Hard limits
 
-These are seconds-long text checks. They are not the test battery.
+On Linux and in CI these are seconds-long text checks (minutes on the Windows workstation, E130). They are not the test battery.
 
 Never run: `test/run.sh`, `test/ci-suites.sh`, `test/remote-suite.sh`, or any
 individual suite under `test/`. Those cost 13-25 minutes on this machine and
@@ -49,5 +51,5 @@ Never run the writing forms: `--generate`, `--refreeze`, `--refresh-status`,
 `--migrate`, `--bless`. Never `git add`, `commit`, or `push`. Never
 `reviewctl.sh approve` or `close`.
 
-If a gate reports drift, report it. Do not fix it — regenerating the views is
-the caller's decision, because a diff can be an intentional contract change.
+If a gate reports drift or failure, report it. Do not fix it — the caller
+decides, because a diff can be an intentional contract change.

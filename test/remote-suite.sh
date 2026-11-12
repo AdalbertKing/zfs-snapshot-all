@@ -35,7 +35,26 @@ die() { echo "remote-suite: $*" >&2; exit 1; }
 
 suite="${1:-}"
 ref="${2:-origin/main}"
-[ -n "$suite" ] || die "usage: $0 <suite> [ref]"
+[ -n "$suite" ] || die "usage: $0 <suite> [ref] | $0 derive [ref] [threads]"
+
+# PROTOCOL V4.4: `derive [ref] [threads]` prints the review state of <ref>
+# (`reviewctl.sh --derive`), computed on the test host -- a whole derivation takes
+# minutes under MSYS (E130). The driver is fresh main's reviewctl; the generator is
+# <ref>'s own. Fixed words only, like the suite names.
+if [ "$suite" = derive ]; then
+    extra=""; driver="${REMOTE_DERIVE_DRIVER:-origin/main}"
+    case "$driver" in *[!A-Za-z0-9./_-]*) die "'$driver' is not a plain git ref" ;; esac
+    case "${3:-}" in "") ;; threads) extra=" --threads" ;; *) die "derive takes [ref] [threads], not '$3'" ;; esac
+    case "$ref" in *[!A-Za-z0-9./_-]*) die "'$ref' is not a plain git ref" ;; esac
+    remote_cmd="set -e
+[ -d $CLONE/.git ] || git clone -q https://github.com/AdalbertKing/zfs-snapshot-all.git $CLONE
+cd $CLONE
+git fetch -q origin '+refs/heads/*:refs/remotes/origin/*'
+git checkout -q -f -B remotesuite $driver
+./test/reviewctl.sh --derive $ref$extra"
+    MSYS_NO_PATHCONV=1 plink -batch "root@$HOST" "$remote_cmd"
+    exit $?
+fi
 
 # The name must be one this checkout actually has. That is what makes it a NAME
 # and not an argument: `foo; rm -rf /` names no suite, and neither does `../..`.

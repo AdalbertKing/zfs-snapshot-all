@@ -308,7 +308,9 @@ let such a batch through without one. The Owner had to carry the request by hand
 2026-11-12 with the word "akceptuję", including this form as a V4 section in place of V3.12
 point 3's next `V3.n` subsection. It is in force from its merge, read back on `main`. V4.4 and
 V4.5 are staged: they take effect only when their tooling is merged and verified. Until then,
-today's rules for committed views and response headers stay mandatory.
+today's rules for committed views and response headers stay mandatory. V4.5's tool was merged
+in PR #1202 and V4.4's migration is delivered in its own change; each section below states its
+current status.
 
 **The problem it removes.** On 2026-11-11..12, 28 pull requests reached `main`:
 - 13 Reviewer verdict PRs, 10 of them for REV-20261112-194, -195 and -196;
@@ -392,12 +394,12 @@ planning comment. Prior Reviewer agreement is needed only when the contract or t
 scope is genuinely unclear. The
 checklist does not make an undiscovered defect acceptable.
 
-### V4.4 Generated review views are derived, not committed (staged; highest priority)
+### V4.4 Generated review views are derived, not committed (delivered; waiting for the Reviewer)
 
-**Staged: not in force until the tooling migration below is merged and verified. Until then
-today's rule stays mandatory:** `REVIEW_LEDGER.md` and `OPEN-THREADS.md` are committed, the work
-pickup in `CLAUDE.md` reads the committed ledger, and the release gates read the committed
-ledger.
+**Delivered: the migration is in this change and waiting for the Reviewer** (`docs/project/DELIVERIES.md`). From its merge the views are not committed: the state at a commit is `./test/reviewctl.sh --derive SHA` (`--threads` for the routing view), the work pickup derives it from fresh `main`, `--verify` checks that the artifacts derive cleanly, and `release/publish.sh --push` derives the candidate's ledger for both release gates. `--generate` still writes an uncommitted local copy. This supersedes every earlier statement in this
+file that the views are committed, compared with a committed copy, or regenerated and committed.
+On the Windows workstation a derivation takes minutes; `./test/remote-suite.sh derive REF` runs it
+on the test host.
 
 The migration happens as one change. The reader, the pickup, CI and both release gates move
 together. The target state:
@@ -476,6 +478,8 @@ deployment is inferred from a version number):
 
 - V4, 2026-11-12: V4.1-V4.7, the Reviewer's decision in PR #1195, accepted by the Owner
   ("akceptuję"). V4.4 and V4.5 are staged until their tooling exists.
+- V4.4 delivery, 2026-11-12: the views are derived (`reviewctl.sh --derive SHA`) and no longer
+  committed; both release gates derive the candidate's ledger. Waiting for the Reviewer.
 - V3.14 revision 4, 2026-11-12 (REV-20261112-195 F4g, Reviewer round 3 verdict): a
   resubmission keeps its earlier ranges as `<!-- submitted: <base> <implementation> -->`.
 - V3.14 revision 3, 2026-11-12 (REV-20261112-195 F4e-f, Reviewer round 3): a file's state
