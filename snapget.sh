@@ -1391,6 +1391,42 @@ mirror_target() {
         esac
         tgt_guid["$_n"]="$_g"
     done <<< "$tgt_gl"
+    # REV-20261112-196 round 2: the GUID lists are evidence only when they are COMPLETE. An
+    # empty or partial answer with rc 0 (after a non-empty name list) used to leave GUIDs out,
+    # and a GUID left out read as "not on the source" -- a destroy. Each side's GUID list must
+    # name exactly the snapshots of its name list; anything else means the lists disagree or
+    # changed between the two reads, and nothing is deleted.
+    local -A src_named=()
+    local _cnt=0
+    for _g in "${!src_by_guid[@]}"; do src_named["${src_by_guid[$_g]}"]=1; done
+    while IFS=$'\t' read -r _n _g; do [ -n "$_n" ] && _cnt=$((_cnt + 1)); done <<< "$src_gl"
+    local _ns=0
+    while IFS= read -r _n; do
+        [ -n "$_n" ] || continue
+        _ns=$((_ns + 1))
+        [ -n "${src_named[$_n]:-}" ] || {
+            log 0 "Mirror (-M) on '$tgt': '$src@$_n' is in the snapshot list of '$src' but not in its GUID list -- the GUID evidence is incomplete, NOTHING deleted"
+            return 1
+        }
+    done <<< "$src_list"
+    if [ "$_cnt" -ne "$_ns" ] || [ "${#src_by_guid[@]}" -ne "$_ns" ]; then
+        log 0 "Mirror (-M) on '$tgt': '$src' lists $_ns snapshot(s) by name but $_cnt row(s) / ${#src_by_guid[@]} GUID(s) by GUID -- the lists disagree or changed while read, NOTHING deleted"
+        return 1
+    fi
+    _cnt=0; _ns=0
+    while IFS=$'\t' read -r _n _g; do [ -n "$_n" ] && _cnt=$((_cnt + 1)); done <<< "$tgt_gl"
+    while IFS= read -r _n; do
+        [ -n "$_n" ] || continue
+        _ns=$((_ns + 1))
+        [ -n "${tgt_guid[$_n]:-}" ] || {
+            log 0 "Mirror (-M) on '$tgt': '$tgt@$_n' is not in the target's GUID list (changed while it was read?) -- NOTHING deleted"
+            return 1
+        }
+    done <<< "$tgt_list"
+    if [ "$_cnt" -ne "$_ns" ] || [ "${#tgt_guid[@]}" -ne "$_ns" ]; then
+        log 0 "Mirror (-M) on '$tgt': the target lists $_ns snapshot(s) by name but $_cnt row(s) by GUID -- the lists disagree or changed while read, NOTHING deleted"
+        return 1
+    fi
     local doomed=() kept=0 gone=0 stuck=0 reserved=0
     while IFS= read -r s; do
         [ -n "$s" ] || continue
