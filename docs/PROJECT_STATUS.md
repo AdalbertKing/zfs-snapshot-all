@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 39a28254894f73a5 -->
+<!-- status-covers-digest: 9b1777f62456e582 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -23,7 +23,7 @@
 - **Niewydane po 1.0.19 (gałąź `fix/rev-196-mirror-guid`, REV-20261112-196):** `-M` (lustro,
   replika na nośniku) rozstrzyga „źródło już tego nie ma” po GUID, nie po nazwie. Migawka o
   zmienionej nazwie na źródle albo na celu zostaje; ta sama nazwa z innym GUID to inna migawka.
-  Nieczytelna lista GUID to nic nie skasowane. Przedtem migawka przemianowana na źródle traciła
+  Gdy listy GUID nie da się odczytać, nic nie jest kasowane. Przedtem migawka przemianowana na źródle traciła
   kopię na celu (na żywo, pve9). Zamrożenie snapget.sh otwarte na słowo właściciela.
 - **Niewydane po 1.0.19 (gałąź `fix/rev-194-media-attach`, REV-20261112-194):** podłączanie
   nośnika repliki. Źródło z `:` w nazwie (`tank/dane:czesc`) silnik dostaje jako lokalne

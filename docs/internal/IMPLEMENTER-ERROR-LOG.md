@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83, E85, E94, E109, E110, E117 (an idle rerun read as the state the cron minute sees), E122.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83, E85, E94, E109, E110, E117 (an idle rerun read as the state the cron minute sees), E129 (a SHA completed by hand), E122.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -2111,6 +2111,24 @@ that habit was carried onto a window with a different default.
 
 *Rule.* R14, unchanged: Esc out of a destructive window; `capture-pane -e` before Enter.
 A repeat under an existing rule, so it is evidence for R14, not a new rule.
+
+### E129 — a full SHA typed from its short prefix (2026-11-12, R2)
+**2026-11-12, REV-20261112-196 response.**
+
+*Genesis.* The response header needed the full base SHA. I knew the prefix `0981b3f6` from
+`git log --oneline` and wrote the 40 characters after it from nowhere. The ancestry check run
+before the commit answered `Not a valid commit name`.
+
+*Cause.* R2: a value from the tree was produced without reading the tree. The prefix looked
+like enough to "complete" it.
+
+*Rule.* R2: every SHA in a header, a response or a PR comes from `git rev-parse`, pasted, never
+completed by hand. `git merge-base --is-ancestor <base> <impl>` runs on the written header
+values before the commit.
+
+Also on 2026-11-12, a repeat of E128: two Python patches in Bash heredocs (`coverage-gate.sh`,
+`test/twins/run.sh`) lost `\n` or failed their asserts. Caught by `bash -n`, a read-back and the
+assert, and redone with the Edit tool. R16 point 4 was known and not applied.
 
 ### E128 — the heredoc ate the backslashes three more times (2026-11-11, R16 point 4, repeat of E124)
 **2026-11-11, batch 1.0.18 (`batch/gui-1-0-18`).**

@@ -100,7 +100,7 @@ These are the names the GUI uses.
 | Kind | What it does | Engine |
 |---|---|---|
 | backup | The collector pulls datasets of a source into its own target and keeps a tiered history on both sides | `snapget.sh`, `delsnaps.sh` |
-| mirror (lustro) | Sync mode: the collector holds the source's datasets at the same paths and, after each pull, destroys the target snapshots the source no longer has (`snapget.sh -M`) | `snapget.sh -M` |
+| mirror (lustro) | Sync mode: the collector holds the source's datasets at the same paths and, after each pull, destroys the target snapshots the source no longer has, judged by GUID (`snapget.sh -M`) | `snapget.sh -M` |
 | local copy (kopia lokalna) | A copy of local datasets onto another local pool, run by root or a named account | `snapget.sh` with a local source |
 | local snapshots (migawki lokalne) | Snapshots on the source, pruned in place, nothing copied (`--target=''`) | `snapsend.sh`, `delsnaps.sh` |
 | remote snapshots (migawki zdalne) | The collector takes snapshots on a remote source and copies nothing (`[snaponly:]` section, `snapget.sh -s`) | `snapget.sh -s`, `delsnaps.sh` |

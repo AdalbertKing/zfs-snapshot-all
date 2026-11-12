@@ -100,7 +100,7 @@ Takich nazw używa GUI.
 | Rodzaj | Co robi | Silnik |
 |---|---|---|
 | backup | Kolektor pobiera datasety źródła do własnego celu i trzyma warstwową historię po obu stronach | `snapget.sh`, `delsnaps.sh` |
-| lustro (mirror) | Tryb sync: kolektor trzyma datasety źródła pod tymi samymi ścieżkami i po każdym pobraniu niszczy migawki celu, których źródło już nie ma (`snapget.sh -M`) | `snapget.sh -M` |
+| lustro (mirror) | Tryb sync: kolektor trzyma datasety źródła pod tymi samymi ścieżkami i po każdym pobraniu niszczy migawki celu, których źródło już nie ma, rozpoznawane po GUID (`snapget.sh -M`) | `snapget.sh -M` |
 | kopia lokalna (local copy) | Kopia lokalnych datasetów na inną lokalną pulę, uruchamiana przez roota lub wskazane konto | `snapget.sh` z lokalnym źródłem |
 | migawki lokalne (local snapshots) | Migawki na źródle, prune w miejscu, nic nie jest kopiowane (`--target=''`) | `snapsend.sh`, `delsnaps.sh` |
 | migawki zdalne (remote snapshots) | Kolektor robi migawki na zdalnym źródle i niczego nie kopiuje (sekcja `[snaponly:]`, `snapget.sh -s`) | `snapget.sh -s`, `delsnaps.sh` |
