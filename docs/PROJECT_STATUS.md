@@ -35,7 +35,7 @@
   bookmarka przechodzi te same kontrole co ze wspólnej migawki. Push na cel `-t` z zapisem po
   najnowszej migawce odmawia (F1). Nieudana lista migawek między bookmarkiem a najnowszą to odmowa,
   a nie pojedyncza różnica (F2). `-T` działa też od bookmarka (F3). `publish.sh --push` odmawia
-  wydania, gdy zmiany w plikach uruchomieniowych od poprzedniego wydania nie pokrywa żaden REV (F4,
+  wydania, gdy żaden REV nie pokrywa zmian w plikach uruchomieniowych od poprzedniego wydania (F4,
   `release/coverage-gate.sh`). Druga runda recenzji (F4a-d): bramka porównuje paczkę wydaną
   (`RELEASE-OF` z `origin/main` repo wydań, nie z kopii roboczej) z kandydatem. Każdy zmieniony,
   dodany albo usunięty plik uruchomieniowy musi wynikać z zakresów zgłoszonych do recenzji
