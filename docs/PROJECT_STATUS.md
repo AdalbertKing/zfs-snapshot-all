@@ -27,7 +27,10 @@
   nieczytelnych danych nie odmawia i nie radzi `zfs destroy` (F2). Pula zaimportowana przed biegiem
   przechodzi te same kontrole linii i miejsca; odmowa nie eksportuje importu operatora (F3).
   Niepełna lista drzewa źródła nie liczy się jako „bez nowych danych” (F4). Linie crona bez `:`
-  w źródle bez zmian.
+  w źródle bez zmian. Dowód na żywo dla recenzenta (pve9, pula z pliku, `main` `c63b500c`):
+  powrót nośnika po retencji idzie przyrostem z bookmarka. Migawka o zmienionej nazwie, z tym samym
+  GUID i bez wspólnej nazwy, przechodzi bramkę (bramka sprzed F2 odmawiała). Brak wspólnego GUID to odmowa, a import operatora zostaje
+  (`docs/internal/reviews/evidence/REV-20261112-194-mediagate-live.*`).
 - **Niewydane po 1.0.19 (gałąź `fix/rev-195-bookmark-guards`, REV-20261112-195):** przyrost z
   bookmarka przechodzi te same kontrole co ze wspólnej migawki. Push na cel `-t` z zapisem po
   najnowszej migawce odmawia (F1). Nieudana lista migawek między bookmarkiem a najnowszą to odmowa,
