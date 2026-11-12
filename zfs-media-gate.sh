@@ -655,12 +655,6 @@ attach)
         _work=no
         for _src in "${SOURCES[@]}"; do
             if ! zfs list -H -o name "$_src" >/dev/null 2>&1; then _work=unknown; break; fi
-            # REV-20261112-194 F4: a tree listing that failed, or came back without
-            # the source itself, proves nothing -- it is unknown, never "quiet".
-            # Before this an empty or failed listing ran the loop zero times and
-            # left _work=no, so a missing listing could skip a copy with real work.
-            _tree="$(zfs list -H -o name -r "$_src" 2>/dev/null)" || { _work=unknown; break; }
-            printf '%s\n' "$_tree" | grep -qxF -- "$_src" || { _work=unknown; break; }
             while IFS= read -r _ds; do
                 [ -n "$_ds" ] || continue
                 _snap="$(zfs list -H -t snapshot -o name -d 1 "$_ds" 2>/dev/null | grep "@${PREFIX}" | tail -1)"
@@ -672,7 +666,7 @@ attach)
                     *) _work=yes; break ;;
                 esac
             done <<EOF
-$_tree
+$(zfs list -H -o name -r "$_src" 2>/dev/null)
 EOF
             [ "$_work" = no ] || break
         done
@@ -721,138 +715,12 @@ EOF
         say "REFUSING: '$POOL' is imported, but its guid ($(pool_guid)) is not one of the disks of '$LABEL' (guids $ALLOWED_GUIDS). Not using it and not exporting it -- it is not this replica's disk."
         emit foreign_medium; exit 2
     fi
-    # REV-20261112-194 F3: THE SAME PREFLIGHT IN EVERY STATE. A pool imported before
-    # this run -- our own interrupted run, or an operator's import -- used to return
-    # 0 before the lineage and capacity checks below, so a first copy too big for the
-    # disk, or onto a foreign lineage, started just because the pool was already
-    # imported. The checks now run in all three states; only the way out differs:
-    #   new    -- this run imported it: export, and clear the marker once exported;
-    #   ours   -- our own earlier import (marker present): the same;
-    #   theirs -- somebody else's import: NEVER exported; left as it was found.
-    preflight_put_away() {   # <new|ours|theirs>
-        if [ "$1" = theirs ]; then
-            say "'$POOL' was imported before this run by somebody else, so it is left imported, as it was found."
-            return 0
-        fi
-        if bounded_export >/dev/null 2>&1; then
-            rm -f "$OURS" 2>/dev/null || :
-        else
-            say "DO NOT UNPLUG '$POOL': the refusal above stands, but exporting the pool afterwards did not succeed, so it is STILL IMPORTED. The ownership marker is kept so this run's detach can export it; pulling the disk now can hang this host."
-        fi
-    }
-    media_preflight() {   # <new|ours|theirs> -- returns only when the medium may be used
-        local _pf_own="$1" _src _tgt _tall _tsnaps _sall _ssnaps _common _one _bl _bg _need _new _ok _b _free
-        # A MEDIUM THAT HOLDS SOMEBODY ELSE'S LINEAGE CANNOT BE WRITTEN, and the
-        # error ZFS gives for it names the wrong layer.
-        #
-        # Measured on pve9, 2026-08-30, on a clean teardown-and-rebuild: the disk
-        # still carried the replica of the relationship that had just been removed,
-        # the rebuilt collector datasets carry a brand new snapshot family, and the
-        # two share nothing. The engine can neither send an increment (no common
-        # snapshot) nor seed afresh (the target has snapshots), so every night the
-        # operator gets
-        #
-        #     cannot receive new filesystem stream: destination has snapshots
-        #     (eg. ...@replica_2026-08-30_11-18-29) must destroy them to overwrite it
-        #
-        # which is true, is about ZFS, and says nothing about the decision in front
-        # of them. Refusing HERE means the engine never runs and the log carries one
-        # cause instead of a stream of receive errors -- and rc 2 is already this
-        # verb's "something is wrong, alert", so the cron line's behaviour is
-        # unchanged.
-        #
-        # ONLY when there is no common snapshot AT ALL. A target sharing any
-        # snapshot of the family is an ordinary incremental and must not be touched
-        # by this.
-        if [ "${#SOURCES[@]}" -gt 0 ] && has_family && [ -n "$DATASET" ]; then
-            for _src in "${SOURCES[@]}"; do
-                _tgt="$DATASET/$_src"
-                zfs list -H -o name "$_tgt" >/dev/null 2>&1 || continue
-                # REV-20261112-194 F2: THE LINEAGE IS DECIDED BY GUID, the way the engine
-                # decides it (find_common_snapshot): a snapshot of the same name counts only
-                # with the same GUID, and a snapshot renamed on either side is found by its
-                # GUID alone. The gate used to accept any name match and, failing that,
-                # compared target GUIDs to source BOOKMARKS only -- so a renamed snapshot
-                # was refused as "a DIFFERENT lineage" with destroy advice.
-                # Evidence that cannot be read, or a snapshot listed without a GUID, is
-                # UNKNOWN: no refusal and no destroy advice on a guess. The engine runs and
-                # reports what it finds.
-                _tall="$(zfs list -H -t snapshot -o name,guid -d 1 "$_tgt" 2>/dev/null)" || continue
-                _tsnaps="$(printf '%s\n' "$_tall" | cut -f1 | grep "@${PREFIX}" | sed 's/.*@//')"
-                [ -n "$_tsnaps" ] || continue
-                _sall="$(zfs list -H -t snapshot -o name,guid -d 1 "$_src" 2>/dev/null)" || continue
-                _bl="$(zfs list -H -t bookmark -o guid -d 1 "$_src" 2>/dev/null)" || continue
-                printf '%s\n%s\n' "$_tall" "$_sall" | awk -F'\t' 'NF && $2 !~ /^[0-9]+$/ { bad = 1 } END { exit bad }' || continue
-                printf '%s\n' "$_bl" | grep -q '[^0-9]' && continue
-                _ssnaps="$(printf '%s\n' "$_sall" | cut -f1 | grep "@${PREFIX}" | sed 's/.*@//')"
-                # REV-20261111-B01 (found during F2): a medium that returns after the collector's
-                # retention has pruned the snapshot it holds still shares the lineage, because a
-                # source BOOKMARK carries that snapshot's GUID. The engine sends the increment
-                # from it ("a bookmark still anchors an incremental"), and that bookmark is why
-                # the anchor exists at all. Before this, the gate refused this medium as "a
-                # DIFFERENT lineage". Measured on pve9 2026-11-11: with the gate bypassed, the
-                # engine sent `-i src#tgt-...` and the copy succeeded.
-                # So the set a target snapshot may match is the source's snapshot GUIDs
-                # plus its bookmark GUIDs.
-                _bg=" $(printf '%s\n' "$_sall" | cut -f2 | tr '\n' ' ') $(printf '%s\n' "$_bl" | tr '\n' ' ') "
-                _common=no
-                for _one in $(printf '%s\n' "$_tall" | cut -f2); do
-                    case "$_bg" in *" $_one "*) _common=yes; break ;; esac
-                done
-                [ "$_common" = yes ] && continue
-                say "REFUSING: '$_tgt' on this medium holds '$PREFIX' snapshots that '$_src' does not have, and they share none at all -- so this is a copy of a DIFFERENT lineage, not an older state of this one. The engine can neither send an increment (no common snapshot) nor seed over it (the target has snapshots), and would fail every run with a ZFS receive error."
-                say "  the medium holds:  $(printf '%s' "$_tsnaps" | tail -1)"
-                say "  the source is at:  $(printf '%s' "$_ssnaps" | tail -1)"
-                say "  Decide, then act: KEEP that copy by pointing this replica at a different --dst, or DISCARD it with 'zfs destroy -r $_tgt' and let the next run seed afresh. This tool will not choose between somebody's two backups."
-                # THE MARKER GOES ONLY IF THE EXPORT REALLY HAPPENED.
-                #
-                # REV-20260829-126 F2. This ran `bounded_export || :` and then
-                # deleted $OURS unconditionally -- treating an ATTEMPT as a success.
-                # When export fails or hits the timeout the pool stays imported
-                # while the ownership evidence is gone, so the bracket's detach can
-                # no longer prove this run imported it and must not export it. A
-                # temporary failure became a permanently imported removable pool
-                # with no retry path.
-                #
-                # Ownership evidence may be cleared only after export is KNOWN to
-                # have succeeded; otherwise the marker stays, so detach can finish
-                # the job, and the operator gets the same DO NOT UNPLUG warning
-                # every other failed export emits.
-                preflight_put_away "$_pf_own"
-                emit lineage_mismatch; exit 2
-            done
-        fi
-
-        # U183 (Site-A 2026-11-09): a first copy started onto a disk far too small for its
-        # sources and ran until the owner killed it. Before the engine starts, a source with
-        # no copy on this medium yet is a full send (first_copy_bytes, lib-backup-common.sh).
-        # If the sum exceeds what the medium has free, refuse with both numbers -- rc 2, an
-        # alert -- and put the disk away.
-        # Unreadable numbers skip the check rather than block a copy on a guess.
-        if [ "${#SOURCES[@]}" -gt 0 ] && [ -n "$DATASET" ]; then
-            _need=0; _new=""; _ok=yes
-            for _src in "${SOURCES[@]}"; do
-                zfs list -H -o name "$DATASET/$_src" >/dev/null 2>&1 && continue
-                _b="$(first_copy_bytes "$RECURSIVE" "$_src")" || { _ok=no; break; }
-                _need=$(( _need + _b )); _new="$_new $_src"
-            done
-            _free="$(zfs get -H -p -o value available "$DATASET" 2>/dev/null)"
-            case "$_free" in ''|*[!0-9]*) _ok=no ;; esac
-            if [ "$_ok" = yes ] && [ -n "$_new" ] && [ "$_need" -gt "$_free" ]; then
-                say "REFUSING: the first copy of$_new needs about $(iec_bytes "$_need") (zfs used on the source$([ "$RECURSIVE" = 1 ] && echo ", whole tree")), and '$DATASET' has $(iec_bytes "$_free") free. It cannot fit; not starting it. Use a bigger disk, or fewer sources for this replica."
-                preflight_put_away "$_pf_own"
-                emit medium_too_small; exit 2
-            fi
-        fi
-    }
-
     if imported; then
         marker_is_ours; _own=$?
         case "$_own" in
             0)  # Our own interrupted run. The marker STAYS.
                 check_dataset || exit $?
                 mkdir -p "$STATE_DIR" 2>/dev/null && date '+%Y-%m-%d %H:%M:%S' > "$SEEN" 2>/dev/null || :
-                media_preflight ours
                 say "medium '$POOL' for '$LABEL' is already imported AND carries this package's ownership marker -- a previous run was interrupted before it could export. Keeping ownership; this run will export it when it is done."
                 emit present_ours_resumed; exit 0 ;;
             2)  # A marker exists and we cannot match it to the pool in the slot.
@@ -862,7 +730,6 @@ EOF
         # No marker at all: somebody else's import, and it stays that way.
         check_dataset || exit $?
         mkdir -p "$STATE_DIR" 2>/dev/null && date '+%Y-%m-%d %H:%M:%S' > "$SEEN" 2>/dev/null || :
-        media_preflight theirs
         say "medium '$POOL' for '$LABEL' was ALREADY imported -- using it, and detach will leave it as it found it."
         emit present_not_ours; exit 0
     fi
@@ -939,7 +806,112 @@ guid=%s
         say "note: '$POOL' has failmode=wait, the ZFS default. On a disk that gets unplugged that turns a pull-while-imported into an unkillable hang rather than an error -- measured on the lab. Consider: zpool set failmode=continue $POOL"
     fi
 
-    media_preflight new
+    # A MEDIUM THAT HOLDS SOMEBODY ELSE'S LINEAGE CANNOT BE WRITTEN, and the
+    # error ZFS gives for it names the wrong layer.
+    #
+    # Measured on pve9, 2026-08-30, on a clean teardown-and-rebuild: the disk
+    # still carried the replica of the relationship that had just been removed,
+    # the rebuilt collector datasets carry a brand new snapshot family, and the
+    # two share nothing. The engine can neither send an increment (no common
+    # snapshot) nor seed afresh (the target has snapshots), so every night the
+    # operator gets
+    #
+    #     cannot receive new filesystem stream: destination has snapshots
+    #     (eg. ...@replica_2026-08-30_11-18-29) must destroy them to overwrite it
+    #
+    # which is true, is about ZFS, and says nothing about the decision in front
+    # of them. Refusing HERE means the engine never runs and the log carries one
+    # cause instead of a stream of receive errors -- and rc 2 is already this
+    # verb's "something is wrong, alert", so the cron line's behaviour is
+    # unchanged.
+    #
+    # ONLY when there is no common snapshot AT ALL. A target sharing any
+    # snapshot of the family is an ordinary incremental and must not be touched
+    # by this.
+    if [ "${#SOURCES[@]}" -gt 0 ] && has_family && [ -n "$DATASET" ]; then
+        for _src in "${SOURCES[@]}"; do
+            _tgt="$DATASET/$_src"
+            zfs list -H -o name "$_tgt" >/dev/null 2>&1 || continue
+            _tsnaps="$(zfs list -H -t snapshot -o name -d 1 "$_tgt" 2>/dev/null | grep "@${PREFIX}" | sed 's/.*@//')"
+            [ -n "$_tsnaps" ] || continue
+            _ssnaps="$(zfs list -H -t snapshot -o name -d 1 "$_src" 2>/dev/null | grep "@${PREFIX}" | sed 's/.*@//')"
+            _common=no
+            while IFS= read -r _one; do
+                [ -n "$_one" ] || continue
+                case "
+$_ssnaps
+" in *"
+$_one
+"*) _common=yes; break ;; esac
+            done <<EOF
+$_tsnaps
+EOF
+            # REV-20261111-B01 (found during F2): a medium that returns after the collector's
+            # retention has pruned the snapshot it holds still shares the lineage, because a
+            # source BOOKMARK carries that snapshot's GUID. The engine sends the increment
+            # from it ("a bookmark still anchors an incremental"), and that bookmark is why
+            # the anchor exists at all. Before this, the gate refused this medium as "a
+            # DIFFERENT lineage". Measured on pve9 2026-11-11: with the gate bypassed, the
+            # engine sent `-i src#tgt-...` and the copy succeeded.
+            if [ "$_common" = no ]; then
+                _bg=" $(zfs list -H -t bookmark -o guid -d 1 "$_src" 2>/dev/null | tr '\n' ' ') "
+                for _one in $(zfs list -H -t snapshot -o guid -d 1 "$_tgt" 2>/dev/null); do
+                    case "$_bg" in *" $_one "*) _common=yes; break ;; esac
+                done
+            fi
+            [ "$_common" = yes ] && continue
+            say "REFUSING: '$_tgt' on this medium holds '$PREFIX' snapshots that '$_src' does not have, and they share none at all -- so this is a copy of a DIFFERENT lineage, not an older state of this one. The engine can neither send an increment (no common snapshot) nor seed over it (the target has snapshots), and would fail every run with a ZFS receive error."
+            say "  the medium holds:  $(printf '%s' "$_tsnaps" | tail -1)"
+            say "  the source is at:  $(printf '%s' "$_ssnaps" | tail -1)"
+            say "  Decide, then act: KEEP that copy by pointing this replica at a different --dst, or DISCARD it with 'zfs destroy -r $_tgt' and let the next run seed afresh. This tool will not choose between somebody's two backups."
+            # THE MARKER GOES ONLY IF THE EXPORT REALLY HAPPENED.
+            #
+            # REV-20260829-126 F2. This ran `bounded_export || :` and then
+            # deleted $OURS unconditionally -- treating an ATTEMPT as a success.
+            # When export fails or hits the timeout the pool stays imported
+            # while the ownership evidence is gone, so the bracket's detach can
+            # no longer prove this run imported it and must not export it. A
+            # temporary failure became a permanently imported removable pool
+            # with no retry path.
+            #
+            # Ownership evidence may be cleared only after export is KNOWN to
+            # have succeeded; otherwise the marker stays, so detach can finish
+            # the job, and the operator gets the same DO NOT UNPLUG warning
+            # every other failed export emits.
+            if bounded_export >/dev/null 2>&1; then
+                rm -f "$OURS" 2>/dev/null || :
+            else
+                say "DO NOT UNPLUG '$POOL': the refusal above stands, but exporting the pool afterwards did not succeed, so it is STILL IMPORTED. The ownership marker is kept so this run's detach can export it; pulling the disk now can hang this host."
+            fi
+            emit lineage_mismatch; exit 2
+        done
+    fi
+
+    # U183 (Site-A 2026-11-09): a first copy started onto a disk far too small for its
+    # sources and ran until the owner killed it. Before the engine starts, a source with
+    # no copy on this medium yet is a full send (first_copy_bytes, lib-backup-common.sh).
+    # If the sum exceeds what the medium has free, refuse with both numbers -- rc 2, an
+    # alert -- and put the disk away.
+    # Unreadable numbers skip the check rather than block a copy on a guess.
+    if [ "${#SOURCES[@]}" -gt 0 ] && [ -n "$DATASET" ]; then
+        _need=0; _new=""; _ok=yes
+        for _src in "${SOURCES[@]}"; do
+            zfs list -H -o name "$DATASET/$_src" >/dev/null 2>&1 && continue
+            _b="$(first_copy_bytes "$RECURSIVE" "$_src")" || { _ok=no; break; }
+            _need=$(( _need + _b )); _new="$_new $_src"
+        done
+        _free="$(zfs get -H -p -o value available "$DATASET" 2>/dev/null)"
+        case "$_free" in ''|*[!0-9]*) _ok=no ;; esac
+        if [ "$_ok" = yes ] && [ -n "$_new" ] && [ "$_need" -gt "$_free" ]; then
+            say "REFUSING: the first copy of$_new needs about $(iec_bytes "$_need") (zfs used on the source$([ "$RECURSIVE" = 1 ] && echo ", whole tree")), and '$DATASET' has $(iec_bytes "$_free") free. It cannot fit; not starting it. Use a bigger disk, or fewer sources for this replica."
+            if bounded_export >/dev/null 2>&1; then
+                rm -f "$OURS" 2>/dev/null || :
+            else
+                say "DO NOT UNPLUG '$POOL': the refusal above stands, but exporting the pool afterwards did not succeed, so it is STILL IMPORTED. The ownership marker is kept so this run's detach can export it; pulling the disk now can hang this host."
+            fi
+            emit medium_too_small; exit 2
+        fi
+    fi
 
     say "imported '$POOL' for '$LABEL' -- this run will export it again when it is done."
     emit imported; exit 0
