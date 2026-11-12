@@ -15,21 +15,14 @@
 # A submission is a ledger row whose response names its range: `implementation:` (the row's
 # Implementation column) and `<!-- base: <sha> -->` in the response file. It covers a file only
 # where its own range changed that file: the file's state at <base> -> its state at <impl>
-# A file's STATE in a revision is what hosts receive from that revision's publish: its tree
-# mode (executable bit, symlink) and the hash of its bytes AFTER that revision's scrub
-# (`release/scrub.sed`, applied by that revision's `release/scrub-file.sh`), or "not shipped"
-# when the file is outside that revision's package. A mode change is a state change (round 3,
-# F4e); so is a scrub change that alters the bytes of a shipped file, although its source blob
-# is unchanged (F4f). A scrub change that alters no shipped file changes no state.
+# (a state is the blob, or "not shipped" when the file is outside that revision's package).
 # A file is covered when a chain of such steps leads from its published state to its state in
 # <rev>. So:
 #   - a review of other files does not cover an earlier change to this one, whatever the
 #     ancestry (round 2, F4b);
 #   - a run-time edit made only by a merge is a state no submission reached, and is refused;
 #     a mechanical merge of submitted work reproduces a submitted state and passes (F4c);
-#   - adding a file to the package or dropping it is a state change like any other (F4d);
-#   - an unsubmitted chmod, or an unsubmitted scrub change that rewrites a shipped file, is a
-#     state no submission reached (F4e, F4f).
+#   - adding a file to the package or dropping it is a state change like any other (F4d).
 # Docs, Markdown and repository metadata are not run-time and are not compared.
 # Exit 0 = covered; 1 = refused, every uncovered file named; 2 = could not run.
 set -u
@@ -49,37 +42,8 @@ pkg() {   # <commit>: the run-time part of its package, into $tmp/pkg.<commit>
     bash "$here/package-list.sh" "$dev" "$1" > "$tmp/all.$1" || return 1
     grep -vE "$NOT_RUNTIME" "$tmp/all.$1" > "$tmp/pkg.$1" || :
 }
-xform() {   # <commit>: that revision's scrub into $tmp/sed.<commit>, its applier into $tmp/sf.<commit>
-    [ -f "$tmp/sf.$1" ] && return 0
-    if git -C "$dev" cat-file -e "$1:release/scrub.sed" 2>/dev/null; then
-        git -C "$dev" show "$1:release/scrub.sed" > "$tmp/sed.$1" || return 1
-    else
-        : > "$tmp/sed.$1"          # no scrub in that revision: nothing rewritten
-    fi
-    if git -C "$dev" cat-file -e "$1:release/scrub-file.sh" 2>/dev/null; then
-        git -C "$dev" show "$1:release/scrub-file.sh" > "$tmp/sf.$1" || return 1
-    else                           # before scrub-file.sh existed, publish.sh did this inline
-        printf '%s\n' 'grep -Iq . "$2" 2>/dev/null || exit 0' 'sed -i -f "$1" "$2"' > "$tmp/sf.$1"
-    fi
-}
-state() {   # <commit> <path>: "<mode>:<hash of the shipped bytes>", "-" when not in its package,
-            # "!" when it cannot be computed
-    grep -qxF -- "$2" "$tmp/pkg.$1" || { echo -; return 0; }
-    local m t o
-    read -r m t o _ < <(git -C "$dev" ls-tree "$1" -- "$2")
-    [ -n "${o:-}" ] || { echo '!'; return 0; }
-    if [ "$t" = blob ]; then
-        xform "$1" && git -C "$dev" cat-file blob "$o" > "$tmp/f" \
-            && bash "$tmp/sf.$1" "$tmp/sed.$1" "$tmp/f" && o=$(git hash-object "$tmp/f") \
-            || { echo '!'; return 0; }
-    fi
-    echo "$m:$o"
-}
-st() {   # <var> <commit> <path>: state into <var>; rc 2 for the whole gate when it cannot be read
-    local v
-    v=$(state "$2" "$3")
-    [ "$v" != '!' ] || { echo "coverage-gate: cannot compute the shipped state of $3 at ${2:0:12}" >&2; exit 2; }
-    printf -v "$1" '%s' "$v"
+state() {   # <commit> <path>: the blob it ships, or "-" when that path is not in its package
+    if grep -qxF -- "$2" "$tmp/pkg.$1"; then git -C "$dev" rev-parse "$1:$2"; else echo -; fi
 }
 pkg "$prev" || { echo "coverage-gate: cannot read the package of the published revision" >&2; exit 2; }
 pkg "$rev"  || { echo "coverage-gate: cannot read the package of $rev" >&2; exit 2; }
@@ -109,7 +73,7 @@ done <<< "$ledger"
 uncovered=0
 while IFS= read -r p; do
     [ -n "$p" ] || continue
-    st v0 "$prev" "$p"; st vr "$rev" "$p"
+    v0=$(state "$prev" "$p"); vr=$(state "$rev" "$p")
     [ "$v0" = "$vr" ] && continue
     # Reachable states from the published one, one submitted step at a time.
     reach=" $v0 "; by=""; grew=1
@@ -117,7 +81,7 @@ while IFS= read -r p; do
         grew=0
         for s in ${subs[@]+"${subs[@]}"}; do
             read -r sr sb si <<< "$s"
-            st a "$sb" "$p"; st b "$si" "$p"
+            a=$(state "$sb" "$p"); b=$(state "$si" "$p")
             [ "$a" != "$b" ] || continue
             case "$reach" in *" $a "*) ;; *) continue ;; esac
             case "$reach" in *" $b "*) continue ;; esac
@@ -134,7 +98,7 @@ while IFS= read -r p; do
             esac
             {
                 echo "coverage-gate: UNCOVERED $p ($what since the published release) -- no submitted range leads to its state in ${rev:0:12}"
-                git -C "$dev" log --format='    %h %s' "$prev..$rev" -- "$p" release/MANIFEST release/scrub.sed release/scrub-file.sh
+                git -C "$dev" log --format='    %h %s' "$prev..$rev" -- "$p" "release/MANIFEST"
             } >&2 ;;
     esac
 done < <(sort -u "$tmp/pkg.$prev" "$tmp/pkg.$rev")

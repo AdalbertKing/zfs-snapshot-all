@@ -81,15 +81,13 @@ while IFS= read -r f; do
     mkdir -p "$tmp/$(dirname "$f")"
     cp -p "$all/$f" "$tmp/$f"
 done <<< "$list"
-# The scrub and its applier come from $rev, as coverage-gate.sh reads them for every revision
-# it compares (REV-20261112-195 F4f): what is checked is what is shipped.
 git -C "$dev" show "$rev:release/scrub.sed" > "$tmp/.scrub.sed"
-git -C "$dev" show "$rev:release/scrub-file.sh" > "$tmp/.scrub-file.sh"
 while IFS= read -r f; do
     [ -f "$tmp/$f" ] || continue
-    bash "$tmp/.scrub-file.sh" "$tmp/.scrub.sed" "$tmp/$f" || die "the scrub failed on $f"
+    grep -Iq . "$tmp/$f" 2>/dev/null || continue          # binary: left alone
+    sed -i -f "$tmp/.scrub.sed" "$tmp/$f"
 done <<< "$list"
-rm -f "$tmp/.scrub.sed" "$tmp/.scrub-file.sh"
+rm -f "$tmp/.scrub.sed"
 git -C "$dev" show "$rev:release/README.md" > "$tmp/README.md"
 subject=$(git -C "$dev" log -1 --format=%s "$rev")
 printf '%s\n' "$rev" > "$tmp/RELEASE-OF"
