@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: 94aa27c809f1562a -->
+<!-- status-covers-digest: 6ce6a1caabffabc8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,14 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Niewydane po 1.0.19 (gałąź `fix/rev-194-media-attach`, REV-20261112-194):** podłączanie
+  nośnika repliki. Źródło z `:` w nazwie (`tank/dane:czesc`) silnik dostaje jako lokalne
+  (`:tank/dane:czesc`), tak jak sprawdza je bramka; przedtem brał część przed `:` za host ssh (F1,
+  na żywo na pve9). Zgodność linii bramka ocenia po GUID migawek i bookmarków źródła; przy
+  nieczytelnych danych nie odmawia i nie radzi `zfs destroy` (F2). Pula zaimportowana przed biegiem
+  przechodzi te same kontrole linii i miejsca; odmowa nie eksportuje importu operatora (F3).
+  Niepełna lista drzewa źródła nie liczy się jako „bez nowych danych” (F4). Linie crona bez `:`
+  w źródle bez zmian.
 - **Niewydane po 1.0.19 (gałąź `fix/rev-195-bookmark-guards`, REV-20261112-195):** przyrost z
   bookmarka przechodzi te same kontrole co ze wspólnej migawki. Push na cel `-t` z zapisem po
   najnowszej migawce odmawia (F1). Nieudana lista migawek między bookmarkiem a najnowszą to odmowa,

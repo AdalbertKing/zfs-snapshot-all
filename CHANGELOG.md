@@ -14,6 +14,17 @@ when they change how the tool is used.
     and the next run tries again. Before, it sent a single diff and those snapshots never arrived.
   - `-T` applies to an increment from a bookmark too, measured from the bookmark's creation.
 - **A release refuses a change no review covers** (`release/coverage-gate.sh`).
+- **Attaching a removable replica medium** (REV-20261112-194):
+  - A replica source whose name holds `:` (`tank/data:part`) is copied as a local dataset.
+    Before, the engine read the part before the `:` as an ssh host, while the media gate
+    checked the name as given.
+  - A medium is refused as "a different lineage" only when no target snapshot shares a GUID
+    with a source snapshot or bookmark. A snapshot renamed on either side counts. Unreadable
+    evidence no longer leads to a refusal or to `zfs destroy` advice.
+  - A medium imported before the run (by an interrupted run of ours or by an operator) gets
+    the same lineage and free-space checks. On refusal an operator's import stays imported.
+  - A source tree that cannot be listed in full no longer counts as "no new data", so the copy
+    is not skipped on that basis.
 
 ## [1.0.19] — 2026-11-12
 

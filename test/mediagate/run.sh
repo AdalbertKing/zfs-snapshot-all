@@ -97,18 +97,43 @@ case "$*" in
   *"list -H -o name -r"*)
       v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
       eval "t=\${SRC_TREE_$v-__u__}"; [ "$t" = "__u__" ] && t="${SRC_TREE:-}"
-      for d in $t; do echo "$d"; done; exit 0 ;;
+      # R194 F4: TREE_RC makes the listing fail after whatever it printed.
+      for d in $t; do echo "$d"; done; exit "${TREE_RC:-0}" ;;
+  # R194 F2: the lineage check reads name+guid. SNAPS_<ds>="name:guid ..." lists
+  # several; otherwise the one SRC_SNAP name, with SNAP_GUID_<ds> or -- unset -- a
+  # guid derived from the name, so the same name means the same snapshot, as on a
+  # real pool. SNAPLIST_FAIL_<ds> makes the read fail.
+  *"list -H -t snapshot -o name,guid -d 1"*)
+      v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
+      eval "f=\${SNAPLIST_FAIL_$v-}"; [ -n "$f" ] && exit 1
+      eval "l=\${SNAPS_$v-__u__}"
+      if [ "$l" = "__u__" ]; then
+          eval "s=\${SRC_SNAP_$v-__u__}"; [ "$s" = "__u__" ] && s="${SRC_SNAP:-}"
+          [ -z "$s" ] && exit 0
+          eval "gd=\${SNAP_GUID_$v-}"; [ -n "$gd" ] || gd=$(printf '%s' "$s" | cksum | cut -d' ' -f1)
+          l="$s:$gd"
+      fi
+      for p in $l; do printf '%s@%s\t%s\n' "$last" "${p%%:*}" "${p#*:}"; done; exit 0 ;;
+  # SNAPS_<ds> and SNAPLIST_FAIL_<ds> hold for the name-only and guid-only reads too,
+  # so a gate that reads the snapshots another way sees the same pool (negative control).
   *"list -H -t snapshot -o name -d 1"*)
       v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
+      eval "f=\${SNAPLIST_FAIL_$v-}"; [ -n "$f" ] && exit 1
+      eval "l=\${SNAPS_$v-__u__}"
+      if [ "$l" != "__u__" ]; then for p in $l; do echo "$last@${p%%:*}"; done; exit 0; fi
       eval "s=\${SRC_SNAP_$v-__u__}"; [ "$s" = "__u__" ] && s="${SRC_SNAP:-}"
       [ -n "$s" ] && echo "$last@${s}"; exit 0 ;;
   # B01: GUIDs for the lineage check's bookmark anchor. SNAP_GUID_<ds> = the guid of
   # that dataset's snapshot, BM_GUID_<ds> = the guid of its bookmark. Unset = none.
   *"list -H -t snapshot -o guid -d 1"*)
       v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
+      eval "f=\${SNAPLIST_FAIL_$v-}"; [ -n "$f" ] && exit 1
+      eval "l=\${SNAPS_$v-__u__}"
+      if [ "$l" != "__u__" ]; then for p in $l; do echo "${p#*:}"; done; exit 0; fi
       eval "s=\${SNAP_GUID_$v-}"; [ -n "$s" ] && echo "$s"; exit 0 ;;
   *"list -H -t bookmark -o guid -d 1"*)
       v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
+      eval "f=\${BM_FAIL_$v-}"; [ -n "$f" ] && exit 1
       eval "s=\${BM_GUID_$v-}"; [ -n "$s" ] && echo "$s"; exit 0 ;;
   *"get -H -p -o value written@"*)
       v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
@@ -1468,6 +1493,106 @@ check "U183d: the copy already on the medium is no first copy -- not sized, let 
 SRC_USED=""; SRC_UDS=""; MED_AVAIL=""; FIRST=yes; u183 1
 check "U183e: sizes unreadable -- the check is skipped, not guessed" "0" "$rc"
 unset SRC_USED SRC_UDS SRC_USN MED_AVAIL FIRST
+DATASETS="hdd rotpool/replica tank/src tank/src/a"
+
+# ---------------------------------------------------------------------------
+# R194 (REV-20261112-194). F4: a tree listing that failed or came back without
+# the source is UNKNOWN, never quiet. F2: lineage by GUID, unknown is not foreign.
+# F3: a pool imported before this run gets the same lineage and capacity checks,
+# and an operator's import is never exported by a refusal.
+# ---------------------------------------------------------------------------
+r194_reset() {
+    rm -f "$STATE/rep.imported-by-us" "$STATE/rep.running" "$STATE/rep.synced"
+    : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
+}
+r194_put_back() { POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1; POOLS="hdd"; IMPORTABLE="rotpool"; }
+
+# F4: L1's shape -- a quiet source, a record naming the newest snapshot -- skips
+# (rc 1, never imported) only when the tree listing is complete.
+POOLS="hdd"; IMPORTABLE="rotpool"; POOL_GUID=11111111
+DATASETS="hdd rotpool/replica tank/src tank/src/a"
+SRC_TREE="tank/src tank/src/a"; SRC_SNAP="replica_s2"; SRC_WRITTEN=0; export TREE_RC=0
+f4() { r194_reset; printf 'guid=11111111\nsnap:tank/src=replica_s2\n' > "$STATE/rep.synced"
+       out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+       [ "$rc" = 0 ] && r194_put_back; }
+f4; check "R194-F4a: control -- a complete quiet tree is skipped" "1" "$rc"
+SRC_TREE_tank_src=""; export SRC_TREE_tank_src
+f4; check "R194-F4b: THE ROOT PROBE PASSES, THE TREE LISTING IS EMPTY -- unknown, imported, not skipped" "0" "$rc"
+unset SRC_TREE_tank_src; TREE_RC=1; SRC_TREE=""
+f4; check "R194-F4c: the tree listing FAILS with no output -- imported, not skipped" "0" "$rc"
+SRC_TREE="tank/src"
+f4; check "R194-F4d: the tree listing FAILS after partial output -- imported, not skipped" "0" "$rc"
+TREE_RC=0; SRC_TREE="tank/src tank/src/a"; SRC_WRITTEN_tank_src_a=4096; export SRC_WRITTEN_tank_src_a
+f4; check "R194-F4e: control -- a child with new work is imported" "0" "$rc"
+unset SRC_WRITTEN_tank_src_a TREE_RC
+
+# F2: target rotpool/replica/tank/src exists and holds the family.
+DATASETS="hdd rotpool/replica rotpool/replica/tank/src tank/src"
+SRC_TREE="tank/src"; SRC_WRITTEN=0
+f2() { r194_reset
+       out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+       [ "$rc" = 0 ] && r194_put_back; }
+export SNAPS_tank_src="replica_new:777" SNAPS_rotpool_replica_tank_src="replica_old:777"
+f2; check "R194-F2a: DIFFERENT NAMES, SAME GUID -- the same snapshot, not refused" "0" "$rc"
+has "DIFFERENT lineage" "$out" && bad "R194-F2a: ...and no lineage diagnosis" "$out" || ok "R194-F2a: ...and no lineage diagnosis"
+export SNAPS_tank_src="replica_new:777" SNAPS_rotpool_replica_tank_src="replica_new:778"
+f2; check "R194-F2b: SAME NAME, DIFFERENT GUID -- not the same snapshot, refused" "2" "$rc"
+has "rotpool" "$(cat "$EXPORTED_LOG")" && ok "R194-F2b: ...and the medium this run imported is exported" || bad "R194-F2b: ...exported" "$(cat "$EXPORTED_LOG")"
+export SNAPS_tank_src="replica_new:900" SNAPS_rotpool_replica_tank_src="replica_old:777" BM_GUID_tank_src=777
+f2; check "R194-F2c: the target's LATEST snapshot survives as a source bookmark -- not refused" "0" "$rc"
+export SNAPS_rotpool_replica_tank_src="replica_older:777 replica_old:555"
+f2; check "R194-F2d: a bookmark of an OLDER target snapshot -- not refused" "0" "$rc"
+export BM_GUID_tank_src=556
+f2; check "R194-F2e: control -- no GUID in common at all is refused" "2" "$rc"
+export SNAPLIST_FAIL_tank_src=1
+f2; check "R194-F2f: THE SOURCE'S SNAPSHOT LIST CANNOT BE READ -- unknown, not refused" "0" "$rc"
+has "zfs destroy" "$out" && bad "R194-F2f: ...and no destroy advice on a guess" "$out" || ok "R194-F2f: ...and no destroy advice on a guess"
+unset SNAPLIST_FAIL_tank_src; export BM_FAIL_tank_src=1
+f2; check "R194-F2g: the source's bookmark list cannot be read -- unknown, not refused" "0" "$rc"
+unset BM_FAIL_tank_src; export SNAPLIST_FAIL_rotpool_replica_tank_src=1
+f2; check "R194-F2h: the target's snapshot list cannot be read -- unknown, not refused" "0" "$rc"
+unset SNAPLIST_FAIL_rotpool_replica_tank_src; export SNAPS_rotpool_replica_tank_src="replica_old:-"
+f2; check "R194-F2i: a target snapshot listed without a GUID -- unknown, not refused" "0" "$rc"
+unset SNAPS_tank_src SNAPS_rotpool_replica_tank_src BM_GUID_tank_src
+
+# F3: the pool is ALREADY imported. "ours" = our marker; "theirs" = no marker.
+f3() {   # <ours|theirs> <args...>
+    local who="$1"; shift
+    r194_reset; POOLS="hdd rotpool"; IMPORTABLE=""
+    [ "$who" = ours ] && printf 'pool=rotpool\nguid=11111111\n' > "$STATE/rep.imported-by-us"
+    out="$(g attach rotpool rep --dataset rotpool/replica "$@")"; rc=$?
+}
+# Capacity: tank/src has no copy on the medium yet (a first copy).
+DATASETS="hdd rotpool/replica tank/src"; export SRC_USED=1000000000 MED_AVAIL=500000000
+f3 ours --source tank/src --prefix - --recursive
+check "R194-F3a: OUR OWN EARLIER IMPORT, FIRST COPY TOO BIG -- refused" "2" "$rc"
+check "R194-F3a: ...and exported, since we imported it" "rotpool" "$(cat "$EXPORTED_LOG")"
+[ -f "$STATE/rep.imported-by-us" ] && bad "R194-F3a: ...and the marker cleared once exported" "marker kept" || ok "R194-F3a: ...and the marker cleared once exported"
+EXPORT_FAILS=1; f3 ours --source tank/src --prefix - --recursive; EXPORT_FAILS=""
+check "R194-F3b: our import, export FAILS -- still refused" "2" "$rc"
+[ -f "$STATE/rep.imported-by-us" ] && ok "R194-F3b: ...the marker SURVIVES for detach" || bad "R194-F3b: ...the marker SURVIVES for detach" "marker deleted"
+has "DO NOT UNPLUG" "$out" && ok "R194-F3b: ...with the DO NOT UNPLUG warning" || bad "R194-F3b: ...with the DO NOT UNPLUG warning" "$out"
+f3 theirs --source tank/src --prefix - --recursive
+check "R194-F3c: AN OPERATOR'S IMPORT, FIRST COPY TOO BIG -- refused" "2" "$rc"
+check "R194-F3c: ...AND NOT EXPORTED -- it is not ours" "" "$(cat "$EXPORTED_LOG")"
+export MED_AVAIL=5000000000
+f3 theirs --source tank/src --prefix - --recursive
+check "R194-F3d: control -- an operator's import with room enough is used" "0" "$rc"
+check "R194-F3d: ...and not exported" "" "$(cat "$EXPORTED_LOG")"
+f3 ours --source tank/src --prefix - --recursive
+check "R194-F3e: control -- our own import with room enough is used" "0" "$rc"
+unset SRC_USED MED_AVAIL
+# Lineage on an already-imported pool.
+DATASETS="hdd rotpool/replica rotpool/replica/tank/src tank/src"
+export SNAPS_tank_src="replica_new:900" SNAPS_rotpool_replica_tank_src="replica_old:777"
+f3 theirs --source tank/src --prefix replica_
+check "R194-F3f: AN OPERATOR'S IMPORT HOLDING A FOREIGN LINEAGE -- refused" "2" "$rc"
+check "R194-F3f: ...and not exported" "" "$(cat "$EXPORTED_LOG")"
+f3 ours --source tank/src --prefix replica_
+check "R194-F3g: our own import holding a foreign lineage -- refused" "2" "$rc"
+check "R194-F3g: ...and exported" "rotpool" "$(cat "$EXPORTED_LOG")"
+unset SNAPS_tank_src SNAPS_rotpool_replica_tank_src
+r194_reset; POOLS="hdd"; IMPORTABLE="rotpool"
 DATASETS="hdd rotpool/replica tank/src tank/src/a"
 
 echo "--------------------------------------------"
