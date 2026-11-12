@@ -789,6 +789,124 @@ tx_close() {   # <rev> <approval-commit> <expected-parent>
     echo "reviewctl: nothing is published yet -- the compare-and-swap is the push, which the server refuses if $(pubref) has moved."
 }
 
+# ---- respond: the Implementer's range writer (PROTOCOL V4.5) -----------------
+#
+#   respond REV --implementation=REF --base=REF
+#
+# Writes the response's machine headers from resolved Git refs, so nobody types a
+# SHA into a header (E129, twice on 2026-11-12) and a resubmission cannot narrow
+# `base:` and lose its earlier range (REV-20261112-195 F4g). It writes ONLY
+# responses/<REV>.md -- never the Reviewer's artifact -- and only its header lines:
+#   <!-- response-status: IMPLEMENTED -->
+#   <!-- implementation: <sha> -->
+#   <!-- base: <sha> -->
+#   <!-- submitted: <base> <implementation> -->   one per earlier range, kept
+# On a resubmission the previous pair moves into a `submitted:` line by itself.
+# Every doubt refuses with the file byte-identical: a ref that does not resolve, a
+# base that is not an ancestor of the implementation, an implementation that does
+# not descend from the previous one or from an earlier submitted one (that range
+# would be dropped by the coverage gate), a previous implementation with no base
+# (its range is unknown), or a malformed header. The implementation need not be on
+# the published branch yet -- the response is normally written before the merge --
+# so this checks existence and ancestry, not reachability; the views are not
+# regenerated here (run --generate afterwards, as before).
+tx_resolve() {   # <label> <ref> -> full sha on stdout, or refuse
+    local g sha
+    [ -n "$2" ] || tx_die "$1 is required (a commit, branch or tag)"
+    g="$(gitrepo)"
+    sha="$(git -C "$g" rev-parse --verify --quiet "$2^{commit}" 2>/dev/null)" \
+        || tx_die "$1 '$2' does not resolve to a commit in this repository"
+    printf '%s' "$sha"
+}
+tx_respond() {   # <rev> <impl-ref> <base-ref>
+    local rev="$1" g impl base pfile pimpl pbase line eb ei tmp
+    tx_rev_id "$rev"
+    impl="$(tx_resolve --implementation "$2")" || exit 1
+    base="$(tx_resolve --base "$3")" || exit 1
+    g="$(gitrepo)"
+    git -C "$g" merge-base --is-ancestor "$base" "$impl" \
+        || tx_die "$rev: --base ${base:0:12} is not an ancestor of --implementation ${impl:0:12} -- that is not a range"
+    pfile="$RDIR/responses/$rev.md"
+    [ -f "$pfile" ] || tx_die "$rev: no response at ${pfile#$REPO/} -- write its prose first; this tool sets headers, it does not invent artifacts"
+    [ "$(hdr "$pfile" rev)" = "$rev" ] || tx_die "${pfile#$REPO/} does not carry '<!-- rev: $rev -->' -- refusing to write into the wrong artifact"
+    pimpl="$(hdr "$pfile" implementation)"; pbase="$(hdr "$pfile" base)"
+    for line in "$pimpl" "$pbase"; do
+        case "$line" in ''|????????????????????????????????????????) ;; *) tx_die "$rev: an existing header value '$line' is not a full commit id -- fix it by hand first" ;; esac
+        case "$line" in *[!0-9a-f]*) tx_die "$rev: an existing header value '$line' is not a lowercase commit id" ;; esac
+    done
+    # Earlier submitted ranges must stay on this line of work.
+    while read -r eb ei; do
+        [ -n "$ei" ] || continue
+        git -C "$g" merge-base --is-ancestor "$ei" "$impl" 2>/dev/null \
+            || tx_die "$rev: the earlier range 'submitted: ${eb:0:12} ${ei:0:12}' is not an ancestor of ${impl:0:12} -- this implementation would leave it off its line, and the coverage gate would drop it"
+    done < <(sed -n 's/^<!-- submitted: \([0-9a-f]\{40\}\) \([0-9a-f]\{40\}\) -->$/\1 \2/p' "$pfile")
+    local keep=""
+    if [ -n "$pimpl" ] && [ "$pimpl" != "$impl" ]; then
+        [ -n "$pbase" ] || tx_die "$rev: the response submits ${pimpl:0:12} with no base -- its range is unknown, so it cannot be kept; add its '<!-- base: -->' by hand first"
+        git -C "$g" merge-base --is-ancestor "$pimpl" "$impl" 2>/dev/null \
+            || tx_die "$rev: --implementation ${impl:0:12} does not descend from the submitted ${pimpl:0:12} -- the earlier range would leave this line of work"
+        keep="$pbase $pimpl"
+    elif [ -n "$pimpl" ] && [ "$pbase" != "$base" ] && [ -n "$pbase" ]; then
+        tx_die "$rev: ${impl:0:12} is already submitted with base ${pbase:0:12}; changing only the base of the same implementation would rewrite a submitted range -- resubmit with a new implementation instead"
+    fi
+    if [ "$pimpl" = "$impl" ] && [ "$pbase" = "$base" ] && [ "$(hdr "$pfile" response-status)" = IMPLEMENTED ]; then
+        echo "reviewctl: $rev already submits ${impl:0:12} from ${base:0:12} -- nothing to write"
+        return 0
+    fi
+    tx_guard "$pfile"
+    tmp="$TXDIR/r.$$"
+    # The header block is the run of '<!-- field: value -->' lines at the top. Drop
+    # the fields this tool owns and rewrite them after 'rev:', keeping every other
+    # header and all prose byte for byte.
+    awk -v impl="$impl" -v base="$base" -v keep="$keep" '
+        function flush(   i, k, dup) {
+            for (i = 1; i <= ns; i++) print sv[i]
+            if (keep != "") { k = "<!-- submitted: " keep " -->"; dup = 0
+                for (i = 1; i <= ns; i++) if (sv[i] == k) dup = 1
+                if (!dup) print k }
+            inhdr = 0
+        }
+        BEGIN { inhdr = 1 }
+        inhdr && /^<!-- [a-z-]+: .* -->$/ {
+            if ($0 ~ /^<!-- (response-status|implementation|base): /) next
+            if ($0 ~ /^<!-- submitted: /) { sv[++ns] = $0; next }
+            print
+            if ($0 ~ /^<!-- rev: /) {
+                print "<!-- response-status: IMPLEMENTED -->"
+                print "<!-- implementation: " impl " -->"
+                print "<!-- base: " base " -->"
+            }
+            next
+        }
+        inhdr { flush() }
+        { print }
+        END { if (inhdr) flush() }
+    ' "$pfile" > "$tmp" || tx_die "could not rewrite the headers of ${pfile#$REPO/}"
+    grep -q "^<!-- implementation: $impl -->$" "$tmp" && grep -q "^<!-- base: $base -->$" "$tmp" \
+        || tx_die "$rev: the rewritten headers did not come out as intended -- nothing written"
+    cat "$tmp" > "$pfile"
+    echo "reviewctl: $rev submits ${impl:0:12} from ${base:0:12}${keep:+; earlier range kept as submitted: ${keep%% *} ${keep##* }}"
+    echo "reviewctl: regenerate the views (--generate) and commit; nothing is published yet."
+}
+
+if [ "${1:-}" = "respond" ]; then
+    shift
+    tx_rev="${1:-}"; shift || true
+    [ -n "$tx_rev" ] || { echo "usage: $0 respond REV --implementation=REF --base=REF" >&2; exit 1; }
+    tx_impl=""; tx_base=""
+    tx_begin
+    for a in "$@"; do
+        case "$a" in
+            --implementation=*) tx_impl="${a#*=}" ;;
+            --base=*)           tx_base="${a#*=}" ;;
+            *) tx_die "unknown option '$a' (respond takes --implementation=REF and --base=REF)" ;;
+        esac
+    done
+    tx_respond "$tx_rev" "$tx_impl" "$tx_base"
+    tx_cleanup
+    exit 0
+fi
+
 # ---- argument parsing for the writers ---------------------------------------
 # Foreign flags are refused rather than ignored, and the two operations cannot be
 # combined: `approve` does not accept --approval-commit and `close` does not
@@ -819,7 +937,7 @@ fi
 MODE=""
 case "${1:-}" in
     --generate|--verify|--migrate) MODE="${1#--}" ;;
-    *) echo "usage: $0 --generate | --verify | --migrate | approve REV ... | close REV ..." >&2; exit 1 ;;
+    *) echo "usage: $0 --generate | --verify | --migrate | approve REV ... | close REV ... | respond REV ..." >&2; exit 1 ;;
 esac
 
 collect

@@ -6,6 +6,6 @@ Do not edit. Owner decisions that are not reviews live in
 
 | REV | State | Whose move | Next action |
 |---|---|---|---|
-| _(nothing open)_ | - | - | - |
+| 93a59879 PROTOCOL V4.5: reviewctl respond (e4094ea4), the Implementer's range writer; test/reviewctl RS1-RS13, 14/0 on the fix, 0/13 against main's reviewctl, RS13 fails with the dedupe removed (V4.3 matrix in the PR) | DELIVERED | Reviewer | review it, or open a REV for it |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.

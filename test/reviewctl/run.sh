@@ -877,6 +877,118 @@ fi
 rm -rf "$X2_TX" 2>/dev/null || :
 rm -f "$CPBIN/cp" "$CPBIN/cp-restore-fails"
 
+# ==============================================================================
+# respond -- the Implementer's range writer (PROTOCOL V4.5, 2026-11-12).
+# The negative-case matrix (V4.3), one case each: a ref that does not resolve
+# (read fails), a missing response (empty), a legacy response with no base
+# (partial evidence), a foreign line of history, a wrong artifact, a malformed
+# header, a rewrite of a submitted range, and replay. A change between two reads
+# and a concurrent run are n/a: the file is read once and written through the same
+# snapshot/restore transaction as approve/close; publication is the push.
+# ==============================================================================
+P0="$(git -C "$REPO" rev-parse origin/main~6)"
+P1="$(git -C "$REPO" rev-parse origin/main~3)"
+P2="$(git -C "$REPO" rev-parse origin/main~1)"
+P3="$(git -C "$REPO" rev-parse origin/main)"
+RS=REV-20990101-501
+rsworld() {   # <name>: a response with prose and only its rev header
+    world "$1"
+    printf '<!-- rev: %s -->\n\n# Response\n\nprose that must survive\n' "$RS" > "$W/docs/internal/reviews/responses/$RS.md"
+    printf '<!-- rev: %s -->\n<!-- verdict: CHANGES-REQUIRED -->\n<!-- reviewed-implementation: %s -->\n\n# t\n' \
+        "$RS" "$P0" > "$W/docs/internal/reviews/$RS.md"
+}
+rsf()  { cat "$W/docs/internal/reviews/responses/$RS.md"; }
+rsrefuses() {   # <name> <phrase> <args...>: refuses for that reason AND leaves the response byte-identical
+    local name="$1" phrase="$2" before; shift 2
+    before="$(rsf 2>/dev/null)"
+    if tx respond "$RS" "$@"; then bad "$name" "it succeeded"
+    elif ! grep -qF -- "$phrase" "$TMPD/out"; then bad "$name" "refused for the wrong reason: $(head -1 "$TMPD/out")"
+    elif [ "$(rsf 2>/dev/null)" != "$before" ]; then bad "$name" "the response was modified"
+    else ok "$name"; fi
+}
+
+# RS1. First submission, from short refs: full SHAs, IMPLEMENTED, prose untouched.
+rsworld rs1
+revbefore="$(cat "$W/docs/internal/reviews/$RS.md")"
+if tx respond "$RS" --implementation=origin/main~3 --base=origin/main~6 \
+   && [ "$(rsf | sed -n 2,4p)" = "$(printf '<!-- response-status: IMPLEMENTED -->\n<!-- implementation: %s -->\n<!-- base: %s -->' "$P1" "$P0")" ] \
+   && rsf | grep -q '^prose that must survive$' \
+   && [ "$(cat "$W/docs/internal/reviews/$RS.md")" = "$revbefore" ]; then
+    ok "respond RS1: writes status, full implementation and base from refs; prose and the Reviewer's file untouched"
+else
+    bad "respond RS1: first submission" "$(cat "$TMPD/out"; rsf)"
+fi
+# RS2. Replay is a no-op.
+before="$(rsf)"
+if tx respond "$RS" --implementation="$P1" --base="$P0" && grep -q 'nothing to write' "$TMPD/out" && [ "$(rsf)" = "$before" ]; then
+    ok "respond RS2: the same submission twice writes nothing"
+else
+    bad "respond RS2: replay" "$(cat "$TMPD/out")"
+fi
+# RS3. Resubmission keeps the previous pair; a third keeps both, in order; replay adds no duplicate.
+tx respond "$RS" --implementation="$P2" --base="$P1"
+tx respond "$RS" --implementation="$P3" --base="$P2"
+tx respond "$RS" --implementation="$P3" --base="$P2"
+if [ "$(rsf | grep -c '^<!-- submitted: ')" -eq 2 ] \
+   && [ "$(rsf | grep '^<!-- submitted: ' | head -1)" = "<!-- submitted: $P0 $P1 -->" ] \
+   && [ "$(rsf | grep '^<!-- submitted: ' | tail -1)" = "<!-- submitted: $P1 $P2 -->" ] \
+   && rsf | grep -q "^<!-- implementation: $P3 -->$" && rsf | grep -q "^<!-- base: $P2 -->$"; then
+    ok "respond RS3: each resubmission keeps the previous range as 'submitted:', once, in order"
+else
+    bad "respond RS3: resubmission chain" "$(rsf | head -8)"
+fi
+# RS4-RS11: every doubt refuses, byte-identical.
+rsworld rs4
+rsrefuses "respond RS4: a ref that does not resolve refuses (read fails)" "does not resolve to a commit" \
+    --implementation=no-such-ref-v45 --base="$P0"
+rsrefuses "respond RS5: a base that is not an ancestor of the implementation refuses" "is not an ancestor of --implementation" \
+    --implementation="$P0" --base="$P3"
+tx respond "$RS" --implementation="$P2" --base="$P1"
+rsrefuses "respond RS6: an implementation that does not descend from the submitted one refuses (foreign line)" "does not descend from the submitted" \
+    --implementation="$P1" --base="$P0"
+rsrefuses "respond RS7: changing only the base of a submitted implementation refuses" "changing only the base" \
+    --implementation="$P2" --base="$P0"
+rsworld rs8
+printf '<!-- rev: %s -->\n<!-- response-status: IMPLEMENTED -->\n<!-- implementation: %s -->\n\n# legacy\n' "$RS" "$P1" \
+    > "$W/docs/internal/reviews/responses/$RS.md"
+rsrefuses "respond RS8: a legacy response with no base cannot be resubmitted (its range is unknown)" "with no base" \
+    --implementation="$P3" --base="$P2"
+if tx respond "$RS" --implementation="$P1" --base="$P0" && rsf | grep -q "^<!-- base: $P0 -->$" && ! rsf | grep -q '^<!-- submitted: '; then
+    ok "respond RS8: ...the same implementation gets its base, with no invented earlier range"
+else
+    bad "respond RS8: legacy base added" "$(cat "$TMPD/out")"
+fi
+rsworld rs9
+printf '<!-- rev: %s -->\n<!-- implementation: %s -->\n<!-- base: %s -->\n<!-- submitted: %s %s -->\n\n# t\n' \
+    "$RS" "$P2" "$P1" "$P0" "$P3" > "$W/docs/internal/reviews/responses/$RS.md"
+rsrefuses "respond RS9: an earlier 'submitted:' range off the new implementation's line refuses" "is not an ancestor of" \
+    --implementation="$P2" --base="$P1"
+rsworld rs10
+rm -f "$W/docs/internal/reviews/responses/$RS.md"
+if tx respond "$RS" --implementation="$P1" --base="$P0"; then bad "respond RS10: a missing response refuses" "it succeeded"
+elif grep -q 'no response at' "$TMPD/out" && [ ! -e "$W/docs/internal/reviews/responses/$RS.md" ]; then
+    ok "respond RS10: a missing response refuses and nothing is created (empty)"
+else bad "respond RS10: a missing response" "$(cat "$TMPD/out")"; fi
+rsworld rs11
+printf '<!-- rev: REV-20990101-502 -->\n\n# other\n' > "$W/docs/internal/reviews/responses/$RS.md"
+rsrefuses "respond RS11: a response carrying another REV's id refuses (wrong artifact)" "does not carry" \
+    --implementation="$P1" --base="$P0"
+rsworld rs12
+printf '<!-- rev: %s -->\n<!-- implementation: %s -->\n\n# t\n' "$RS" "${P1:0:12}" > "$W/docs/internal/reviews/responses/$RS.md"
+rsrefuses "respond RS12: an abbreviated existing implementation header refuses" "is not a full commit id" \
+    --implementation="$P3" --base="$P2"
+# RS13. The previous range is already written by hand as 'submitted:': the resubmission keeps it once.
+rsworld rs13
+printf '<!-- rev: %s -->\n<!-- implementation: %s -->\n<!-- base: %s -->\n<!-- submitted: %s %s -->\n\n# t\n' \
+    "$RS" "$P1" "$P0" "$P0" "$P1" > "$W/docs/internal/reviews/responses/$RS.md"
+if tx respond "$RS" --implementation="$P2" --base="$P1" \
+   && [ "$(rsf | grep -c '^<!-- submitted: ')" -eq 1 ] \
+   && rsf | grep -q "^<!-- submitted: $P0 $P1 -->$" && rsf | grep -q "^<!-- implementation: $P2 -->$"; then
+    ok "respond RS13: a previous range already present as 'submitted:' is kept once (duplicate line)"
+else
+    bad "respond RS13: duplicate submitted line" "$(rsf | head -8; cat "$TMPD/out")"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
