@@ -7,10 +7,10 @@ when they change how the tool is used.
 ## [Unreleased]
 
 - **The bookmark path keeps the safety checks** (REV-20261112-195):
-  - A push onto an exact path (`-t`) whose copy was written to after its newest snapshot is
-    refused there too. Before, a bookmark-backed increment skipped that check and `zfs recv -F`
+  - A push onto a sync or exact (`-t`) path whose copy was written to after its newest snapshot
+    is refused there too. Before, a bookmark-backed increment skipped that check and `zfs recv -F`
     rolled the write back.
-  - When the snapshots between a bookmark and the newest one cannot be listed, the run refuses
+  - When the snapshots between a bookmark and the newest one cannot be listed in full, the run refuses
     and the next run tries again. Before, it sent a single diff and those snapshots never arrived.
   - `-T` applies to an increment from a bookmark too, measured from the bookmark's creation.
 - **A release refuses a change no review covers** (`release/coverage-gate.sh`).

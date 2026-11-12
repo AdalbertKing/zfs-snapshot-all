@@ -187,7 +187,7 @@ reach the target too.
 An increment from a bookmark gets the same checks as one from a common snapshot. On a sync or
 exact (`-t`) target that was written to after its newest snapshot, the run refuses rather than
 let `zfs recv -F` roll the write back. When the snapshots between the bookmark and the newest
-cannot be listed, the run refuses and the next run tries again; a single diff would skip them
+cannot be listed in full, the run refuses and the next run tries again; a single diff would skip them
 for good. `-T` measures the interval from the bookmark's creation time.
 
 Bookmark names are `tgt-<8 hex chars>`, a hash of the target dataset path (and of the `-j`

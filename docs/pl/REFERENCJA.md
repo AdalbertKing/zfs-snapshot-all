@@ -185,7 +185,7 @@ międzyczasie też docierają na cel.
 
 Przyrost z bookmarka przechodzi te same kontrole co przyrost ze wspólnej migawki. Na celu sync
 albo dokładnym (`-t`), do którego coś zapisano po jego najnowszej migawce, przebieg odmawia,
-zamiast pozwolić `zfs recv -F` cofnąć ten zapis. Gdy nie da się wylistować migawek między
+zamiast pozwolić `zfs recv -F` cofnąć ten zapis. Gdy nie da się w pełni wylistować migawek między
 bookmarkiem a najnowszą, przebieg odmawia, a następny próbuje znowu; pojedyncza różnica pominęłaby
 je na zawsze. `-T` liczy odstęp od chwili utworzenia bookmarka.
 

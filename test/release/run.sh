@@ -328,6 +328,11 @@ if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
         bad "publish: a second run with --push and an override does not push the earlier, unaudited commit" "rc=$rc4" "$out4"
     fi
     mkrel "$WORK/f3b"
+    # The coverage gate (REV-20261112-195 F4) reads the previous release from RELEASE-OF: the
+    # parent of the fixture commit, so the only commit in between touches the ledger, not a
+    # run-time file.
+    git -C "$DEVW" rev-parse "$devrev^" > "$WORK/f3b/RELEASE-OF"
+    git -C "$WORK/f3b" add RELEASE-OF && git -C "$WORK/f3b" commit -qm "previous release" && git -C "$WORK/f3b" push -q origin main
     out5="$(bash "$DEVW/release/publish.sh" "$devrev" "$WORK/f3b" --push --accept-open-review=REV-20990101-003 2>&1)"; rc5=$?
     if [ "$rc5" -eq 0 ] && git -C "$WORK/f3b.git" log -1 --format=%B main | grep -q '^accepted: REV-20990101-003 '; then
         ok "publish: an override with a new release commit pushes, and the pushed commit records 'accepted: REV-...'"
