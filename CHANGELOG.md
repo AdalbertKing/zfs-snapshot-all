@@ -4,7 +4,7 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
-## [Unreleased]
+## [1.0.20] — 2026-11-12
 
 - **A mirror keeps a snapshot that was renamed on the source** (REV-20261112-196). `-M` (sync
   relations, removable replicas) now decides "gone from the source" by GUID. A snapshot renamed
