@@ -281,8 +281,10 @@ let such a batch through without one. The Owner had to carry the request by hand
 - A resubmission of the same REV names its new, smaller range in `base:` and keeps every
   earlier submitted range as its own line, `<!-- submitted: <base> <implementation> -->`.
   Narrowing `base:` alone would make the earlier work look unsubmitted. The coverage gate counts
-  an earlier range only when its implementation is an ancestor of the row's current one, so a
-  `submitted:` line cannot reach another line of work.
+  an earlier range only when both commits exist, its base is an ancestor of its implementation,
+  and that implementation is an ancestor of the row's current one. A line that fails this covers
+  nothing, and the gate says so. That the line names this REV's own earlier range, the one
+  already reviewed, is checked by the Reviewer when reading the response.
 - `release/publish.sh --push` also runs `release/coverage-gate.sh` (REV-20261112-195 F4). It
   compares the run-time package of the PUBLISHED release (`RELEASE-OF` on the release repo's
   `origin/main`, not the checkout's working copy) with the candidate. Each shipped file that

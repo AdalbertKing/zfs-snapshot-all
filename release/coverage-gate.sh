@@ -18,7 +18,8 @@
 # A resubmission of the same REV names its new, smaller range in `base:` and keeps every earlier
 # one as `<!-- submitted: <base> <impl> -->` (round 4, F4g): narrowing `base:` alone would make
 # the earlier submitted work look unsubmitted. An earlier range counts only when its <impl> is
-# an ancestor of the row's implementation -- no other REV's work and no ancestry-wide range.
+# an ancestor of the row's implementation, and it covers only what its own <base>..<impl>
+# changed. That it is this REV's earlier range is what the Reviewer checks in the response.
 # A file's STATE in a revision is what hosts receive from that revision's publish: its tree
 # mode (executable bit, symlink) and the hash of its bytes AFTER that revision's scrub
 # (`release/scrub.sed`, applied by that revision's `release/scrub-file.sh`), or "not shipped"
@@ -109,8 +110,9 @@ while IFS='|' read -r _ r _ _ impl _ resp _; do
     pkg "$base" && pkg "$impl" || { echo "coverage-gate: cannot read the package of $r's range" >&2; exit 2; }
     subs+=("$r $base $impl")
     # Earlier rounds of the same REV (round 4, F4g): each `<!-- submitted: <base> <impl> -->`
-    # keeps its own range. It counts only on this REV's line of work -- its implementation is
-    # an ancestor of the current one -- and only while it is unpublished.
+    # keeps its own range. It counts only when both commits exist, its base is an ancestor of
+    # its implementation and that implementation is an ancestor of the current one; a line that
+    # fails these covers nothing and is reported. An already published range is skipped.
     while read -r eb ei; do
         if ! git -C "$dev" cat-file -e "$eb^{commit}" 2>/dev/null \
            || ! git -C "$dev" cat-file -e "$ei^{commit}" 2>/dev/null \
