@@ -70,6 +70,20 @@ list=$(printf '%s\n' "$files" | awk '
     END   { for (f in keep) { ok = 1; for (d in drop) if (f == d || index(f, d "/") == 1) ok = 0; if (ok) print f } }' | sort)
 [ -n "$list" ] || die "the MANIFEST resolves to no files"
 
+# --- every behaviour change has a review (REV-20261112-195 F4) -----------------------------
+# review-gate.sh judges the ledger's rows; a change nobody submitted has none and passed by
+# absence (1.0.19). Run-time files only: docs, Markdown and repo metadata are not behaviour.
+if [ "$push" -eq 1 ]; then
+    prev=$(head -n 1 "$dst/RELEASE-OF" 2>/dev/null) && [ -n "$prev" ] \
+        || die "$dst has no RELEASE-OF -- cannot tell what the previous release contained, so cannot check review coverage"
+    pathsf=$(mktemp)
+    printf '%s\n' "$list" | grep -vE '^docs/|\.md$|^LICENSE$|^\.gitattributes$' > "$pathsf"
+    cov_rc=0
+    printf '%s\n' "$ledger" | bash "$dev/release/coverage-gate.sh" "$dev" "$prev" "$rev" "$pathsf" || cov_rc=$?
+    rm -f "$pathsf"
+    [ "$cov_rc" -eq 0 ] || die "the review-coverage gate refused $rev (rc $cov_rc, see above)"
+fi
+
 # --- export, scrub, README, RELEASE-OF -----------------------------------------------------
 tmp=$(mktemp -d); all=$(mktemp -d); trap 'rm -rf "$tmp" "$all"' EXIT
 # The whole revision once (modes kept), then only the listed paths are taken from it.
