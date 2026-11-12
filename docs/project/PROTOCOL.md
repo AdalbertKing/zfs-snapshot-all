@@ -306,11 +306,7 @@ let such a batch through without one. The Owner had to carry the request by hand
 **Status: accepted under V3.12.** The Reviewer decided each point in PR #1195 (comment of
 2026-11-12 18:51 UTC), and this text is amended to that decision. The Owner accepted it on
 2026-11-12 with the word "akceptuję", including this form as a V4 section in place of V3.12
-point 3's next `V3.n` subsection. It is in force from its merge, read back on `main`. V4.4 and
-V4.5 are staged: they take effect only when their tooling is merged and verified. Until then,
-today's rules for committed views and response headers stay mandatory. V4.5's tool was merged
-in PR #1202 and V4.4's migration is delivered in its own change; each section below states its
-current status.
+point 3's next `V3.n` subsection. It is in force from its merge, read back on `main`. V4.4 and V4.5 are active after their tooling deliveries (PR #1203 and #1202) were merged, independently verified by the Reviewer, and cleared in DELIVERIES.md. Each section below states the applicable operation.
 
 **The problem it removes.** On 2026-11-11..12, 28 pull requests reached `main`:
 - 13 Reviewer verdict PRs, 10 of them for REV-20261112-194, -195 and -196;
@@ -394,9 +390,9 @@ planning comment. Prior Reviewer agreement is needed only when the contract or t
 scope is genuinely unclear. The
 checklist does not make an undiscovered defect acceptable.
 
-### V4.4 Generated review views are derived, not committed (delivered; waiting for the Reviewer)
+### V4.4 Generated review views are derived, not committed (ACTIVE)
 
-**Delivered: the migration is in this change and waiting for the Reviewer** (`docs/project/DELIVERIES.md`). From its merge the views are not committed: the state at a commit is `./test/reviewctl.sh --derive SHA` (`--threads` for the routing view), the work pickup derives it from fresh `main`, `--verify` checks that the artifacts derive cleanly, and `release/publish.sh --push` derives the candidate's ledger for both release gates. `--generate` still writes an uncommitted local copy. This supersedes every earlier statement in this
+**ACTIVE:** delivered in PR #1203 and cleared by the Reviewer in `docs/project/DELIVERIES.md`. The Reviewer derived ledger and routing from pinned `8adfaa5254646012dcb4f23c75941b78aa93484c` on pve9 and executed the focused reviewctl suite there (128 PASS / 0 FAIL). From its merge the views are not committed: the state at a commit is `./test/reviewctl.sh --derive SHA` (`--threads` for the routing view), the work pickup derives it from fresh `main`, `--verify` checks that the artifacts derive cleanly, and `release/publish.sh --push` derives the candidate's ledger for both release gates. `--generate` still writes an uncommitted local copy. This supersedes every earlier statement in this
 file that the views are committed, compared with a committed copy, or regenerated and committed.
 On the Windows workstation a derivation takes minutes; `./test/remote-suite.sh derive REF` runs it
 on the test host.
@@ -417,12 +413,9 @@ together. The target state:
 *Removes:* the merge conflicts that verdict merges caused in open PRs. It is delivered
 as its own change under V4.1 full evidence (release behaviour), after V4.5.
 
-### V4.5 The Implementer's response headers are written by a tool (staged)
+### V4.5 The Implementer's response headers are written by a tool (ACTIVE)
 
-**Staged: the tool exists and is waiting for the Reviewer.** It is
-`./test/reviewctl.sh respond REV --implementation=REF --base=REF`, delivered in
-`docs/project/DELIVERIES.md`. It is in force once the Reviewer clears that delivery; until then
-headers may still be written by hand. It is a new writer for the Implementer's
+**ACTIVE:** delivered in PR #1202 and cleared by the Reviewer in DELIVERIES.md. Use `./test/reviewctl.sh respond REV --implementation=REF --base=REF` for response/range headers. Source, scope-preservation, refusal/idempotency controls and the focused pve9 suite were verified. It is a new writer for the Implementer's
 response and range operation. The Reviewer's existing `approve` and `close` writers stay. The
 tool must:
 - write `<!-- implementation: <sha> -->`, `<!-- base: <sha> -->` and
@@ -475,6 +468,8 @@ deployment is inferred from a version number):
 - Merge on green (V3.13), the evidence classes (V3.5) and the dispute rule (V3.7).
 
 ### Amendment log
+
+- V4.4/V4.5 verification, 2026-11-12: Reviewer cleared both tool deliveries; pinned-SHA derived views and the response/range writer are active. Product review W5 is separate.
 
 - V4, 2026-11-12: V4.1-V4.7, the Reviewer's decision in PR #1195, accepted by the Owner
   ("akceptuję"). V4.4 and V4.5 are staged until their tooling exists.
