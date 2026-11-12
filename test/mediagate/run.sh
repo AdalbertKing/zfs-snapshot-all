@@ -114,14 +114,22 @@ case "$*" in
           l="$s:$gd"
       fi
       for p in $l; do printf '%s@%s\t%s\n' "$last" "${p%%:*}" "${p#*:}"; done; exit 0 ;;
+  # SNAPS_<ds> and SNAPLIST_FAIL_<ds> hold for the name-only and guid-only reads too,
+  # so a gate that reads the snapshots another way sees the same pool (negative control).
   *"list -H -t snapshot -o name -d 1"*)
       v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
+      eval "f=\${SNAPLIST_FAIL_$v-}"; [ -n "$f" ] && exit 1
+      eval "l=\${SNAPS_$v-__u__}"
+      if [ "$l" != "__u__" ]; then for p in $l; do echo "$last@${p%%:*}"; done; exit 0; fi
       eval "s=\${SRC_SNAP_$v-__u__}"; [ "$s" = "__u__" ] && s="${SRC_SNAP:-}"
       [ -n "$s" ] && echo "$last@${s}"; exit 0 ;;
   # B01: GUIDs for the lineage check's bookmark anchor. SNAP_GUID_<ds> = the guid of
   # that dataset's snapshot, BM_GUID_<ds> = the guid of its bookmark. Unset = none.
   *"list -H -t snapshot -o guid -d 1"*)
       v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
+      eval "f=\${SNAPLIST_FAIL_$v-}"; [ -n "$f" ] && exit 1
+      eval "l=\${SNAPS_$v-__u__}"
+      if [ "$l" != "__u__" ]; then for p in $l; do echo "${p#*:}"; done; exit 0; fi
       eval "s=\${SNAP_GUID_$v-}"; [ -n "$s" ] && echo "$s"; exit 0 ;;
   *"list -H -t bookmark -o guid -d 1"*)
       v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
