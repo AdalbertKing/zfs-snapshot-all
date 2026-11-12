@@ -100,7 +100,7 @@ Takich nazw używa GUI.
 | Rodzaj | Co robi | Silnik |
 |---|---|---|
 | backup | Kolektor pobiera datasety źródła do własnego celu i trzyma warstwową historię po obu stronach | `snapget.sh`, `delsnaps.sh` |
-| lustro (mirror) | Tryb sync: kolektor trzyma datasety źródła pod tymi samymi ścieżkami i po każdym pobraniu niszczy migawki celu, których źródło już nie ma (`snapget.sh -M`) | `snapget.sh -M` |
+| lustro (mirror) | Tryb sync: kolektor trzyma datasety źródła pod tymi samymi ścieżkami i po każdym pobraniu niszczy migawki celu, których źródło już nie ma, rozpoznawane po GUID (`snapget.sh -M`) | `snapget.sh -M` |
 | kopia lokalna (local copy) | Kopia lokalnych datasetów na inną lokalną pulę, uruchamiana przez roota lub wskazane konto | `snapget.sh` z lokalnym źródłem |
 | migawki lokalne (local snapshots) | Migawki na źródle, prune w miejscu, nic nie jest kopiowane (`--target=''`) | `snapsend.sh`, `delsnaps.sh` |
 | migawki zdalne (remote snapshots) | Kolektor robi migawki na zdalnym źródle i niczego nie kopiuje (sekcja `[snaponly:]`, `snapget.sh -s`) | `snapget.sh -s`, `delsnaps.sh` |
@@ -588,7 +588,7 @@ zamrożenie odbywa się tam. Trzy flagi istnieją tylko tutaj:
 
 | Flaga | Znaczenie |
 |---|---|
-| `-M` | Lustro (relacje sync): po udanym pobraniu zniszcz na celu każdą migawkę, której źródło już nie ma, a która jest STARSZA niż wspólna baza, żeby cel trzymał to, co źródło. Nigdy bazy ani niczego nowszego, nigdy zarezerwowanej rodziny Proxmoxa, i nic w ogóle, gdy lista źródła nie daje się odczytać albo wraca pusta. Rozstrzygane per dataset, więc przy `-R` każde rozwinięte dziecko lustruje swoje własne źródło. Nie z `-r` |
+| `-M` | Lustro (relacje sync): po udanym pobraniu zniszcz na celu każdą migawkę, której źródło już nie ma (żadna migawka źródła nie ma jej GUID, pod żadną nazwą, więc migawka o zmienionej nazwie zostaje), a która jest STARSZA niż wspólna baza, żeby cel trzymał to, co źródło. Nigdy bazy ani niczego nowszego, nigdy zarezerwowanej rodziny Proxmoxa, i nic w ogóle, gdy nie daje się odczytać lista źródła albo lista GUID którejś strony, albo gdy lista źródła wraca pusta. Rozstrzygane per dataset, więc przy `-R` każde rozwinięte dziecko lustruje swoje własne źródło. Nie z `-r` |
 | `-s` | Tylko migawki, bez transferu: robi migawkę (migawki) źródła tam, gdzie źródło żyje (przez ssh dla `[user@]host:dataset`, lokalnie dla samego datasetu) i na tym kończy: nic nie jest wysyłane, odbierane, trzymane holdem, bookmarkowane, lustrowane ani tworzone tutaj. Dla datasetów, które inny mechanizm już kopiuje (`pvesr` w klastrze Proxmoxa) i które potrzebują tylko własnej rodziny migawek tej relacji. Przyjmuje dokładnie jeden argument pozycyjny (listę źródeł); argument celu i każda flaga, która tylko kształtuje transfer, są odrzucane przed jakimkolwiek ssh czy migawką (`-e -t -M -f -F` oraz `-z -Z -g -N -l -A -b -H -i -T -w -o -x -u -U -E`). `-m -j -v -n -r -R -X -S -q -Q -L -p -k -K -O -c` zostają. Nie potrzebuje ani mbuffera, ani kompresora. `-n` wypisuje jedną linię `PLAN=SNAPSHOT-ONLY src=<dataset>` na każdy wybrany dataset. Status w statystykach to `snapshot_only` lub `snapshot_only_failed`, nigdy `success` |
 | `-Q <SEKUNDY>` | Jak długo zdalny deadman czeka, zanim odmrozi bezwarunkowo (domyślnie 120, minimum 10). Ma sens tylko z `-q` |
 

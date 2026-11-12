@@ -1287,9 +1287,10 @@ guest_disk_is_live() {   # <dataset> -> 0 if it IS a live guest disk, 1 otherwis
 # race a transfer and cannot disagree with it about what "common" means.
 #
 # Deletes on the TARGET exactly the snapshots that are (a) absent from the
-# source's current list and (b) strictly OLDER than the common base, in the
+# source -- no source snapshot carries their GUID, under any name
+# (REV-20261112-196) -- and (b) strictly OLDER than the common base, in the
 # target's own creation order. Refuses -- deleting nothing -- when the source
-# list cannot be read, when it is EMPTY (an empty answer is never evidence that
+# list or either GUID list cannot be read or names a snapshot without a numeric GUID, when it is EMPTY (an empty answer is never evidence that
 # everything was pruned: a wrong path, a wiped pool and a broken channel all
 # look like that), when there is no common base, or when the base is not found
 # by name on the target (a renamed base, matched by GUID: the order on the
@@ -1355,29 +1356,76 @@ mirror_target() {
         log 0 "Mirror (-M) on '$tgt': the common base '$base' is not on the target under that name (matched by GUID) -- order not provable, NOTHING deleted"
         return 1
     fi
-    local -A on_src=()
-    while IFS= read -r s; do [ -n "$s" ] && on_src["$s"]=1; done <<< "$src_list"
-    local gone=0 stuck=0 reserved=0
+    # REV-20261112-196 F1: "ON THE SOURCE" MEANS THE SAME GUID, the identity the transfer
+    # itself uses (find_common_snapshot). This used to compare NAMES: a snapshot renamed on
+    # the source was "no longer on the source" and its only copy here was destroyed, rc 0,
+    # though the source still held that recovery point (live, pve9 2026-11-12). Now a target
+    # snapshot stays when any source snapshot carries its GUID, whatever either side calls
+    # it; one with the source's NAME but another GUID is a different point and is not on
+    # the source. Every doubt deletes nothing: a GUID list that cannot be read, a GUID that
+    # is not a number, a target snapshot the GUID list does not name. The whole decision
+    # is made before the first destroy.
+    local src_gl tgt_gl _n _g
+    src_gl=$(get_snapshot_guids "$src" "$ruser" "$rhost") || {
+        log 0 "Mirror (-M) on '$tgt': the snapshot GUIDs of '$src' could not be read -- presence on the source is unknown, NOTHING deleted"
+        return 1
+    }
+    tgt_gl=$(get_snapshot_guids "$tgt") || {
+        log 0 "Mirror (-M) on '$tgt': its own snapshot GUIDs could not be read -- NOTHING deleted"
+        return 1
+    }
+    local -A src_by_guid=() tgt_guid=()
+    while IFS=$'\t' read -r _n _g; do
+        [ -n "$_n" ] || continue
+        case "$_g" in ''|*[!0-9]*)
+            log 0 "Mirror (-M) on '$tgt': '$src@$_n' is listed with no valid GUID ('$_g') -- presence on the source is unknown, NOTHING deleted"
+            return 1 ;;
+        esac
+        src_by_guid["$_g"]="$_n"
+    done <<< "$src_gl"
+    while IFS=$'\t' read -r _n _g; do
+        [ -n "$_n" ] || continue
+        case "$_g" in ''|*[!0-9]*)
+            log 0 "Mirror (-M) on '$tgt': '$tgt@$_n' is listed with no valid GUID ('$_g') -- NOTHING deleted"
+            return 1 ;;
+        esac
+        tgt_guid["$_n"]="$_g"
+    done <<< "$tgt_gl"
+    local doomed=() kept=0 gone=0 stuck=0 reserved=0
     while IFS= read -r s; do
         [ -n "$s" ] || continue
         [ "$s" = "$base" ] && break
-        [ -n "${on_src[$s]:-}" ] && continue
+        _g="${tgt_guid[$s]:-}"
+        if [ -z "$_g" ]; then
+            log 0 "Mirror (-M) on '$tgt': '$tgt@$s' is not in the target's GUID list (changed while it was read?) -- NOTHING deleted"
+            return 1
+        fi
+        if [ -n "${src_by_guid[$_g]:-}" ]; then
+            if [ "${src_by_guid[$_g]}" != "$s" ]; then
+                kept=$((kept + 1))
+                log 1 "Mirror (-M): kept $tgt@$s -- the source still holds it as @${src_by_guid[$_g]} (same GUID $_g)"
+            fi
+            continue
+        fi
         case "$s" in __replicate_*|vzdump*|__migration__*) reserved=$((reserved + 1)); continue ;; esac
+        doomed+=("$s")
+    done <<< "$tgt_list"
+    for s in ${doomed[@]+"${doomed[@]}"}; do
         if zfs destroy "$tgt@$s" 2>/dev/null; then
             gone=$((gone + 1))
-            log 1 "Mirror (-M): destroyed $tgt@$s -- no longer on the source"
+            log 1 "Mirror (-M): destroyed $tgt@$s -- no snapshot on the source carries its GUID ${tgt_guid[$s]}"
         else
             stuck=$((stuck + 1))
             log 0 "Mirror (-M): could not destroy $tgt@$s (held or busy?) -- left in place"
         fi
-    done <<< "$tgt_list"
+    done
     # Level 0 whenever the mirror DID something: a deletion is history leaving
     # the target, and the cron log is where an operator looks for why it is
     # gone. At level 1 the first live run removed 163 snapshots from one
     # dataset on pve10 and cron.log said nothing (2026-10-06).
     local _lvl=1
     [ $((gone + stuck)) -gt 0 ] && _lvl=0
-    log "$_lvl" "Mirror (-M) on '$tgt': $gone removed (gone from the source, older than '$base'), $stuck could not be removed, $reserved reserved left alone"
+    log "$_lvl" "Mirror (-M) on '$tgt': $gone removed (gone from the source, older than '$base'), $stuck could not be removed, $reserved reserved left alone, $kept kept (on the source under another name)"
     [ "$stuck" -eq 0 ]
 }
 
