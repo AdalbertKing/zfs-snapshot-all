@@ -1,0 +1,110 @@
+== identity: c29f5fb981c2b2cb0e48bf6e97236270398980cf  host pve9  2026-11-12 18:06:35
+611a0f3c80fded260e056cef040438b2c51404a383e6bd6d2c256bf45aa0ea72  snapget.sh
+43c3ff318a5a61b6aee25b86cfa9b6e8303b174a76ea86f877fa41f824e74284  lib-zfs-snap.sh
+9388f92b3bbe3d9ff19176c1128350da46b356cf20c3779df8c6d87cc5c04809  lib-backup-common.sh
+zfs-2.1.11-1+deb12u1
+
+===== 1. two runs: the target holds two snapshots
+-- engine (first): snapget.sh -m replica_ -M hdd/lab/r196src r196tgt/rep
+2026-11-12 18:06:36 - SEND CMD: zfs send  -c   hdd/lab/r196src@replica_2026-11-12_18-06-35
+2026-11-12 18:06:39 - Mirror (-M) on 'r196tgt/rep/hdd/lab/r196src': 0 removed (gone from the source, older than 'replica_2026-11-12_18-06-35'), 0 could not be removed, 0 reserved left alone, 0 kept (on the source under another name)
+All datasets processed successfully
+engine rc=0
+-- engine (second): snapget.sh -m replica_ -M hdd/lab/r196src r196tgt/rep
+2026-11-12 18:06:41 - Target dataset already exists: r196tgt/rep/hdd/lab/r196src
+2026-11-12 18:06:41 - Found valid common snapshot: hdd/lab/r196src@replica_2026-11-12_18-06-35
+2026-11-12 18:06:41 - SEND CMD: zfs send  -c   -I hdd/lab/r196src@replica_2026-11-12_18-06-35 hdd/lab/r196src@replica_2026-11-12_18-06-40
+2026-11-12 18:06:44 - Mirror (-M) on 'r196tgt/rep/hdd/lab/r196src': 0 removed (gone from the source, older than 'replica_2026-11-12_18-06-40'), 0 could not be removed, 0 reserved left alone, 0 kept (on the source under another name)
+All datasets processed successfully
+engine rc=0
+-- hdd/lab/r196src
+   hdd/lab/r196src@replica_2026-11-12_18-06-35	3131084202161357131
+   hdd/lab/r196src@replica_2026-11-12_18-06-40	908943618845494316
+-- r196tgt/rep/hdd/lab/r196src
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-35	3131084202161357131
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-40	908943618845494316
+oldest: @replica_2026-11-12_18-06-35 (f1 md5 8bf2ec2e9e0464d6abf1b0b57c47e17a)  second: @replica_2026-11-12_18-06-40
+
+===== 2. the OLDEST snapshot renamed on the source (same GUID), new work, -m -M
+source: @replica_2026-11-12_18-06-35 -> @replica_renamed
+-- hdd/lab/r196src
+   hdd/lab/r196src@replica_renamed	3131084202161357131
+   hdd/lab/r196src@replica_2026-11-12_18-06-40	908943618845494316
+-- r196tgt/rep/hdd/lab/r196src
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-35	3131084202161357131
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-40	908943618845494316
+-- engine (third): snapget.sh -m replica_ -M hdd/lab/r196src r196tgt/rep
+2026-11-12 18:06:45 - Target dataset already exists: r196tgt/rep/hdd/lab/r196src
+2026-11-12 18:06:45 - Found valid common snapshot: hdd/lab/r196src@replica_2026-11-12_18-06-40
+2026-11-12 18:06:45 - SEND CMD: zfs send  -c   -I hdd/lab/r196src@replica_2026-11-12_18-06-40 hdd/lab/r196src@replica_2026-11-12_18-06-45
+2026-11-12 18:06:49 - Mirror (-M): kept r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-35 -- the source still holds it as @replica_renamed (same GUID 3131084202161357131)
+2026-11-12 18:06:49 - Mirror (-M) on 'r196tgt/rep/hdd/lab/r196src': 0 removed (gone from the source, older than 'replica_2026-11-12_18-06-45'), 0 could not be removed, 0 reserved left alone, 1 kept (on the source under another name)
+All datasets processed successfully
+engine rc=0
+-- hdd/lab/r196src
+   hdd/lab/r196src@replica_renamed	3131084202161357131
+   hdd/lab/r196src@replica_2026-11-12_18-06-40	908943618845494316
+   hdd/lab/r196src@replica_2026-11-12_18-06-45	2723418783726890027
+-- r196tgt/rep/hdd/lab/r196src
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-35	3131084202161357131
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-40	908943618845494316
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-45	2723418783726890027
+-- is the target's @replica_2026-11-12_18-06-35 a usable recovery point? clone it and read f1
+target @replica_2026-11-12_18-06-35 f1 md5 8bf2ec2e9e0464d6abf1b0b57c47e17a  source @replica_renamed f1 md5 8bf2ec2e9e0464d6abf1b0b57c47e17a  -> SAME
+
+===== 3. no new work: -e -M (existing snapshots only)
+-- engine (no-new-work): snapget.sh -e -M hdd/lab/r196src r196tgt/rep
+2026-11-12 18:06:49 - Target dataset already exists: r196tgt/rep/hdd/lab/r196src
+2026-11-12 18:06:49 - Snapshot already exists in target - skipping
+2026-11-12 18:06:49 - Mirror (-M): kept r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-35 -- the source still holds it as @replica_renamed (same GUID 3131084202161357131)
+2026-11-12 18:06:49 - Mirror (-M) on 'r196tgt/rep/hdd/lab/r196src': 0 removed (gone from the source, older than 'replica_2026-11-12_18-06-45'), 0 could not be removed, 0 reserved left alone, 1 kept (on the source under another name)
+All datasets processed successfully
+engine rc=0
+-- hdd/lab/r196src
+   hdd/lab/r196src@replica_renamed	3131084202161357131
+   hdd/lab/r196src@replica_2026-11-12_18-06-40	908943618845494316
+   hdd/lab/r196src@replica_2026-11-12_18-06-45	2723418783726890027
+-- r196tgt/rep/hdd/lab/r196src
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-35	3131084202161357131
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-40	908943618845494316
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-45	2723418783726890027
+
+===== 4. a snapshot renamed on the TARGET (same GUID as the source's @replica_2026-11-12_18-06-40), -e -M
+target: @replica_2026-11-12_18-06-40 -> @replica_2026-11-12_18-06-40_t
+-- engine (target-rename): snapget.sh -e -M hdd/lab/r196src r196tgt/rep
+2026-11-12 18:06:49 - Target dataset already exists: r196tgt/rep/hdd/lab/r196src
+2026-11-12 18:06:49 - Snapshot already exists in target - skipping
+2026-11-12 18:06:49 - Mirror (-M): kept r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-35 -- the source still holds it as @replica_renamed (same GUID 3131084202161357131)
+2026-11-12 18:06:49 - Mirror (-M): kept r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-40_t -- the source still holds it as @replica_2026-11-12_18-06-40 (same GUID 908943618845494316)
+2026-11-12 18:06:49 - Mirror (-M) on 'r196tgt/rep/hdd/lab/r196src': 0 removed (gone from the source, older than 'replica_2026-11-12_18-06-45'), 0 could not be removed, 0 reserved left alone, 2 kept (on the source under another name)
+All datasets processed successfully
+engine rc=0
+-- hdd/lab/r196src
+   hdd/lab/r196src@replica_renamed	3131084202161357131
+   hdd/lab/r196src@replica_2026-11-12_18-06-40	908943618845494316
+   hdd/lab/r196src@replica_2026-11-12_18-06-45	2723418783726890027
+-- r196tgt/rep/hdd/lab/r196src
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-35	3131084202161357131
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-40_t	908943618845494316
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-45	2723418783726890027
+
+===== 5. control: @replica_2026-11-12_18-06-40 really destroyed on the source -- the mirror must remove its copy
+source: destroyed @replica_2026-11-12_18-06-40
+-- engine (true-deletion): snapget.sh -m replica_ -M hdd/lab/r196src r196tgt/rep
+2026-11-12 18:06:50 - Target dataset already exists: r196tgt/rep/hdd/lab/r196src
+2026-11-12 18:06:50 - Found valid common snapshot: hdd/lab/r196src@replica_2026-11-12_18-06-45
+2026-11-12 18:06:50 - SEND CMD: zfs send  -c   -I hdd/lab/r196src@replica_2026-11-12_18-06-45 hdd/lab/r196src@replica_2026-11-12_18-06-50
+2026-11-12 18:06:54 - Mirror (-M): kept r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-35 -- the source still holds it as @replica_renamed (same GUID 3131084202161357131)
+2026-11-12 18:06:54 - Mirror (-M): destroyed r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-40_t -- no snapshot on the source carries its GUID 908943618845494316
+2026-11-12 18:06:54 - Mirror (-M) on 'r196tgt/rep/hdd/lab/r196src': 1 removed (gone from the source, older than 'replica_2026-11-12_18-06-50'), 0 could not be removed, 0 reserved left alone, 1 kept (on the source under another name)
+All datasets processed successfully
+engine rc=0
+-- hdd/lab/r196src
+   hdd/lab/r196src@replica_renamed	3131084202161357131
+   hdd/lab/r196src@replica_2026-11-12_18-06-45	2723418783726890027
+   hdd/lab/r196src@replica_2026-11-12_18-06-50	3321253353067800778
+-- r196tgt/rep/hdd/lab/r196src
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-35	3131084202161357131
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-45	2723418783726890027
+   r196tgt/rep/hdd/lab/r196src@replica_2026-11-12_18-06-50	3321253353067800778
+cleaned
