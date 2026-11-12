@@ -12,6 +12,13 @@
 # <paths-file>: the shipped run-time paths, one per line (publish.sh writes it from the MANIFEST).
 # Exit 0 = covered; 1 = refused, with every uncovered commit named; 2 = could not run.
 set -u
+# NEGCTL SHIM (fix/rev-195-r2-negctl only): the round-2 tests call the gate with 3 arguments;
+# the old logic wants a paths file -- built here the way old publish.sh built it.
+if [ $# -eq 3 ]; then
+    _pf=$(mktemp)
+    bash "$(dirname "$0")/package-list.sh" "$1" "$3" | grep -vE '^docs/|\.md$|^LICENSE$|^\.gitattributes$' > "$_pf"
+    set -- "$1" "$2" "$3" "$_pf"
+fi
 
 dev="$1" prev="$2" rev="$3" paths_file="$4"
 ledger=$(cat)
