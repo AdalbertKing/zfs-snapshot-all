@@ -76,8 +76,11 @@
   odrzucany z `-e`, z `-s` i bez `-m`, a `snapsend.sh` odrzuca go zawsze); (W5-2) pasywna (`-e`)
   nie przyjmuje już `__replicate_`, `vzdump` ani `__migration__`, z `-E` i bez (dataset z samymi
   takimi migawkami odmawia); `-m` nazywający jedną z tych rodzin (np. `-e -m __replicate_`)
-  wyłącza ją z tego wykluczenia. Pomiar
-  ponowny 2026-11-12 na kontenerze laboratoryjnym w klastrze dwuwęzłowym z pvesr, trzy fazy (gość
+  wyłącza ją z tego wykluczenia. REV-20261112-197 (recenzent, CHANGES-REQUIRED): przy dwóch
+  nośnikach jednej repliki przycinanie jednego mogło zabrać bazę drugiemu, gdy jego zakładka
+  nie powstała; zmienione na gałęzi `fix/rev-197-anchor` (przed zgłoszeniem recenzentowi): przycinane są tylko migawki, które
+  dany nośnik sam ma (po GUID), `--source-keep` wymaga `-i`. Pomiar
+  ponowny 2026-11-12 (przed F1 z REV-197) na kontenerze laboratoryjnym w klastrze dwuwęzłowym z pvesr, trzy fazy (gość
   na węźle 1, po `pct migrate` na węzeł 2, z powrotem): 6 biegów rc 0, przyrosty z zakładki,
   węzeł, z którego job kopiuje, trzyma dokładnie 1 migawkę repliki, nośnik 3 wersje, pvesr
   FailCount 0. Znany ślad: po powrocie gościa na węźle, który go odebrał, zostaje co najwyżej

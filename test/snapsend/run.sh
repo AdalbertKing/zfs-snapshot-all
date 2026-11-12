@@ -2311,7 +2311,9 @@ check "REV-197 --source-keep without -i: refused, said" "1|1" \
 # REV-20261112-197: two media of ONE replica share the family (same -m). B's run must never
 # prune A's base, whatever happened to A's bookmark. A shim fails `zfs bookmark` (or the
 # removal of the old bookmark) for A's run only; "race" runs B's whole job INSIDE A's
-# bookmark call -- after A's hold is released, before A's bookmark exists.
+# bookmark call -- after A's hold is released, before A's bookmark exists. (It waits one
+# second first: two runs of one family in the same second would name the same snapshot,
+# and B would fail on that instead -- measured on pve9, 2026-11-13.)
 R197D="$(mktemp -d)"; mkdir -p "$R197D/bin"
 export R197_REAL="$(command -v zfs)" R197_SNAPGET="$SNAPGET"
 cat > "$R197D/bin/zfs" <<'SHIM'
@@ -2319,7 +2321,7 @@ cat > "$R197D/bin/zfs" <<'SHIM'
 case "${R197_FAIL:-}:$1" in
     bookmark:bookmark) echo "simulated: permission denied (bookmark)" >&2; exit 1 ;;
     bmdestroy:destroy) case "$*" in *'#'*) echo "simulated: permission denied (destroy bookmark)" >&2; exit 1 ;; esac ;;
-    race:bookmark) R197_FAIL= timeout 120 "$R197_SNAPGET" -i -m rep_ --source-keep=1 "$R197_SRC" "$R197_B" >"$R197_RACELOG" 2>&1 ;;
+    race:bookmark) sleep 1; R197_FAIL= timeout 120 "$R197_SNAPGET" -i -m rep_ --source-keep=1 "$R197_SRC" "$R197_B" >"$R197_RACELOG" 2>&1 ;;
 esac
 exec "$R197_REAL" "$@"
 SHIM

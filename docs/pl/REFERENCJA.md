@@ -1097,8 +1097,10 @@ notify       = pulled
   migawkę tego poziomu (np. kopia dzienna 01:11 za repliką `*/2:00` → 02:10). Kopia, która po
   przesunięciu przechodzi przez północ, przesuwa też dzień tygodnia albo miesiąca.
 - **Replika aktywna z `keep` i migawki Proxmoxa.** Replika aktywna z `keep = N` trzyma na źródle
-  tylko najnowszą własną migawkę (`--source-keep=1`): starsze znikają po udanej kopii, a zakładka
-  `#tgt-` niesie następny przyrost. `--source-keep` odrzuca `-e`, `-s` i brak `-m`. Replika
+  tylko najnowszą własną migawkę (`--source-keep=1`), po jednej na nośnik, gdy replika ma ich
+  kilka: starsze znikają po udanej kopii, każdy nośnik usuwa tylko migawki, które sam ma, a
+  zakładka `#tgt-` niesie następny przyrost. `--source-keep` odrzuca `-e` i `-s` oraz uruchomienie bez `-m` albo
+  bez `-i`; przy `history = all` lub `auto:N` generator go nie używa. Replika
   pasywna (`-e`) nigdy nie przyjmuje migawek samego Proxmoxa (`__replicate_`, `vzdump`,
   `__migration__`), także bez `-E`, chyba że jej `-m` nazywa jedną z tych rodzin
   (`-e -m __replicate_`).
