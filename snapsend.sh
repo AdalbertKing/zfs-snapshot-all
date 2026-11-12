@@ -607,6 +607,7 @@ PORT=22
 TARGET_EXACT=0
 USE_EXISTING_SNAPSHOT=0
 declare -a EXCLUDE_SNAPS=()
+SOURCE_KEEP=0      # parsed by the shared translate_long_options; refused below (pull-only, W5)
 # -q: quiesce the Proxmox guest that owns each dataset before snapshotting it.
 # "no" (default), "agent" (qemu-guest-agent, VMs), "fs" (host fsfreeze, containers)
 # or "auto" (pick per guest). See the QUIESCE section in lib-zfs-snap.sh.
@@ -2292,6 +2293,12 @@ translate_long_options() {
                 shift ;;
             --recursive)
                 echo "Error: --recursive needs a mode: --recursive=atomic|flat|no" >&2; exit 1 ;;
+            --source-keep=*)
+                SOURCE_KEEP="${a#--source-keep=}"
+                case "$SOURCE_KEEP" in
+                    ''|*[!0-9]*|0*) echo "Error: --source-keep= takes a whole number of at least 1 (got '${a#--source-keep=}')" >&2; exit 1 ;;
+                esac
+                shift ;;
             --*)
                 echo "Error: unknown option $a" >&2; exit 1 ;;
             -?*)
@@ -2383,6 +2390,22 @@ shift $((OPTIND-1))
 if [ $FLAT_RECURSE -eq 1 ] && [ $RECURSIVE -eq 1 ]; then
     echo "Error: -r and -R are mutually exclusive (-r = one atomic zfs send -R stream, -R = independent per-dataset sends)" >&2
     exit 1
+fi
+# W5 (2026-11-12): --source-keep is pull-only -- the replica engine is snapget.sh
+# (gen-cron.sh replica_engine_cmd); the twin parser accepts the spelling, this refuses it.
+if [ "$SOURCE_KEEP" -gt 0 ]; then
+    echo "Error: --source-keep is a snapget.sh (pull) option; snapsend.sh does not prune its source" >&2
+    exit 1
+fi
+# W5 (2026-11-12), the twin of snapget.sh: under a DECLARED -e the Proxmox-reserved
+# families are never adopted, with or without -E.
+if [ $USE_EXISTING_SNAPSHOT -eq 1 ]; then
+    for _rf in __replicate_ vzdump __migration__; do
+        _have=0
+        for _xp in ${EXCLUDE_SNAPS[@]+"${EXCLUDE_SNAPS[@]}"}; do [ "$_xp" = "$_rf" ] && _have=1; done
+        [ $_have -eq 1 ] || EXCLUDE_SNAPS+=("$_rf")
+    done
+    unset _rf _have _xp
 fi
 # A repeat of the SAME mode is refused too. It is harmless today -- but the
 # rule is about the declaration, not its effect, and once --recursive=<mode>
