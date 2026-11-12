@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 c6252c79ee1eea8f71bae043f5d66bad92e0cf01 -->
-<!-- frozen: snapget.sh 100755 27eafb7fe3d319d41d23fbe9d43480a8ce0ddc67 -->
+<!-- frozen: snapsend.sh 100755 3148caf67442bf5b2f39f0689ba21ad17706039f -->
+<!-- frozen: snapget.sh 100755 e5f54a9c1e6d3cb1b414ad274ac5b2b995b7dc6f -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
 <!-- frozen: lib-zfs-snap.sh 100644 4024c09b357197732632d04a24cf020c8cf92433 -->
@@ -1443,6 +1443,16 @@ Owner-authorized refreezes:
   Anything else deletes nothing, rc 1. Tests: test/twins section M, +5 cases (4 refusals, 1
   complete-list control); the 4 refusals fail on main's snapget.sh.
   twin: n/a -- snapsend.sh has no mirror.
+- 2026-11-12 (snapget.sh, snapsend.sh): **W5, replicas on a pvesr pair.** Owner opening "Tak,
+  otwórz W5" (2026-11-12), from the CT 990 measurement. W5-1: `snapget.sh --source-keep=N`,
+  after a successful non-recursive pull, destroys the job's own older snapshots on the source
+  beyond the N newest (exact `-m` prefix + engine timestamp, or the quiesce crash form); a
+  failed listing or destroy is a level-1 warning, never a failed run; under `-r` nothing is
+  pruned. gen-cron gives `--source-keep=1` to the keep replica only. W5-2: a declared `-e`
+  never adopts `__replicate_`, `vzdump` or `__migration__`, with or without `-E`. Tests:
+  test/snapsend W5 cases (real ZFS), test/cron PRK1/PRK2.
+  twin: W5-2 ported to snapsend.sh; `--source-keep` is parsed by the shared
+  translate_long_options and refused by snapsend.sh (pull-only), reason in twins.sha256.
 
 ## How it is enforced
 
