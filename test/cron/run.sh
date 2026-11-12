@@ -1839,6 +1839,29 @@ while IFS= read -r _ln; do
 done < <(printf '%s\n' "$fo" | grep -E 'replica copy \((fx|fk)\)')
 check "PRK4 FIXED replicas (several sources; keep with one source) render as lines that parse as shell" "0:0:2" \
       "$frc:$_bad:$(printf '%s\n' "$fo" | grep -cE "replica copy \((fx|fk)\).* -- /bin/sh -c '\( ")"
+# R194 F1 (REV-20261112-194): a replica source is LOCAL, and ZFS allows ':' in a dataset
+# name. snapget.sh reads what precedes the first ':' as [user@]host, so a list holding a
+# ':' goes to the engine with an empty host part (':tank/data:part' = local), while the
+# media gate gets the names literally. A list without ':' renders byte-identical.
+printf '[defaults]\n\thost_label = f\n[replica:c1]\n\tsource = tank/data:part\n\tdst = usb/rep\n\tschedule = 0 1 * * *\n\tprefix = replica_\n\tmedia = removable\n' > "$FOR/c.conf"
+fo=$(for_run); frc=$?
+_l="$(printf '%s\n' "$fo" | grep 'replica copy (c1)')"
+check "R194-F1a: a source with ':' reaches the engine as local (':tank/data:part'), the gate literally" "0:1:1:0" \
+      "$frc:$(printf '%s' "$_l" | grep -c -- '-M ":tank/data:part" "usb/rep"'):$(printf '%s' "$_l" | grep -c -- '--source tank/data:part '):$(printf '%s' "$_l" | grep -c -- '--source :')"
+printf '[defaults]\n\thost_label = f\n[replica:c2]\n\tsource = backupnode:tank/data\n\tdst = usb/rep\n\tschedule = 0 1 * * *\n\tprefix = replica_\n\tmedia = removable\n' > "$FOR/c.conf"
+fo=$(for_run); frc=$?
+_l="$(printf '%s\n' "$fo" | grep 'replica copy (c2)')"
+check "R194-F1b: 'backupnode:tank/data' is ONE local name for engine and gate alike -- never an ssh host" "0:1:1" \
+      "$frc:$(printf '%s' "$_l" | grep -c -- '-M ":backupnode:tank/data" "usb/rep"'):$(printf '%s' "$_l" | grep -c -- '--source backupnode:tank/data ')"
+printf '[defaults]\n\thost_label = f\n[replica:c3]\n\tsource = tank/a,tank/b:x\n\tdst = usb/rep\n\tschedule = 0 1 * * *\n\tprefix = replica_\n' > "$FOR/c.conf"
+fo=$(for_run); frc=$?
+_l="$(printf '%s\n' "$fo" | grep 'replica copy (c3)')"
+check "R194-F1c: several sources, one with ':' -- every engine argument gets the local prefix" "0:1" \
+      "$frc:$(printf '%s' "$_l" | grep -c -- '-M ":\$s" "usb/rep"')"
+printf '[defaults]\n\thost_label = f\n[replica:c4]\n\tsource = tank/a,tank/b\n\tdst = usb/rep\n\tschedule = 0 1 * * *\n\tprefix = replica_\n[replica:c5]\n\tsource = tank/c\n\tdst = usb/rep2\n\tschedule = 0 2 * * *\n\tprefix = replica_\n' > "$FOR/c.conf"
+fo=$(for_run); frc=$?
+check "R194-F1d: control -- sources without ':' render as before, no prefix" "0:1:1:0" \
+      "$frc:$(printf '%s\n' "$fo" | grep 'replica copy (c4)' | grep -c -- '-M "\$s" "usb/rep"'):$(printf '%s\n' "$fo" | grep 'replica copy (c5)' | grep -c -- '-M "tank/c" "usb/rep2"'):$(printf '%s\n' "$fo" | grep 'replica copy' | grep -c '":')"
 # W16 (owner 2026-10-11): history in a relationship's [dataset:] -- all (default, -I),
 # newest -> -i, auto:N -> -T N, on every send line of the section; a second answer
 # in flags is refused.

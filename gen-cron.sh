@@ -4582,6 +4582,15 @@ emit_replicas() {
         # with passive = yes any snapshot ("-", as check-snap-age and the gate read it).
         fam="$prefix"; [ "$passive" = 1 ] && fam="-"
         IFS=',' read -ra srcs <<< "$source"
+        # REV-20261112-194 F1: A REPLICA SOURCE IS LOCAL, and ZFS allows ':' in a
+        # dataset name (tank/data:part). snapget.sh reads everything before the
+        # first ':' of a source as [user@]host, so such a name went to ssh while
+        # the media gate checked it literally -- two programs, two datasets. An
+        # empty host part (':tank/data:part') is the engine's own spelling of
+        # "local, no ssh", so a list holding any ':' gets that prefix on every
+        # engine argument. Lines without a ':' stay byte-identical.
+        local lp=""
+        for s in "${srcs[@]}"; do case "$s" in *:*) lp=":" ;; esac; done
         # ONE ENGINE CALL PER SOURCE, ALL INSIDE ONE BRACKET.
         #
         # The shape depends on the count, and deliberately:
@@ -4609,7 +4618,7 @@ emit_replicas() {
             _keepcmd="$REPO_DIR/delsnaps.sh$([ "$recursive" = 1 ] && printf ' -R') \"$dst/%s\" \"$prefix\" -M$keep"
         fi
         if [ "${#srcs[@]}" -le 1 ]; then
-            cmd="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" "$source" "$dst" "$passive" "$keep")"
+            cmd="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" "$lp$source" "$dst" "$passive" "$keep")"
             if [ -n "$keep" ]; then
                 # shellcheck disable=SC2059
                 cmd="$cmd; m=\$?; [ \$m -eq 0 ] && { $(printf "$_keepcmd" "$source"); m=\$?; }"
@@ -4631,7 +4640,7 @@ emit_replicas() {
             # replica_engine_cmd quotes its source argument, so passing the
             # literal $s yields "$s" in the emitted line -- expanded by the
             # shell cron runs it in, and quoted there, which is what we want.
-            one="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" '$s' "$dst" "$passive" "$keep")"
+            one="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" "$lp"'$s' "$dst" "$passive" "$keep")"
             if [ -n "$keep" ]; then
                 # shellcheck disable=SC2059
                 one="$one; r=\$?; [ \$r -eq 0 ] && { $(printf "$_keepcmd" '$s'); r=\$?; }"

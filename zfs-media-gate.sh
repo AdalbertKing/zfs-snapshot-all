@@ -741,7 +741,7 @@ EOF
         fi
     }
     media_preflight() {   # <new|ours|theirs> -- returns only when the medium may be used
-        local _pf_own="$1" _src _tgt _tsnaps _sall _ssnaps _common _one _bl _tg _bg _need _new _ok _b _free
+        local _pf_own="$1" _src _tgt _tall _tsnaps _sall _ssnaps _common _one _bl _bg _need _new _ok _b _free
         # A MEDIUM THAT HOLDS SOMEBODY ELSE'S LINEAGE CANNOT BE WRITTEN, and the
         # error ZFS gives for it names the wrong layer.
         #
@@ -768,23 +768,23 @@ EOF
             for _src in "${SOURCES[@]}"; do
                 _tgt="$DATASET/$_src"
                 zfs list -H -o name "$_tgt" >/dev/null 2>&1 || continue
-                _tsnaps="$(zfs list -H -t snapshot -o name -d 1 "$_tgt" 2>/dev/null | grep "@${PREFIX}" | sed 's/.*@//')"
+                # REV-20261112-194 F2: THE LINEAGE IS DECIDED BY GUID, the way the engine
+                # decides it (find_common_snapshot): a snapshot of the same name counts only
+                # with the same GUID, and a snapshot renamed on either side is found by its
+                # GUID alone. The gate used to accept any name match and, failing that,
+                # compared target GUIDs to source BOOKMARKS only -- so a renamed snapshot
+                # was refused as "a DIFFERENT lineage" with destroy advice.
+                # Evidence that cannot be read, or a snapshot listed without a GUID, is
+                # UNKNOWN: no refusal and no destroy advice on a guess. The engine runs and
+                # reports what it finds.
+                _tall="$(zfs list -H -t snapshot -o name,guid -d 1 "$_tgt" 2>/dev/null)" || continue
+                _tsnaps="$(printf '%s\n' "$_tall" | cut -f1 | grep "@${PREFIX}" | sed 's/.*@//')"
                 [ -n "$_tsnaps" ] || continue
-                # REV-20261112-194 F2: unreadable evidence is unknown, never "a different
-                # lineage" -- the engine decides, and no destroy is suggested on a guess.
                 _sall="$(zfs list -H -t snapshot -o name,guid -d 1 "$_src" 2>/dev/null)" || continue
+                _bl="$(zfs list -H -t bookmark -o guid -d 1 "$_src" 2>/dev/null)" || continue
+                printf '%s\n%s\n' "$_tall" "$_sall" | awk -F'\t' 'NF && $2 !~ /^[0-9]+$/ { bad = 1 } END { exit bad }' || continue
+                printf '%s\n' "$_bl" | grep -q '[^0-9]' && continue
                 _ssnaps="$(printf '%s\n' "$_sall" | cut -f1 | grep "@${PREFIX}" | sed 's/.*@//')"
-                _common=no
-                while IFS= read -r _one; do
-                    [ -n "$_one" ] || continue
-                    case "
-$_ssnaps
-" in *"
-$_one
-"*) _common=yes; break ;; esac
-                done <<EOF
-$_tsnaps
-EOF
                 # REV-20261111-B01 (found during F2): a medium that returns after the collector's
                 # retention has pruned the snapshot it holds still shares the lineage, because a
                 # source BOOKMARK carries that snapshot's GUID. The engine sends the increment
@@ -792,17 +792,13 @@ EOF
                 # the anchor exists at all. Before this, the gate refused this medium as "a
                 # DIFFERENT lineage". Measured on pve9 2026-11-11: with the gate bypassed, the
                 # engine sent `-i src#tgt-...` and the copy succeeded.
-                # REV-20261112-194 F2: the source's SNAPSHOT GUIDs count as well -- a
-                # snapshot renamed on either side is still the same snapshot, and the
-                # engine matches it by GUID (find_common_snapshot).
-                if [ "$_common" = no ]; then
-                    _bl="$(zfs list -H -t bookmark -o guid -d 1 "$_src" 2>/dev/null)" || continue
-                    _tg="$(zfs list -H -t snapshot -o guid -d 1 "$_tgt" 2>/dev/null)" || continue
-                    _bg=" $(printf '%s\n' "$_bl" "$_sall" | sed 's/.*\t//' | tr '\n' ' ') "
-                    for _one in $_tg; do
-                        case "$_bg" in *" $_one "*) _common=yes; break ;; esac
-                    done
-                fi
+                # So the set a target snapshot may match is the source's snapshot GUIDs
+                # plus its bookmark GUIDs.
+                _bg=" $(printf '%s\n' "$_sall" | cut -f2 | tr '\n' ' ') $(printf '%s\n' "$_bl" | tr '\n' ' ') "
+                _common=no
+                for _one in $(printf '%s\n' "$_tall" | cut -f2); do
+                    case "$_bg" in *" $_one "*) _common=yes; break ;; esac
+                done
                 [ "$_common" = yes ] && continue
                 say "REFUSING: '$_tgt' on this medium holds '$PREFIX' snapshots that '$_src' does not have, and they share none at all -- so this is a copy of a DIFFERENT lineage, not an older state of this one. The engine can neither send an increment (no common snapshot) nor seed over it (the target has snapshots), and would fail every run with a ZFS receive error."
                 say "  the medium holds:  $(printf '%s' "$_tsnaps" | tail -1)"
