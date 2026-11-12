@@ -737,6 +737,16 @@ if grep -q '^mirror_target() {' "$MT/fn.sh"; then
 else
     bad "M mirror_target is extracted from the shipped snapget.sh" "missing in $SG"
 fi
+mt_names() { local e; for e in $1; do printf '%s\n' "${e%%:*}"; done; }
+mt_guids() {
+    local e
+    for e in $1; do
+        case "$e" in
+            *:*) printf '%s\t%s\n' "${e%%:*}" "${e#*:}" ;;
+            *)   printf '%s\t%s\n' "$e" "$(printf '%s' "$e" | cksum | cut -d' ' -f1)" ;;
+        esac
+    done
+}
 mt_run() {   # <src list|FAIL> <tgt list> <base|NONE> [stuck name] -> "rc|destroyed..."
     ( set +u
       log() { :; }
@@ -744,9 +754,20 @@ mt_run() {   # <src list|FAIL> <tgt list> <base|NONE> [stuck name] -> "rc|destro
       get_sorted_snapshots() {
           if [ -n "${2:-}" ]; then
               [ "$MT_SRC" = FAIL ] && return 1
-              printf '%s' "$MT_SRC" | tr ' ' '\n'
+              mt_names "$MT_SRC"
           else
-              printf '%s' "$MT_TGT" | tr ' ' '\n'
+              mt_names "$MT_TGT"
+          fi
+      }
+      # REV-20261112-196: an entry is "name" or "name:guid"; a bare name gets a GUID made
+      # from its name, so equal names are the same snapshot unless a test says otherwise.
+      # MT_GSRC/MT_GTGT=FAIL: that GUID list cannot be read. MT_TGL: the target's GUID
+      # list, when it must differ from its name list.
+      get_snapshot_guids() {
+          if [ -n "${2:-}" ]; then
+              [ "${MT_GSRC:-}" = FAIL ] && return 1; mt_guids "$MT_SRC"
+          else
+              [ "${MT_GTGT:-}" = FAIL ] && return 1; mt_guids "${MT_TGL:-$MT_TGT}"
           fi
       }
       find_common_snapshot() { [ "$MT_BASE" = NONE ] && { echo -n null; return 0; }; echo -n "$MT_BASE"; }
@@ -787,6 +808,29 @@ got=$(mt_run "e" "vzdump-1 __replicate_x old e" e)
 got=$(mt_run "e" "a b e" e b)
 [ "$got" = "1|t/x@a " ] && ok "M a snapshot that will not die is reported (run fails) while the others still go" \
                         || bad "M a snapshot that will not die is reported (run fails) while the others still go" "got=$got"
+# REV-20261112-196: presence on the source is decided by GUID, the identity the transfer
+# uses. Live on pve9 (2026-11-12) a snapshot renamed on the source lost its only copy here.
+got=$(mt_run "a b2:111 e" "a b:111 c e" e)
+[ "$got" = "0|t/x@c " ] && ok "M R196: a snapshot RENAMED on the source (same GUID) stays; a really gone one is still destroyed" \
+                        || bad "M R196: a snapshot renamed on the source stays" "got=$got"
+got=$(mt_run "a b:111 e" "a bb:111 e" e)
+[ "$got" = "0|" ] && ok "M R196: a snapshot renamed on the TARGET (same GUID as the source's) stays" \
+                  || bad "M R196: a snapshot renamed on the target stays" "got=$got"
+got=$(mt_run "a b:111 e" "a b:222 e" e)
+[ "$got" = "0|t/x@b " ] && ok "M R196: the same NAME with another GUID is not on the source -- destroyed like any gone snapshot" \
+                        || bad "M R196: same name, other GUID" "got=$got"
+got=$(MT_GSRC=FAIL mt_run "a e" "a c e" e)
+[ "$got" = "1|" ] && ok "M R196: the source's GUID list cannot be read -- NOTHING deleted, rc 1" \
+                  || bad "M R196: unreadable source GUIDs" "got=$got"
+got=$(MT_GTGT=FAIL mt_run "a e" "a c e" e)
+[ "$got" = "1|" ] && ok "M R196: the target's GUID list cannot be read -- NOTHING deleted, rc 1" \
+                  || bad "M R196: unreadable target GUIDs" "got=$got"
+got=$(mt_run "a b:x1 e" "a c e" e)
+[ "$got" = "1|" ] && ok "M R196: a source snapshot listed with a non-numeric GUID -- NOTHING deleted, rc 1" \
+                  || bad "M R196: a non-numeric source GUID" "got=$got"
+got=$(MT_TGL="a e" mt_run "a e" "a c d e" e)
+[ "$got" = "1|" ] && ok "M R196: a target snapshot missing from the target's GUID list -- NOTHING deleted (not even the others), rc 1" \
+                  || bad "M R196: a target snapshot without a GUID" "got=$got"
 # THE SUMMARY IS VISIBLE WHEN THE MIRROR DID SOMETHING (2026-10-06): the first
 # live run removed 163 snapshots on pve10 and cron.log, which carries level 0
 # only, said nothing. Level 0 when anything was removed or stuck, level 1 for
@@ -795,7 +839,8 @@ mt_lvl() {   # <src> <tgt> <base> [stuck] -> the level of the summary line
     ( set +u
       log() { case "$2" in "Mirror (-M) on "*) echo "$1" >> "$MT/lvl" ;; esac; }
       MT_SRC="$1" MT_TGT="$2" MT_BASE="$3" MT_STUCK="${4:-}"
-      get_sorted_snapshots() { if [ -n "${2:-}" ]; then printf '%s' "$MT_SRC" | tr ' ' '\n'; else printf '%s' "$MT_TGT" | tr ' ' '\n'; fi; }
+      get_sorted_snapshots() { if [ -n "${2:-}" ]; then mt_names "$MT_SRC"; else mt_names "$MT_TGT"; fi; }
+      get_snapshot_guids() { if [ -n "${2:-}" ]; then mt_guids "$MT_SRC"; else mt_guids "$MT_TGT"; fi; }
       find_common_snapshot() { echo -n "$MT_BASE"; }
       guest_disk_is_live() { return 1; }
       zfs() { [ -n "$MT_STUCK" ] && [ "$2" = "t/x@$MT_STUCK" ] && return 1; return 0; }
