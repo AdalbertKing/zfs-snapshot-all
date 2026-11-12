@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 c6252c79ee1eea8f71bae043f5d66bad92e0cf01 -->
-<!-- frozen: snapget.sh 100755 edb0b18a40f364ab335432af5a96b27b09fd32f7 -->
+<!-- frozen: snapget.sh 100755 27eafb7fe3d319d41d23fbe9d43480a8ce0ddc67 -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
 <!-- frozen: lib-zfs-snap.sh 100644 4024c09b357197732632d04a24cf020c8cf92433 -->
@@ -1435,6 +1435,14 @@ Owner-authorized refreezes:
   source rename keeps the copy (a clone of it reads the same `f1`), with and without new work;
   a target rename keeps it; a real source deletion still removes the copy.
   twin: n/a -- snapsend.sh has no mirror. snapsend.sh is not changed.
+- 2026-11-12 (snapget.sh): **REV-20261112-196 round 2, the GUID lists must be complete.** The
+  same Owner opening ("Tak, otwórz", for REV-196); the Reviewer's round-2 verdict continues F1.
+  An empty or partial source GUID list with rc 0, after a non-empty name list, deleted target
+  snapshots (Reviewer's stub reproduction on `3babadf0`). Change: before the first destroy, each
+  side's GUID list must name exactly the snapshots of its name list, with the same count.
+  Anything else deletes nothing, rc 1. Tests: test/twins section M, +5 cases (4 refusals, 1
+  complete-list control); the 4 refusals fail on main's snapget.sh.
+  twin: n/a -- snapsend.sh has no mirror.
 
 ## How it is enforced
 

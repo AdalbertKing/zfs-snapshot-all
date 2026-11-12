@@ -762,10 +762,13 @@ mt_run() {   # <src list|FAIL> <tgt list> <base|NONE> [stuck name] -> "rc|destro
       # REV-20261112-196: an entry is "name" or "name:guid"; a bare name gets a GUID made
       # from its name, so equal names are the same snapshot unless a test says otherwise.
       # MT_GSRC/MT_GTGT=FAIL: that GUID list cannot be read. MT_TGL: the target's GUID
-      # list, when it must differ from its name list.
+      # list, when it must differ from its name list; MT_SGL the same for the source
+      # (EMPTY: an empty answer with rc 0).
       get_snapshot_guids() {
           if [ -n "${2:-}" ]; then
-              [ "${MT_GSRC:-}" = FAIL ] && return 1; mt_guids "$MT_SRC"
+              [ "${MT_GSRC:-}" = FAIL ] && return 1
+              [ "${MT_SGL:-}" = EMPTY ] && return 0
+              mt_guids "${MT_SGL:-$MT_SRC}"
           else
               [ "${MT_GTGT:-}" = FAIL ] && return 1; mt_guids "${MT_TGL:-$MT_TGT}"
           fi
@@ -831,6 +834,24 @@ got=$(mt_run "a b:x1 e" "a c e" e)
 got=$(MT_TGL="a e" mt_run "a e" "a c d e" e)
 [ "$got" = "1|" ] && ok "M R196: a target snapshot missing from the target's GUID list -- NOTHING deleted (not even the others), rc 1" \
                   || bad "M R196: a target snapshot without a GUID" "got=$got"
+# REV-20261112-196 round 2: a GUID list is evidence only when it is complete. An empty or
+# partial answer with rc 0 after a non-empty name list destroyed target@a and target@b
+# (Reviewer's stub reproduction on 3babadf0).
+got=$(MT_SGL=EMPTY mt_run "a b e" "a b e" e)
+[ "$got" = "1|" ] && ok "M R196 r2: an EMPTY source GUID list (rc 0) after a non-empty name list -- NOTHING deleted, rc 1" \
+                  || bad "M R196 r2: empty source GUID list" "got=$got"
+got=$(MT_SGL="e" mt_run "a b e" "a b e" e)
+[ "$got" = "1|" ] && ok "M R196 r2: a PARTIAL source GUID list (only the base) -- NOTHING deleted, rc 1" \
+                  || bad "M R196 r2: partial source GUID list" "got=$got"
+got=$(MT_SGL="a b e f" mt_run "a b e" "a b e" e)
+[ "$got" = "1|" ] && ok "M R196 r2: a source GUID list naming a snapshot the name list does not (changed while read) -- NOTHING deleted, rc 1" \
+                  || bad "M R196 r2: source GUID list with an extra name" "got=$got"
+got=$(MT_TGL="a c d e x" mt_run "a e" "a c d e" e)
+[ "$got" = "1|" ] && ok "M R196 r2: a target GUID list naming a snapshot its name list does not -- NOTHING deleted, rc 1" \
+                  || bad "M R196 r2: target GUID list with an extra name" "got=$got"
+got=$(MT_SGL="a b:999 e" mt_run "a b e" "a b c e" e)
+[ "$got" = "0|t/x@b t/x@c " ] && ok "M R196 r2: control -- a COMPLETE source GUID list still decides: other GUID and gone snapshots go" \
+                              || bad "M R196 r2: complete list control" "got=$got"
 # THE SUMMARY IS VISIBLE WHEN THE MIRROR DID SOMETHING (2026-10-06): the first
 # live run removed 163 snapshots on pve10 and cron.log, which carries level 0
 # only, said nothing. Level 0 when anything was removed or stuck, level 1 for
