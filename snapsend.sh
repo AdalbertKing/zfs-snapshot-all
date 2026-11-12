@@ -2398,9 +2398,10 @@ if [ "$SOURCE_KEEP" -gt 0 ]; then
     exit 1
 fi
 # W5 (2026-11-12), the twin of snapget.sh: under a DECLARED -e the Proxmox-reserved
-# families are never adopted, with or without -E.
+# families are never adopted, with or without -E; an -m naming one is the opt-out.
 if [ $USE_EXISTING_SNAPSHOT -eq 1 ]; then
     for _rf in __replicate_ vzdump __migration__; do
+        case "$MESSAGE" in "$_rf"*) continue ;; esac
         _have=0
         for _xp in ${EXCLUDE_SNAPS[@]+"${EXCLUDE_SNAPS[@]}"}; do [ "$_xp" = "$_rf" ] && _have=1; done
         [ $_have -eq 1 ] || EXCLUDE_SNAPS+=("$_rf")

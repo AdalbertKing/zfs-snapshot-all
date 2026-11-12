@@ -2294,6 +2294,15 @@ zfs snapshot "$W5Q@__replicate_101-0_1700000000__"
 run_get_out -e "$W5Q" "$W5D"
 check "W5-2 -e on a dataset with only reserved snapshots: refused, said, nothing received" "1|1|0" \
       "$([ $RC -ne 0 ] && echo 1)|$(printf '%s\n' "$OUT" | grep -c 'matches an -E exclusion')|$(zfs list -H -o name -t snapshot -r "$W5D/$W5Q" 2>/dev/null | grep -c .)"
+# review 2026-11-12: an -m naming a reserved family is the explicit opt-out
+run_get -e -m __replicate_ "$W5Q" "$W5D"
+check "W5-2 -e -m __replicate_: the named reserved family is adopted (explicit opt-out)" "0|1" \
+      "$RC|$(zfs list -H -o name -t snapshot -d 1 "$W5D/$W5Q" 2>/dev/null | grep -c '@__replicate_101-0_1700000000__$')"
+# review 2026-11-12: -s sends nothing, so the prune would never run -- refused, not ignored
+w5sbefore=$(zfs list -H -o name -t snapshot -d 1 "$W5S" | sort)
+run_get_out -s -m "rep_" --source-keep=1 "$W5S" "$W5D"
+check "W5-1 --source-keep with -s: refused, said, no snapshot made" "1|1|same" \
+      "$([ $RC -ne 0 ] && echo 1)|$(printf '%s\n' "$OUT" | grep -c 'no -e and no -s')|$([ "$(zfs list -H -o name -t snapshot -d 1 "$W5S" | sort)" = "$w5sbefore" ] && echo same)"
 zfs destroy -r "$W5S" 2>/dev/null; zfs destroy -r "$W5R" 2>/dev/null; zfs destroy -r "$W5P" 2>/dev/null
 zfs destroy -r "$W5Q" 2>/dev/null; zfs destroy -r "$W5D" 2>/dev/null
 

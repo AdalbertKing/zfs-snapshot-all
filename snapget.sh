@@ -2775,16 +2775,18 @@ if [ $FLAT_RECURSE -eq 1 ] && [ $RECURSIVE -eq 1 ]; then
     exit 1
 fi
 # W5 (2026-11-12): --source-keep prunes the job's OWN snapshots, which exist only when
-# this run makes them (-m, no -e).
-if [ "$SOURCE_KEEP" -gt 0 ] && { [ $USE_EXISTING_SNAPSHOT -eq 1 ] || [ -z "$MESSAGE" ]; }; then
-    echo "Error: --source-keep needs -m and no -e: it prunes only the snapshots this job makes" >&2
+# this run makes them (-m, no -e) and sends (no -s: nothing is sent, so the prune never runs).
+if [ "$SOURCE_KEEP" -gt 0 ] && { [ $USE_EXISTING_SNAPSHOT -eq 1 ] || [ -z "$MESSAGE" ] || [ $SNAPSHOT_ONLY -eq 1 ]; }; then
+    echo "Error: --source-keep needs -m and no -e and no -s: it prunes only the snapshots this job makes and sends" >&2
     exit 1
 fi
 # W5 (2026-11-12): under a DECLARED -e the Proxmox-reserved families are never adopted.
 # Added here, before the quiesce paths below switch USE_EXISTING_SNAPSHOT on for their
-# own snapshots, so only the operator's -e gets it.
+# own snapshots, so only the operator's -e gets it. An -m that itself names a reserved
+# family (`-e -m __replicate_`) is the explicit opt-out for that family.
 if [ $USE_EXISTING_SNAPSHOT -eq 1 ]; then
     for _rf in __replicate_ vzdump __migration__; do
+        case "$MESSAGE" in "$_rf"*) continue ;; esac
         _have=0
         for _xp in ${EXCLUDE_SNAPS[@]+"${EXCLUDE_SNAPS[@]}"}; do [ "$_xp" = "$_rf" ] && _have=1; done
         [ $_have -eq 1 ] || EXCLUDE_SNAPS+=("$_rf")
