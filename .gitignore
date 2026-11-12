@@ -95,3 +95,7 @@ __pycache__/
 *.pyc
 !release/
 !release/**
+
+# PROTOCOL V4.4: the review views are derived (./test/reviewctl.sh --derive SHA), never committed.
+docs/internal/reviews/REVIEW_LEDGER.md
+docs/project/OPEN-THREADS.md
