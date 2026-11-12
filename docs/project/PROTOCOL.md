@@ -417,7 +417,10 @@ as its own change under V4.1 full evidence (release behaviour), after V4.5.
 
 ### V4.5 The Implementer's response headers are written by a tool (staged)
 
-**Staged: not in force until the tool exists.** It is a new writer for the Implementer's
+**Staged: the tool exists and is waiting for the Reviewer.** It is
+`./test/reviewctl.sh respond REV --implementation=REF --base=REF`, delivered in
+`docs/project/DELIVERIES.md`. It is in force once the Reviewer clears that delivery; until then
+headers may still be written by hand. It is a new writer for the Implementer's
 response and range operation. The Reviewer's existing `approve` and `close` writers stay. The
 tool must:
 - write `<!-- implementation: <sha> -->`, `<!-- base: <sha> -->` and

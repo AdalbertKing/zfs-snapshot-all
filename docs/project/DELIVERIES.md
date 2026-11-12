@@ -68,3 +68,4 @@ is that sha, or records `<!-- no-review-required: <sha> -->` here.
 <!-- reviewed-by: 9711e31738736e95bed66b6a1be7420f99b2f9c6 reviewer-clean-no-finding -->
 <!-- delivered: 7ffef0a4b4952f91b7740d39b6910797c80bd334 Profiles PR #333: m31w4d7h24 four-family flat-count profile for machines returning after long downtime; CI 33899253155; profiles 87/0 and independent rendered-shape review -->
 <!-- reviewed-by: 7ffef0a4b4952f91b7740d39b6910797c80bd334 reviewer-clean-no-finding -->
+<!-- delivered: e4094ea4a0a4d71f40a6b4e2956cc7551ec2765b PROTOCOL V4.5: reviewctl respond, the Implementer's range writer; test/reviewctl RS1-RS12, 13/0 on the fix and 0/13 against main's reviewctl (V4.3 matrix in the PR) -->
