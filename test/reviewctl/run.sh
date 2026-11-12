@@ -1028,7 +1028,7 @@ dg "$C1"; s1="$(dgst)"; dg "$C2"; s2="$(dgst)"; cp "$TMPD/dout" "$TMPD/dv1"
 # DV2. A dirty working tree is never mixed in.
 printf 'garbage\n' > "$DG/docs/internal/reviews/responses/$DX.md"; rm -f "$DG/docs/internal/reviews/$DX.md"
 dg "$C2"
-cmp -s "$TMPD/dout" "$TMPD/dv1" && ok "derive DV2: uncommitted changes in the working tree do not reach the derived state" \
+grep -q "^| $DX | IMPLEMENTED |" "$TMPD/dv1" && cmp -s "$TMPD/dout" "$TMPD/dv1" && ok "derive DV2: uncommitted changes in the working tree do not reach the derived state" \
     || bad "derive DV2: dirty working tree leaked" "$(diff "$TMPD/dv1" "$TMPD/dout" | head -4)"
 git -C "$DG" checkout -q -- . 2>/dev/null || git -C "$DG" restore -q . 2>/dev/null
 # DV3. The commit's OWN generator renders it, not the caller's.
@@ -1067,7 +1067,7 @@ dg "$C6"; [ "$(dgst)" = IMPLEMENTED ] && ! grep -q '| CLOSED |' "$TMPD/dout" \
 ( REVIEWCTL_REPO="$DG" "$CTL" --derive "$C2" > "$TMPD/dc1" 2>/dev/null ) &
 ( REVIEWCTL_REPO="$DG" "$CTL" --derive "$C2" > "$TMPD/dc2" 2>/dev/null ) &
 wait
-cmp -s "$TMPD/dc1" "$TMPD/dv1" && cmp -s "$TMPD/dc2" "$TMPD/dv1" \
+grep -q "^| $DX | IMPLEMENTED |" "$TMPD/dv1" && cmp -s "$TMPD/dc1" "$TMPD/dv1" && cmp -s "$TMPD/dc2" "$TMPD/dv1" \
     && ok "derive DV8: two concurrent derivations give the same ledger" \
     || bad "derive DV8: concurrent derivations differ" "$(diff "$TMPD/dv1" "$TMPD/dc1" | head -3)"
 # DV9. The routing view, and argument hygiene.
