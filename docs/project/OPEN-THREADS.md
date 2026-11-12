@@ -6,7 +6,6 @@ Do not edit. Owner decisions that are not reviews live in
 
 | REV | State | Whose move | Next action |
 |---|---|---|---|
-| REV-20261112-194 | APPROVED | Reviewer | write the closure artifact |
 | REV-20261112-195 | OPEN | Claude | implement and respond |
 | REV-20261112-196 | OPEN | Claude | implement and respond |
 
