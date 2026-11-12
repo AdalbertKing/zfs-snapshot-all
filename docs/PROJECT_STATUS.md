@@ -66,10 +66,25 @@
   11:15. Wydane bez zgłoszenia do recenzji; zapisane w REV-20261112-195 F4.
 - **Pomiar repliki na celu pvesr (CT 990, 2026-11-12, 1.0.19):** replika pasywna i aktywna (keep
   = 3) z lokalnej kopii pvesr na pve2 działają przed zmianą kierunku pvesr (`pct migrate`), po niej
-  i po powrocie: 12 biegów rc 0, GUID zgodne, pvesr bez błędów. Dwie wady do poprawki:
-  `replica_` zrobione, gdy gość żyje na kolektorze, zostają na obu węzłach (nikt ich nie sprząta);
-  pasywna bez `-E` bierze `__replicate_` jako najnowszą. Nośnik testowy `lab990m` (plik loop na
-  pve2) i migawki `lab_w5_*` zostawione na polecenie właściciela.
+  i po powrocie: 12 biegów rc 0, GUID zgodne, pvesr bez błędów. Dwie wady, obie poprawione na
+  gałęzi `fix/w5-replica-pvesr`, NIEWYDANE: (W5-1) `replica_` robione przy każdym biegu zostawały
+  na źródle, a na gościu pod pvesr szły też na drugi węzeł — nowa opcja `snapget.sh
+  --source-keep=N`, a `gen-cron.sh` daje `--source-keep=1` tylko replice aktywnej z `keep = N`
+  (decyzja właściciela 2026-11-12: źródło trzyma tylko najnowszą migawkę repliki, następny
+  przyrost niesie zakładka `#tgt-`; wariant lustrzany `-m P -M` jej nie dostaje, bo przy `-M`
+  nośnik idzie za źródłem, więc przycięcie usunęłoby kopie z nośnika; `--source-keep` jest
+  odrzucany z `-e`, z `-s` i bez `-m`, a `snapsend.sh` odrzuca go zawsze); (W5-2) pasywna (`-e`)
+  nie przyjmuje już `__replicate_`, `vzdump` ani `__migration__`, z `-E` i bez (dataset z samymi
+  takimi migawkami odmawia); `-m` nazywający jedną z tych rodzin (np. `-e -m __replicate_`)
+  wyłącza ją z tego wykluczenia. Pomiar
+  ponowny 2026-11-12 na kontenerze laboratoryjnym w klastrze dwuwęzłowym z pvesr, trzy fazy (gość
+  na węźle 1, po `pct migrate` na węzeł 2, z powrotem): 6 biegów rc 0, przyrosty z zakładki,
+  węzeł, z którego job kopiuje, trzyma dokładnie 1 migawkę repliki, nośnik 3 wersje, pvesr
+  FailCount 0. Znany ślad: po powrocie gościa na węźle, który go odebrał, zostaje co najwyżej
+  JEDNA migawka repliki, zrobiona, gdy żył na drugim węźle, do następnej migracji (receive pvesr
+  ją wtedy usuwa). Migawki `__replicate_` już będące na nośniku sprzed zmiany zostają (lustro nigdy
+  nie usuwa zarezerwowanej rodziny) — jednorazowo usunąć ręcznie. Nośnik testowy `lab990m` (plik
+  loop na pve2) i migawki `lab_w5_*` zostawione na polecenie właściciela.
 - **1.0.18 wydane (2026-11-11 ~22:20; repo wydań zfsbackup f5adf7f, z `main` dcd474d6, PR #1174).**
   Lab ręcznie: pve9 (`lab-dev.sh off`, konto bkp wróciło z gałęzi dev, `deploy.sh` rc 0), pve9b
   (`--self-update`, rc 0), pve11 (`lab-dev.sh off` + `--resume-updates`); reszta floty z crona o :15.

@@ -36,7 +36,8 @@ set -o pipefail
 #   -e               Use existing latest snapshot on source instead of creating a new one.
 #                    The Proxmox-reserved families (__replicate_, vzdump,
 #                    __migration__) are never adopted under -e, with or without
-#                    -E (2026-11-12, W5): pvesr replaces __replicate_ every few
+#                    -E, unless -m names that family (-e -m __replicate_)
+#                    (2026-11-12, W5): pvesr replaces __replicate_ every few
 #                    minutes, so it was nearly always "the newest", and -M never
 #                    removes a reserved family from the target.
 #   --source-keep=N  After a SUCCESSFUL non-recursive pull of a snapshot this run
@@ -45,7 +46,7 @@ set -o pipefail
 #                    quiesce crash form) beyond the N newest (2026-11-12, W5:
 #                    an active replica's snapshots piled up on both pvesr nodes).
 #                    The per-target bookmark keeps the next increment possible.
-#                    Not with -e; under -r nothing is pruned (said at level 1).
+#                    Needs -m; not with -e or -s; under -r nothing is pruned (level 1).
 #                    A failed listing or destroy is a warning, never a failed run.
 #   -z               Compress the data stream (default compressor: zstd). Redundant
 #                    against a remote source -- see "COMPRESSION DEFAULT" below,

@@ -2131,6 +2131,10 @@ values before the commit.
 Also on 2026-11-12, a repeat of E128: two Python patches in Bash heredocs (`coverage-gate.sh`,
 `test/twins/run.sh`) lost `\n` or failed their asserts. Caught by `bash -n`, a read-back and the
 assert, and redone with the Edit tool. R16 point 4 was known and not applied.
+A third one the same evening, W5: the `test/cron/run.sh` PRK1/PRK2 expectations were patched with
+Python in a heredoc and lost their backslashes. Caught by a read-back of the diff and redone with
+the Edit tool. Three in one day under a rule written for exactly this: the rule is known and not
+being applied.
 
 Repeat, the same day, REV-20261112-195 round 4. In the response's commit list I typed
 `08b0c64a` for the metadata commit; the real one is `b6d7c1d3`. A short SHA in prose was

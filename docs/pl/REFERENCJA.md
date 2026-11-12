@@ -1096,6 +1096,12 @@ notify       = pulled
   3x), a godzina kopii każdego poziomu przesuwa się na 10 minut po biegu repliki, który przynosi
   migawkę tego poziomu (np. kopia dzienna 01:11 za repliką `*/2:00` → 02:10). Kopia, która po
   przesunięciu przechodzi przez północ, przesuwa też dzień tygodnia albo miesiąca.
+- **Replika aktywna z `keep` i migawki Proxmoxa.** Replika aktywna z `keep = N` trzyma na źródle
+  tylko najnowszą własną migawkę (`--source-keep=1`): starsze znikają po udanej kopii, a zakładka
+  `#tgt-` niesie następny przyrost. `--source-keep` odrzuca `-e`, `-s` i brak `-m`. Replika
+  pasywna (`-e`) nigdy nie przyjmuje migawek samego Proxmoxa (`__replicate_`, `vzdump`,
+  `__migration__`), także bez `-E`, chyba że jej `-m` nazywa jedną z tych rodzin
+  (`-e -m __replicate_`).
 - `recursive` steruje wszystkimi trzema wygenerowanymi liniami z jednej deklaracji: `no` = ten
   dataset, `flat` = `-R` przy transferze, `delsnaps -R`, `check-snap-age -R`; `atomic` = `-r` przy
   transferze z tym samym `-R` dla prune i strażnika.

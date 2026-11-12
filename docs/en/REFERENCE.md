@@ -1078,6 +1078,12 @@ notify       = pulled
   interval; alarm at least 3x), and each tier's copy time moves to 10 minutes after the replica
   run that brings that tier's snapshot (e.g. a daily copy at 01:11 behind a `*/2:00` replica -> 02:10). A
   copy that the shift moves past midnight also moves its day of week or month.
+- **Active replica with `keep`, and Proxmox's own snapshots.** An active replica with `keep = N`
+  keeps only its newest own snapshot on the source (`--source-keep=1`): older ones go after a
+  successful copy, and the `#tgt-` bookmark carries the next increment. `--source-keep` is refused
+  with `-e`, with `-s` and without `-m`. A passive replica (`-e`) never adopts Proxmox's own
+  snapshots (`__replicate_`, `vzdump`, `__migration__`), with or without `-E`, unless its `-m`
+  names one of those families (`-e -m __replicate_`).
 - `recursive` drives all three generated lines from one declaration: `no` = this dataset,
   `flat` = `-R` on the transfer, `delsnaps -R`, `check-snap-age -R`; `atomic` = `-r` on the
   transfer with the same `-R` prune and monitor.
