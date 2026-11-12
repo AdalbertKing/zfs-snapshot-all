@@ -55,6 +55,11 @@
   Gałęzie: runda 2 `fix/rev-195-r2-coverage`, runda 3 `fix/rev-195-r3-state`, runda 4
   `fix/rev-195-r4-cumulative`. Wydanie wymaga werdyktu recenzenta albo akceptacji właściciela
   z numerem REV (bramka recenzji). Bramka pokrycia nie ma obejścia: zmiana musi być zgłoszona.
+- **1.0.20 wydane (2026-11-12 ~20:08; repo wydań zfsbackup 7f9b065, z `main` d65b861f, PR #1200):**
+  REV-20261112-194, -195 i -196 (wszystkie CLOSED). Bramka recenzji i bramka pokrycia rc 0. Flota z
+  crona o 20:15 (decyzja właściciela). Odczyt o 20:17: pve9, pve9b, pve11, Metropolis pve1 i pve2,
+  Site-B pve0 i pve1 na 7f9b065 (root i konto). pve10 nie sprawdzony: odrzuca klucz ssh. Tego samego
+  dnia przyjęty PROTOCOL V4 (PR #1195); V4.4 i V4.5 czekają na narzędzia.
 - **1.0.19 wydane (2026-11-12 ~10:35; repo wydań zfsbackup 47b5e09, z `main` 2e6f652b, PR #1175,
   #1176):** bookmark nowszy od wspólnej migawki jest bazą przyrostu, a most `-i` z bookmarka,
   potem `-I`, przenosi migawki pośrednie. Lab ręcznie (pve9, pve9b, pve11), Metropolis z crona
