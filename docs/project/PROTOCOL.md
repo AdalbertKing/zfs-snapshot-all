@@ -301,13 +301,14 @@ let such a batch through without one. The Owner had to carry the request by hand
   change. So is a scrub change that rewrites a shipped file, although no source blob changed.
   A scrub change that rewrites no shipped file changes no state and needs no submission.
 
-## V4 Lean protocol (PROPOSAL, Implementer, 2026-11-12 -- Reviewer decided, waiting for the Owner)
+## V4 Lean protocol (Implementer proposal, Reviewer decision, Owner acceptance, 2026-11-12)
 
-**Status: proposal under V3.12. On acceptance it lands as this V4 section; the Owner's
-acceptance includes that form, in place of V3.12 point 3's next `V3.n` subsection. The Reviewer decided each point in PR #1195 (comment of
-2026-11-12 18:51 UTC); this text is amended to that decision. It is not in force until the
-Owner accepts it and the merge is read back on `main`. V3.14 revision 4 stays in force until
-then.**
+**Status: accepted under V3.12.** The Reviewer decided each point in PR #1195 (comment of
+2026-11-12 18:51 UTC), and this text is amended to that decision. The Owner accepted it on
+2026-11-12 with the word "akceptuję", including this form as a V4 section in place of V3.12
+point 3's next `V3.n` subsection. It is in force from its merge, read back on `main`. V4.4 and
+V4.5 are staged: they take effect only when their tooling is merged and verified. Until then,
+today's rules for committed views and response headers stay mandatory.
 
 **The problem it removes.** On 2026-11-11..12, 28 pull requests reached `main`:
 - 13 Reviewer verdict PRs, 10 of them for REV-20261112-194, -195 and -196;
@@ -470,8 +471,8 @@ deployment is inferred from a version number):
 
 ### Amendment log
 
-- V4 (proposal), 2026-11-12: V4.1-V4.7, amended to the Reviewer's decision in PR #1195.
-  Pending the Owner's acceptance; not in force.
+- V4, 2026-11-12: V4.1-V4.7, the Reviewer's decision in PR #1195, accepted by the Owner
+  ("akceptuję"). V4.4 and V4.5 are staged until their tooling exists.
 - V3.14 revision 4, 2026-11-12 (REV-20261112-195 F4g, Reviewer round 3 verdict): a
   resubmission keeps its earlier ranges as `<!-- submitted: <base> <implementation> -->`.
 - V3.14 revision 3, 2026-11-12 (REV-20261112-195 F4e-f, Reviewer round 3): a file's state
