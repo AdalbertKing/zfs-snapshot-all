@@ -407,8 +407,7 @@ if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
     mkrel() {
         git init -q --bare "$1.git"
         git init -q -b main "$1"
-        if [ -n "${2:-}" ]; then printf '%s
-' "$2" > "$1/RELEASE-OF" && git -C "$1" add RELEASE-OF; fi
+        if [ -n "${2:-}" ]; then printf '%s\n' "$2" > "$1/RELEASE-OF" && git -C "$1" add RELEASE-OF; fi
         git -C "$1" commit -q --allow-empty -m start
         git -C "$1" remote add origin "$1.git" && git -C "$1" push -q origin main
     }
@@ -433,49 +432,55 @@ if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
     fi
     # Round 2, F4a: the baseline is the PUBLISHED release, not the checkout's working RELEASE-OF.
     # d0: a ledger with nothing open; d1: an unsubmitted run-time change; d2: its submission.
-    printf '%s
-' '# REVIEW_LEDGER' '' '| REV | State | Owner | Implementation | Reviewed | Response | Next |'         '|---|---|---|---|---|---|---|' '| REV-20990101-004 | CLOSED | - | - | - | - | - |'         > "$DEVW/docs/internal/reviews/REVIEW_LEDGER.md"
+    printf '%s\n' '# REVIEW_LEDGER' '' '| REV | State | Owner | Implementation | Reviewed | Response | Next |' \
+        '|---|---|---|---|---|---|---|' '| REV-20990101-004 | CLOSED | - | - | - | - | - |' \
+        > "$DEVW/docs/internal/reviews/REVIEW_LEDGER.md"
     git -C "$DEVW" commit -qam "fixture: nothing open" && d0="$(git -C "$DEVW" rev-parse HEAD)"
-    printf '# r195 fixture: an unsubmitted run-time change
-' >> "$DEVW/zfs-job.sh"
+    printf '# r195 fixture: an unsubmitted run-time change\n' >> "$DEVW/zfs-job.sh"
     git -C "$DEVW" commit -qam "fixture: run-time change" && d1="$(git -C "$DEVW" rev-parse HEAD)"
     f4a_refused() {   # <dir> <rc> <out> <origin main before>
-        [ "$2" -ne 0 ] && printf '%s
-' "$3" | grep -q 'UNCOVERED zfs-job.sh'             && [ "$(git -C "$1.git" rev-parse main)" = "$4" ]
+        [ "$2" -ne 0 ] && printf '%s\n' "$3" | grep -q 'UNCOVERED zfs-job.sh' \
+            && [ "$(git -C "$1.git" rev-parse main)" = "$4" ]
     }
     mkrel "$WORK/f4a" "$d0"; st="$(git -C "$WORK/f4a.git" rev-parse main)"
     bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4a" >/dev/null 2>&1      # prepare, no push
     o="$(bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4a" --push 2>&1)"; r=$?
-    f4a_refused "$WORK/f4a" "$r" "$o" "$st"         && ok "publish F4a: prepare without --push, then --push -- still refused against the PUBLISHED release, nothing pushed"         || bad "publish F4a: prepare then push launders the change" "rc=$r" "$o"
+    if f4a_refused "$WORK/f4a" "$r" "$o" "$st"; then
+        ok "publish F4a: prepare without --push, then --push -- still refused against the PUBLISHED release, nothing pushed"
+    else
+        bad "publish F4a: prepare then push launders the change" "rc=$r" "$o"
+    fi
     mkrel "$WORK/f4b" "$d0"; st="$(git -C "$WORK/f4b.git" rev-parse main)"
     bash "$DEVW/release/publish.sh" "$d0" "$WORK/f4b" >/dev/null 2>&1
     bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4b" >/dev/null 2>&1
     o="$(bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4b" --push 2>&1)"; r=$?
-    f4a_refused "$WORK/f4b" "$r" "$o" "$st"         && ok "publish F4a: several prepared local commits -- all checked from the published release, refused"         || bad "publish F4a: several prepared commits" "rc=$r" "$o"
+    if f4a_refused "$WORK/f4b" "$r" "$o" "$st"; then
+        ok "publish F4a: several prepared local commits -- all checked from the published release, refused"
+    else
+        bad "publish F4a: several prepared commits" "rc=$r" "$o"
+    fi
     mkrel "$WORK/f4c"; st="$(git -C "$WORK/f4c.git" rev-parse main)"
     o="$(bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4c" --push 2>&1)"; r=$?
     git init -q -b main "$WORK/f4n" && git -C "$WORK/f4n" commit -q --allow-empty -m start
     on="$(bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4n" --push 2>&1)"; rn=$?
-    if [ "$r" -ne 0 ] && printf '%s
-' "$o" | grep -q 'has no RELEASE-OF' && [ "$(git -C "$WORK/f4c.git" rev-parse main)" = "$st" ]        && [ "$rn" -ne 0 ] && printf '%s
-' "$on" | grep -q 'what hosts received last is unknown'; then
+    if [ "$r" -ne 0 ] && printf '%s\n' "$o" | grep -q 'has no RELEASE-OF' \
+       && [ "$(git -C "$WORK/f4c.git" rev-parse main)" = "$st" ] \
+       && [ "$rn" -ne 0 ] && printf '%s\n' "$on" | grep -q 'what hosts received last is unknown'; then
         ok "publish F4a: an unknown published baseline (no RELEASE-OF on origin, no origin at all) refuses"
     else
         bad "publish F4a: an unknown published baseline" "rc=$r $o" "rc=$rn $on"
     fi
     mkdir -p "$DEVW/docs/internal/reviews/responses"
-    printf '<!-- rev: REV-20990101-005 -->
-<!-- implementation: %s -->
-<!-- base: %s -->
-' "$d1" "$d0"         > "$DEVW/docs/internal/reviews/responses/REV-20990101-005.md"
-    printf '| REV-20990101-005 | CLOSED | - | %s | %s | responses/REV-20990101-005.md | - |
-' "$d1" "$d1"         >> "$DEVW/docs/internal/reviews/REVIEW_LEDGER.md"
+    printf '<!-- rev: REV-20990101-005 -->\n<!-- implementation: %s -->\n<!-- base: %s -->\n' "$d1" "$d0" \
+        > "$DEVW/docs/internal/reviews/responses/REV-20990101-005.md"
+    printf '| REV-20990101-005 | CLOSED | - | %s | %s | responses/REV-20990101-005.md | - |\n' "$d1" "$d1" \
+        >> "$DEVW/docs/internal/reviews/REVIEW_LEDGER.md"
     git -C "$DEVW" add -A docs/internal/reviews && git -C "$DEVW" commit -qm "fixture: submitted" && d2="$(git -C "$DEVW" rev-parse HEAD)"
     mkrel "$WORK/f4d" "$d0"
     bash "$DEVW/release/publish.sh" "$d2" "$WORK/f4d" >/dev/null 2>&1      # prepared first, as in F4a
     o="$(bash "$DEVW/release/publish.sh" "$d2" "$WORK/f4d" --push 2>&1)"; r=$?
-    if [ "$r" -eq 0 ] && [ "$(git -C "$WORK/f4d.git" show main:RELEASE-OF)" = "$d2" ]        && printf '%s
-' "$o" | grep -q 'zfs-job.sh <- REV-20990101-005'; then
+    if [ "$r" -eq 0 ] && [ "$(git -C "$WORK/f4d.git" show main:RELEASE-OF)" = "$d2" ] \
+       && printf '%s\n' "$o" | grep -q 'zfs-job.sh <- REV-20990101-005'; then
         ok "publish F4a: control -- the submitted change pushes, and the gate names the REV that covers it"
     else
         bad "publish F4a: a submitted change pushes" "rc=$r" "$o"
