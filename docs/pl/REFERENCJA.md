@@ -183,6 +183,12 @@ migawka i `zfs recv -F` kasował na celu wszystkie nowsze (np. godzinowe po prze
 najstarszej migawki źródła po nim, której `-E` nie wyklucza, potem zwykłe `-I` do najnowszej, i migawki zrobione na źródle w
 międzyczasie też docierają na cel.
 
+Przyrost z bookmarka przechodzi te same kontrole co przyrost ze wspólnej migawki. Na celu sync
+albo dokładnym (`-t`), do którego coś zapisano po jego najnowszej migawce, przebieg odmawia,
+zamiast pozwolić `zfs recv -F` cofnąć ten zapis. Gdy nie da się wylistować migawek między
+bookmarkiem a najnowszą, przebieg odmawia, a następny próbuje znowu; pojedyncza różnica pominęłaby
+je na zawsze. `-T` liczy odstęp od chwili utworzenia bookmarka.
+
 Nazwy bookmarków mają postać `tgt-<8 znaków hex>`: to skrót ścieżki datasetu celu (oraz
 identyfikatora `-j`, jeśli jest). Nic innego na źródle ich nie rusza, więc dokładnie jeden bookmark
 na parę (cel, identyfikator) się kumuluje, aż cel zostanie wycofany; o ich sprzątaniu zobacz

@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 535c2f43ac22687c7e53beae3bbd327a08e86bb8 -->
-<!-- frozen: snapget.sh 100755 34befbb13d1962627fc161aa96426e0d40add08c -->
+<!-- frozen: snapsend.sh 100755 c6252c79ee1eea8f71bae043f5d66bad92e0cf01 -->
+<!-- frozen: snapget.sh 100755 20554f845e76be9205259447655dea516358fedd -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
-<!-- frozen: lib-zfs-snap.sh 100644 c9b3dfed07a6d60f1d2d7558ea06298ef4cd06f0 -->
+<!-- frozen: lib-zfs-snap.sh 100644 4024c09b357197732632d04a24cf020c8cf92433 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -1414,6 +1414,15 @@ Owner-authorized refreezes:
   never picks a `__replicate_` snapshot. Test `bm5` (plan names the bookmark; bridge skips
   `__replicate_`).
   twin: the same lookup and bridge block in both engines, remote arguments on the remote side.
+- 2026-11-12 (snapsend.sh, snapget.sh, lib-zfs-snap.sh): **REV-20261112-195 F1-F3, the bookmark
+  path keeps the engines' guards.** F1: the push divergence check before `recv -F` also runs on a
+  bookmark-backed increment, with the target head as the receive base; snapget.sh already did
+  this. F2: `bookmark_bridge_snap` returns rc 3 when its list lacks the bookmark or the newest
+  snapshot. Both engines refuse on any bridge failure; a single diff would move the bookmark past
+  the snapshots in between for good. F3: `-T` measures a bookmark-backed interval from the
+  bookmark's creation time (`auto_skip_intermediates` takes a `dataset#bookmark` base). Tests:
+  test/snapsend `R195 F1/F2/F3`, both engines.
+  twin: the same F2/F3 blocks in both engines; F1 ports snapget.sh's existing branch to push.
 
 ## How it is enforced
 
