@@ -4,6 +4,26 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [Unreleased]
+
+- **An active replica with `keep` keeps only its newest snapshot on the source** (W5-1). New
+  `snapget.sh --source-keep=N`: after a successful pull of the snapshot the run made with `-m`
+  (not under `-r`; under `-R` each dataset is pruned on its own), the job's own older snapshots
+  (exact `-m` prefix plus the engine's timestamp, or its quiesce crash form) beyond the N newest
+  are destroyed on the source. Other families and other jobs' snapshots are never touched; a
+  failed listing or destroy is a warning, not a failed run; `-n` destroys nothing. Refused with
+  `-e`, with `-s`, or without `-m`; `snapsend.sh` refuses it (pull-only). `gen-cron.sh` passes
+  `--source-keep=1` only to an active replica with `keep = N`; the mirror variant (`-m P -M`)
+  does not get it, because under `-M` the medium follows the source, so the pruning would delete
+  the medium's copies too.
+- **A passive copy never adopts a Proxmox-reserved snapshot** (W5-2). Under `-e` both engines skip
+  `__replicate_`, `vzdump` and `__migration__` as the newest/base, with or without `-E`. An `-m`
+  that names one of those families (for example `-e -m __replicate_`) opts that family out. A
+  dataset with only reserved snapshots now refuses under `-e` ("Every source snapshot on
+  '<dataset>' matches an -E exclusion"); under `-R` it is skipped as scaffolding. Reserved
+  snapshots already on a medium stay (the mirror never removes a reserved family); remove them by
+  hand once.
+
 ## [1.0.20] — 2026-11-12
 
 - **A mirror keeps a snapshot that was renamed on the source** (REV-20261112-196). `-M` (sync
