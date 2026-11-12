@@ -62,13 +62,14 @@ list=$(bash "$dev/release/package-list.sh" "$dev" "$rev") || die "cannot resolve
 # a later --push would compare the candidate with itself (round 2, F4a). Every local commit not
 # yet pushed lies between the two, so all of them are checked.
 if [ "$push" -eq 1 ]; then
-    git -C "$dst" fetch -q origin 2>/dev/null         || die "cannot fetch $dst's origin -- what hosts received last is unknown, so review coverage cannot be checked"
-    pub=$(git -C "$dst" rev-parse -q --verify "refs/remotes/origin/main^{commit}")         || die "$dst's origin has no main -- what hosts received last is unknown, so review coverage cannot be checked"
-    prev=$(git -C "$dst" show "$pub:RELEASE-OF" 2>/dev/null | head -n 1)
+    git -C "$dst" fetch -q origin 2>/dev/null \
+        || die "cannot fetch $dst's origin -- what hosts received last is unknown, so review coverage cannot be checked"
+    pub=$(git -C "$dst" rev-parse -q --verify "refs/remotes/origin/main^{commit}") \
+        || die "$dst's origin has no main -- what hosts received last is unknown, so review coverage cannot be checked"
+    prev=$(git -C "$dst" show "$pub:RELEASE-OF" 2>/dev/null | head -n 1) || prev=""
     [ -n "$prev" ] || die "the published release (origin/main of $dst) has no RELEASE-OF -- cannot tell what hosts received last, so cannot check review coverage"
     cov_rc=0
-    printf '%s
-' "$ledger" | bash "$dev/release/coverage-gate.sh" "$dev" "$prev" "$rev" || cov_rc=$?
+    printf '%s\n' "$ledger" | bash "$dev/release/coverage-gate.sh" "$dev" "$prev" "$rev" || cov_rc=$?
     [ "$cov_rc" -eq 0 ] || die "the review-coverage gate refused $rev (rc $cov_rc, see above)"
 fi
 
