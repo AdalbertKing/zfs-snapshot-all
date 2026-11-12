@@ -39,8 +39,17 @@ zpool import -d $IMG $POOL; gl $T; zpool export $POOL
 echo; echo "===== 3. F2: the medium's newest snapshot RENAMED on the source (same GUID, other name)"
 zpool import -d $IMG $POOL; held=$(zfs list -H -t snapshot -o name -s createtxg $T | tail -1 | sed 's/.*@//'); zpool export $POOL
 zfs rename $SRC@$held $SRC@replica_renamed && echo "source: @$held -> @replica_renamed"
+for b in $(zfs list -H -t bookmark -o name -d 1 $SRC); do zfs destroy "$b" && echo "source: destroyed bookmark $b -- only the renamed snapshot's GUID links the two sides now"; done
+zfs destroy $SRC@replica_collector2 && echo "source: destroyed @replica_collector2 (retention) -- no snapshot name is shared any more"
 gl $SRC
 dd if=/dev/urandom of=/$SRC/f3 bs=64k count=2 status=none
+echo "-- negative control: the gate before F2 (d30fd5f0), same state"
+cp -a "$ST" "$ST.keep"
+git show d30fd5f0:zfs-media-gate.sh > zfs-media-gate.old.sh && chmod +x zfs-media-gate.old.sh && sha256sum zfs-media-gate.old.sh
+./zfs-media-gate.old.sh attach $POOL r194 --dataset $DST --dir $IMG --source $SRC --prefix replica_; echo "OLD gate attach rc=$?"
+./zfs-media-gate.old.sh detach $POOL r194 --dir $IMG --source $SRC --prefix replica_ --engine-rc 2; echo "OLD gate detach rc=$?"
+zpool list -H -o name $POOL >/dev/null 2>&1 && { zpool export $POOL; echo "(exported after the old gate)"; }
+rm -rf "$ST"; mv "$ST.keep" "$ST"; echo "-- the candidate gate, same state (gate record restored to what it was before the control)"
 bracket
 zpool import -d $IMG $POOL; gl $T; zpool export $POOL
 echo; echo "===== 4. control: NO common GUID (source rebuilt) -- refused, and an OPERATOR's import stays imported"
