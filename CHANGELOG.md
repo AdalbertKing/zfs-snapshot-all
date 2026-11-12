@@ -13,7 +13,11 @@ when they change how the tool is used.
   - When the snapshots between a bookmark and the newest one cannot be listed in full, the run refuses
     and the next run tries again. Before, it sent a single diff and those snapshots never arrived.
   - `-T` applies to an increment from a bookmark too, measured from the bookmark's creation.
-- **A release refuses a change no review covers** (`release/coverage-gate.sh`).
+- **A release refuses a change no review covers** (`release/coverage-gate.sh`). The gate compares
+  the run-time package of the published release (read from the release repo's `origin/main`) with
+  the candidate. Every shipped file that changed, was newly shipped or stopped being shipped must
+  be reached through submitted review ranges: each response names `implementation:` and
+  `<!-- base: <sha> -->`. That includes edits made inside a merge.
 - **Attaching a removable replica medium** (REV-20261112-194):
   - A replica source whose name holds `:` (`tank/data:part`) is copied as a local dataset.
     Before, the engine read the part before the `:` as an ssh host, while the media gate

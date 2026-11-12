@@ -33,7 +33,11 @@
   najnowszej migawce odmawia (F1). Nieudana lista migawek między bookmarkiem a najnowszą to odmowa,
   a nie pojedyncza różnica (F2). `-T` działa też od bookmarka (F3). `publish.sh --push` odmawia
   wydania, gdy zmiany w plikach uruchomieniowych od poprzedniego wydania nie pokrywa żaden REV (F4,
-  `release/coverage-gate.sh`). Wydanie po werdykcie recenzenta albo za akceptacją właściciela
+  `release/coverage-gate.sh`). Druga runda recenzji (F4a-d): bramka porównuje paczkę wydaną
+  (`RELEASE-OF` z `origin/main` repo wydań, nie z kopii roboczej) z kandydatem. Każdy zmieniony,
+  dodany albo usunięty plik uruchomieniowy musi wynikać z zakresów zgłoszonych do recenzji
+  (`implementation:` + `<!-- base: -->` w odpowiedzi), także zmiana zrobiona przy scalaniu.
+  Gałąź `fix/rev-195-r2-coverage`. Wydanie po werdykcie recenzenta albo za akceptacją właściciela
   z numerem REV.
 - **1.0.19 wydane (2026-11-12 ~10:35; repo wydań zfsbackup 47b5e09, z `main` 2e6f652b, PR #1175,
   #1176):** bookmark nowszy od wspólnej migawki jest bazą przyrostu, a most `-i` z bookmarka,
