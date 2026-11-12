@@ -301,8 +301,136 @@ let such a batch through without one. The Owner had to carry the request by hand
   change. So is a scrub change that rewrites a shipped file, although no source blob changed.
   A scrub change that rewrites no shipped file changes no state and needs no submission.
 
+## V4 Lean protocol (PROPOSAL, Implementer, 2026-11-12 -- needs the Reviewer's decision, then the Owner's)
+
+**Status: proposal under V3.12. Not in force until the Reviewer has decided each point and the
+Owner has accepted the result, and the merge is read back on `main`.**
+
+**The problem it removes.** On 2026-11-11..12, 28 pull requests reached `main`:
+- 13 Reviewer verdict PRs, 10 of them for REV-194, REV-195 and REV-196;
+- 10 Implementer fix PRs, 8 of them for those three REVs;
+- 2 releases;
+- 3 batches (two GUI, one review-submission). Three findings were real destructive defects and justify review:
+- REV-196 round 1: a snapshot renamed on the source lost its only copy on the target;
+- REV-196 round 2: an incomplete GUID list still authorised deletion;
+- REV-195 F1-F3: the bookmark path skipped the engine's checks.
+
+Most of the remaining rounds went to the procedure itself, or were caused by the Implementer:
+- REV-195 F4: the release coverage gate needed four revisions (V3.14 revisions 1-4: F4, F4a-d,
+  F4e-f, F4g), each a Reviewer verdict and an Implementer fix;
+- generated-view conflicts after every verdict merge: three on 2026-11-12, each a regeneration
+  and a full CI run;
+- SHAs typed by hand: E129 and its recorded repeat, and F4g came from a narrowed `base:`;
+- one missed negative case per round (empty list, then partial list).
+
+V4 keeps what found defects and removes or automates the rest. Each point below is decided on
+its own.
+
+### V4.1 Full review only where data can be destroyed
+
+A full review (V4.3 negative cases, live evidence, its own findings) is mandatory for a change
+to:
+- a file listed in `docs/project/ENGINE-FREEZE.md`;
+- any code path that destroys snapshots, datasets or pools, or rolls them back;
+- `release/` (the release gates and `publish.sh`; see also V4.6).
+
+Every other shipped run-time change (GUI, generator text) is still submitted, because the
+coverage gate (V3.14) requires it. It rides the batch submission (V4.2), and the batch response
+lists it, one line per change. The Reviewer checks such a change only for one question: does it
+reach any of the three classes above? If not, the verdict records it with no further review.
+Docs and tests outside the package need no submission, as now.
+*Removes:* full review rounds on changes that cannot lose data.
+
+### V4.2 One review per batch, before the release
+
+The Implementer delivers a batch: several fixes on `main`, one batch REV (`V3.14`), one response.
+The Reviewer answers the whole batch in one verdict. Findings are fixed in one round on the same
+batch, and the next verdict covers only that round's delta (V3.5 item 7). Merge-on-green (V3.13)
+and the release gate are unchanged.
+*Removes:* a fix PR and a verdict PR for each round of each finding.
+
+### V4.3 Negative cases before code, for destructive changes
+
+Before code that decides a deletion, the response (or the batch's PR description) lists its
+negative cases, each with its expected result. At least these classes:
+- the read fails (non-zero rc);
+- the read succeeds with an empty answer;
+- the read succeeds with a partial answer;
+- the data changes between two reads;
+- foreign data: same name with another identity, another line of history;
+- a concurrent run.
+
+The Reviewer accepts or extends the list in one PR comment (V3.12 style). Then the tests
+implement the list, and a negative control on `main`'s code is still required. A class that does
+not apply is marked "n/a" with one line of reason.
+*Removes:* one hole found per round (REV-196: empty and partial lists in round 2; REV-195 F4:
+four rounds).
+
+### V4.4 Generated review views are not committed
+
+Target, not in force until the tooling exists. Today both views are committed, `publish.sh`
+reads the committed ledger, and the work pickup in `CLAUDE.md` reads the committed ledger; all
+of that stays until the change below is merged.
+
+Target: `docs/internal/reviews/REVIEW_LEDGER.md` and `docs/project/OPEN-THREADS.md` are not
+committed. They are generated from the REV and response files whenever they are read:
+- by a new print mode of `./test/reviewctl.sh` (it has `--generate`, `--verify` and
+  `--migrate` today) for a person or a session; the work pickup then reads its output for fresh
+  `main`;
+- by `release/publish.sh` before it runs the gates;
+- by CI for a check.
+
+Facts stay in the REV and response files, as now.
+*Removes:* the merge conflict that every verdict merge caused in every open PR.
+*Needs:* a tooling change (reviewctl print mode, publish, CI, the `CLAUDE.md` pickup wording),
+done only after acceptance, as its own delivery under V4.1 (`release/` is touched).
+
+### V4.5 Response headers are written by a script
+
+Target, not in force until the tooling exists. A new subcommand of `./test/reviewctl.sh` (none
+exists today) writes `<!-- implementation: <sha> -->`, `<!-- base: <sha> -->` and
+`<!-- submitted: <base> <implementation> -->` from two refs. It resolves both with
+`git rev-parse` and checks that the base is an ancestor of the implementation. On a resubmission
+it moves the previous pair into a `submitted:` line by itself. Nobody types a SHA into a header.
+*Removes:* E129 (twice) and the F4g class, where a hand-narrowed `base:` lost earlier work.
+*Needs:* a tooling change, as for V4.4.
+
+### V4.6 The procedure is frozen like an engine
+
+`release/review-gate.sh`, `release/coverage-gate.sh` and `release/publish.sh` are added to the
+frozen list in `docs/project/ENGINE-FREEZE.md`. Today that list holds only the five engine files,
+so this is a change to that list and to the `impact.sh --verify` baseline after acceptance.
+Like an engine, they change only on the Owner's word, and the change then gets the full review
+of V4.1: both the Owner's word and a REV. This file's V3/V4 rules change as V4.7 says.
+
+If either side finds a hole in the procedure, it reports the hole to the Owner with a one-line
+fix proposal. The Owner decides whether it is fixed now, later or never. A procedure hole is not
+a finding inside a product REV.
+*Removes:* procedure work growing inside a product REV (REV-195 F4).
+
+### V4.7 Maintenance mode after 1.0.20
+
+After 1.0.20 is released and deployed:
+- only defects found in production or on the lab are fixed;
+- new features need the Owner's explicit order;
+- a protocol amendment needs the Owner's go-ahead before its PR is opened. This narrows V3.12
+  point 1 in maintenance mode; the rest of V3.12 (point-by-point decision, the amendment log,
+  read-back on `main`) is unchanged.
+
+### Kept unchanged
+
+- Engine freeze, opened only on the Owner's word.
+- A negative control on `main`'s code for every fix.
+- Live evidence on the lab for destructive changes.
+- The release gate: no publish without the Reviewer's verdict or the Owner's named acceptance
+  (`--accept-open-review`).
+- The coverage gate (V3.14): every shipped run-time change is submitted; there is no override.
+- Merge on green (V3.13), the evidence classes (V3.5) and the dispute rule (V3.7).
+
 ### Amendment log
 
+- V4 (proposal), 2026-11-12: V4.1-V4.7. Pending the Reviewer's point-by-point decision and the
+  Owner's acceptance; not in force.
 - V3.14 revision 4, 2026-11-12 (REV-20261112-195 F4g, Reviewer round 3 verdict): a
   resubmission keeps its earlier ranges as `<!-- submitted: <base> <implementation> -->`.
 - V3.14 revision 3, 2026-11-12 (REV-20261112-195 F4e-f, Reviewer round 3): a file's state
