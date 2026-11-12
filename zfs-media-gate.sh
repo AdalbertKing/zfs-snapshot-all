@@ -660,7 +660,7 @@ attach)
             # Before this an empty or failed listing ran the loop zero times and
             # left _work=no, so a missing listing could skip a copy with real work.
             _tree="$(zfs list -H -o name -r "$_src" 2>/dev/null)" || { _work=unknown; break; }
-            printf '%s\n' "$_tree" | grep -qxF -- "$_src" || { _work=unknown; break; }
+            printf '%s\n' "$_tree" | grep -cxF -- "$_src" >/dev/null || { _work=unknown; break; }
             while IFS= read -r _ds; do
                 [ -n "$_ds" ] || continue
                 _snap="$(zfs list -H -t snapshot -o name -d 1 "$_ds" 2>/dev/null | grep "@${PREFIX}" | tail -1)"
@@ -783,7 +783,7 @@ EOF
                 _sall="$(zfs list -H -t snapshot -o name,guid -d 1 "$_src" 2>/dev/null)" || continue
                 _bl="$(zfs list -H -t bookmark -o guid -d 1 "$_src" 2>/dev/null)" || continue
                 printf '%s\n%s\n' "$_tall" "$_sall" | awk -F'\t' 'NF && $2 !~ /^[0-9]+$/ { bad = 1 } END { exit bad }' || continue
-                printf '%s\n' "$_bl" | grep -q '[^0-9]' && continue
+                printf '%s\n' "$_bl" | grep -c '[^0-9]' >/dev/null && continue
                 _ssnaps="$(printf '%s\n' "$_sall" | cut -f1 | grep "@${PREFIX}" | sed 's/.*@//')"
                 # REV-20261111-B01 (found during F2): a medium that returns after the collector's
                 # retention has pruned the snapshot it holds still shares the lineage, because a
