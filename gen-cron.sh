@@ -4724,10 +4724,7 @@ replica_engine_cmd() {   # <prefix> <recursive> <hist> <flags> <source> <dst> [p
     # passive: -e, no -m -- the newest snapshot already there, whatever family.
     # keep (W18): no -M -- the medium keeps its own N, not the collector's set.
     if [ "$passive" = 1 ]; then c="$REPO_DIR/snapget.sh -e -M"
-    # keep + --source-keep=1 (W5, owner 2026-11-12: the source keeps only the newest
-    # replica snapshot; the #tgt- bookmark carries the next increment). Not for the -M
-    # variant: there the medium mirrors the source, so pruning the source would prune it.
-    elif [ -n "$keep" ]; then c="$REPO_DIR/snapget.sh -m \"$prefix\" --source-keep=1"
+    elif [ -n "$keep" ]; then c="$REPO_DIR/snapget.sh -m \"$prefix\""
     else c="$REPO_DIR/snapget.sh -m \"$prefix\" -M"; fi
     [ "$recursive" = "1" ] && c="$c -R"
     [ -n "$hist" ] && c="$c $hist"

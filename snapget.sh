@@ -33,20 +33,7 @@ set -o pipefail
 #                    instruction. They are twins: a capability in one direction
 #                    and not the other is how the two drift, and test/twins
 #                    exists because that has happened before.
-#   -e               Use existing latest snapshot on source instead of creating a new one.
-#                    The Proxmox-reserved families (__replicate_, vzdump,
-#                    __migration__) are never adopted under -e, with or without
-#                    -E (2026-11-12, W5): pvesr replaces __replicate_ every few
-#                    minutes, so it was nearly always "the newest", and -M never
-#                    removes a reserved family from the target.
-#   --source-keep=N  After a SUCCESSFUL non-recursive pull of a snapshot this run
-#                    made with -m, destroy on the SOURCE this job's own older
-#                    snapshots (-m prefix + this engine's timestamp, or its
-#                    quiesce crash form) beyond the N newest (2026-11-12, W5:
-#                    an active replica's snapshots piled up on both pvesr nodes).
-#                    The per-target bookmark keeps the next increment possible.
-#                    Not with -e; under -r nothing is pruned (said at level 1).
-#                    A failed listing or destroy is a warning, never a failed run.
+#   -e               Use existing latest snapshot on source instead of creating a new one
 #   -z               Compress the data stream (default compressor: zstd). Redundant
 #                    against a remote source -- see "COMPRESSION DEFAULT" below,
 #                    this is now ON by default there. Ignored, with a log line,
@@ -550,7 +537,6 @@ PORT=22
 TARGET_EXACT=0
 USE_EXISTING_SNAPSHOT=0
 declare -a EXCLUDE_SNAPS=()
-SOURCE_KEEP=0      # --source-keep=N (W5, 2026-11-12); 0 = never touch the source
 # -q: quiesce the Proxmox guest that owns each SOURCE dataset before
 # snapshotting it. Unlike snapsend.sh's -q, the guest is on the REMOTE host
 # here, so the whole freeze/snapshot/thaw runs in one remote invocation --
@@ -1311,70 +1297,6 @@ guest_disk_is_live() {   # <dataset> -> 0 if it IS a live guest disk, 1 otherwis
 # target is then not provable). Proxmox-reserved families are never touched.
 # A snapshot that will not die (held, busy) is reported and left; the run
 # still fails so somebody looks.
-# --source-keep=N (W5, 2026-11-12). An active replica (-m P, keep on the medium) made a
-# snapshot on the SOURCE every run and nothing ever removed it there: on a guest that
-# pvesr replicates, every one of them also went to the other node. After a successful
-# pull this destroys the job's OWN older snapshots on the source beyond the N newest.
-#   own = <MESSAGE><timestamp> or <crash form of MESSAGE><timestamp>, the two names this
-#         engine gives (create_snapshot, quiesce_crash_message) -- exact, so another
-#         job's "replica_usb2_<ts>" is not "replica_<ts>";
-#   only snapshots at or before the one just sent, in createtxg order -- a newer one
-#         (made concurrently) is never in the set;
-#   nothing when the listing fails or the sent snapshot is not in it.
-# The per-target bookmark (record_send_bookmark, just above the call) anchors this
-# target's next increment; another medium of the same family keeps its own bookmark.
-prune_source_family() {   # <src_dataset> <sent_snap> [remote_user remote_host]
-    local src="$1" sent="$2" ruser="${3:-}" rhost="${4:-}" list rc crash s n i idx=-1
-    local ts='[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-    local own=() doomed=() gone=0 stuck=0 d
-    if [ "${DRY_RUN:-0}" -eq 1 ]; then
-        log 1 "--source-keep=$SOURCE_KEEP: dry run -- the job's own snapshots on '$src' beyond the $SOURCE_KEEP newest would be destroyed"
-        return 0
-    fi
-    crash="$(quiesce_crash_message "$MESSAGE")"
-    if [ -n "$rhost" ]; then
-        list=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" "zfs list -H -o name -s createtxg -t snapshot -d 1 '$src'"); rc=$?
-    else
-        list=$(zfs list -H -o name -s createtxg -t snapshot -d 1 "$src"); rc=$?
-    fi
-    if [ $rc -ne 0 ]; then
-        log 1 "Warning: --source-keep: cannot list the snapshots of '$src'${rhost:+ on $rhost} -- nothing pruned"
-        return 0
-    fi
-    while IFS= read -r s; do
-        n="${s#"$src"@}"
-        [ -n "$s" ] && [ "$n" != "$s" ] || continue
-        case "$n" in
-            "$MESSAGE"$ts|"$crash"$ts) own+=("$n") ;;
-        esac
-    done <<< "$list"
-    for i in "${!own[@]}"; do [ "${own[$i]}" = "$sent" ] && idx=$i; done
-    if [ $idx -lt 0 ]; then
-        log 1 "Warning: --source-keep: '$src@$sent' is not among the job's own snapshots on the source -- nothing pruned"
-        return 0
-    fi
-    for (( i = 0; i <= idx - SOURCE_KEEP; i++ )); do doomed+=("${own[$i]}"); done
-    if [ ${#doomed[@]} -eq 0 ]; then
-        log 2 "--source-keep=$SOURCE_KEEP: nothing to prune on '$src'"
-        return 0
-    fi
-    for d in "${doomed[@]}"; do
-        case "$d" in
-            *[!A-Za-z0-9_.:-]*)
-                log 1 "Warning: --source-keep: '$src@$d' carries an unexpected character -- left alone"
-                stuck=$((stuck + 1)); continue ;;
-        esac
-        if [ -n "$rhost" ]; then
-            ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" "zfs destroy '$src@$d'" && gone=$((gone + 1)) || stuck=$((stuck + 1))
-        else
-            zfs destroy "$src@$d" && gone=$((gone + 1)) || stuck=$((stuck + 1))
-        fi
-    done
-    log 1 "--source-keep=$SOURCE_KEEP on '$src'${rhost:+ ($rhost)}: $gone of the job's older snapshots destroyed, $stuck left (kept: the $SOURCE_KEEP newest up to '$sent')"
-    [ $stuck -eq 0 ] || log 1 "Warning: --source-keep: $stuck older snapshot(s) of the job stay on '$src' (held, no 'destroy' delegation, or an unexpected name)"
-    return 0
-}
-
 mirror_target() {
     local src="$1" tgt="$2" ruser="$3" rhost="$4"
     local src_list tgt_list base s
@@ -2552,14 +2474,6 @@ process_dataset() {
     # remote here.
     [ $RECURSIVE -ne 1 ] && record_send_bookmark "$src_dataset" "$latest_snap" "$tgt_dataset" "$remote_user" "$remote_host" "$IDENTIFIER"
 
-    if [ "$SOURCE_KEEP" -gt 0 ]; then
-        if [ $RECURSIVE -eq 1 ]; then
-            log 1 "--source-keep: nothing pruned on '$src_dataset' under -r (one atomic stream, no per-dataset bookmark)"
-        else
-            prune_source_family "$src_dataset" "$latest_snap" "$remote_user" "$remote_host"
-        fi
-    fi
-
     log 1 "Transfer completed successfully"
     return 0
 }
@@ -2658,12 +2572,6 @@ translate_long_options() {
                 shift ;;
             --recursive)
                 echo "Error: --recursive needs a mode: --recursive=atomic|flat|no" >&2; exit 1 ;;
-            --source-keep=*)
-                SOURCE_KEEP="${a#--source-keep=}"
-                case "$SOURCE_KEEP" in
-                    ''|*[!0-9]*|0*) echo "Error: --source-keep= takes a whole number of at least 1 (got '${a#--source-keep=}')" >&2; exit 1 ;;
-                esac
-                shift ;;
             --*)
                 echo "Error: unknown option $a" >&2; exit 1 ;;
             -?*)
@@ -2773,23 +2681,6 @@ fi
 if [ $FLAT_RECURSE -eq 1 ] && [ $RECURSIVE -eq 1 ]; then
     echo "Error: -r and -R are mutually exclusive (-r = one atomic zfs recv -R stream, -R = independent per-dataset pulls)" >&2
     exit 1
-fi
-# W5 (2026-11-12): --source-keep prunes the job's OWN snapshots, which exist only when
-# this run makes them (-m, no -e).
-if [ "$SOURCE_KEEP" -gt 0 ] && { [ $USE_EXISTING_SNAPSHOT -eq 1 ] || [ -z "$MESSAGE" ]; }; then
-    echo "Error: --source-keep needs -m and no -e: it prunes only the snapshots this job makes" >&2
-    exit 1
-fi
-# W5 (2026-11-12): under a DECLARED -e the Proxmox-reserved families are never adopted.
-# Added here, before the quiesce paths below switch USE_EXISTING_SNAPSHOT on for their
-# own snapshots, so only the operator's -e gets it.
-if [ $USE_EXISTING_SNAPSHOT -eq 1 ]; then
-    for _rf in __replicate_ vzdump __migration__; do
-        _have=0
-        for _xp in ${EXCLUDE_SNAPS[@]+"${EXCLUDE_SNAPS[@]}"}; do [ "$_xp" = "$_rf" ] && _have=1; done
-        [ $_have -eq 1 ] || EXCLUDE_SNAPS+=("$_rf")
-    done
-    unset _rf _have _xp
 fi
 # A repeat of the SAME mode is refused too. It is harmless today -- but the
 # rule is about the declaration, not its effect, and once --recursive=<mode>
