@@ -20,6 +20,11 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Niewydane po 1.0.19 (gałąź `fix/rev-196-mirror-guid`, REV-20261112-196):** `-M` (lustro,
+  replika na nośniku) rozstrzyga „źródło już tego nie ma” po GUID, nie po nazwie. Migawka o
+  zmienionej nazwie na źródle albo na celu zostaje; ta sama nazwa z innym GUID to inna migawka.
+  Nieczytelna lista GUID to nic nie skasowane. Przedtem migawka przemianowana na źródle traciła
+  kopię na celu (na żywo, pve9). Zamrożenie snapget.sh otwarte na słowo właściciela.
 - **Niewydane po 1.0.19 (gałąź `fix/rev-194-media-attach`, REV-20261112-194):** podłączanie
   nośnika repliki. Źródło z `:` w nazwie (`tank/dane:czesc`) silnik dostaje jako lokalne
   (`:tank/dane:czesc`), tak jak sprawdza je bramka; przedtem brał część przed `:` za host ssh (F1,

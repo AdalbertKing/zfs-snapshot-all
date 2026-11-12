@@ -6,6 +6,10 @@ when they change how the tool is used.
 
 ## [Unreleased]
 
+- **A mirror keeps a snapshot that was renamed on the source** (REV-20261112-196). `-M` (sync
+  relations, removable replicas) now decides "gone from the source" by GUID. A snapshot renamed
+  on either side stays. A snapshot that only shares a name with a source snapshot, with another
+  GUID, is not on the source. When either side's GUID list cannot be read, nothing is deleted.
 - **The bookmark path keeps the safety checks** (REV-20261112-195):
   - A push onto a sync or exact (`-t`) path whose copy was written to after its newest snapshot
     is refused there too. Before, a bookmark-backed increment skipped that check and `zfs recv -F`
