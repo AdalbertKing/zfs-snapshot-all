@@ -2241,7 +2241,7 @@ W5S="$POOL/w5s"; W5D="$POOL/w5d"
 zfs create -p "$W5S" && zfs create -p "$W5D" || exit 1
 zfs snapshot "$W5S@other_1"
 zfs snapshot "$W5S@rep_usb2_2026-01-01_00-00-00"     # another job's family, same prefix start
-for _i in 1 2 3; do tick; run_get -m "rep_" --source-keep=1 "$W5S" "$W5D"; w5rc[$_i]=$RC; done
+for _i in 1 2 3; do tick; run_get -i -m "rep_" --source-keep=1 "$W5S" "$W5D"; w5rc[$_i]=$RC; done
 w5own=$(zfs list -H -o name -t snapshot -d 1 "$W5S" | sed 's/.*@//' | grep -c '^rep_[0-9]')
 w5tgt=$(zfs list -H -o name -t snapshot -d 1 "$W5D/$W5S" 2>/dev/null | sed 's/.*@//' | grep -c '^rep_[0-9]')
 check "W5-1 --source-keep=1: three runs rc 0, the source keeps 1 own snapshot, the medium all 3 (increments)" "0 0 0|1|3" \
@@ -2252,13 +2252,13 @@ check "W5-1 --source-keep: the kept snapshot is the one just sent (the medium's 
       "$(zfs list -H -o name -t snapshot -d 1 -s createtxg "$W5D/$W5S" | tail -1 | sed 's/.*@//')" \
       "$(zfs list -H -o name -t snapshot -d 1 -s createtxg "$W5S" | sed 's/.*@//' | grep '^rep_[0-9]' | tail -1)"
 # keep 2, and a held older one: warned, left, the run still rc 0
-tick; run_get -m "rep_" --source-keep=2 "$W5S" "$W5D"
-tick; run_get -m "rep_" --source-keep=2 "$W5S" "$W5D"
+tick; run_get -i -m "rep_" --source-keep=2 "$W5S" "$W5D"
+tick; run_get -i -m "rep_" --source-keep=2 "$W5S" "$W5D"
 check "W5-1 --source-keep=2: two own snapshots stay" "0|2" \
       "$RC|$(zfs list -H -o name -t snapshot -d 1 "$W5S" | sed 's/.*@//' | grep -c '^rep_[0-9]')"
 w5old=$(zfs list -H -o name -t snapshot -d 1 -s createtxg "$W5S" | grep '@rep_[0-9]' | head -1)
 zfs hold w5test "$w5old"
-tick; run_get_out -v 1 -m "rep_" --source-keep=1 "$W5S" "$W5D"
+tick; run_get_out -v 1 -i -m "rep_" --source-keep=1 "$W5S" "$W5D"
 check "W5-1 --source-keep: a held older snapshot stays with a warning; rc 0; the held one and the newest remain" "0|1|2" \
       "$RC|$(printf '%s\n' "$OUT" | grep -c 'stay on')|$(zfs list -H -o name -t snapshot -d 1 "$W5S" | sed 's/.*@//' | grep -c '^rep_[0-9]')"
 zfs release w5test "$w5old"
@@ -2266,18 +2266,18 @@ zfs release w5test "$w5old"
 w5before=$(zfs list -H -o name -t snapshot -d 1 "$W5S" | sort)
 tick; zfs snapshot "$W5S@rep_$(date '+%Y-%m-%d_%H-%M-%S')"
 w5before=$(zfs list -H -o name -t snapshot -d 1 "$W5S" | sort)
-tick; run_get -n -m "rep_" --source-keep=1 "$W5S" "$W5D"
+tick; run_get -n -i -m "rep_" --source-keep=1 "$W5S" "$W5D"
 check "W5-1 --source-keep under -n: nothing destroyed on the source" "$w5before" \
       "$(zfs list -H -o name -t snapshot -d 1 "$W5S" | sort)"
 # refusals: with -e, without -m, bad N
 run_get_out -e --source-keep=1 "$W5S" "$W5D";            w5e=$RC; w5eo=$(printf '%s' "$OUT" | grep -c 'needs -m and no -e')
-run_get_out -m "rep_" --source-keep=0 "$W5S" "$W5D";     w5z=$RC
-run_get_out -m "rep_" --source-keep=x1 "$W5S" "$W5D";    w5x=$RC
+run_get_out -i -m "rep_" --source-keep=0 "$W5S" "$W5D";     w5z=$RC
+run_get_out -i -m "rep_" --source-keep=x1 "$W5S" "$W5D";    w5x=$RC
 check "W5-1 --source-keep refuses with -e, and N=0 / N=x1 refuse" "1|1|1|1" \
       "$([ $w5e -ne 0 ] && echo 1)|$w5eo|$([ $w5z -ne 0 ] && echo 1)|$([ $w5x -ne 0 ] && echo 1)"
 # under -r nothing is pruned, and it says so
 W5R="$POOL/w5r"; zfs create -p "$W5R/c" || exit 1
-for _i in 1 2; do tick; run_get_out -v 1 -r -m "rep_" --source-keep=1 "$W5R" "$W5D"; done
+for _i in 1 2; do tick; run_get_out -v 1 -r -i -m "rep_" --source-keep=1 "$W5R" "$W5D"; done
 check "W5-1 --source-keep under -r: rc 0, both own snapshots stay, the run says nothing was pruned" "0|2|1" \
       "$RC|$(zfs list -H -o name -t snapshot -d 1 "$W5R" | grep -c '@rep_[0-9]')|$(printf '%s\n' "$OUT" | grep -c 'nothing pruned .* under -r')"
 # W5-2: -e without -E never adopts a reserved family
@@ -2300,9 +2300,86 @@ check "W5-2 -e -m __replicate_: the named reserved family is adopted (explicit o
       "$RC|$(zfs list -H -o name -t snapshot -d 1 "$W5D/$W5Q" 2>/dev/null | grep -c '@__replicate_101-0_1700000000__$')"
 # review 2026-11-12: -s sends nothing, so the prune would never run -- refused, not ignored
 w5sbefore=$(zfs list -H -o name -t snapshot -d 1 "$W5S" | sort)
-run_get_out -s -m "rep_" --source-keep=1 "$W5S" "$W5D"
+run_get_out -s -i -m "rep_" --source-keep=1 "$W5S" "$W5D"
 check "W5-1 --source-keep with -s: refused, said, no snapshot made" "1|1|same" \
       "$([ $RC -ne 0 ] && echo 1)|$(printf '%s\n' "$OUT" | grep -c 'no -e and no -s')|$([ "$(zfs list -H -o name -t snapshot -d 1 "$W5S" | sort)" = "$w5sbefore" ] && echo same)"
+# REV-20261112-197: --source-keep without -i would carry another medium's snapshots here
+run_get_out -m "rep_" --source-keep=1 "$W5S" "$W5D"
+check "REV-197 --source-keep without -i: refused, said" "1|1" \
+      "$([ $RC -ne 0 ] && echo 1)|$(printf '%s\n' "$OUT" | grep -c 'needs -i')"
+
+# REV-20261112-197: two media of ONE replica share the family (same -m). B's run must never
+# prune A's base, whatever happened to A's bookmark. A shim fails `zfs bookmark` (or the
+# removal of the old bookmark) for A's run only; "race" runs B's whole job INSIDE A's
+# bookmark call -- after A's hold is released, before A's bookmark exists.
+R197D="$(mktemp -d)"; mkdir -p "$R197D/bin"
+export R197_REAL="$(command -v zfs)" R197_SNAPGET="$SNAPGET"
+cat > "$R197D/bin/zfs" <<'SHIM'
+#!/bin/bash
+case "${R197_FAIL:-}:$1" in
+    bookmark:bookmark) echo "simulated: permission denied (bookmark)" >&2; exit 1 ;;
+    bmdestroy:destroy) case "$*" in *'#'*) echo "simulated: permission denied (destroy bookmark)" >&2; exit 1 ;; esac ;;
+    race:bookmark) R197_FAIL= timeout 120 "$R197_SNAPGET" -i -m rep_ --source-keep=1 "$R197_SRC" "$R197_B" >"$R197_RACELOG" 2>&1 ;;
+esac
+exec "$R197_REAL" "$@"
+SHIM
+cat > "$R197D/bin/ssh" <<'SHIM'
+#!/bin/bash
+c="${!#}"
+case "$c" in
+    *machine-id*) echo 00000000000000000000000000r197001; exit 0 ;;
+    *"hostname -f"*) echo r197-remote.example; exit 0 ;;
+esac
+exec bash -c "$c"
+SHIM
+chmod +x "$R197D/bin/zfs" "$R197D/bin/ssh"
+export R197_RACELOG="$R197D/race.log"
+S7="$POOL/s197"; A7="$POOL/m197a"; B7="$POOL/m197b"; C7="$POOL/m197c"
+zfs create -p "$S7" && zfs create -p "$A7" && zfs create -p "$B7" && zfs create -p "$C7" || exit 1
+export R197_SRC="$S7" R197_B="$B7"
+k197() { run_get_out -v 2 -i -m "rep_" --source-keep=1 "$S7" "$1"; }
+k197f() { local m="$1"; shift; R197_FAIL="$m" PATH="$R197D/bin:$PATH" run_get_out -v 2 -i -m "rep_" --source-keep=1 "$S7" "$1"; }
+head197() { zfs list -H -o name -t snapshot -s createtxg -d 1 "$1/$S7" 2>/dev/null | tail -1 | sed 's/.*@//'; }
+onsrc197() { zfs list -H -o name "$S7@$1" >/dev/null 2>&1 && echo yes || echo no; }
+incr197() { printf '%s\n' "$OUT" | grep -q 'full pull' && echo full || echo incr; }
+own197() { zfs list -H -o name -t snapshot -d 1 "$S7" | grep -c '@rep_[0-9]'; }
+# healthy control: A, B, A, B -- every run after the first per medium is incremental, and the
+# source keeps exactly each medium's head
+tick; k197 "$A7"; r1=$RC; tick; k197 "$B7"; r2=$RC
+tick; k197 "$A7"; r3=$RC; i3=$(incr197); tick; k197 "$B7"; r4=$RC; i4=$(incr197)
+check "REV-197 control: two media of one family, A B A B -- rc 0, incrementals, the source keeps both heads" "0 0 0 0|incr incr|2|yes yes" \
+      "$r1 $r2 $r3 $r4|$i3 $i4|$(own197)|$(onsrc197 "$(head197 "$A7")") $(onsrc197 "$(head197 "$B7")")"
+# A's bookmark refresh FAILS (old one removed, new one refused), then B's healthy run prunes
+tick; k197f bookmark "$A7"; ra=$RC; ah=$(head197 "$A7"); wa=$(printf '%s\n' "$OUT" | grep -c 'failed to refresh bookmark')
+tick; k197 "$B7"; ahs=$(onsrc197 "$ah")
+tick; k197 "$A7"; rn=$RC; inn=$(incr197)
+check "REV-197 F1: A's bookmark refresh fails, B's later prune leaves A's head; A's next run is incremental" "0|1|yes|0|incr" \
+      "$ra|$wa|$ahs|$rn|$inn"
+# the OLD bookmark cannot be removed (so the new one cannot be made), then B prunes
+tick; k197f bmdestroy "$A7"; ra=$RC; ah=$(head197 "$A7")
+tick; k197 "$B7"
+check "REV-197 F1: A's old bookmark cannot be removed; after B's prune A's head is still on the source" "0|yes" "$ra|$(onsrc197 "$ah")"
+tick; k197 "$A7"
+check "REV-197 F1: ... and A's next run is incremental" "0|incr" "$RC|$(incr197)"
+# a NEW medium C whose very first bookmark fails: B's prune leaves C's only base
+tick; k197f bookmark "$C7"; rc0=$RC; ch=$(head197 "$C7")
+tick; k197 "$B7"
+tick; k197 "$C7"
+check "REV-197 F1: a new medium's first bookmark fails; B's prune leaves its base; its next run is incremental" "0|0|incr" "$rc0|$RC|$(incr197)"
+# the window: B's whole job runs INSIDE A's bookmark call (A's hold released, no bookmark yet)
+tick; k197f race "$A7"; ra=$RC; ah=$(head197 "$A7")
+check "REV-197 F1: B runs inside A's hold-to-bookmark window -- B rc 0, A's head stays, A rc 0" "0|yes|0" \
+      "$(grep -q 'Transfer completed successfully' "$R197_RACELOG" && echo 0 || echo 1)|$(onsrc197 "$ah")|$ra"
+tick; k197 "$A7"
+check "REV-197 F1: ... and A's next run is incremental" "0|incr" "$RC|$(incr197)"
+# own pruning still works: each medium's older own snapshots go; bounded at one head per medium
+tick; k197 "$B7"; tick; k197 "$C7"
+check "REV-197 retention: after every medium ran healthy, the source holds exactly one own snapshot per medium" "3" "$(own197)"
+# the remote source path lists name,guid over ssh: same answer
+tick; PATH="$R197D/bin:$PATH" run_get_out -v 2 -i -m "rep_" --source-keep=1 "root@r197host:$S7" "$A7"
+check "REV-197 remote source: rc 0, still one own snapshot per medium" "0|3" "$RC|$(own197)"
+zfs destroy -r "$S7" 2>/dev/null; zfs destroy -r "$A7" 2>/dev/null; zfs destroy -r "$B7" 2>/dev/null; zfs destroy -r "$C7" 2>/dev/null
+rm -rf "$R197D"
 zfs destroy -r "$W5S" 2>/dev/null; zfs destroy -r "$W5R" 2>/dev/null; zfs destroy -r "$W5P" 2>/dev/null
 zfs destroy -r "$W5Q" 2>/dev/null; zfs destroy -r "$W5D" 2>/dev/null
 

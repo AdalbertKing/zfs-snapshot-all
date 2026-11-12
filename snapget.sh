@@ -46,7 +46,10 @@ set -o pipefail
 #                    quiesce crash form) beyond the N newest (2026-11-12, W5:
 #                    an active replica's snapshots piled up on both pvesr nodes).
 #                    The per-target bookmark keeps the next increment possible.
-#                    Needs -m; not with -e or -s; under -r nothing is pruned (level 1).
+#                    Only snapshots THIS target holds (by GUID): another medium
+#                    of the same family never loses its base (REV-20261112-197).
+#                    Needs -m and -i; not with -e or -s; under -r nothing is
+#                    pruned (level 1).
 #                    A failed listing or destroy is a warning, never a failed run.
 #   -z               Compress the data stream (default compressor: zstd). Redundant
 #                    against a remote source -- see "COMPRESSION DEFAULT" below,
@@ -1321,37 +1324,51 @@ guest_disk_is_live() {   # <dataset> -> 0 if it IS a live guest disk, 1 otherwis
 #         job's "replica_usb2_<ts>" is not "replica_<ts>";
 #   only snapshots at or before the one just sent, in createtxg order -- a newer one
 #         (made concurrently) is never in the set;
-#   nothing when the listing fails or the sent snapshot is not in it.
-# The per-target bookmark (record_send_bookmark, just above the call) anchors this
-# target's next increment; another medium of the same family keeps its own bookmark.
-prune_source_family() {   # <src_dataset> <sent_snap> [remote_user remote_host]
-    local src="$1" sent="$2" ruser="${3:-}" rhost="${4:-}" list rc crash s n i idx=-1
+#   nothing when the listing fails or the sent snapshot is not in it;
+#   only snapshots THIS target holds, by GUID (REV-20261112-197). Two media of one
+#   replica share the family (same -m): B's run must never take the base of A, whose
+#   bookmark refresh may have failed or not happened yet -- record_send_bookmark is
+#   best-effort and runs after the hold is released. Under -i (required with
+#   --source-keep) each run sends only the snapshot it made, so A's snapshots never
+#   reach B's medium and B never prunes them; A prunes them itself, on A's run,
+#   and never its own head. Correctness does not depend on any bookmark.
+prune_source_family() {   # <src_dataset> <sent_snap> <tgt_dataset> [remote_user remote_host]
+    local src="$1" sent="$2" tgt="$3" ruser="${4:-}" rhost="${5:-}" list rc crash s n g i idx=-1
     local ts='[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-    local own=() doomed=() gone=0 stuck=0 d
+    local own=() doomed=() gone=0 stuck=0 d tguids
     if [ "${DRY_RUN:-0}" -eq 1 ]; then
-        log 1 "--source-keep=$SOURCE_KEEP: dry run -- the job's own snapshots on '$src' beyond the $SOURCE_KEEP newest would be destroyed"
+        log 1 "--source-keep=$SOURCE_KEEP: dry run -- the job's own snapshots on '$src' that '$tgt' holds, beyond the $SOURCE_KEEP newest, would be destroyed"
         return 0
     fi
     crash="$(quiesce_crash_message "$MESSAGE")"
+    # The target is local in snapget.sh. An unreadable or empty answer is never "this
+    # medium holds nothing": nothing is pruned.
+    tguids=$(zfs list -H -o guid -t snapshot -d 1 "$tgt" 2>/dev/null); rc=$?
+    if [ $rc -ne 0 ] || [ -z "$tguids" ]; then
+        log 1 "Warning: --source-keep: cannot list the snapshots of the target '$tgt' -- nothing pruned"
+        return 0
+    fi
     if [ -n "$rhost" ]; then
-        list=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" "zfs list -H -o name -s createtxg -t snapshot -d 1 '$src'"); rc=$?
+        list=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" "zfs list -H -o name,guid -s createtxg -t snapshot -d 1 '$src'"); rc=$?
     else
-        list=$(zfs list -H -o name -s createtxg -t snapshot -d 1 "$src"); rc=$?
+        list=$(zfs list -H -o name,guid -s createtxg -t snapshot -d 1 "$src"); rc=$?
     fi
     if [ $rc -ne 0 ]; then
         log 1 "Warning: --source-keep: cannot list the snapshots of '$src'${rhost:+ on $rhost} -- nothing pruned"
         return 0
     fi
-    while IFS= read -r s; do
+    while IFS=$'\t' read -r s g; do
         n="${s#"$src"@}"
         [ -n "$s" ] && [ "$n" != "$s" ] || continue
+        [[ "$g" =~ ^[0-9]+$ ]] || continue
         case "$n" in
-            "$MESSAGE"$ts|"$crash"$ts) own+=("$n") ;;
+            "$MESSAGE"$ts|"$crash"$ts)
+                grep -qxF -- "$g" <<< "$tguids" && own+=("$n") ;;
         esac
     done <<< "$list"
     for i in "${!own[@]}"; do [ "${own[$i]}" = "$sent" ] && idx=$i; done
     if [ $idx -lt 0 ]; then
-        log 1 "Warning: --source-keep: '$src@$sent' is not among the job's own snapshots on the source -- nothing pruned"
+        log 1 "Warning: --source-keep: '$src@$sent' is not among the job's own snapshots that both the source and '$tgt' hold -- nothing pruned"
         return 0
     fi
     for (( i = 0; i <= idx - SOURCE_KEEP; i++ )); do doomed+=("${own[$i]}"); done
@@ -2557,7 +2574,7 @@ process_dataset() {
         if [ $RECURSIVE -eq 1 ]; then
             log 1 "--source-keep: nothing pruned on '$src_dataset' under -r (one atomic stream, no per-dataset bookmark)"
         else
-            prune_source_family "$src_dataset" "$latest_snap" "$remote_user" "$remote_host"
+            prune_source_family "$src_dataset" "$latest_snap" "$tgt_dataset" "$remote_user" "$remote_host"
         fi
     fi
 
@@ -2779,6 +2796,13 @@ fi
 # this run makes them (-m, no -e) and sends (no -s: nothing is sent, so the prune never runs).
 if [ "$SOURCE_KEEP" -gt 0 ] && { [ $USE_EXISTING_SNAPSHOT -eq 1 ] || [ -z "$MESSAGE" ] || [ $SNAPSHOT_ONLY -eq 1 ]; }; then
     echo "Error: --source-keep needs -m and no -e and no -s: it prunes only the snapshots this job makes and sends" >&2
+    exit 1
+fi
+# REV-20261112-197: and -i. Without it a run carries the intermediate snapshots -- another
+# medium's of the same family among them -- onto this target, which would make them prunable
+# here and take that medium's only base.
+if [ "$SOURCE_KEEP" -gt 0 ] && [ $SKIP_INTERMEDIATES -ne 1 ]; then
+    echo "Error: --source-keep needs -i: only the snapshot this run makes may reach this target, so another medium's base is never prunable here" >&2
     exit 1
 fi
 # W5 (2026-11-12): under a DECLARED -e the Proxmox-reserved families are never adopted.
