@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: a0a29e2f5f548f13 -->
+<!-- status-covers-digest: 94aa27c809f1562a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,12 +20,23 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **Niewydane po 1.0.18 (gałąź `fix/bookmark-base-shadowed`):** bookmark nowszy od wspólnej
-  migawki jest bazą przyrostu. Dotąd, gdy najnowszej migawki celu nie było już na źródle, a starsza
-  była wspólna, `recv -F` kasował na celu nowsze migawki (zmierzone 2026-11-11: kopia po przerwie
-  kolektora na pve9, nośnik repliki w trybie keep na CT 990). Teraz `-i` z bookmarka do najstarszej
-  migawki po nim nie wykluczonej przez `-E` (nigdy `__replicate_`), potem `-I` do najnowszej. Plan `-n` liczy tę samą bazę.
-  Testy `bm3`/`bm4`/`bm5` w suicie snapsend.
+- **Niewydane po 1.0.19 (gałąź `fix/rev-195-bookmark-guards`, REV-20261112-195):** przyrost z
+  bookmarka przechodzi te same kontrole co ze wspólnej migawki. Push na cel `-t` z zapisem po
+  najnowszej migawce odmawia (F1). Nieudana lista migawek między bookmarkiem a najnowszą to odmowa,
+  a nie pojedyncza różnica (F2). `-T` działa też od bookmarka (F3). `publish.sh --push` odmawia
+  wydania, gdy zmiany w plikach uruchomieniowych od poprzedniego wydania nie pokrywa żaden REV (F4,
+  `release/coverage-gate.sh`). Wydanie po werdykcie recenzenta albo za akceptacją właściciela
+  z numerem REV.
+- **1.0.19 wydane (2026-11-12 ~10:35; repo wydań zfsbackup 47b5e09, z `main` 2e6f652b, PR #1175,
+  #1176):** bookmark nowszy od wspólnej migawki jest bazą przyrostu, a most `-i` z bookmarka,
+  potem `-I`, przenosi migawki pośrednie. Lab ręcznie (pve9, pve9b, pve11), Metropolis z crona
+  11:15. Wydane bez zgłoszenia do recenzji; zapisane w REV-20261112-195 F4.
+- **Pomiar repliki na celu pvesr (CT 990, 2026-11-12, 1.0.19):** replika pasywna i aktywna (keep
+  = 3) z lokalnej kopii pvesr na pve2 działają przed zmianą kierunku pvesr (`pct migrate`), po niej
+  i po powrocie: 12 biegów rc 0, GUID zgodne, pvesr bez błędów. Dwie wady do poprawki:
+  `replica_` zrobione, gdy gość żyje na kolektorze, zostają na obu węzłach (nikt ich nie sprząta);
+  pasywna bez `-E` bierze `__replicate_` jako najnowszą. Nośnik testowy `lab990m` (plik loop na
+  pve2) i migawki `lab_w5_*` zostawione na polecenie właściciela.
 - **1.0.18 wydane (2026-11-11 ~22:20; repo wydań zfsbackup f5adf7f, z `main` dcd474d6, PR #1174).**
   Lab ręcznie: pve9 (`lab-dev.sh off`, konto bkp wróciło z gałęzi dev, `deploy.sh` rc 0), pve9b
   (`--self-update`, rc 0), pve11 (`lab-dev.sh off` + `--resume-updates`); reszta floty z crona o :15.

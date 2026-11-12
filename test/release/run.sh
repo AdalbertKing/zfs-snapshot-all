@@ -249,6 +249,47 @@ if printf '| REV | State |\n| REV-20990101-001 | CLOSED |\n| REV-20990101-002 | 
 else
     bad "gate: only APPROVED/CLOSED passes; input that is not a ledger fails closed" ""
 fi
+# The review-coverage gate (REV-20261112-195 F4): a behaviour change since the previous release
+# with no review naming it refuses; docs-only commits and covered commits pass.
+COV="$REPO/release/coverage-gate.sh"
+CR="$WORK/covrepo"; mkdir -p "$CR"
+git -C "$CR" init -q && git -C "$CR" config user.email t@t && git -C "$CR" config user.name t
+cov_commit() { printf '%s\n' "$2" >> "$CR/$1"; git -C "$CR" add -- "$1"; git -C "$CR" commit -qm "$3"; git -C "$CR" rev-parse HEAD; }
+C0=$(cov_commit a.sh x "prev release")
+C1=$(cov_commit a.sh y "engine change 1")
+C2=$(cov_commit docs/n.md z "docs only")
+C3=$(cov_commit a.sh w "engine change 2")
+printf 'a.sh\n' > "$WORK/cov.paths"
+cov() { printf '%s\n' "$1" | bash "$COV" "$CR" "$C0" "$C3" "$WORK/cov.paths" > "$WORK/cov.out" 2>&1; }
+cov "| REV | State | Owner | Implementation | Reviewed | Response | Next |
+| REV-20990101-001 | CLOSED | - | $C1 | $C1 | r | - |"; rc=$?
+if [ "$rc" -eq 1 ] && grep -q "${C3:0:7}" "$WORK/cov.out" && ! grep -q "${C1:0:7}\|${C2:0:7}" "$WORK/cov.out"; then
+    ok "coverage: an engine commit after the last reviewed SHA refuses and is named; covered and docs-only commits are not"
+else
+    bad "coverage: an engine commit after the last reviewed SHA refuses and is named" "rc=$rc $(cat "$WORK/cov.out")"
+fi
+cov "| REV | State | Owner | Implementation | Reviewed | Response | Next |
+| REV-20990101-002 | OPEN | Claude | - | $C3 | - | implement |"; rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "coverage: a REV that reviewed the newest engine commit covers everything before it"
+else
+    bad "coverage: a REV that reviewed the newest engine commit covers everything before it" "rc=$rc $(cat "$WORK/cov.out")"
+fi
+cov "| REV | State | Owner | Implementation | Reviewed | Response | Next |
+| REV-20990101-003 | CLOSED | - | - | - | r | - |"; rc=$?
+if [ "$rc" -eq 1 ] && grep -q "${C1:0:7}" "$WORK/cov.out" && grep -q "${C3:0:7}" "$WORK/cov.out"; then
+    ok "coverage: a ledger naming no SHA covers nothing"
+else
+    bad "coverage: a ledger naming no SHA covers nothing" "rc=$rc $(cat "$WORK/cov.out")"
+fi
+printf 'not a ledger\n' | bash "$COV" "$CR" "$C0" "$C3" "$WORK/cov.paths" >/dev/null 2>&1; rc1=$?
+printf '| REV-20990101-001 | CLOSED | - | %s | %s | r | - |\n' "$C3" "$C3" | bash "$COV" "$CR" deadbeef "$C3" "$WORK/cov.paths" >/dev/null 2>&1; rc2=$?
+if [ "$rc1" -eq 2 ] && [ "$rc2" -eq 2 ]; then
+    ok "coverage: no ledger, or an unknown previous release, fails closed (rc 2)"
+else
+    bad "coverage: no ledger, or an unknown previous release, fails closed (rc 2)" "rc1=$rc1 rc2=$rc2"
+fi
+
 # publish.sh --push runs the gate on HEAD's own ledger BEFORE writing anything: when the gate
 # refuses, REL gets no new commit. (When it passes, publish commits locally and the push then
 # fails, because REL has no remote; that branch is not asserted here.) HEAD's own ledger decides
@@ -287,6 +328,11 @@ if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
         bad "publish: a second run with --push and an override does not push the earlier, unaudited commit" "rc=$rc4" "$out4"
     fi
     mkrel "$WORK/f3b"
+    # The coverage gate (REV-20261112-195 F4) reads the previous release from RELEASE-OF: the
+    # parent of the fixture commit, so the only commit in between touches the ledger, not a
+    # run-time file.
+    git -C "$DEVW" rev-parse "$devrev^" > "$WORK/f3b/RELEASE-OF"
+    git -C "$WORK/f3b" add RELEASE-OF && git -C "$WORK/f3b" commit -qm "previous release" && git -C "$WORK/f3b" push -q origin main
     out5="$(bash "$DEVW/release/publish.sh" "$devrev" "$WORK/f3b" --push --accept-open-review=REV-20990101-003 2>&1)"; rc5=$?
     if [ "$rc5" -eq 0 ] && git -C "$WORK/f3b.git" log -1 --format=%B main | grep -q '^accepted: REV-20990101-003 '; then
         ok "publish: an override with a new release commit pushes, and the pushed commit records 'accepted: REV-...'"

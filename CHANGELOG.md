@@ -4,6 +4,17 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [Unreleased]
+
+- **The bookmark path keeps the safety checks** (REV-20261112-195):
+  - A push onto a sync or exact (`-t`) path whose copy was written to after its newest snapshot
+    is refused there too. Before, a bookmark-backed increment skipped that check and `zfs recv -F`
+    rolled the write back.
+  - When the snapshots between a bookmark and the newest one cannot be listed in full, the run refuses
+    and the next run tries again. Before, it sent a single diff and those snapshots never arrived.
+  - `-T` applies to an increment from a bookmark too, measured from the bookmark's creation.
+- **A release refuses a change no review covers** (`release/coverage-gate.sh`).
+
 ## [1.0.19] — 2026-11-12
 
 - **A copy no longer loses snapshots the source pruned while the collector was away.** When the

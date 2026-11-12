@@ -1871,7 +1871,14 @@ process_dataset() {
         send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $EXTRA_SEND_OPTS $incr_flag ${src_dataset}@${common_snapshot} $snapshot"
     elif [ -n "$bookmark_base" ]; then
         [ "$_bm_shadow" -eq 1 ] || log 1 "No common snapshot, but a bookmark still anchors an incremental: $bookmark_base"
-        [ $SKIP_INTERMEDIATES -eq 1 ] && log 2 "-i requested but already sending a single diff via bookmark -- nothing to skip"
+        # REV-20261112-195 F3: -T measures the bookmark-backed interval too, from
+        # the bookmark's own creation time; over the threshold, the single diff.
+        if [ $SKIP_INTERMEDIATES -eq 0 ] && [ -n "$THRESHOLD_INTERVALS" ] \
+           && [ "$(auto_skip_intermediates "$src_dataset" "$MESSAGE" "$bookmark_base" "$THRESHOLD_INTERVALS" "" "")" = "yes" ]; then
+            log 1 "Catch-up (-T $THRESHOLD_INTERVALS): more than $THRESHOLD_INTERVALS of this dataset's own snapshot intervals have elapsed since bookmark $bookmark_base -- sending only the diff to newest"
+            SKIP_INTERMEDIATES=1
+        fi
+        [ $SKIP_INTERMEDIATES -eq 1 ] && log 2 "-i: a single diff from the bookmark, none of the snapshots in between"
         send_cmd="zfs send $raw_send_flag $comp_send_flag $EXTRA_SEND_OPTS -i $bookmark_base $snapshot"
     else
         if [ $FULL_HISTORY_SEND -eq 1 ]; then
@@ -1915,9 +1922,16 @@ process_dataset() {
         return 1
     fi
     local p0_no_force=0
-    if [ $FORCE_FULL_SEND -ne 1 ] && [[ "$common_snapshot" != "null" ]] && [ "${#tgt_snaps[@]}" -gt 0 ]; then
+    if [ $FORCE_FULL_SEND -ne 1 ] && { [[ "$common_snapshot" != "null" ]] || [ -n "$bookmark_base" ]; } \
+       && [ "${#tgt_snaps[@]}" -gt 0 ]; then
         local recv_base="" p0_written="" p0_guid p0_t
-        if printf '%s\n' "${tgt_snaps[@]}" | grep_q -Fx -- "$common_snapshot"; then
+        if [[ "$common_snapshot" == "null" ]]; then
+            # REV-20261112-195 F1: a bookmark-backed increment resumes from the
+            # target's head -- the snapshot whose GUID the bookmark carries --
+            # and gets the same divergence decision before -F as a common
+            # snapshot does (snapget.sh has always done this).
+            recv_base="${tgt_snaps[-1]}"
+        elif printf '%s\n' "${tgt_snaps[@]}" | grep_q -Fx -- "$common_snapshot"; then
             recv_base="$common_snapshot"
         else
             # A renamed base matched by GUID: the target's own name for it.
@@ -1992,7 +2006,11 @@ process_dataset() {
                 send_cmd="zfs send $raw_send_flag $comp_send_flag $EXTRA_SEND_OPTS -I ${src_dataset}@${_bridge} $snapshot"
             fi
         else
-            log 1 "Could not list the snapshots after bookmark $bookmark_base -- sending its single diff to @${latest_snap}; the snapshots in between are not carried this run"
+            # REV-20261112-195 F2: unknown is not "none in between". A single
+            # diff would move the bookmark past those snapshots for good.
+            log 0 "Refusing: could not tell which snapshots lie between bookmark $bookmark_base and @${latest_snap} -- a single diff would skip them for good (the next run starts after @${latest_snap}). Nothing was sent; the next run tries again."
+            abort_held_snapshot "$snapshot" "$tgt_dataset"
+            return 1
         fi
     fi
 

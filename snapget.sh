@@ -2108,7 +2108,14 @@ process_dataset() {
         send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $EXTRA_SEND_OPTS $incr_flag ${src_dataset}@${common_snapshot} $snapshot"
     elif [ -n "$bookmark_base" ]; then
         [ "$_bm_shadow" -eq 1 ] || log 1 "No common snapshot, but a bookmark still anchors an incremental: $bookmark_base"
-        [ $SKIP_INTERMEDIATES -eq 1 ] && log 2 "-i requested but already sending a single diff via bookmark -- nothing to skip"
+        # REV-20261112-195 F3: -T measures the bookmark-backed interval too, from
+        # the bookmark's own creation time; over the threshold, the single diff.
+        if [ $SKIP_INTERMEDIATES -eq 0 ] && [ -n "$THRESHOLD_INTERVALS" ] \
+           && [ "$(auto_skip_intermediates "$src_dataset" "$MESSAGE" "$bookmark_base" "$THRESHOLD_INTERVALS" "$remote_user" "$remote_host")" = "yes" ]; then
+            log 1 "Catch-up (-T $THRESHOLD_INTERVALS): more than $THRESHOLD_INTERVALS of this dataset's own snapshot intervals have elapsed since bookmark $bookmark_base -- sending only the diff to newest"
+            SKIP_INTERMEDIATES=1
+        fi
+        [ $SKIP_INTERMEDIATES -eq 1 ] && log 2 "-i: a single diff from the bookmark, none of the snapshots in between"
         send_cmd="zfs send $raw_send_flag $comp_send_flag $EXTRA_SEND_OPTS -i $bookmark_base $snapshot"
     else
         if [ $FULL_HISTORY_SEND -eq 1 ]; then
@@ -2181,7 +2188,11 @@ process_dataset() {
                 send_cmd="zfs send $raw_send_flag $comp_send_flag $EXTRA_SEND_OPTS -I ${src_dataset}@${_bridge} $snapshot"
             fi
         else
-            log 1 "Could not list the snapshots after bookmark $bookmark_base -- sending its single diff to @${latest_snap}; the snapshots in between are not carried this run"
+            # REV-20261112-195 F2: unknown is not "none in between". A single
+            # diff would move the bookmark past those snapshots for good.
+            log 0 "Refusing: could not tell which snapshots lie between bookmark $bookmark_base and @${latest_snap} -- a single diff would skip them for good (the next run starts after @${latest_snap}). Nothing was sent; the next run tries again."
+            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
+            return 1
         fi
     fi
 
