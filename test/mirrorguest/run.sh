@@ -46,6 +46,8 @@ last="${*: -1}"
 case "$1" in
     list)
         case " $* " in
+            *" -o name,guid "*" -t snapshot "*)   # REV-20261112-196: mirror_target reads GUIDs
+                awk -v s="$side" -v d="$last" '$1==s && index($2, d "@")==1 {print $2 "\t" $3}' "$SNAPDB"; exit 0 ;;
             *" -t snapshot "*)
                 awk -v s="$side" -v d="$last" '$1==s && index($2, d "@")==1 {print $2}' "$SNAPDB"; exit 0 ;;
             *" -t bookmark "*) exit 0 ;;

@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 c6252c79ee1eea8f71bae043f5d66bad92e0cf01 -->
-<!-- frozen: snapget.sh 100755 20554f845e76be9205259447655dea516358fedd -->
+<!-- frozen: snapget.sh 100755 edb0b18a40f364ab335432af5a96b27b09fd32f7 -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
 <!-- frozen: lib-zfs-snap.sh 100644 4024c09b357197732632d04a24cf020c8cf92433 -->
@@ -1423,6 +1423,18 @@ Owner-authorized refreezes:
   bookmark's creation time (`auto_skip_intermediates` takes a `dataset#bookmark` base). Tests:
   test/snapsend `R195 F1/F2/F3`, both engines.
   twin: the same F2/F3 blocks in both engines; F1 ports snapget.sh's existing branch to push.
+- 2026-11-12 (snapget.sh): **REV-20261112-196 F1, `-M` decides "gone from the source" by GUID.**
+  Owner direction, verbatim: "Tak, otwórz", the answer to "Otwierasz zamrożenie
+  snapget.sh/snapsend.sh pod REV-196?". `mirror_target` compared names: a snapshot renamed on
+  the source lost its only copy on the target, rc 0 (live, pve9, REV-194 evidence scenario 3).
+  Change: before the first destroy it reads both sides' GUID lists (`get_snapshot_guids`, the
+  reader `find_common_snapshot` uses). A target snapshot older than the base stays when any
+  source snapshot carries its GUID; the same name with another GUID is gone. An unreadable list,
+  a non-numeric GUID or a target snapshot missing from its GUID list deletes nothing, rc 1.
+  Tests: test/twins section M, +7 cases; all 7 fail on main's snapget.sh. Live on pve9: a
+  source rename keeps the copy (a clone of it reads the same `f1`), with and without new work;
+  a target rename keeps it; a real source deletion still removes the copy.
+  twin: n/a -- snapsend.sh has no mirror. snapsend.sh is not changed.
 
 ## How it is enforced
 
