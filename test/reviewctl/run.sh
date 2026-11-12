@@ -977,6 +977,17 @@ rsworld rs12
 printf '<!-- rev: %s -->\n<!-- implementation: %s -->\n\n# t\n' "$RS" "${P1:0:12}" > "$W/docs/internal/reviews/responses/$RS.md"
 rsrefuses "respond RS12: an abbreviated existing implementation header refuses" "is not a full commit id" \
     --implementation="$P3" --base="$P2"
+# RS13. The previous range is already written by hand as 'submitted:': the resubmission keeps it once.
+rsworld rs13
+printf '<!-- rev: %s -->\n<!-- implementation: %s -->\n<!-- base: %s -->\n<!-- submitted: %s %s -->\n\n# t\n' \
+    "$RS" "$P1" "$P0" "$P0" "$P1" > "$W/docs/internal/reviews/responses/$RS.md"
+if tx respond "$RS" --implementation="$P2" --base="$P1" \
+   && [ "$(rsf | grep -c '^<!-- submitted: ')" -eq 1 ] \
+   && rsf | grep -q "^<!-- submitted: $P0 $P1 -->$" && rsf | grep -q "^<!-- implementation: $P2 -->$"; then
+    ok "respond RS13: a previous range already present as 'submitted:' is kept once (duplicate line)"
+else
+    bad "respond RS13: duplicate submitted line" "$(rsf | head -8; cat "$TMPD/out")"
+fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
