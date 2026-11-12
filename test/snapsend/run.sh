@@ -2258,7 +2258,7 @@ check "W5-1 --source-keep=2: two own snapshots stay" "0|2" \
       "$RC|$(zfs list -H -o name -t snapshot -d 1 "$W5S" | sed 's/.*@//' | grep -c '^rep_[0-9]')"
 w5old=$(zfs list -H -o name -t snapshot -d 1 -s createtxg "$W5S" | grep '@rep_[0-9]' | head -1)
 zfs hold w5test "$w5old"
-tick; run_get_out -m "rep_" --source-keep=1 "$W5S" "$W5D"
+tick; run_get_out -v 1 -m "rep_" --source-keep=1 "$W5S" "$W5D"
 check "W5-1 --source-keep: a held older snapshot stays with a warning; rc 0; the held one and the newest remain" "0|1|2" \
       "$RC|$(printf '%s\n' "$OUT" | grep -c 'stay on')|$(zfs list -H -o name -t snapshot -d 1 "$W5S" | sed 's/.*@//' | grep -c '^rep_[0-9]')"
 zfs release w5test "$w5old"
@@ -2277,7 +2277,7 @@ check "W5-1 --source-keep refuses with -e, and N=0 / N=x1 refuse" "1|1|1|1" \
       "$([ $w5e -ne 0 ] && echo 1)|$w5eo|$([ $w5z -ne 0 ] && echo 1)|$([ $w5x -ne 0 ] && echo 1)"
 # under -r nothing is pruned, and it says so
 W5R="$POOL/w5r"; zfs create -p "$W5R/c" || exit 1
-for _i in 1 2; do tick; run_get_out -r -m "rep_" --source-keep=1 "$W5R" "$W5D"; done
+for _i in 1 2; do tick; run_get_out -v 1 -r -m "rep_" --source-keep=1 "$W5R" "$W5D"; done
 check "W5-1 --source-keep under -r: rc 0, both own snapshots stay, the run says nothing was pruned" "0|2|1" \
       "$RC|$(zfs list -H -o name -t snapshot -d 1 "$W5R" | grep -c '@rep_[0-9]')|$(printf '%s\n' "$OUT" | grep -c 'nothing pruned .* under -r')"
 # W5-2: -e without -E never adopts a reserved family
@@ -2294,6 +2294,15 @@ zfs snapshot "$W5Q@__replicate_101-0_1700000000__"
 run_get_out -e "$W5Q" "$W5D"
 check "W5-2 -e on a dataset with only reserved snapshots: refused, said, nothing received" "1|1|0" \
       "$([ $RC -ne 0 ] && echo 1)|$(printf '%s\n' "$OUT" | grep -c 'matches an -E exclusion')|$(zfs list -H -o name -t snapshot -r "$W5D/$W5Q" 2>/dev/null | grep -c .)"
+# review 2026-11-12: an -m naming a reserved family is the explicit opt-out
+run_get -e -m __replicate_ "$W5Q" "$W5D"
+check "W5-2 -e -m __replicate_: the named reserved family is adopted (explicit opt-out)" "0|1" \
+      "$RC|$(zfs list -H -o name -t snapshot -d 1 "$W5D/$W5Q" 2>/dev/null | grep -c '@__replicate_101-0_1700000000__$')"
+# review 2026-11-12: -s sends nothing, so the prune would never run -- refused, not ignored
+w5sbefore=$(zfs list -H -o name -t snapshot -d 1 "$W5S" | sort)
+run_get_out -s -m "rep_" --source-keep=1 "$W5S" "$W5D"
+check "W5-1 --source-keep with -s: refused, said, no snapshot made" "1|1|same" \
+      "$([ $RC -ne 0 ] && echo 1)|$(printf '%s\n' "$OUT" | grep -c 'no -e and no -s')|$([ "$(zfs list -H -o name -t snapshot -d 1 "$W5S" | sort)" = "$w5sbefore" ] && echo same)"
 zfs destroy -r "$W5S" 2>/dev/null; zfs destroy -r "$W5R" 2>/dev/null; zfs destroy -r "$W5P" 2>/dev/null
 zfs destroy -r "$W5Q" 2>/dev/null; zfs destroy -r "$W5D" 2>/dev/null
 
