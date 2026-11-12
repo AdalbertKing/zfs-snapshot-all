@@ -37,8 +37,8 @@
   (`RELEASE-OF` z `origin/main` repo wydań, nie z kopii roboczej) z kandydatem. Każdy zmieniony,
   dodany albo usunięty plik uruchomieniowy musi wynikać z zakresów zgłoszonych do recenzji
   (`implementation:` + `<!-- base: -->` w odpowiedzi), także zmiana zrobiona przy scalaniu.
-  Gałąź `fix/rev-195-r2-coverage`. Wydanie po werdykcie recenzenta albo za akceptacją właściciela
-  z numerem REV.
+  Runda 2: gałąź `fix/rev-195-r2-coverage`. Wydanie po werdykcie recenzenta albo za akceptacją właściciela
+  z numerem REV (bramka recenzji). Bramka pokrycia nie ma obejścia: zmiana musi być zgłoszona.
 - **1.0.19 wydane (2026-11-12 ~10:35; repo wydań zfsbackup 47b5e09, z `main` 2e6f652b, PR #1175,
   #1176):** bookmark nowszy od wspólnej migawki jest bazą przyrostu, a most `-i` z bookmarka,
   potem `-I`, przenosi migawki pośrednie. Lab ręcznie (pve9, pve9b, pve11), Metropolis z crona
