@@ -1,0 +1,94 @@
+== identity: c63b500cf870bf5d3bf0064933054cd6c31682b8  host pve9  2026-11-12 13:51:36
+5e519e6cb9b6108e3fd984c6dba6f91b80d41e0030672705020f80444a4c7ba9  zfs-media-gate.sh
+67eb9b02164afc3b39af6e36f391a2ec7d9a1fedd3e15bf59a3dbb6cae8cb76b  snapget.sh
+43c3ff318a5a61b6aee25b86cfa9b6e8303b174a76ea86f877fa41f824e74284  lib-zfs-snap.sh
+9388f92b3bbe3d9ff19176c1128350da46b356cf20c3779df8c6d87cc5c04809  lib-backup-common.sh
+zfs-2.1.11-1+deb12u1
+
+===== 1. first copy onto the exported medium
+medium BEFORE the run:
+2026-11-12 13:51:36 - imported 'r194med' for 'r194' -- this run will export it again when it is done.
+attach rc=0
+2026-11-12 13:51:37 - SEND CMD: zfs send  -c   hdd/lab/r194src@replica_2026-11-12_13-51-36
+2026-11-12 13:51:41 - Mirror (-M) on 'r194med/rep/hdd/lab/r194src': 0 removed (gone from the source, older than 'replica_2026-11-12_13-51-36'), 0 could not be removed, 0 reserved left alone
+All datasets processed successfully
+engine rc=0
+2026-11-12 13:51:41 - exported 'r194med' -- the disk can be unplugged.
+detach rc=0
+pool after bracket: exported
+
+===== 2. return after retention: the snapshot the medium holds is gone on the source, its bookmark stays
+medium holds: @replica_2026-11-12_13-51-36
+source: destroyed @replica_2026-11-12_13-51-36 (retention)
+-- hdd/lab/r194src
+   hdd/lab/r194src@replica_collector2	14811550560836971688
+   hdd/lab/r194src#tgt-70b65aa8	16673784577828423015
+medium BEFORE the run:
+   r194med/rep/hdd/lab/r194src@replica_2026-11-12_13-51-36	16673784577828423015
+2026-11-12 13:51:41 - 'hdd/lab/r194src' is quiet, but this medium last received 'replica_2026-11-12_13-51-36' and the family is now at 'replica_collector2' -- it is behind. Importing to bring it up.
+2026-11-12 13:51:41 - imported 'r194med' for 'r194' -- this run will export it again when it is done.
+attach rc=0
+2026-11-12 13:51:42 - No common snapshot, but a bookmark still anchors an incremental: hdd/lab/r194src#tgt-70b65aa8
+2026-11-12 13:51:42 - SEND CMD: zfs send  -c  -i hdd/lab/r194src#tgt-70b65aa8 hdd/lab/r194src@replica_collector2
+2026-11-12 13:51:45 - SEND CMD: zfs send  -c  -I hdd/lab/r194src@replica_collector2 hdd/lab/r194src@replica_2026-11-12_13-51-41
+2026-11-12 13:51:49 - Mirror (-M): destroyed r194med/rep/hdd/lab/r194src@replica_2026-11-12_13-51-36 -- no longer on the source
+2026-11-12 13:51:49 - Mirror (-M) on 'r194med/rep/hdd/lab/r194src': 1 removed (gone from the source, older than 'replica_2026-11-12_13-51-41'), 0 could not be removed, 0 reserved left alone
+All datasets processed successfully
+engine rc=0
+2026-11-12 13:51:49 - exported 'r194med' -- the disk can be unplugged.
+detach rc=0
+pool after bracket: exported
+-- r194med/rep/hdd/lab/r194src
+   r194med/rep/hdd/lab/r194src@replica_collector2	14811550560836971688
+   r194med/rep/hdd/lab/r194src@replica_2026-11-12_13-51-41	12128216800917772009
+
+===== 3. F2: the medium's newest snapshot RENAMED on the source (same GUID, other name)
+source: @replica_2026-11-12_13-51-41 -> @replica_renamed
+source: destroyed bookmark hdd/lab/r194src#tgt-70b65aa8 -- only the renamed snapshot's GUID links the two sides now
+source: destroyed @replica_collector2 (retention) -- no snapshot name is shared any more
+-- hdd/lab/r194src
+   hdd/lab/r194src@replica_renamed	12128216800917772009
+-- negative control: the gate before F2 (d30fd5f0), same state
+cc3373e8066b665246e6c3ae9184077e9ea05c1b65d16a7c448c43117fd889af  zfs-media-gate.old.sh
+2026-11-12 13:51:50 - 'hdd/lab/r194src' is quiet, but this medium last received 'replica_2026-11-12_13-51-41' and the family is now at 'replica_renamed' -- it is behind. Importing to bring it up.
+2026-11-12 13:51:50 - REFUSING: 'r194med/rep/hdd/lab/r194src' on this medium holds 'replica_' snapshots that 'hdd/lab/r194src' does not have, and they share none at all -- so this is a copy of a DIFFERENT lineage, not an older state of this one. The engine can neither send an increment (no common snapshot) nor seed over it (the target has snapshots), and would fail every run with a ZFS receive error.
+2026-11-12 13:51:50 -   the medium holds:  replica_2026-11-12_13-51-41
+2026-11-12 13:51:50 -   the source is at:  replica_renamed
+2026-11-12 13:51:50 -   Decide, then act: KEEP that copy by pointing this replica at a different --dst, or DISCARD it with 'zfs destroy -r r194med/rep/hdd/lab/r194src' and let the next run seed afresh. This tool will not choose between somebody's two backups.
+OLD gate attach rc=2
+2026-11-12 13:51:50 - 'r194med' is not imported -- nothing to export.
+OLD gate detach rc=0
+-- the candidate gate, same state (gate record restored to what it was before the control)
+medium BEFORE the run:
+   r194med/rep/hdd/lab/r194src@replica_collector2	14811550560836971688
+   r194med/rep/hdd/lab/r194src@replica_2026-11-12_13-51-41	12128216800917772009
+2026-11-12 13:51:50 - 'hdd/lab/r194src' is quiet, but this medium last received 'replica_2026-11-12_13-51-41' and the family is now at 'replica_renamed' -- it is behind. Importing to bring it up.
+2026-11-12 13:51:50 - imported 'r194med' for 'r194' -- this run will export it again when it is done.
+attach rc=0
+2026-11-12 13:51:51 - Found valid common snapshot: hdd/lab/r194src@replica_renamed
+2026-11-12 13:51:51 - SEND CMD: zfs send  -c   -I hdd/lab/r194src@replica_renamed hdd/lab/r194src@replica_2026-11-12_13-51-50
+2026-11-12 13:51:54 - Mirror (-M): destroyed r194med/rep/hdd/lab/r194src@replica_collector2 -- no longer on the source
+2026-11-12 13:51:54 - Mirror (-M): destroyed r194med/rep/hdd/lab/r194src@replica_2026-11-12_13-51-41 -- no longer on the source
+2026-11-12 13:51:54 - Mirror (-M) on 'r194med/rep/hdd/lab/r194src': 2 removed (gone from the source, older than 'replica_2026-11-12_13-51-50'), 0 could not be removed, 0 reserved left alone
+All datasets processed successfully
+engine rc=0
+2026-11-12 13:51:55 - exported 'r194med' -- the disk can be unplugged.
+detach rc=0
+pool after bracket: exported
+-- r194med/rep/hdd/lab/r194src
+   r194med/rep/hdd/lab/r194src@replica_2026-11-12_13-51-50	16585132537459466547
+
+===== 4. control: NO common GUID (source rebuilt) -- refused, and an OPERATOR's import stays imported
+operator imported r194med by hand
+2026-11-12 13:51:55 - 'hdd/lab/r194src' is quiet, but the medium for 'r194med' could not be identified without importing it. Importing rather than assuming it is the same disk.
+2026-11-12 13:51:55 - REFUSING: 'r194med/rep/hdd/lab/r194src' on this medium holds 'replica_' snapshots that 'hdd/lab/r194src' does not have, and they share none at all -- so this is a copy of a DIFFERENT lineage, not an older state of this one. The engine can neither send an increment (no common snapshot) nor seed over it (the target has snapshots), and would fail every run with a ZFS receive error.
+2026-11-12 13:51:55 -   the medium holds:  replica_2026-11-12_13-51-50
+2026-11-12 13:51:55 -   the source is at:  replica_newfamily
+2026-11-12 13:51:55 -   Decide, then act: KEEP that copy by pointing this replica at a different --dst, or DISCARD it with 'zfs destroy -r r194med/rep/hdd/lab/r194src' and let the next run seed afresh. This tool will not choose between somebody's two backups.
+2026-11-12 13:51:55 - 'r194med' was imported before this run by somebody else, so it is left imported, as it was found.
+attach rc=2
+pool after refusal: STILL IMPORTED (operator's)
+2026-11-12 13:51:55 - leaving 'r194med' imported: this run did not import it, so putting it away is not this run's call.
+detach rc=0
+pool after detach: STILL IMPORTED (operator's)
+cleaned
