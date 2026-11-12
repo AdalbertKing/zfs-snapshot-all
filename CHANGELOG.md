@@ -4,7 +4,7 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
-## [Unreleased]
+## [1.0.19] — 2026-11-12
 
 - **A copy no longer loses snapshots the source pruned while the collector was away.** When the
   target's newest snapshot was gone from the source but an older one was common to both, the
