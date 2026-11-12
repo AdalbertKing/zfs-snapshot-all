@@ -3366,6 +3366,22 @@ find_bookmark_base() {
     done <<< "$marks"
 }
 
+# A BOOKMARK NEWER THAN THE COMMON SNAPSHOT (2026-11-11), shared by the run and
+# the -n plan of both engines so the two never disagree. Echoes the source's
+# bookmark carrying the target head's GUID when that head is NOT the common
+# snapshot itself -- a head that is the common one under another name (renamed
+# on the target) keeps the ordinary -I. Prints nothing otherwise.
+# Usage: bookmark_beats_common <src_dataset> <common> <tgt_head_guid> [user host]
+bookmark_beats_common() {
+    local src="$1" common="$2" head="$3" ruser="${4:-}" rhost="${5:-}" bm cg
+    [ -n "$head" ] || return 0
+    bm=$(find_bookmark_base "$src" "$head" "$ruser" "$rhost")
+    [ -n "$bm" ] || return 0
+    cg=$(get_snapshot_guid "$src" "$common" "$ruser" "$rhost")
+    [ -n "$cg" ] && [ "$cg" = "$head" ] && return 0
+    echo "$bm"
+}
+
 # After a successful transfer, refresh the per-target bookmark on the SOURCE
 # to the snapshot that was just sent. This is the insurance policy itself:
 # if the source's own retention deletes that snapshot before the next run,
@@ -3457,6 +3473,47 @@ exclusion_step_plan() {
             }
             if (hid == 0 || ns == 0 || last != l) exit 0
             for (i = 1; i <= ns; i++) print P[i]
+        }'
+}
+
+# BOOKMARK BRIDGE (2026-11-11). `zfs send -I` cannot start at a bookmark --
+# measured on pve9, ZFS 2.1.11: "multiple snapshots cannot be sent from a
+# bookmark" -- so an increment anchored by a bookmark carries only its two ends,
+# and every snapshot the source made after the bookmark and before <latest>
+# (the dailies of a long collector outage) would never reach the target. This
+# names the bridge: the OLDEST snapshot of <dataset> created after the bookmark
+# and before <latest> that -E does not exclude (EXCLUDE_SNAPS prefixes, as in
+# exclusion_step_plan). The caller sends `-i #bookmark @bridge`, then the usual
+# `-I @bridge @latest`. Prints nothing when there is none: the single -i is then
+# the whole interval. rc 1 only when the list itself could not be read.
+# Usage: bookmark_bridge_snap <dataset> <dataset#bookmark> <latest> [user host]
+bookmark_bridge_snap() {
+    local ds="$1" bm="$2" latest="$3" ruser="${4:-}" rhost="${5:-}" out
+    if [ -n "$rhost" ]; then
+        out=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" \
+            "zfs list -H -p -o name,createtxg -t snapshot,bookmark -d 1 '$ds'") || return 1
+    else
+        out=$(zfs list -H -p -o name,createtxg -t snapshot,bookmark -d 1 "$ds") || return 1
+    fi
+    printf '%s\n' "$out" | awk -F'\t' -v b="$bm" -v l="${ds}@${latest}" \
+        -v xs="${EXCLUDE_SNAPS[*]}" '
+        BEGIN { nx = split(xs, X, " ") }
+        { N[NR] = $1; T[NR] = $2 + 0; if ($1 == b) bt = T[NR]; if ($1 == l) lt = T[NR] }
+        END {
+            if (bt == "" || lt == "" || lt <= bt) exit 0
+            best = ""
+            for (i = 1; i <= NR; i++) {
+                at = index(N[i], "@"); if (at == 0) continue
+                if (T[i] <= bt || T[i] >= lt) continue
+                s = substr(N[i], at + 1); x = 0
+                # never pvesr'\''s own: it renames or destroys them every sync,
+                # and a send from one blocks its receive (handoff test B)
+                if (index(s, "__replicate_") == 1) continue
+                for (k = 1; k <= nx; k++) if (index(s, X[k]) == 1) { x = 1; break }
+                if (x) continue
+                if (best == "" || T[i] < bestt) { best = s; bestt = T[i] }
+            }
+            if (best != "") print best
         }'
 }
 
