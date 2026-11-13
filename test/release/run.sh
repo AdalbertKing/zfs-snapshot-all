@@ -608,14 +608,14 @@ if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
     fi
     # A release checkout BEHIND its origin (someone published since it was cloned) is refused
     # before the gates, not by a rejected push at the end (1.0.21, 2026-11-13).
-    mkrel "$WORK/f4s" "$d0"
-    git clone -q -b main "$WORK/f4s.git" "$WORK/f4s2" && git -C "$WORK/f4s2" commit -q --allow-empty -m newer \
-        && git -C "$WORK/f4s2" push -q origin main
-    st="$(git -C "$WORK/f4s.git" rev-parse main)"
-    o="$(bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4s" --push 2>&1)"; r=$?
+    mkrel "$WORK/fbehind" "$d0"
+    git clone -q -b main "$WORK/fbehind.git" "$WORK/fbehind2" && git -C "$WORK/fbehind2" commit -q --allow-empty -m newer \
+        && git -C "$WORK/fbehind2" push -q origin main
+    st="$(git -C "$WORK/fbehind.git" rev-parse main)"
+    o="$(bash "$DEVW/release/publish.sh" "$d1" "$WORK/fbehind" --push 2>&1)"; r=$?
     if [ "$r" -ne 0 ] && printf '%s\n' "$o" | grep -q 'is behind (or off) its origin/main' \
        && ! printf '%s\n' "$o" | grep -q 'reviewctl: derived' \
-       && [ "$(git -C "$WORK/f4s.git" rev-parse main)" = "$st" ]; then
+       && [ "$(git -C "$WORK/fbehind.git" rev-parse main)" = "$st" ]; then
         ok "publish: a release checkout behind its origin is refused before the gates, nothing pushed"
     else
         bad "publish: a release checkout behind its origin" "rc=$r" "$o"
