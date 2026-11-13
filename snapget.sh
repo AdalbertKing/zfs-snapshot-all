@@ -1340,8 +1340,8 @@ guest_disk_is_live() {   # <dataset> -> 0 if it IS a live guest disk, 1 otherwis
 # snapshot is this target's own -- history copied before (a history-all run, an -H
 # seed, an import) can put A's base on B as well. So ownership is recorded where it
 # is created: the run that makes the snapshot for a --source-keep job stamps it on
-# the source with SOURCE_OWNER_PROP = this target's tag (bookmark_target_tag of the
-# target and -j). Only snapshots carrying THIS target's stamp AND held by this
+# the source with SOURCE_OWNER_PROP = this target's tag (source_owner_tag: the
+# target, -j and, since round 3, the target pool's GUID). Only snapshots carrying THIS target's stamp AND held by this
 # target are prunable. An unstamped snapshot (made before, by hand, by another job,
 # or when the stamp could not be set) is ambiguous and stays on the source.
 SOURCE_OWNER_PROP="zfsbackup:srckeep-owner"
