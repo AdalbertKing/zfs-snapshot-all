@@ -17,13 +17,39 @@
 # an EXIT trap that destroys the pool even if a test fails midway.
 #
 # Usage: ./run.sh     (override the scripts under test with SNAPSEND=/SNAPGET=)
+#        SUITE_ONLY=W5 ./run.sh   (one group of sections -- see below)
 
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO="${SUITE_REPO:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 SNAPSEND="${SNAPSEND:-$REPO/snapsend.sh}"
 SNAPGET="${SNAPGET:-$REPO/snapget.sh}"
+
+# SUITE_ONLY=<word>: run the preamble, the helpers, every section whose
+# "# --- " header contains <word> (case-insensitive) and the summary -- nothing
+# else. One section takes a minute or two; the whole suite takes 25-40 minutes
+# on pve9 (measured 2026-11-13). Use it while a change is being worked on; the
+# whole suite still runs once on the final head before the PR. A section that
+# reads state an earlier section left behind fails here and not in the full
+# run: that is the section's defect, not the selector's.
+if [ -n "${SUITE_ONLY:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
+    case "$SUITE_ONLY" in
+        *[!A-Za-z0-9_.-]*) echo "SUITE_ONLY: a plain word, not '$SUITE_ONLY'" >&2; exit 2 ;;
+    esac
+    only_f="$(mktemp)"
+    awk -v w="$SUITE_ONLY" '
+        /^# --- / { h = tolower($0); keep = (h ~ /^# --- (helpers|summary) /) || index(h, tolower(w)) > 0
+                    if (keep && h !~ /^# --- (helpers|summary) /) hit++ }
+        !seen && /^# --- / { seen = 1 }
+        !seen || keep
+        END { if (!hit) exit 3 }' "${BASH_SOURCE[0]}" > "$only_f" \
+        || { echo "SUITE_ONLY: no section header contains '$SUITE_ONLY'" >&2; rm -f "$only_f"; exit 2; }
+    echo "SUITE_ONLY=$SUITE_ONLY: $(grep -c '^# --- ' "$only_f") of $(grep -c '^# --- ' "${BASH_SOURCE[0]}") sections (helpers and summary included)"
+    SUITE_FILTERED=1 SUITE_REPO="$REPO" bash "$only_f"; only_rc=$?
+    rm -f "$only_f"
+    exit "$only_rc"
+fi
 
 [ -x "$SNAPSEND" ] || { echo "cannot find executable snapsend.sh at $SNAPSEND" >&2; exit 1; }
 [ -x "$SNAPGET" ]  || { echo "cannot find executable snapget.sh at $SNAPGET" >&2; exit 1; }
