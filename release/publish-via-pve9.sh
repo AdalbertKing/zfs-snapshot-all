@@ -82,6 +82,6 @@ echo "   pushed: zfsbackup main = ${relsha:0:7} ($(( $(date +%s) - t0 )) s)"
 echo "== 3/3 lab hosts: self-update now (production: its update cron)"
 for h in $LAB_HOSTS; do
     v=$(MSYS_NO_PATHCONV=1 timeout 120 plink -batch "root@$h" \
-        '/root/.zfs-snapshot-all-update-state/update-control.sh --self-update >/dev/null 2>&1; git -C /root/zfs-snapshot-all log -1 --format=%h 2>/dev/null; id zfsbackup >/dev/null 2>&1 && su -s /bin/sh zfsbackup -c "cd ~/zfs-snapshot-all && git pull -q --ff-only origin main && git log -1 --format=%h"' 2>&1 | tr '\n' ' ') || true
+        '/root/.zfs-snapshot-all-update-state/update-control.sh --self-update >/dev/null 2>&1; for d in /root/zfs-snapshot-all /root/scripts/zfs-snapshot-all; do [ -d $d/.git ] && { echo "root:$(git -C $d log -1 --format=%h)"; break; }; done; id zfsbackup >/dev/null 2>&1 && echo "account:$(su -s /bin/sh zfsbackup -c "cd ~/zfs-snapshot-all && git pull -q --ff-only origin main && git log -1 --format=%h" 2>&1)"' 2>&1 | tr '\n' ' ') || true
     echo "   $h: ${v:-unreachable}"
 done
