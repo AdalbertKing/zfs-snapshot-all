@@ -59,9 +59,10 @@
 # documents -e. So a baseline row whose two hashes differ now carries a fourth
 # column, one of:
 #
-#   direction:<one sentence naming a LINE, e.g. snapget.sh:1186>
+#   direction:<one sentence>
 #       the bodies differ because push and pull genuinely do different work
-#       there. The line is the evidence; a sentence without one is a claim.
+#       there. (Until 2026-11-13 the sentence had to name a file:line; the
+#       number went stale on every engine edit and only its format was checked.)
 #   port-by:<YYYY-MM-DD>  or  port-by:<REV-YYYYMMDD-NNN>
 #       the bodies differ because one side is BEHIND, and this is the
 #       deadline for the port. Section B2 turns red the day after the date,
@@ -185,7 +186,7 @@ if [ "$BLESS" -eq 1 ]; then
         echo "# Pinned hashes of the snapsend.sh/snapget.sh twinned functions."
         echo "# Regenerate with: ./test/twins/run.sh --bless"
         echo "# Blessing records a REVIEWED decision about both directions."
-        echo "# Format: <function> <snapsend-sha256> <snapget-sha256> [direction:<why, with a file:line> | port-by:<date or REV>]"
+        echo "# Format: <function> <snapsend-sha256> <snapget-sha256> [direction:<why> | port-by:<date or REV>]"
         echo "# A row whose two hashes differ MUST carry the fourth column; see the header of run.sh."
         for fn in $TWINS; do
             _hs="$(hash_of "$SNAPSEND" "$fn")"; _hg="$(hash_of "$SNAPGET" "$fn")"
@@ -194,7 +195,7 @@ if [ "$BLESS" -eq 1 ]; then
             elif [ -n "${REASON[$fn]:-}" ]; then
                 printf '%s %s %s %s\n' "$fn" "$_hs" "$_hg" "${REASON[$fn]}"
             else
-                echo "refusing to bless: $fn differs between the engines and carries no reason -- add 'direction:<why, file:line>' or 'port-by:<date|REV>' as the 4th column of its row in $BASELINE, then bless" >&2
+                echo "refusing to bless: $fn differs between the engines and carries no reason -- add 'direction:<why>' or 'port-by:<date|REV>' as the 4th column of its row in $BASELINE, then bless" >&2
                 _bless_missing=1
             fi
         done
@@ -277,21 +278,23 @@ done < "$BASELINE"
 
 # ---- B2. a difference carries a checked reason ------------------------------
 # The pinned hashes say WHETHER the two copies differ; this says WHY, and the
-# why is verified as far as text allows: a direction reason must point at a
-# line, a port-by deadline must not have passed, a port-by review must not be
-# closed. What it cannot verify is that the sentence is true -- that is the
-# reviewer's, and the line reference is what makes it checkable.
+# why is verified as far as text allows: a direction reason must be there, a
+# port-by deadline must not have passed, a port-by review must not be closed.
+# What it cannot verify is that the sentence is true -- that is the reviewer's.
 _today="$(date +%F)"
 while read -r fn want_s want_g reason; do
     case "$fn" in ''|'#'*) continue ;; esac
     [ "$want_s" = "$want_g" ] && continue
     case "$reason" in
         direction:*)
-            if printf '%s' "$reason" | grep -qE '(snapsend|snapget|lib-zfs-snap)\.sh:[0-9]+'; then
-                ok "B2 $fn differs by direction, and the reason names a line"
+            # A sentence, no file:line. The line reference went stale on every
+            # edit of the engine and was only ever checked for its FORMAT
+            # (workflow V5, 2026-11-13).
+            _why="${reason#direction:}"
+            if [ -n "${_why// /}" ]; then
+                ok "B2 $fn differs by direction, and the row says why"
             else
-                bad "B2 $fn differs by direction, and the reason names a line" \
-                    "reason: '$reason'" "a direction reason is a claim about the other engine; name the line that shows it (file.sh:NNN)"
+                bad "B2 $fn differs by direction, and the row says why"                     "reason: '$reason'" "a direction reason is one sentence saying why the two engines differ here"
             fi ;;
         port-by:*)
             _due="${reason#port-by:}"; _due="${_due%% *}"
@@ -313,7 +316,7 @@ while read -r fn want_s want_g reason; do
                 *) bad "B2 $fn is behind on one side" "port-by needs a YYYY-MM-DD date or a REV id, got '$_due'" ;;
             esac ;;
         '') bad "B2 $fn differs between the engines WITHOUT a reason" \
-                "the two pinned hashes differ and the row has no 4th column. Say why: direction:<why, file:line> or port-by:<date|REV>" ;;
+                "the two pinned hashes differ and the row has no 4th column. Say why: direction:<why> or port-by:<date|REV>" ;;
         *)  bad "B2 $fn differs between the engines with an unreadable reason" "'$reason' -- expected direction:... or port-by:..." ;;
     esac
 done < "$BASELINE"

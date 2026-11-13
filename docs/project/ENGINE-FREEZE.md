@@ -1,5 +1,10 @@
 # Engine freeze
 
+> **RETIRED 2026-11-13 (Workflow V5, `docs/project/WORKFLOW.md` W8).** `impact.sh` no longer
+> reads this file; `--refreeze` is gone. The markers and the entries below are history.
+> What the freeze was for is enforced at publish by `release/coverage-gate.sh`.
+
+
 <!-- frozen: snapsend.sh 100755 705d3e2f57c06cf5c6ebe2c7bcecc84424344b76 -->
 <!-- frozen: snapget.sh 100755 a199fac63fa50468f86eb5deceb9da89111f123a -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->

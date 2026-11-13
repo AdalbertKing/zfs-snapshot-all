@@ -121,4 +121,4 @@ distribution per directory instead of the full list.
 ## Forbidden
 
 No edits, no `git add/commit/push`, no running test suites, no `--bless`,
-no `--generate`, no `--refreeze`. If the task needs a write, stop and say so.
+no `--generate`. If the task needs a write, stop and say so.

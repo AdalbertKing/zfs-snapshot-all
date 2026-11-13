@@ -1,5 +1,9 @@
 # AI project rules
 
+> **Workflow V5 (2026-11-13): `docs/project/WORKFLOW.md` is the rule text for a round and wins
+> where this file disagrees** (status digest, engine freeze, response size, path map).
+
+
 This repository is the single source of truth for work performed by human maintainers and AI agents.
 Chat transcripts, local notes, and unpushed files are not project state.
 

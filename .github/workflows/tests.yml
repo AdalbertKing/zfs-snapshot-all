@@ -60,6 +60,24 @@ jobs:
       # script fails here, which is one of F5's acceptance criteria.
       - run: ./test/impact.sh --verify
 
+  ledger:
+    name: review ledger (whose move)
+    runs-on: ubuntu-latest
+    steps:
+      # Workflow V5 (2026-11-13): the ledger is derived, never committed, and
+      # deriving it on the Windows box takes minutes (11m29s measured, E130).
+      # Both sides read it here instead: the open rows in the log, the whole
+      # table in the job summary. Full history for the reachability checks,
+      # as in the graph job.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: |
+          ./test/reviewctl.sh --derive "$(git rev-parse HEAD)" > "$RUNNER_TEMP/ledger.md"
+          echo "== rows that are somebody's move"
+          grep -E '^\| REV-[^|]*\| (OPEN|IMPLEMENTED|APPROVED) ' "$RUNNER_TEMP/ledger.md" || echo "(none)"
+          cat "$RUNNER_TEMP/ledger.md" >> "$GITHUB_STEP_SUMMARY"
+
   release:
     name: release package builds (manifest, scrub)
     runs-on: ubuntu-latest

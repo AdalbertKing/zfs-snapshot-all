@@ -70,10 +70,9 @@ sourcing, and for a branch a running job has checked out.
 Count the assertions you expect by name and compare against the output. A total
 that only goes up cannot tell you an assertion never ran.
 
-The same holds for the delivery: a green run is evidence for the SHA it ran on. The
-status digest (`impact.sh --refresh-status`) is the last commit before the push, and any
-later commit, however small, is followed by a new refresh and `--verify`. The SHA in a
-response is the head on which `--verify` ran clean and which has its own green CI run.
+The same holds for the delivery: a green run is evidence for the SHA it ran on. The SHA
+in a response is the head which has its own green CI run. (The status digest this rule
+used to name was removed on 2026-11-13, WORKFLOW W8.)
 
 *Evidence: E3, E9, E15, E24, E25, E28, E52, E92, E112, E114, E116 (the rule known and not
 applied to a "comment-only" commit).*
@@ -2262,7 +2261,7 @@ has a case where the undecided field alone separates the two lines. A change to 
 test helper is listed against every helper of the same file that lifts code, not the one
 that broke.
 
-### E120 — an edited suite run whole on the Windows box (2026-11-05, R9)
+### E120b — an edited suite run whole on the Windows box (2026-11-05, R9)
 **2026-11-05, batch `fix/batch-zero-test` (U149-a).**
 
 *Genesis.* After adding the tier-minute cases to `test/configexamples/run.sh` I ran the

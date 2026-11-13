@@ -1,5 +1,9 @@
 # ACTIVE WORK PLAN
 
+> **HISTORICAL since 2026-11-13 (Workflow V5).** Dated 2026-08-09 and not maintained since.
+> Sequencing comes from the Owner's current direction and `docs/project/FINISZ-BACKLOG.md`.
+
+
 Status: **ACTIVE — OWNER APPROVED**
 Date: 2026-08-09
 Owner direction: combine importance with implementation cost; do the highest-value low/medium-cost work first, keep the architecture reduction-oriented, and do not grow a profile-management framework.
