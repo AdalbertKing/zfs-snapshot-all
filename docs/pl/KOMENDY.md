@@ -222,7 +222,7 @@ Rodziny flag, które warto znać:
 | `-i` | pomiń snapshoty pośrednie: jedna różnica do najnowszego zamiast wszystkich snapshotów pomiędzy |
 | `-M` | *snapget*: lustro: po pobraniu zniszcz na celu snapshoty, których źródło już nie ma (według GUID, więc przemianowany snapshot zostaje) |
 | `-s` | *snapget*: tylko snapshoty: zrób snapshot tam, gdzie żyje źródło, nic nie przesyłaj |
-| `--source-keep=N` | *snapget*, replika aktywna: po udanym pobraniu zniszcz na **źródle** starsze własne snapshoty zadania poza N najnowszymi (tylko te, które oznaczył ten cel) |
+| `--source-keep=N` | *snapget*, replika aktywna: po udanym pobraniu zniszcz na **źródle** starsze własne snapshoty zadania poza N najnowszymi (tylko te, które oznaczył ten cel; nic pod `-r`) |
 
 Silnik, który zastaje blokadę trzymaną przez inny przebieg tego samego zadania, kończy się z **rc 75**:
 przebieg został pominięty, nic nie skopiowano. `zfs-job.sh` zgłasza to jako ostrzeżenie, a nie jako błąd.
@@ -264,7 +264,7 @@ deploy.sh --test-mail                # czy alerty wychodzą
 
 Temat maila mówi, jaki to rodzaj maila: `[ZFS][REPORT]` dzienne podsumowanie, `[ZFS][WARNING]`
 ostrzeżenie, zapełnienie puli lub przyrost danych, `[ZFS][ALERT]` nieudany przebieg. Przy ustawionym
-`alerts.site` mail podsumowania i alertu brzmi `[ZFS][ALERT] Site-A pve2: ...`; bez niego na jego miejscu stoi pełna nazwa hosta.
+`alerts.site` podsumowanie ma temat `[ZFS][REPORT] Site-A pve2 <data> ...`, a alert `[ZFS][ALERT] Site-A pve2: ...`; bez niego na jego miejscu stoi pełna nazwa hosta.
 
 ---
 

@@ -54,7 +54,7 @@ Cel **musi istnieć**. Schodzi delta albo samo cofnięcie — komunikat
 `ROLLBACK ONLY, no transfer` (w linii Strategy planu) znaczy: kopia miała już najnowszy punkt repliki, więc
 zeszły tylko snapshoty nowsze, **zero bajtów na łączu**.
 
-To jest powód, dla którego ten tryb istnieje. Lądowanie w wolne miejsce (4b) przy
+To jest powód, dla którego ten tryb istnieje. Lądowanie na wolne miejsce (4b) przy
 10 TB potrzebuje drugie tyle miejsca i przenosi każdy bajt, podczas gdy dataset
 kopii już stoi i dzieli historię z repliką.
 
@@ -133,7 +133,7 @@ proces dalej stoi. Dopiero `zpool clear` ją zwalnia i wtedy zaległy sygnał
 wreszcie dochodzi. Działa tak samo przy obu ustawieniach `failmode`.
 
 **`failmode` nośnika to `continue`, ustawiane przez `prepare-media`.** Zmiana na
-`wait` kupuje niewiele — procesu złapanego w połowie zapisu i tak nie ratuje, a
+`wait` daje niewiele — procesu złapanego w połowie zapisu i tak nie ratuje, a
 hosta żadne z ustawień nie zagraża. Osłoną jest to, co brama już robi: pula jest
 zaimportowana **wyłącznie w oknie biegu**, a `status` mówi, kiedy wolno wypiąć.
-Ekspozycja istnieje tylko w trakcie biegu, nie między nimi.
+Narażenie istnieje tylko w trakcie biegu, nie między nimi.

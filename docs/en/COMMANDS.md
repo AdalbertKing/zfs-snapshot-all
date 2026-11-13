@@ -221,7 +221,7 @@ Flag families worth knowing:
 | `-i` | skip the snapshots in between: one diff to the newest instead of every snapshot between |
 | `-M` | *snapget*: mirror: after a pull, destroy on the target the snapshots the source no longer has (judged by GUID, so a renamed snapshot stays) |
 | `-s` | *snapget*: snapshot-only: take the snapshot where the source lives, transfer nothing |
-| `--source-keep=N` | *snapget*, an active replica: after a successful pull, destroy on the **source** this job's own older snapshots beyond the N newest (only those this target stamped) |
+| `--source-keep=N` | *snapget*, an active replica: after a successful pull, destroy on the **source** this job's own older snapshots beyond the N newest (only those this target stamped; nothing under `-r`) |
 
 An engine that finds its lock held by another run of the same job ends with **rc 75**: the run was
 skipped, nothing was copied. `zfs-job.sh` reports that as a warning, not as a failure.
@@ -263,7 +263,7 @@ deploy.sh --test-mail                # whether alerts get out
 
 The mail subject says what kind of mail it is: `[ZFS][REPORT]` the daily summary, `[ZFS][WARNING]`
 a warning, pool capacity or data growth, `[ZFS][ALERT]` a failed run. With `alerts.site` set, the
-summary and alert mails read `[ZFS][ALERT] Site-A pve2: ...`; without it the host's full name stands in its place.
+summary reads `[ZFS][REPORT] Site-A pve2 <date> ...` and an alert `[ZFS][ALERT] Site-A pve2: ...`; without it the host's full name stands in its place.
 
 ---
 

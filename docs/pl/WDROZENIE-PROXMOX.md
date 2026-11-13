@@ -69,7 +69,7 @@ git clone https://github.com/AdalbertKing/zfsbackup.git /root/scripts/zfs-snapsh
 > **Debian 11 (Proxmox 7):** `security.debian.org` nie ma już pakietów bullseye, które wskazują
 > listy apt, więc `apt-get install -y git` kończy się `404 Not Found`. Wtedy weź `git` i `git-man`
 > z archiwum głównego, w tej samej wersji (pokazuje ją `apt-cache madison git git-man`, wiersz bez
-> `security`), np. `apt-get install -y git=1:2.30.2-1+deb11u2 git-man=1:2.30.2-1+deb11u2`.
+> `security`), np. `apt-get install -y git=<wersja> git-man=<wersja>` z wersją podaną w linii 404.
 > Dalsze pakiety (sudo, git na źródle) narzędzie instaluje samo. Gdy apt odpowie 404, przypina do najnowszej
 > wersji spoza archiwum bezpieczeństwa każdy pakiet wymieniony w liniach 404 apta (do trzech prób), więc
 > `git-man` i podobne też są objęte.
@@ -96,7 +96,7 @@ cd /root/scripts/zfs-snapshot-all
 Co się dzieje: instalują się zależności, powstaje konto delegowane
 `zfsbackup` i wpis crona z automatyczną aktualizacją. Dataset na kopię (np.
 `rpool/backups`) wybierasz przy zakładaniu relacji (kreator: pole Cel, CLI: `--target=`).
-Na końcu wypisuje następny krok, `zfs-backup gui`: relacje, repliki i ich harmonogram tworzy sam pakiet,
+Wypisuje następny krok, `zfs-backup gui`: relacje, repliki i ich harmonogram tworzy sam pakiet,
 więc linii crona nie pisze się ręcznie.
 
 `--backup-user=zfsbackup` znaczy: **zadania backupu nie będą chodzić z roota.**
@@ -399,7 +399,7 @@ Gdy jedna osoba dostaje maile z kilku instalacji, nazwij każdą: F10 (ustawieni
 ./zfs-backup.sh settings set alerts.site=Site-A --yes
 ```
 
-Temat brzmi wtedy `[ZFS][ALERT] Site-A pve-backup: …`.
+Temat alertu brzmi wtedy `[ZFS][ALERT] Site-A pve-backup: …`.
 
 ### Poczta na czystym Debianie (nie-Proxmox)
 
