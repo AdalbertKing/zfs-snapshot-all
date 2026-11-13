@@ -1454,12 +1454,21 @@ check "P -R -e over scaffolding: the path container got no snapshot on either si
 check "P -R -e over scaffolding: the root got no snapshot on either side" "0 0" \
       "$(count_snaps "$PBK/$POOL/pe") $(count_snaps "$PLP/$POOL/pe")"
 
-# P2. -R -e over NOTHING BUT scaffolding: every member skipped is not success.
+# P2. -R -e over NOTHING BUT scaffolding. Owner, 2026-11-07 (snapsend.sh/snapget.sh, the
+# final verdict): snapshots that exist but none of them in the family is a refusal; a
+# subtree with no snapshot at all has nothing to copy and is not a failure. Until
+# 2026-11-13 this case still asserted the older contract on a snapshot-less subtree,
+# and failed on every run.
 zfs create -p "$POOL/pn/x" || exit 1
+zfs snapshot "$POOL/pn@other_1"; zfs snapshot "$POOL/pn/x@other_1"
 pair_rc "-R -e over scaffolding only" -R -e -m "auto_" "$POOL/pn"
-check "P -R -e over scaffolding only: the agreed answer is failure -- nothing was adopted" "1" "$RC_S"
-check "P -R -e over scaffolding only: push says so in the same words as pull" "yes" \
-      "$(printf '%s\n' "$OUT_S" | grep -q 'nothing was adopted' && echo yes || echo no)"
+check "P -R -e over scaffolding only: snapshots exist, none in the family -- failure, nothing was adopted" "1" "$RC_S"
+check "P -R -e over scaffolding only: push says so in the same words as pull" "yes yes" \
+      "$(printf '%s\n' "$OUT_S" | grep -q 'nothing was adopted' && echo yes || echo no) $(printf '%s\n' "$OUT_G" | grep -q 'nothing was adopted' && echo yes || echo no)"
+zfs create -p "$POOL/pz/x" || exit 1
+pair_rc "-R -e over a subtree with no snapshot at all" -R -e -m "auto_" "$POOL/pz"
+check "P -R -e, no snapshot at all: not a failure -- nothing to copy, said by both" "0|yes yes" \
+      "$RC_S|$(printf '%s\n' "$OUT_S" | grep -q 'nothing to copy' && echo yes || echo no) $(printf '%s\n' "$OUT_G" | grep -q 'nothing to copy' && echo yes || echo no)"
 
 # P3. The dry-run verdict is the same line from both engines.
 zfs create -p "$POOL/pp" || exit 1
