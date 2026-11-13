@@ -343,6 +343,12 @@ budget (`QUIESCE_MAX_WINDOW`, default 5 seconds), refuses the snapshot rather th
 a freeze that may already be gone. Raise the budget only if you know the guests involved can hold
 the freeze.
 
+**What a successfully quiesced run copies.** Each dataset the window covered copies exactly the snapshot that
+window made, never a newer one another job made in the meantime. If that snapshot is missing
+(destroyed, or excluded with `-E`), that dataset fails and so does the run; under `-R` it is not
+skipped as an empty dataset. A crash-consistent fallback (`_crash_`) takes its snapshot per dataset
+and is not bound by this.
+
 **Failure policy.** A failed freeze still takes the snapshot, crash-consistent, unless the tier says
 `,strict`:
 

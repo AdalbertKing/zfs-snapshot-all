@@ -4,8 +4,15 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
-## [Unreleased]
+## [1.0.21] — 2026-11-13
 
+- **Under `-R`, a quiesced dataset whose window snapshot is missing fails** (REV-20261112-197
+  round 5, both engines). Before, a member left empty, fully `-E`-excluded or without the `-m`
+  family was skipped as scaffolding and the run reported success without copying it. Also under
+  quiesce: a snapshot that disappears after selection fails the dataset; a resumed interrupted
+  transfer no longer ends the dataset before the window's snapshot is copied; `-s` checks that the
+  window's snapshot exists; `snapget.sh`'s local snapshot-only mode no longer takes a second,
+  unfrozen snapshot. Passive runs (no window) are unchanged.
 - **A quiesced run copies the snapshot its own window made** (REV-20261112-197 round 4, both
   `snapsend.sh` and `snapget.sh`). Before, it took the newest snapshot of the `-m` family, which
   could be another job's snapshot made between the window and the copy. Such a copy made the
