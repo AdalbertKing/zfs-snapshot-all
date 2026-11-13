@@ -6,6 +6,12 @@ when they change how the tool is used.
 
 ## [Unreleased]
 
+- **A quiesced run copies the snapshot its own window made** (REV-20261112-197 round 4, both
+  `snapsend.sh` and `snapget.sh`). Before, it took the newest snapshot of the `-m` family, which
+  could be another job's snapshot made between the window and the copy. Such a copy made the
+  target depend on a point the other job owns and, with `--source-keep`, later prunes. If the
+  window's snapshot is gone before the copy, the run now refuses.
+
 - **An active replica with `keep` keeps only its newest own snapshot on the source** (W5-1; one per medium when it has several). New
   `snapget.sh --source-keep=N`: after a successful pull of the snapshot the run made with `-m`
   (not under `-r`; under `-R` each dataset is pruned on its own), the job's own older snapshots

@@ -1579,6 +1579,22 @@ process_dataset() {
         fi
 
         local latest_snap="${src_snaps[-1]}"
+        # REV-20261112-197 round 4 (F1d), same rule as snapget.sh: after a successful
+        # quiesce window, copy exactly this run's ${SNAP_MESSAGE}${RUN_SUFFIX}. The
+        # newest of the family may be another job's, made outside the window.
+        if [ "$QUIESCE_SNAPPED" -eq 1 ]; then
+            local _own="${SNAP_MESSAGE}${RUN_SUFFIX}" _found=0 _s
+            for _s in "${src_snaps[@]}"; do
+                [ "$_s" = "$_own" ] && { _found=1; break; }
+            done
+            if [ $_found -eq 0 ]; then
+                log 0 "Quiesce: this run's snapshot '${src_dataset}@${_own}' is not on the source -- refusing to copy another snapshot in its place"
+                return 1
+            fi
+            [ "$latest_snap" = "$_own" ] \
+                || log 1 "Quiesce: '${src_dataset}@${latest_snap}' is newer than this run's snapshot -- copying this run's '${_own}', not it"
+            latest_snap="$_own"
+        fi
         snapshot="${src_dataset}@${latest_snap}"
     else
         snapshot=$(create_snapshot "$src_dataset") || return 1
