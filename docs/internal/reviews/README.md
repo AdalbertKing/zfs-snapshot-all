@@ -1,5 +1,10 @@
 # Review exchange protocol
 
+> **Workflow V5 (2026-11-13): `docs/project/WORKFLOW.md` is the rule text for a round and wins
+> where this file disagrees.** For the Reviewer: W6 (a rejection names the class, every
+> instance seen, and carries the reproduction) is proposed and needs your acceptance.
+
+
 This directory is the durable communication channel between the reviewer and
 implementer.
 

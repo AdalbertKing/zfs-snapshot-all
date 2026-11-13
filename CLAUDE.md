@@ -1,6 +1,6 @@
 # Implementer instructions
 
-Read `docs/AI_PROJECT_RULES.md`, `docs/internal/reviews/README.md`, and the active reviewer file before changing code.
+Read `docs/project/WORKFLOW.md` (Workflow V5, 2026-11-13) first: it is the rule text and it wins where an older file disagrees. Then the active reviewer file. `docs/AI_PROJECT_RULES.md` and `docs/internal/reviews/README.md` are the reference for roles, states and headers.
 
 **Before every work round, read section 1 of `docs/internal/IMPLEMENTER-ERROR-LOG.md`.**
 Owner instruction, 2026-08-27. That section is the distilled rules, deliberately
@@ -16,21 +16,21 @@ The default role for Claude in this repository is **implementer**.
 
 ## Work pickup — mandatory
 
-The ledger derived from the freshly published `main` (`./test/reviewctl.sh --derive origin/main`) is the only authoritative answer to **current review ownership and routing**. Product sequencing when no review blocks expansion comes from `docs/project/ACTIVE-WORK-PLAN.md` plus any current explicit Owner direction that narrows its immediate next step.
+The ledger derived from the freshly published `main` (`./test/reviewctl.sh --derive origin/main`) is the only authoritative answer to **current review ownership and routing**. Product sequencing when no review blocks expansion comes from the current explicit Owner direction and `docs/project/FINISZ-BACKLOG.md` (`ACTIVE-WORK-PLAN.md` is dated 2026-08-09 and is history).
 
 At the start of every scheduled or manually-started work cycle, and **before saying that there is nothing from the Reviewer / nothing to do**:
 
 1. Refresh the published repository state (`git fetch origin main` or an equivalent fresh read of GitHub `main`). Do not decide from a stale local checkout.
-2. Derive the state from that fresh published `main`: `git fetch origin main`, then `./test/reviewctl.sh --derive origin/main` (add `--threads` for the routing view). On this Windows box run it on the pve9 clone instead: `./test/remote-suite.sh derive origin/main` (`... threads`), about 30 s; here it takes minutes (E130).
+2. Derive the state from that fresh published `main`: `git fetch origin main`, then `./test/reviewctl.sh --derive origin/main` (add `--threads` for the routing view). Do not run it on this Windows box (minutes, E130). Read it from the CI job `ledger` of the newest run on `main` (its log lists every row that is somebody's move; the job summary has the whole table), or run `./test/remote-suite.sh derive origin/main` (`... threads`) on the pve9 clone, about 30 s.
 3. Every row whose derived state is `OPEN` and owner is `Claude` is an actionable reviewer handoff. Open the matching `docs/internal/reviews/REV-YYYYMMDD-NNN.md` and continue that REV from the reviewer's current requirements.
 4. `IMPLEMENTED -> Reviewer` means the submitted SHA is waiting for review. `APPROVED -> Reviewer` means closure is the reviewer's move. Do not continue modifying that submitted acceptance boundary behind its SHA merely because the implementer cycle is still running. `CLOSED` needs no implementer action.
-5. If there is no `OPEN | Claude` work and no earlier gate/submission whose current Reviewer ownership blocks functional expansion, read `docs/project/ACTIVE-WORK-PLAN.md` and any current explicit Owner sequencing note, then start the next dependency-ready planned item without waiting for a new Owner message.
+5. If there is no `OPEN | Claude` work and no earlier gate/submission whose current Reviewer ownership blocks functional expansion, read the current explicit Owner sequencing note and `docs/project/FINISZ-BACKLOG.md`, then start the next dependency-ready planned item without waiting for a new Owner message.
 6. While Reviewer owns a submitted functional boundary, only dependency-independent work explicitly permitted by the active plan may proceed, and it may not assume that the pending boundary will be accepted (PROTOCOL V3.9). That includes preparing the next batch on another branch. A rejection of that boundary is fixed under the same REV and response, not moved to the next batch. Do not jump to a later functional phase to fill the wait.
 7. Never claim "no reviewer work" while the fresh ledger contains an `OPEN | Claude` row, and never claim "nothing to do" without also checking the active product sequence when review routing is clear.
 
 A rejection/follow-up normally does **not** edit Claude's response file: the Reviewer advances the reviewer-owned `reviewed-implementation`/verdict fact, which deterministically changes the ledger from `IMPLEMENTED -> Reviewer` to `OPEN -> Claude`. Therefore an older response may still say `response-status: IMPLEMENTED`, may describe previous remaining work, or may contain an earlier request for reviewer input. **The fresh ledger plus the current reviewer file wins for pickup.** Claude updates the same response file only after producing the next implementation/evidence SHA.
 
-The `--threads` view (`OPEN-THREADS.md`) is only a derived convenience view, and neither it nor any local `--generate` copy is committed. `docs/PROJECT_STATUS.md` describes product/operational state. Neither may be used instead of the derived ledger for workflow ownership. `ACTIVE-WORK-PLAN.md` is product sequencing, not a second review-routing table.
+The `--threads` view (`OPEN-THREADS.md`) is only a derived convenience view, and neither it nor any local `--generate` copy is committed. `docs/STAN.md` describes product/operational state. Neither may be used instead of the derived ledger for workflow ownership.
 
 ## Current delivery mode
 
@@ -65,20 +65,24 @@ Do not edit the reviewer's `docs/internal/reviews/REV-*.md` file. Record the res
 
 ## F1 — ACCEPTED | DISPUTED | NEEDS-DISCUSSION | IMPLEMENTED
 
-### Analysis
+### Path map (lane D, written before the code; WORKFLOW W4)
 ...
 
-### Planned or implemented change
+### Change
 ...
 
 ### Evidence
 - commit/PR:
-- commands run:
-- results:
+- reproduction on real ZFS: rejected SHA -> fails; new SHA -> passes
+- commands run, results:
 
 ### Remaining risk
 ...
 ```
+
+A resubmission adds a delta of **at most 40 lines** under the same finding; it does not
+restate earlier rounds (WORKFLOW W3). The response to REV-197 reached 327 lines over
+three rounds.
 
 A disagreement is valid. State it precisely and provide code, ZFS/OpenSSH documentation, a reproducible test, or measured behavior. Do not change code merely to satisfy wording that is technically wrong; request review discussion instead.
 
@@ -116,9 +120,9 @@ for the duration.
    the guest-split guard, 2026-11-03). The edited suite runs on the pve9 clone or
    in CI. Measured that day: test/monitor 3m54s here; `impact.sh --verify` did not
    finish in 5 minutes here -- run it on pve9 too.
-2. **Batches, not rounds.** Several fixes ride one branch; PROJECT_STATUS, the
-   text-checker pass, ENGINE-FREEZE/refreeze and the digest are done ONCE per batch,
-   just before its PR.
+2. **Batches, not rounds.** Several fixes ride one branch; the text-checker pass is
+   done ONCE per batch, just before its PR. (The status digest and the engine re-freeze
+   that this line used to list were removed on 2026-11-13, WORKFLOW W8.)
 3. **Lab before code.** Walk the whole GUI scenario on the lab first and write every
    defect down; fix them as one batch afterwards. Not one fix cycle per defect.
 
@@ -133,12 +137,10 @@ So:
   "actions/runs?per_page=6"`, compare `head_sha`, move on;
 - **never block on the queue.** If GitHub has not scheduled the run, say so and
   keep working. A red check is information; a queued check is not;
-- `./test/impact.sh --refreeze` / `--refresh-status` take seconds and write the
-  index: they run here. `./test/impact.sh` (the suite list) and `--verify` run on
-  the pve9 clone or in CI -- `--verify` did not finish in 5 minutes here. Owner,
-  2026-11-07, after this line had said "keep them" and it cost five minutes:
-  `.claude/hooks/suites-on-pve9.sh` (PreToolUse on Bash) now refuses a local
-  suite or `impact.sh` call on Windows;
+- `./test/impact.sh` (the suite list) and `--verify` run on the pve9 clone or in
+  CI -- `--verify` did not finish in 5 minutes here. Owner, 2026-11-07:
+  `.claude/hooks/suites-on-pve9.sh` (PreToolUse on Bash) refuses a local suite or
+  `impact.sh` call on Windows;
 - when a negative control needs the same suite three times, that is a signal the
   suite needs a section selector, not a signal to run it three times.
 
@@ -160,9 +162,14 @@ So:
   past `REMOTE_SUITE_BUDGET` (600 s) it prints `SLOW`. Treat `SLOW` like a red check.
 - **Negative control:** a script that reproduces the defect on real ZFS (minutes), run
   on the rejected SHA. Not a second whole-suite run on an old commit.
-- **Before writing destructive code** (anything that destroys snapshots or data), list
-  in the response every path by which data reaches the medium, before the code. The
-  paths missed in REV-197 cost two extra review rounds.
+- **Before writing lane-D code**, write the path map into the response (WORKFLOW W4:
+  every path by which data reaches the place the change reads, destroys or overwrites;
+  who else creates objects of that kind or name; what if state changes between read and
+  act; rc/empty/partial). The paths missed in REV-197 cost four rejections.
+- **Before submitting lane-D code**, run the adversarial pass (WORKFLOW W5): a
+  fresh-context agent gets the diff and the path map and writes a reproduction per path.
+- **A second rejection in the same class stops the code** (WORKFLOW W6): a design of at
+  most 20 lines goes to the Reviewer first.
 - **Two suites at once:** give them separate clones, `REMOTE_SUITE_CLONE=/tmp/tt2/...`.
 
 Reporting rule: report on completion, not per iteration. One message with the
@@ -192,8 +199,8 @@ exception for one night. One batch:
 3. **Delegate while you work.** Reading goes to haiku (`repo-greper` / `Explore`). Typing
    ≥150 lines goes to `simple-coder`. Prose gets `text-checker` before its commit. In a batch that is once, on the batch's final prose,
    not after each fix.
-4. **Close once.** Write the response and PROJECT_STATUS, do the text-checker pass, commit,
-   then run `./test/ship.sh` (push, digest, `--verify` on pve9; it refuses a dirty tree). Open the PR, read exact-head CI once,
+4. **Close once.** Write the response, do the text-checker pass, commit,
+   then run `./test/ship.sh` (push, `--verify` on pve9; it refuses a dirty tree). Open the PR, read exact-head CI once,
    and merge on green. A material defect or evidence gap found in this batch's scope is fixed
    under the same REV, and the batch is finalised once. There is no suite rerun per edit, only
    one targeted validation after the collected fixes. Only unrelated, non-blocking observations
@@ -271,17 +278,16 @@ delegation for its own sake is waste.
 |---|---|---|---|---|
 | CI diagnosis | `ci-reader` | haiku | a RED check: which test failed, the log excerpt, does `main` pass it | re-run, merge, guess a queued result |
 | inventory | `repo-greper` | haiku | "where is X / who calls it / which suites cover it" across more than two files | say anything runs on a host |
-| prose vs tree | `text-checker` | haiku | **every** PROJECT_STATUS / error-log / response / PR text before its commit | edit, confirm live claims |
-| gate explanation | `gate-runner` | haiku | only when a gate's drift report must be read and explained | write forms, suites |
+| prose vs tree | `text-checker` | haiku | the response and release notes before their commit (WORKFLOW W9) | edit, confirm live claims |
 | typing a decided change | `simple-coder` | sonnet | test sections from a spec, a whiptail dialog over a fixed verb contract, docs from bullet notes | Bash, git, hosts, frozen engines, design |
 | everything else | session | -- | decide, diagnose, guards, engines, live hosts, git, PR, merge | -- |
 
 **No model at all** when a plain command does the job: waiting for green CI and
 merging is a polling script in the session's scratchpad (`wait-merge.sh`, not
-in the repo; zero tokens); `impact.sh --verify` /
-`--refresh-status` run inline with their output trimmed (`> file; tail -1`). A
+in the repo; zero tokens); `impact.sh --verify` runs through `test/ship.sh` or in
+CI with its output trimmed. A
 subagent for a shell call costs more than the call -- measured 2026-09-23, one
-`gate-runner` run of `impact --verify` was ~30k haiku tokens for a one-line answer.
+`gate-runner` run (an agent removed on 2026-11-13) of `impact --verify` was ~30k haiku tokens for a one-line answer.
 
 Routing, in the order the session asks it:
 
@@ -310,20 +316,12 @@ to which agent, and what the session kept and why. Rounds #470 (edit-relation)
 and #471 (replica GUI) went out with nothing delegated and no `text-checker` pass
 on their status entries (E74). The line is how the Owner sees the rule being applied.
 
-## Project status document
+## Current-state document
 
-`docs/PROJECT_STATUS.md` is the shared **product/operational** current-state document. It describes what the tree and deployed estate do today, but it is **not review workflow state and must not be used to decide whose move it is**. Workflow ownership comes only from the ledger derived with `./test/reviewctl.sh --derive origin/main` as required by Protocol V2.
-
-Refresh `PROJECT_STATUS.md` at the end of **every** stage, before reporting the stage as done:
-
-- the `Stan na` commit and date;
-- the host, version and deployment tables;
-- the suite counts;
-- product/operational open items and known gaps.
-
-Where a change replaces a design the document describes, **rewrite that section** rather than appending to it. Historical accuracy belongs in `docs/internal/reviews/responses/`; current product truth belongs in `PROJECT_STATUS.md`.
-
-`./test/impact.sh` raises this as the manual obligation `project-status`.
+`docs/STAN.md` (at most 150 lines) is the product/operational current state: released
+version, hosts, open items. Refresh it once per release, not per round. It is **not**
+review workflow state. `docs/PROJECT_STATUS.md` is frozen at 2026-11-13 and kept as
+history; do not append to it.
 
 ## Delivery evidence
 

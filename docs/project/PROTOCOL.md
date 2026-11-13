@@ -1,4 +1,11 @@
 # REVIEW PROTOCOL V4
+
+> **Workflow V5 (2026-11-13): `docs/project/WORKFLOW.md` is the rule text for a round and wins where
+> this file disagrees.** This file remains the definition of the states, the headers, the
+> submission boundary and the release gates. Removed by V5: the PROJECT_STATUS digest, the
+> engine freeze and its `twin:` line, the `file:line` in a twins reason (WORKFLOW W8). The
+> Reviewer-side rule W6 is active once the Reviewer accepts it.
+
 ## Claude + Reviewer + Owner workflow
 
 Status: **REVIEW PROTOCOL V4 is ACTIVE since its merge in PR #1195 (2026-11-12): the V3 base

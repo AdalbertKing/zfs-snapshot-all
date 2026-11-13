@@ -124,5 +124,5 @@ path defaults, a missing `bookmark` delegation, a hold leaked on every pre-trans
 
 The other manual obligations cover live hardware and live hosts (`mediagate-live`, `pairgate-live`,
 `monitor-live`, `quiesce-helper-live`, `deploy-check-only`, `zfsbackup-live-pair`,
-`rux-live-chain`, `moveclient-live`, `crontab-diff`) and the `project-status` update. Read the
+`rux-live-chain`, `moveclient-live`, `crontab-diff`). Read the
 section for the one `impact.sh` names.

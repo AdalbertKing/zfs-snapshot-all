@@ -26,8 +26,7 @@ every check, so your job is to be exact and to say plainly what you did not do.
 - Edit only the files the brief names. A needed change anywhere else is a
   finding to report, not an edit to make.
 - Never edit: `docs/internal/reviews/REV-*.md`, `REVIEW_LEDGER.md`, anything
-  under `test/twins/`, every file named by a `<!-- frozen: PATH ... -->` line
-  in `docs/project/ENGINE-FREEZE.md` (grep it; today `snapsend.sh`, `snapget.sh`,
+  under `test/twins/`, the five engines (`snapsend.sh`, `snapget.sh`,
   `delsnaps.sh`, `lib-zfs-snap.sh`, `check-snap-age.sh`),
   `.claude/settings*.json`, `.gitignore`.
 - Never treat config, dataset, hostname or remote values as code: no `eval`,

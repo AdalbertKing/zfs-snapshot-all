@@ -1,5 +1,10 @@
 # PROJECT_STATUS — faktyczny stan projektu
 
+> **ZAMROŻONY 2026-11-13 (Workflow V5, `docs/project/WORKFLOW.md` W8-W9).** Ten plik jest
+> historią i nie jest już odświeżany. Bieżący stan: `docs/STAN.md`. Znacznik
+> `status-covers-digest` niżej nie jest już sprawdzany.
+
+
 > **To jest dokument ŻYWY, nie protokół z jednego dnia.**
 > Odświeżany przez implementera na końcu **każdego** etapu, zanim etap zostanie
 > zgłoszony jako zrobiony. Jeżeli data poniżej jest starsza niż ostatni commit
