@@ -1,7 +1,7 @@
 #!/bin/bash
 # remote-suite.sh -- run ONE named test suite on the test host, and nothing else.
 #
-#   ./test/remote-suite.sh <suite> [ref]
+#   ./test/remote-suite.sh <suite> [ref] [only=<word>]
 #
 # Why this exists rather than a plink call written out at each call site:
 #
@@ -35,7 +35,7 @@ die() { echo "remote-suite: $*" >&2; exit 1; }
 
 suite="${1:-}"
 ref="${2:-origin/main}"
-[ -n "$suite" ] || die "usage: $0 <suite> [ref] | $0 derive [ref] [threads]"
+[ -n "$suite" ] || die "usage: $0 <suite> [ref] [only=<word>] | $0 derive [ref] [threads]"
 
 # PROTOCOL V4.4: `derive [ref] [threads]` prints the review state of <ref>
 # (`reviewctl.sh --derive`), computed on the test host -- a whole derivation takes
@@ -69,6 +69,16 @@ case "$ref" in
     *[!A-Za-z0-9./_-]*) die "'$ref' is not a plain git ref" ;;
 esac
 
+# Optional third word `only=<word>`: the suite runs only the sections whose header
+# contains <word> (SUITE_ONLY, test/snapsend/run.sh). A plain word, like the rest.
+only=""
+case "${3:-}" in
+    "") ;;
+    only=*) only="${3#only=}"
+            case "$only" in ""|*[!A-Za-z0-9_.-]*) die "'$3' is not only=<plain word>" ;; esac ;;
+    *) die "third word may only be only=<word>, not '$3'" ;;
+esac
+
 # The full refspec matters. `git fetch origin main` writes only FETCH_HEAD, and
 # several suites resolve origin/main as a ref -- without it dozens of assertions
 # fail for a reason that has nothing to do with the code under test.
@@ -79,6 +89,13 @@ remote_cmd="set -e
 cd $CLONE
 git fetch -q origin '+refs/heads/*:refs/remotes/origin/*'
 git checkout -q -f -B remotesuite $ref
-./test/$suite/run.sh"
+set +e
+# A fresh progress directory per run (2026-11-13): suites left their records in the
+# host's real one, and 2999 of them made every engine call 9.7 s instead of 0.4 s.
+pd=\$(mktemp -d)
+ZFS_PROGRESS_DIR=\$pd ${only:+SUITE_ONLY=$only }./test/$suite/run.sh
+rc=\$?
+rm -rf \"\$pd\"
+exit \$rc"
 
 MSYS_NO_PATHCONV=1 plink -batch "root@$HOST" "$remote_cmd"

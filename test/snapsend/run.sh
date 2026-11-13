@@ -17,13 +17,43 @@
 # an EXIT trap that destroys the pool even if a test fails midway.
 #
 # Usage: ./run.sh     (override the scripts under test with SNAPSEND=/SNAPGET=)
+#        SUITE_ONLY=W5 ./run.sh   (one group of sections -- see below)
 
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO="${SUITE_REPO:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 SNAPSEND="${SNAPSEND:-$REPO/snapsend.sh}"
 SNAPGET="${SNAPGET:-$REPO/snapget.sh}"
+
+# SUITE_ONLY=<word>: run the preamble, the helpers, every section whose
+# "# --- " header contains <word> (case-insensitive) and the summary -- nothing
+# else. Measured on pve9 2026-11-13, with ZFS_PROGRESS_DIR isolated (below):
+# SUITE_ONLY=W5 101 s for 31 checks, the whole suite 7m46s for 468. Use it
+# while a change is being worked on; the
+# whole suite still runs once on the final head before the PR. A section that
+# reads state an earlier section left behind fails here and not in the full
+# run: that is the section's defect, not the selector's.
+if [ -n "${SUITE_ONLY:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
+    case "$SUITE_ONLY" in
+        [!A-Za-z0-9]*|*[!A-Za-z0-9_.-]*) echo "SUITE_ONLY: a plain word starting with a letter or digit, not '$SUITE_ONLY'" >&2; exit 2 ;;
+    esac
+    only_f="$(mktemp)"
+    # The word is matched against the header TITLE (after "# --- "), so it cannot
+    # match the prefix every header shares; helpers and summary are always kept and
+    # do not count as a match.
+    awk -v w="$SUITE_ONLY" '
+        /^# --- / { h = tolower(substr($0, 7)); keep = (h ~ /^(helpers|summary) /) || index(h, tolower(w)) > 0
+                    if (keep && h !~ /^(helpers|summary) /) hit++ }
+        !seen && /^# --- / { seen = 1 }
+        !seen || keep
+        END { if (!hit) exit 3 }' "${BASH_SOURCE[0]}" > "$only_f" \
+        || { echo "SUITE_ONLY: no section header contains '$SUITE_ONLY'" >&2; rm -f "$only_f"; exit 2; }
+    echo "SUITE_ONLY=$SUITE_ONLY: $(grep -c '^# --- ' "$only_f") of $(grep -c '^# --- ' "${BASH_SOURCE[0]}") sections (helpers and summary included)"
+    SUITE_FILTERED=1 SUITE_REPO="$REPO" bash "$only_f"; only_rc=$?
+    rm -f "$only_f"
+    exit "$only_rc"
+fi
 
 [ -x "$SNAPSEND" ] || { echo "cannot find executable snapsend.sh at $SNAPSEND" >&2; exit 1; }
 [ -x "$SNAPGET" ]  || { echo "cannot find executable snapget.sh at $SNAPGET" >&2; exit 1; }
@@ -55,6 +85,13 @@ zpool create -f -m none "$POOL" "$IMG" || { echo "zpool create failed" >&2; exit
 
 export STATS_LOG="$TMPD/stats.log"
 export LOCKDIR="$TMPD"
+# Progress records too. Every transfer (snapget.sh/snapsend.sh transfer_data)
+# reaps the progress directory with a
+# grep and a stat per file, and every run of this suite used to leave ~80 new
+# records (fresh pool name, fresh keys) in the host's real directory. On pve9
+# that reached 2999 files: 9.7 s per engine call instead of 0.4 s, which made
+# this suite 25-40 minutes long (measured 2026-11-13).
+export ZFS_PROGRESS_DIR="$TMPD/progress"
 # Alerting must NEVER touch the host's real queue. Any script under test that
 # hits a pool-health problem calls $NOTIFY_SCRIPT, which by default queues into
 # /var/lib/zfs-snapshot-all/alert-queue.log -- and the 07:00 digest then mails
