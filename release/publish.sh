@@ -36,6 +36,18 @@ fi
 dev=$(cd "$(dirname "$0")/.." && pwd)
 rev=$(git -C "$dev" rev-parse --verify "$1^{commit}") || die "'$1' is not a commit of $dev"
 
+# A release checkout behind its origin is refused here, in seconds, before the slow gates:
+# the push at the end would be rejected as non-fast-forward after the whole run (2026-11-13,
+# 1.0.21: a checkout left on 1.0.19 cost a full run). Ahead is fine -- a run without --push
+# leaves its candidate committed there.
+if [ "$push" -eq 1 ]; then
+    [ -d "$2/.git" ] || die "$2 is not a git checkout (clone the release repo first)"
+    git -C "$2" fetch -q origin \
+        || die "cannot fetch $2's origin -- cannot tell whether the checkout is current"
+    git -C "$2" merge-base --is-ancestor refs/remotes/origin/main HEAD 2>/dev/null \
+        || die "$2 is behind (or off) its origin/main -- the push would be rejected; clone the release repo fresh, or fast-forward it, and publish again"
+fi
+
 # --- the Reviewer's gate, before anything is written (PROTOCOL V3.13) ----------------------
 # Only a pushed release reaches hosts; a local commit into a throw-away checkout (CI, the
 # release suite) is not a publication and is not gated.
