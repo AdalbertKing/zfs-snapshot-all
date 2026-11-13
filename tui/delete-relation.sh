@@ -4,7 +4,7 @@
 # Właściciel 2026-09-20: "Musi być obsłużone z GUI pauzowanie i usuwanie relacji (...)
 # logicznie pakiet musi być spójny." Dialog NIE ma własnej logiki usuwania: pyta o to,
 # o co pyta `zfs-backup.sh delete-relation` (źródło / nazwa / kopie), pokazuje PLAN tego
-# czasownika i po "WYKONAJ" uruchamia go z --yes. To, co czasownik pomija na podstawie
+# czasownika i po "Uruchom" uruchamia go z --yes. To, co czasownik pomija na podstawie
 # dowodu (źródło dzielone z inną relacją, rekord już `removed`), nie jest tu do wyboru.
 #
 # Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka.
@@ -12,7 +12,7 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
-. "$HERE/tui/wt-lib.sh" || { echo "delete-relation: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/wt-lib.sh" || { echo "delete-relation: brak $HERE/tui/wt-lib.sh -- katalog programu jest niekompletny" >&2; exit 1; }
 NAME="${1:-}"
 [ -n "$NAME" ] || { echo "usage: delete-relation.sh NAME" >&2; exit 2; }
 WT_BACKTITLE="$(Tv 'Usuwanie relacji $NAME -- kolektor $(hostname)' '$NAME' "$NAME" '$(hostname)' "$(hostname)")"
@@ -74,7 +74,7 @@ while :; do
         echo
         echo "$(T 'Komenda:')  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
     } >"$TMPD/plan2.txt"
-    yesno_text "$TMPD/plan2.txt" "$(Tv 'Usuń relację $NAME -- na pewno?' '$NAME' "$NAME")" "$(T WYKONAJ)" "$(T Wstecz)" --defaultno || continue
+    yesno_text "$TMPD/plan2.txt" "$(Tv 'Usuń relację $NAME -- na pewno?' '$NAME' "$NAME")" "$(T Uruchom)" "$(T Wstecz)" --defaultno || continue
     # Drugie pytanie TYLKO przy kasowaniu kopii -- nieodwracalne (wlasciciel 2026-10-29).
     if [ "$DATA" = ON ]; then
         wt --title "$(T 'SKASUJ KOPIE -- nieodwracalne')" --yes-button "$(T SKASUJ)" --no-button "$(T Wstecz)" --defaultno \
@@ -98,7 +98,7 @@ while :; do
         result_box "$(Tv 'Usuń relację $NAME: GOTOWE' '$NAME' "$NAME")" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
     elif grep -q 'STOPPED before 3/4' "$TMPD/run.log" 2>/dev/null; then
         { T 'ZATRZYMANE: połowa na źródle nie wyszła, więc NIC dalej nie ruszono.'; echo
-          Tv '    Rekord relacji '\''$NAME'\'' ZOSTAŁ -- nazwa jest nadal zajęta, kopie stoją.' '$NAME' "$NAME"; echo
+          Tv '    Definicja relacji '\''$NAME'\'' pozostała -- nazwa jest nadal zajęta, kopie zostają.' '$NAME' "$NAME"; echo
           T '    Gdy źródło będzie dostępne, uruchom to samo jeszcze raz.'; echo
         } >"$TMPD/result.txt"
         result_box "$(Tv 'Usuń relację $NAME' '$NAME' "$NAME")" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"

@@ -1,7 +1,7 @@
 #!/bin/bash
 # replica-delete.sh NAZWA -- usuwanie repliki w oknach whiptail (Del na F6).
 #
-# Jak okno usuwania relacji: NIE ma własnej logiki. Pokazuje PLAN i po "WYKONAJ"
+# Jak okno usuwania relacji: NIE ma własnej logiki. Pokazuje PLAN i po "Uruchom"
 # uruchamia remove-replica z --yes. DANE NA DYSKACH ZOSTAJĄ, bez wyjątku (właściciel,
 # W12, 2026-10-11): opcja "skasuj kopię na nośniku" znikła -- nośnik wymienny zwykle
 # leży poza maszyną, więc i tak się nie udawała, a kasowanie kopii zapasowej przy
@@ -15,7 +15,7 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
-. "$HERE/tui/wt-lib.sh" || { echo "replica-delete: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/wt-lib.sh" || { echo "replica-delete: brak $HERE/tui/wt-lib.sh -- katalog programu jest niekompletny" >&2; exit 1; }
 NAME="${1:-}"
 [ -n "$NAME" ] || { echo "usage: replica-delete.sh NAME" >&2; exit 2; }
 WT_BACKTITLE="$(Tv 'Usuwanie repliki $NAME -- kolektor $(hostname)' '$NAME' "$NAME" '$(hostname)' "$(hostname)")"
@@ -64,14 +64,14 @@ fi
 
 while :; do
     geom
-    # JEDNO okno (wlasciciel 2026-10-29): bylo "Usuń replikę" Dalej, potem plan WYKONAJ --
+    # JEDNO okno (wlasciciel 2026-10-29): bylo "Usuń replikę" Dalej, potem plan Uruchom --
     # dwa razy to samo pytanie. Plan mowi, co zniknie i co zostaje.
     {
         echo "$(Tv 'Replika $NAME przestanie działać: znikną jej sekcja i zadanie z crona.' '$NAME' "$NAME")"
         echo "$(Tv 'Dane na dyskach repliki ZOSTAJĄ ($DST). Żeby je skasować, sformatuj dysk: zmiana repliki -> Dodaj dysk.' '$DST' "$DST")"
         echo
         if [ -n "$RUNNING_SINCE" ]; then
-            echo "$(Tv 'UWAGA: kopia tej repliki właśnie biegnie (od $SINCE). Usunięcie jej nie przerywa: dobiegnie do końca i odłączy dysk.' '$SINCE' "$RUNNING_SINCE")"
+            echo "$(Tv 'UWAGA: kopia tej repliki właśnie trwa (od $SINCE). Usunięcie jej nie przerywa: dobiegnie do końca i odłączy dysk.' '$SINCE' "$RUNNING_SINCE")"
             echo
         fi
         if [ "$UNTRIG" = yes ]; then
@@ -82,7 +82,7 @@ while :; do
         echo "  $(shq "$ZB") remove-replica $NAME --install --yes"
         [ "$UNTRIG" = yes ] && echo "  $(shq "$ZB") remove-media-trigger --install"
     } >"$TMPD/plan.txt"
-    yesno_text "$TMPD/plan.txt" "$(Tv 'Usuń replikę $NAME -- na pewno?' '$NAME' "$NAME")" "$(T WYKONAJ)" "$(T Wstecz)" --defaultno \
+    yesno_text "$TMPD/plan.txt" "$(Tv 'Usuń replikę $NAME -- na pewno?' '$NAME' "$NAME")" "$(T Uruchom)" "$(T Wstecz)" --defaultno \
         || { clear 2>/dev/null; wt_end_nochange "$(T 'Usuń replikę: przerwane, nic nie zmieniono')"; exit 1; }
     : >"$TMPD/run.log"
     RC=0; run_progress "$(Tv 'Usuń replikę $NAME' '$NAME' "$NAME")" "$TMPD/run.log" "$ZB" remove-replica "$NAME" --install --yes || RC=$?

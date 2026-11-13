@@ -21,7 +21,7 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
-. "$HERE/tui/wt-lib.sh" || { echo "browse: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/wt-lib.sh" || { echo "browse: brak $HERE/tui/wt-lib.sh -- katalog programu jest niekompletny" >&2; exit 1; }
 REL="${1:-}"
 [ -n "$REL" ] || { echo "usage: browse.sh RELATION [--dataset=DS] [--at=EPOCH] | browse.sh --any" >&2; exit 2; }
 # Wejscie z miejsca, w ktorym operator stoi (F4 Kopie z Przebiegow albo z datasetu,

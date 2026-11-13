@@ -113,13 +113,13 @@ def _(s):
 # monitor, ktory nigdy nie chodzi, wyglada dokladnie jak monitor mowiacy, ze
 # wszystko dobrze.
 VERDICTS = {
-    # BLAD (2026-10-08, wlasciciel "rob 1 i 2"): ostatni bieg zadania skonczyl
+    # BLAD (2026-10-08, wlasciciel "rob 1 i 2"): ostatni przebieg zadania skonczyl
     # sie bledem (rc != 0, poza 75 = pominiety przez blokade). Monitor patrzy
     # tylko na wiek kopii, wiec odmowa pobrania byla "aktualne" przez 3 godziny.
-    "BLAD":         (u"błąd biegu",   1),
+    "BLAD":         (u"błąd przebiegu",   1),
     "OK":           ("aktualne",      2),
     "WARNING":      (u"spóźnione",    3),
-    "CRITICAL":     ("stare",         1),
+    "CRITICAL":     ("krytyczne",     1),
     "UNKNOWN":      ("nie odpowiada", 4),
     "BEZ MONITORA": ("bez monitora",  4),
     # Start dwuetapowy (2026-10-29): monitor jeszcze nie odpowiedzial -- NIE "bez monitora".
@@ -190,7 +190,7 @@ def tier_line(m, rel, data, now):
         a = reason_age(m.get("reason"))
         if a:
             out += _(u"   najnowsza sprzed %s") % a
-    return out + _(u"   alarm po %s") % (m.get("crit") or "?")
+    return out + _(u"   krytyczny po %s") % (m.get("crit") or "?")
 
 
 def reason_age(reason):
@@ -219,8 +219,8 @@ TRANSFER_STATES = {
 # srodkowe w jeden i schowalby ten jedyny grozny (dokument decyzji, sekcja 6).
 MEDIA_STATES = {
     "here":         ("TU", 2, u"pula zaimportowana, replika może pisać"),
-    "available":    ("Podłączony", 3, u"dysk jest podłączony, pula NIEzaimportowana -- brama zaimportuje ją przy biegu"),
-    "away":         ("W SEJFIE", 4, u"nośnika nie ma w maszynie; to stan oczekiwany między wymianami"),
+    "available":    ("Podłączony", 3, u"dysk jest podłączony, pula NIEzaimportowana -- brama zaimportuje ją przy przebiegu"),
+    "away":         ("ODŁĄCZONY", 4, u"nośnik jest odłączony od hosta; to stan oczekiwany między wymianami"),
     "wrong_medium": ("NIE TEN DYSK", 1, u"podłączony jest dysk, ale NIE TEN. Brama odmówi replikacji; wyjęcie złego nośnika to ruch człowieka przy maszynie"),
     "unknown":      ("?", 4, u"brama nośnika (zfs-media-gate.sh) nie odpowiedziała -- stan nieznany, nie 'brak'"),
 }
@@ -289,15 +289,15 @@ def media_state_line(r, st):
 # zeby nie byly podciagami zwyklego tekstu.
 COLOR_WORDS = [
     ("nie odpowiada", 4), ("bez monitora", 4), ("aktualne", 2), (u"spóźnione", 3),
-    (" stare", 1), ("NIE TEN DYSK", 1), ("Podłączony", 3), ("W SEJFIE", 4), (" TU ", 2),
-    (u"BŁĄD", 1), ("PRZERWANY", 1), (u"PADŁ", 1), ("w toku", 3), ("PAUZA", 3), ("NIEwdro", 1), ("nieczytelny", 1),
+    (" krytyczne", 1), ("NIE TEN DYSK", 1), ("Podłączony", 3), ("ODŁĄCZONY", 4), (" TU ", 2),
+    (u"BŁĄD", 1), ("PRZERWANY", 1), (u"BŁĄD", 1), ("w toku", 3), ("PAUZA", 3), ("NIEwdro", 1), ("nieczytelny", 1),
     (u"błąd źródła", 1), (" OK ", 2), (" OK", 2),
 ]
 
 def color_words():
     """COLOR_WORDS plus ich tłumaczenia (w polskim: dokładnie COLOR_WORDS). Liczone przy
     rysowaniu, bo katalog języka wchodzi dopiero po imporcie; odstępy z brzegów słowa
-    zostają (" stare" -> " stale")."""
+    zostają (" krytyczne" -> " critical")."""
     out = list(COLOR_WORDS)
     if LANG_CAT:
         for w, pair in COLOR_WORDS:
@@ -1077,7 +1077,7 @@ def profile_words(p):
             r = t["retain"].lstrip("-")
             n = r[1:] if r[:1].isalpha() else r
             ret.append(u"%s %s" % (n, tier_unit(t.get("name", ""))))
-    mech = {"flat": _(u"N najnowszych"), "gfs": _(u"drabina GFS"), "age": _(u"wg wieku")}.get(p.get("mechanism", ""), p.get("mechanism") or "?")
+    mech = {"flat": _(u"N najnowszych"), "gfs": _(u"poziomy GFS"), "age": _(u"wg wieku")}.get(p.get("mechanism", ""), p.get("mechanism") or "?")
     shape = {"one-family": _(u"jedna rodzina"), "family-per-tier": _(u"osobne migawki na każdy szczebel")}.get(p.get("shape", ""), p.get("shape") or "?")
     q = [tier_unit(t.get("name", ""), TIER_ADJ) for t in tiers if t.get("quiesce")]
     quiesce = (_(u"zamraża: %s") % ", ".join(q)) if q else _(u"bez zamrażania")
@@ -1538,7 +1538,7 @@ def disable_note(rel):
             "",
             _(u"Włączenie z powrotem: F8 na tej relacji -> Włącz (enable-client)."),
             _(u"  Źródło musi być dostępne przez sieć; jeśli nie jest, polecenie pokaże, na czym"),
-            _(u"  stanęło, i można je bezpiecznie powtórzyć. Potem następny bieg"),
+            _(u"  stanęło, i można je bezpiecznie powtórzyć. Potem następny przebieg"),
             u"  dogania przyrostowo.",
             _(u"Ograniczenie: kluczem tej relacji da się zdjąć blokadę (źródło to loguje)"),
             _(u"  -- to blokada na przypadek zapomnianego klucza, nie na intruza.")]
@@ -1653,7 +1653,7 @@ def build_relations(data, now):
     """Wiersze ekranu glownego: RELACJA (para hostow), nie zadanie.
 
     Wlasciciel, 2026-09-08: wiersz ma byc relacja. Rekord relacji jest w
-    `status`, jej swiezosc w `monitor` (po etykiecie), ostatni bieg w `progress`
+    `status`, jej swiezosc w `monitor` (po etykiecie), ostatni przebieg w `progress`
     (po etykiecie), nastepny bieg z harmonogramu sekcji `list-jobs` (po
     etykiecie) -- cztery czytelniki, jeden wiersz."""
     rows = []
@@ -1701,7 +1701,7 @@ def build_relations(data, now):
         host = (data.jobs or {}).get("host") or "?"
         dirs = [x.get("direction", "") for x in my_jobs if x.get("section_kind") in SEND_KINDS]
         st = rel_stats(data, my_jobs)
-        # Relacja, w ktorej ostatni bieg ktoregos zadania sie nie udal, nie jest
+        # Relacja, w ktorej ostatni przebieg ktoregos zadania sie nie udal, nie jest
         # "aktualne" (2026-10-08) -- ten sam fakt, co wiersz "błąd biegu" na F2.
         if rel.get("state") == "active":
             for j in sends:
@@ -1709,7 +1709,7 @@ def build_relations(data, now):
                 if fail:
                     verdict = worst([verdict, "BLAD"])
                     vword = _(VERDICTS[verdict][0])
-                    reasons.append(_(u"%s: ostatni bieg %s rc=%s: %s") % (
+                    reasons.append(_(u"%s: ostatni przebieg %s rc=%s: %s") % (
                         (j.get("scope") or "?").split(":")[-1], fail[1], fail[0], fail[2] or _(u"zobacz cron.log")))
         rows.append({
             "kind": "relation", "name": name, "rel": rel, "state": state_word(rel),
@@ -1797,7 +1797,7 @@ def job_is_mirror(j):
 
 def keep_cell(ret):
     """Kolumna 'Trzyma' (R4-4): '-H24' -> '24 godz.', '-D7' -> '7 dni'. Sama
-    liczba bylaby klamstwem: drabina GFS przycina rodzine automated_hourly
+    liczba bylaby klamstwem: poziomy GFS przycina rodzine automated_hourly
     takze szczeblem '-D7' (fikstura pve10) -- "7" przy "automated_hourly"
     czytaloby sie jak 7 godzinowych. Goly licznik (keep = 7) zostaje liczba."""
     out = []
@@ -1907,10 +1907,10 @@ def build_jobs(data, now):
                 v = "BLAD"
             if disc:
                 discs.append((sc, disc))
-        reasons = list(reasons0) + [_(u"ostatni bieg %s rc=%s: %s") % (f[1], f[0], f[2] or _(u"zobacz cron.log"))
+        reasons = list(reasons0) + [_(u"ostatni przebieg %s rc=%s: %s") % (f[1], f[0], f[2] or _(u"zobacz cron.log"))
                                     for _ds, f in fails]
         items.append({
-            "kind": "job", "name": j.get("label") or _("(bez rel.)"), "rel": None,
+            "kind": "job", "name": j.get("label") or _("(bez relacji)"), "rel": None,
             "clabel": clabel, "srow": srow, "vol": vol, "czas": czas, "gb": gb,
             "dir": direction_of(host, j.get("peer") or "", [j.get("direction", "")], mode),
             "mode": mode, "task": task, "pref": pref, "keep": keep, "cnt": 1, "tier": tier, "scope": j.get("scope", ""),
@@ -1967,7 +1967,7 @@ def build_jobs(data, now):
         rnxt = None if on_ins else cron_next(sched, now)
         reasons = []
         if srow and str(srow.get("last_rc")) not in ("0", "None"):
-            reasons.append(_(u"ostatni bieg rc=%s") % srow.get("last_rc"))
+            reasons.append(_(u"ostatni przebieg rc=%s") % srow.get("last_rc"))
         # WERDYKT Z MONITORA REPLIKI (2026-10-08): nosnik wymienny -- linia bramy
         # (`zfs-media-gate.sh age`, etykieta = nazwa repliki, wzorzec "replica");
         # staly -- check-snap-age na kopii (dst/zrodlo) z prefiksem repliki.
@@ -2047,7 +2047,7 @@ def build_jobs(data, now):
         rows.append({
             "kind": "unreadable", "name": _("konto %s") % u.get("account", "?"), "rel": None, "dir": "?",
             "task": "nieczytelny blok", "pref": "-", "keep": "-", "cnt": "",
-            "scope": u.get("config") or _("(bez Source)"), "schedule": "",
+            "scope": u.get("config") or _("(bez źródła)"), "schedule": "",
             "verdict": "UNKNOWN", "vword": _("nie odpowiada"), "reasons": [u.get("error", "")],
             "next_epoch": None, "next": "?", "job": None, "jobs": [], "u": u,
             "state": "nieczytelny", "last_txt": _("%s linii w cronie") % u.get("lines_in_block", "?"),
@@ -2324,7 +2324,7 @@ def transfer_label(t, data):
 def transfer_item(t, data, now, ch):
     wd, _note = transfer_word(t, now)
     st, fin = int(t.get("started_epoch") or 0), int(t.get("finished_epoch") or 0)
-    when = (_(u"biegnie od %s") % time.strftime("%H:%M", time.localtime(st))) if t.get("state") == "running" and st \
+    when = (_(u"trwa od %s") % time.strftime("%H:%M", time.localtime(st))) if t.get("state") == "running" and st \
         else fmt_when_short(fin or st, now)
     return {"cells": [when, wd, ds_of(t.get("dataset")), fmt_dur(fin - st) if fin and st else "-", transfer_data_cell(t)],
             "pairs": transfer_detail_pairs(t, now, ch, data),
@@ -2681,7 +2681,7 @@ def run_result(r):
         return _(u"nadchodzący")
     rc = r.get("rc")
     if r.get("agg_bad"):
-        return _(u"PADŁ %d/%d") % (r["agg_bad"], len(r["agg"]))
+        return _(u"BŁĄD %d/%d") % (r["agg_bad"], len(r["agg"]))
     if rc == 0 and r.get("agg"):
         return u"OK %d/%d" % (len(r["agg"]), len(r["agg"]))
     if rc == 0:
@@ -2694,7 +2694,7 @@ def run_result(r):
     if rc == 75:
         return _(u"pominięty")
     if rc == -1:
-        return _(u"biegnie")
+        return _(u"trwa")
     if rc == -2:
         # U167: bez END, a procesu zfs-job tej linii juz nie ma (zatrzymany, zabity).
         return _(u"PRZERWANY")
@@ -2708,21 +2708,21 @@ def run_when(at):
 def run_pairs(r, now, ch):
     """Grupa "Ten bieg" / "Nadchodzacy bieg" w panelu."""
     if r.get("past"):
-        pairs = [group(ch, _(u"Ten bieg")), (_(u"Kiedy"), time.strftime(DT_FMT + ":%S", time.localtime(r["at"]))),
+        pairs = [group(ch, _(u"Ten przebieg")), (_(u"Kiedy"), time.strftime(DT_FMT + ":%S", time.localtime(r["at"]))),
                  (_(u"Wynik"), run_result(r))]
         if r.get("start") and r.get("end"):
             pairs.append((_(u"Czas"), fmt_dur(r["end"] - r["start"])))
         if r.get("fold_n"):
-            pairs.append((_(u"Zwinięte"), _(u"udane biegi: %d, od %s (ten = ostatni)") % (
+            pairs.append((_(u"Zwinięte"), _(u"udane przebiegi: %d, od %s (ten = ostatni)") % (
                 r["fold_n"], time.strftime("%H:%M", time.localtime(r["fold_from"])))))
         if r.get("rc") == 75:
-            pairs.append((_(u"Powód"), _(u"pominięty: trwał inny bieg tego zadania (blokada)")))
+            pairs.append((_(u"Powód"), _(u"pominięty: trwał inny przebieg tego zadania (blokada)")))
         elif r.get("err"):
             pairs.append((_(u"Powód"), r["err"]))
         return pairs
     if not r.get("at"):
-        return [group(ch, _(u"Nadchodzący bieg")), (_(u"Kiedy"), _(u"bez terminu (po włożeniu nośnika albo poza cronem)"))]
-    return [group(ch, _(u"Nadchodzący bieg")), (_(u"Kiedy"), u"%s   %s" % (
+        return [group(ch, _(u"Nadchodzący przebieg")), (_(u"Kiedy"), _(u"bez terminu (po włożeniu nośnika albo poza cronem)"))]
+    return [group(ch, _(u"Nadchodzący przebieg")), (_(u"Kiedy"), u"%s   %s" % (
         time.strftime(DT_FMT, time.localtime(r["at"])), _(u"za %s") % fmt_dur(max(0, r["at"] - now))))]
 
 
@@ -2888,14 +2888,14 @@ def tpl_children(tab, p, rows, now, ch):
                 "empty": _(u"żadna relacja na tym hoście nie używa tego szablonu")}
     items = []
     for t in p.get("tiers", []):
-        keep = t.get("keep") or (t.get("retain") or "").lstrip("-") or _(u"wg drabiny")
+        keep = t.get("keep") or (t.get("retain") or "").lstrip("-") or _(u"wg poziomów GFS")
         when = cron_words(t["send_schedule"]) if t.get("send_schedule") else \
-            (_(u"porządki %s") % cron_words(t["prune_schedule"]) if t.get("prune_schedule") else _(u"bez własnych migawek"))
+            (_(u"czyszczenie %s") % cron_words(t["prune_schedule"]) if t.get("prune_schedule") else _(u"bez własnych migawek"))
         fam = (t.get("prefix") or t.get("pattern") or "-").rstrip("_")
         pairs = [(_(u"Szczebel"), tier_unit(t.get("name", ""))), (_(u"Kiedy"), when), (_(u"Trzyma"), keep),
                  (_(u"Prefiks migawek"), fam), (_(u"Zamraża"), _(u"tak") if t.get("quiesce") else _(u"nie"))]
         if t.get("monitor_warn") or t.get("monitor_crit"):
-            pairs.append((_(u"Strażnik"), _(u"ostrzeżenie po %s, alarm po %s") % (t.get("monitor_warn") or "?", t.get("monitor_crit") or "?")))
+            pairs.append((_(u"Strażnik"), _(u"ostrzeżenie po %s, krytyczny po %s") % (t.get("monitor_warn") or "?", t.get("monitor_crit") or "?")))
         items.append({"cells": [tier_unit(t.get("name", "")), when, keep, fam], "pairs": pairs,
                       "title": _(u"%s -- szczebel %s") % (p.get("name"), tier_unit(t.get("name", "")))})
     return {"heads": [_(u"Szczebel"), _(u"Kiedy"), _(u"Trzyma"), _(u"Prefiks migawek")], "items": items, "empty": _(u"szablon bez szczebli")}
@@ -2946,7 +2946,7 @@ def rep_children(tab, r, data, now, ch, jobrows=None):
         czas = fmt_dur(x["end"] - x["start"]) if x.get("past") and x.get("start") and x.get("end") else u"-"
         rb = replica_run_bytes(x, r, data)
         items.append({"cells": [run_when(x["at"]), run_result(x), czas, hbytes_short(rb) if rb is not None else u"-"],
-                      "pairs": run_pairs(x, now, ch), "title": _(u"%s -- bieg") % r.get("name")})
+                      "pairs": run_pairs(x, now, ch), "title": _(u"%s -- przebieg") % r.get("name")})
     return {"heads": [_(u"Kiedy"), _(u"Wynik"), _(u"Czas"), _(u"Dane")], "items": items, "prio": [0, 1, 3, 2],
             "empty": _(u"brak przebiegów tej repliki w oknie %dh wstecz i %dh naprzód (dysku nie było albo nie ma harmonogramu)")
             % (PRZ_RUNS_H, PRZ_AHEAD_H)}
@@ -3025,7 +3025,7 @@ def job_panel_pairs(row, data, now, ch):
     # panel mowi, ile kopia trzyma -- "-" przy "ab -- pobranie" nic nie mowilo (kampania 3).
     keep = row.get("keep") if row.get("keep") not in (None, "", "-") else ""
     keep = keep or keep_cell(j.get("retain") or j.get("keep") or "") or "-"
-    pairs.append((_(u"Trzyma"), keep + (u"   drabina GFS" if j.get("gfs") else "")))
+    pairs.append((_(u"Trzyma"), keep + (u"   poziomy GFS" if j.get("gfs") else "")))
     st = data.stats or {}
     win = st.get("window_days")
     pairs.append(group(ch, (_(u"Przebiegi (%s dni)") % win) if win else _(u"Przebiegi")))
@@ -3035,7 +3035,7 @@ def job_panel_pairs(row, data, now, ch):
     elif srow:
         pairs.append((_(u"Czas"), times_words(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s"))))
     else:
-        pairs.append((_(u"Czas"), _(u"brak biegów w dzienniku z tego okna%s") % ("" if row.get("clabel") else _(u" -- zadania nie ma w cronie"))))
+        pairs.append((_(u"Czas"), _(u"brak przebiegów w dzienniku z tego okna%s") % ("" if row.get("clabel") else _(u" -- zadania nie ma w cronie"))))
     if len(srows) > 1 and not data.failed("stats"):
         newest = max(srows, key=lambda x: x.get("last_at") or "")
         pairs.append((_(u"Wywołania"), _(u"%d, błędów %d   w %d zadaniach") % (
@@ -3059,7 +3059,7 @@ def job_panel_pairs(row, data, now, ch):
                 mons.append(m)
     if mons:
         m0 = mons[0]
-        pairs.append((_(u"Strażnik"), _(u"ostrzeżenie po %s, alarm po %s   sprawdza %s") % (
+        pairs.append((_(u"Strażnik"), _(u"ostrzeżenie po %s, krytyczny po %s   sprawdza %s") % (
             m0.get("warn") or "?", m0.get("crit") or "?", cron_words(m0.get("schedule") or "?"))))
     pairs.append(group(ch, _(u"Uprawnienia")))
     pairs.append((_(u"Konto"), j.get("account", "?")))
@@ -3122,7 +3122,7 @@ def rel_panel_pairs(row, data, now, ch):
         pairs.append(("  " + _w, tier_line(m, rel, data, now)))
     last = row["last"]
     # U61: "Ostatni bieg OK" (historia transferow) stal obok "błąd biegu" (job-stats).
-    # Nieudany ostatni bieg ktoregos zadania wygrywa i panel mowi, KTORY dataset i dlaczego.
+    # Nieudany ostatni przebieg ktoregos zadania wygrywa i panel mowi, KTORY dataset i dlaczego.
     # One cron line can carry several datasets (pve2, 2026-10-27: subvol-103 and
     # ROOT/pve-1 in one snapget call). Every dataset job then reads the SAME
     # failure, so it counts once, and it is pinned on a dataset only when the
@@ -3144,7 +3144,7 @@ def rel_panel_pairs(row, data, now, ch):
         scs, f = fails[0]
         named = [s for s in scs if text_names_dataset(f[2] or "", s)]
         ds = named[0] if len(named) == 1 else u", ".join(scs)
-        pairs.append((_(u"Ostatni bieg"), _(u"BŁĄD   %s   rc=%s%s") % (f[1], f[0], (u"   (+%d)" % (len(fails) - 1)) if len(fails) > 1 else u"")))
+        pairs.append((_(u"Ostatni przebieg"), _(u"BŁĄD   %s   rc=%s%s") % (f[1], f[0], (u"   (+%d)" % (len(fails) - 1)) if len(fails) > 1 else u"")))
         pairs.append((_(u"Przyczyna"), u"%s: %s" % (ds, f[2] or _(u"zobacz cron.log"))))
     elif last:
         w, note = transfer_word(last, now)
@@ -3152,9 +3152,9 @@ def rel_panel_pairs(row, data, now, ch):
         txt = u"%s   %s" % (w, fmt_full(fin if fin else st_))
         if note:
             txt += u"   " + note
-        pairs.append((_(u"Ostatni bieg"), txt))
+        pairs.append((_(u"Ostatni przebieg"), txt))
     else:
-        pairs.append((_(u"Ostatni bieg"), _(u"brak wpisu w historii transferów")))
+        pairs.append((_(u"Ostatni przebieg"), _(u"brak wpisu w historii transferów")))
     pairs.append((_(u"Następny"), fmt_full(row["next_epoch"]) if row["next_epoch"] and not rel.get("paused_local") else row["next"]))
     sends = [j for j in row["jobs"] if j.get("section_kind") in SEND_KINDS]
     stt = row.get("stats") or {}
@@ -3190,7 +3190,7 @@ def rel_panel_pairs(row, data, now, ch):
         prof += _(u"   źródło: %s") % rel["source_profile"]
     pairs.append((_(u"Szablon"), prof))
     if rel.get("recursion"):
-        pairs.append((_(u"Sposób"), {"flat": _(u"każdy dataset osobno"), "atomic": _(u"cała gałąź atomowo")}.get(rel["recursion"], rel["recursion"])))
+        pairs.append((_(u"Sposób"), {"flat": _(u"każdy dataset osobno"), "atomic": _(u"całe drzewo datasetów atomowo")}.get(rel["recursion"], rel["recursion"])))
     if rel.get("passive") == "1":
         pairs.append((_(u"Tryb"), _(u"pasywny")))
     if rel.get("bandwidth"):
@@ -3203,7 +3203,7 @@ def rel_panel_pairs(row, data, now, ch):
     n_prune = len(prunes) + sum(1 for j in sends for cl in own_inline_prunes(j)
                                 if (j.get("label") or "", " ".join(cl.split()[:5]), j.get("retain") or j.get("keep") or "") not in _ps)
     if sends or n_prune:
-        pairs.append((_(u"Zadania"), _(u"%d: kopie lub migawki %d, porządki %d") % (len(sends) + n_prune, len(sends), n_prune)))
+        pairs.append((_(u"Zadania"), _(u"%d: kopie lub migawki %d, czyszczenie %d") % (len(sends) + n_prune, len(sends), n_prune)))
     if rel.get("created_at"):
         pairs.append((_(u"Powstała"), dshow(rel["created_at"])))
     for key, fld in ((_(u"Pełna kopia"), "seed_completed_at"), (_(u"Aktywna od"), "activated_at"), (_(u"Usunięta"), "removed_at")):
@@ -3231,7 +3231,7 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", show_
             cells.append([(u"-- " if ch.ascii else u"\u2500\u2500 ") + _(u"teraz %s") % time.strftime("%H:%M", time.localtime(r["at"])), u" ", u" ", u" ", u" ", u" "])
         elif r["kind"] == "grp":
             it = r["item"]
-            cells.append([(u"> " if ch.ascii else u"\u25b8 ") + r["name"], it.get("dir") or u" ", u" ", _(u"błąd biegu") if r["bad"] else u" ", u" ", u" "])
+            cells.append([(u"> " if ch.ascii else u"\u25b8 ") + r["name"], it.get("dir") or u" ", u" ", _(u"błąd przebiegu") if r["bad"] else u" ", u" ", u" "])
         else:
             it = r["item"]
             # Na jednej osi czasu Co mowi tez, KTORYCH datasetow (pve10: dwa 'ab lokalny prune
@@ -3380,7 +3380,7 @@ def guard_label(states):
     cap, gro = states
     # U119: "ochrona: bezpiecznik · przyrost" bylo zargonem -- slowa mowia, co strażnik
     # ROBI (kasuje przy pelnej puli / alarmuje przy skoku danych), jak sekcje F10.
-    return _(u"kasowanie przy pełnej puli: %s · alarm przyrostu: %s") % (pl.get(cap, u"?"), pl.get(gro, u"?"))
+    return _(u"ochrona pojemności: %s · monitor przyrostu: %s") % (pl.get(cap, u"?"), pl.get(gro, u"?"))
 
 
 _PKG_VERSION = []
@@ -3415,7 +3415,7 @@ def top_bar(data, width, now, ascii_only, err_count):
     jobs = (data.jobs or {}).get("jobs", [])
     accounts = sorted({j.get("account", "") for j in jobs} |
                       {u.get("account", "") for u in (data.jobs or {}).get("unreadable", [])})
-    acct = ", ".join(a for a in accounts if a) or _("(brak bloku)")
+    acct = ", ".join(a for a in accounts if a) or _("(brak)")
     ver = pkg_version()
     left = " zfs-snapshot-all" + (" " + ver if ver else "")
     mid = _("%s%s | konto %s%s") % (host, (" " + ip) if ip else "", acct,
@@ -3648,9 +3648,9 @@ def rel_detail_pairs(row, data, now, ch):
         txt += "  %s" % mode
         if note:
             txt += "  " + note
-        pairs.append((_("Ostatni bieg"), txt))
+        pairs.append((_("Ostatni przebieg"), txt))
     else:
-        pairs.append((_("Ostatni bieg"), _(u"brak zapisu w historii -- stan nieznany")))
+        pairs.append((_("Ostatni przebieg"), _(u"brak zapisu w historii -- stan nieznany")))
     if row["next_epoch"]:
         pairs.append((_(u"Następny"), "%s  (wg crontaba, %s)" % (
             fmt_full(row["next_epoch"]), ", ".join(sorted({j.get("schedule", "") for j in row["jobs"] if j.get("section_kind") in SEND_KINDS})))))
@@ -3718,7 +3718,7 @@ def rel_pairs(row, data, now, ch):
             if v == "BEZ MONITORA" and "monitors" in getattr(data, "pending", ()):
                 v = "SPRAWDZAM"
             # U61 (kampania 2026-10-21): wiersz relacji mowil "błąd biegu", a wiersz jej
-            # datasetu "aktualne" -- ten sam fakt (nieudany ostatni bieg TEGO zadania) ma
+            # datasetu "aktualne" -- ten sam fakt (nieudany ostatni przebieg TEGO zadania) ma
             # dawac ten sam werdykt w obu miejscach.
             if (row.get("rel") or {}).get("state") == "active":
                 _fail, _disc = job_run_issue(data, j)
@@ -3836,7 +3836,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
         child.update({"name": r["name"] + ((u" (%s)" % child["how"]) if child.get("how") not in (None, u"wg crona") else ""),
                       "tabs": tabs, "ti": ti})
     empty = [_(u"Brak relacji zfs-backup na tym hoście."),
-             _(u"Cudze migawki (np. replikacja Proxmoxa) nie są tu pokazywane."),
+             _(u"Migawki spoza narzędzia (np. replikacja Proxmoxa) nie są tu pokazywane."),
              _(u"Ins = nowa relacja (kreator).")]
     foot = (_(u"Enter szczegóły   Ins nowa   Del usuń   Tab do datasetów")) if rows else _(u"Ins nowa relacja")
     return render_tabbed(data, width, height, now, ch, "relacje", title,
@@ -3903,7 +3903,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     else:
         pairs.append((_("Cel"), (rel.get("client_target") or "") + _sync or "?"))
     if rel.get("managed_prune_scope"):
-        pairs.append((_(u"Prune"), ",  ".join(rel["managed_prune_scope"])))
+        pairs.append((_(u"Czyszczenie (prune)"),",  ".join(rel["managed_prune_scope"])))
     if rel.get("local_user"):
         pairs.append((_("Konto"), rel["local_user"]))
     out.extend(detail_kv(ch, pairs, w))
@@ -3913,11 +3913,11 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     # tylko informacja, z czego relacja powstała.
     pairs = [(_(u"Powstała z"), profile_word(rel.get("profile"), rel.get("name")))]
     if not rel.get("source_profile") and (rel.get("passive") == "1" or rel.get("mode") == "sync"):
-        pairs.append((_(u"Źródło"), _(u"bez sprzątania (źródło nie kasuje)")))
+        pairs.append((_(u"Źródło"), _(u"bez czyszczenia (źródło nie czyści)")))
     if any(job_is_mirror(j) for j in row.get("jobs") or []):
         pairs.append((_(u"Cel"), _(u"lustro źródła: trzyma to, co źródło (bez własnej retencji)")))
     if rel.get("recursion"):
-        pairs.append((_(u"Sposób"), {"flat": _(u"każdy dataset osobno"), "atomic": _(u"cała gałąź atomowo")}.get(rel["recursion"], rel["recursion"])))
+        pairs.append((_(u"Sposób"), {"flat": _(u"każdy dataset osobno"), "atomic": _(u"całe drzewo datasetów atomowo")}.get(rel["recursion"], rel["recursion"])))
     if rel.get("passive") == "1":
         pairs.append((_("Tryb"), _("pasywny")))
     if rel.get("bandwidth"):
@@ -3979,7 +3979,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                             continue
                         r = t.get("retain") or t.get("keep") or ""
                         key = (u"lokalny prune", _(u"trzyma %s   co: %s%s") % (keep_cell(r) if r else "?", cron_words(sched),
-                                                                         "   drabina GFS" if t.get("gfs") == "yes" else ""))
+                                                                         "   poziomy GFS" if t.get("gfs") == "yes" else ""))
                         pol.setdefault(key, []).append(sec.get("name") or "?")
                         if key not in order:
                             order.append(key)
@@ -3995,7 +3995,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                     r = t.get("retain") or t.get("keep") or ""
                     sched = _tf("prune_schedule", u) or f.get("prune_schedule") or t.get("prune_schedule") or "?"
                     key = (_pw, _(u"trzyma %s   co: %s%s") % (keep_cell(r) if r else "?", cron_words(sched),
-                                                           "   drabina GFS" if (t.get("gfs") or f.get("gfs")) == "yes" else ""))
+                                                           "   poziomy GFS" if (t.get("gfs") or f.get("gfs")) == "yes" else ""))
                     pol.setdefault(key, []).append(sec.get("name") or "?")
                     if key not in order:
                         order.append(key)
@@ -4010,7 +4010,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                 sched = f.get("prune_schedule") or (tmpl.get(used[0], {}).get("prune_schedule") if used else "") or "?"
                 _pw = u"zdalny prune" if "@" in (sec.get("name") or "") else u"lokalny prune"
                 key = (_pw, _(u"trzyma %s   co: %s%s") % (keep_cell(" ".join(ret)) if ret else "?", cron_words(sched),
-                                                       "   drabina GFS" if f.get("gfs") == "yes" else ""))
+                                                       "   poziomy GFS" if f.get("gfs") == "yes" else ""))
                 pol.setdefault(key, []).append(sec.get("name") or "?")
                 if key not in order:
                     order.append(key)
@@ -4052,7 +4052,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     else:
         out.extend(detail_kv(ch, [(_(u"Ostatni transfer"), _(u"brak zapisu w historii"))], w))
     # U114 (symulacja A, 2026-10-28): bez sekcji "komendy" -- te same czynnosci sa pod
-    # klawiszami na ramce, a okno potwierdzenia pokazuje polecenie przed WYKONAJ.
+    # klawiszami na ramce, a okno potwierdzenia pokazuje polecenie przed Uruchom.
     return out
 
 
@@ -4212,7 +4212,7 @@ def cron_lines_of(jobs, w, ch):
     # daje kazdemu zadaniu cron_lines calego BLOKU, a pierwsza wersja drukowala
     # je wszystkie pod pierwszym zadaniem i pomijala powtorki -- pve9-synchro
     # mialo 19 linii pod hdd/lab/ct-201 i osiem pustych naglowkow.
-    # GRUPA = zadania tego samego rodzaju, zakresu i harmonogramu: drabina GFS
+    # GRUPA = zadania tego samego rodzaju, zakresu i harmonogramu: poziomy GFS
     # to JEDNA linia delsnaps dla czterech szczebli, wiec cztery szczeble to
     # jeden naglowek. Linia nalezy do grupy, gdy jej zakres (albo drugi koniec)
     # stoi w niej jako argument w cudzyslowie i jej rodzina tez; transfer tylko
@@ -4301,7 +4301,7 @@ def cron_lines_of(jobs, w, ch):
         for ln, _k in shared:
             _emit(ln)
     if jobs and not any(j.get("cron_lines") for j in jobs):
-        out.append(_(u"  (linie crona: list-jobs bez pola cron_lines -- starszy czytelnik)"))
+        out.append(_(u"  (linie crona niedostępne: brak danych z list-jobs)"))
     return out
 
 
@@ -4521,7 +4521,7 @@ def render_monitor(data, cursor, width, height, now, ch, message=""):
         beside = width >= 150
         lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
         inner = lbw - 4
-        nw = max(8, min(20, max([len(m.get("label") or _("(bez rel.)")) for m in mons] + [8])))
+        nw = max(8, min(20, max([len(m.get("label") or _("(bez relacji)")) for m in mons] + [8])))
         # RODZINA NIE UCINA SIE O JEDEN ZNAK. Kolumna miala na sztywno 16, a
         # `automated_monthly` ma 17 -- ekran pokazywal `automated_month…` przy
         # kazdej szerokosci (zmierzone na pve10, 2026-09-21). Bierze tyle, ile
@@ -4550,7 +4550,7 @@ def render_monitor(data, cursor, width, height, now, ch, message=""):
                 vword += _(" PAUZA")
             if i == cursor:
                 cur_y = len(body)
-            body.append("%s %s %s %s %s" % (fit(m.get("label") or _("(bez rel.)"), nw, ch), fit_left(dtxt, dw, ch),
+            body.append("%s %s %s %s %s" % (fit(m.get("label") or _("(bez relacji)"), nw, ch), fit_left(dtxt, dw, ch),
                                             fit(m.get("pattern") or "?", fw, ch),
                                             fit("%s/%s" % (m.get("warn") or "?", m.get("crit") or "?"), pw, ch), fit(vword, vw, ch)))
         if not mons:
@@ -4605,7 +4605,7 @@ def replica_stats_row(data, name):
 
 def rc_word(rc):
     """Wynik ostatniego biegu w oknach szczegolow -- tymi samymi slowami co kolumna
-    "Ostatni bieg" (replica_last_run). rc 75 to pominiecie pod blokada, nie blad: lab
+    "Ostatni przebieg" (replica_last_run). rc 75 to pominiecie pod blokada, nie blad: lab
     2026-11-07, lista mowila "pominięty", szczegoly tego samego biegu "BŁĄD (rc=75)"."""
     if str(rc) == "0":
         return u"OK"
@@ -4615,7 +4615,7 @@ def rc_word(rc):
 
 
 def replica_last_run(srow, stats_failed=False):
-    """Kolumna "Ostatni bieg" w F6: wynik i czas ostatniego biegu z job-stats. "Wykonana"
+    """Kolumna "Ostatni przebieg" w F6: wynik i czas ostatniego biegu z job-stats. "Wykonana"
     mowi tylko, kiedy kopia byla ostatnio aktualna -- na pve10 replika calapula
     padla 4 razy z 4 (rc=1), a lista pokazywala samo "Wykonana 22.10" (2026-10-28)."""
     if stats_failed:
@@ -4640,7 +4640,7 @@ def replica_when(r, long=False):
 def replica_disks_words(r):
     """Dyski repliki po ID puli (P5): ile, albo że rozpoznawane tylko po nazwie."""
     if r.get("media") != "removable":
-        return _(u"stały nośnik (pula w maszynie)")
+        return _(u"stały nośnik (pula zawsze podłączona)")
     g = [x for x in (r.get("media_guids") or "").split(",") if x]
     if not g:
         return _(u"po nazwie puli -- ID nieznane (zmiana repliki dopisze ID podłączonego dysku)")
@@ -4663,7 +4663,7 @@ def replica_kind(r, ascii_=False):
         return _(u"historia"), _(u"historia kolektora -- dysk dostaje migawki, które już tam są")
     n = replica_keep_n(r)
     return (_(u"migawki %s%d") % ("x" if ascii_ else u"×", n),
-            _(u"własne migawki -- replika przy każdym biegu robi migawkę %s") % (r.get("prefix") or "replica_"))
+            _(u"własne migawki -- replika przy każdym przebiegu robi migawkę %s") % (r.get("prefix") or "replica_"))
 
 
 def replica_disk_words(r):
@@ -4706,7 +4706,7 @@ def replica_crypt_words(r):
 
 def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
     """Panel repliki (F6), U21: grupy Co / Kiedy / Zdrowie, harmonogram slowami,
-    JEDEN "Ostatni bieg" (bylo "Ostatnio" i "Ost. bieg" z roznymi godzinami)."""
+    JEDEN "Ostatni przebieg" (bylo "Ostatnio" i "Ost. bieg" z roznymi godzinami)."""
     s = r.get("schedule") or "?"
     when = _(u"zaraz po podłączeniu dysku") if s == "on-insert" else \
         cron_words(s) + (_(u" i zaraz po podłączeniu dysku") if r.get("on_insert") == "yes" else "")
@@ -4730,14 +4730,14 @@ def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
              (_(u"Ostatnio podłączony"), dshow(r.get("last_seen")) or _(u"nigdy (brak pliku last-seen bramy)")),
              group(ch, _(u"Zdrowie"))]
     if stats_failed:
-        pairs.append((_(u"Ostatni bieg"), _(u"? (job-stats nie odpowiedział)")))
+        pairs.append((_(u"Ostatni przebieg"), _(u"? (job-stats nie odpowiedział)")))
     elif srow:
         _rc = srow.get("last_rc")
-        pairs.append((_(u"Ostatni bieg"), u"%s   %s" % (dshow(srow.get("last_at") or "?"), rc_word(_rc))))
+        pairs.append((_(u"Ostatni przebieg"), u"%s   %s" % (dshow(srow.get("last_at") or "?"), rc_word(_rc))))
         pairs.append((_(u"Czas"), times_words(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s"))))
         pairs.append((_(u"Wywołania"), _(u"%s, błędów %s") % (srow.get("runs"), srow.get("failures"))))
     else:
-        pairs.append((_(u"Ostatni bieg"), _(u"brak w oknie statystyk (zadanie nie biegło albo dysku nie było)")))
+        pairs.append((_(u"Ostatni przebieg"), _(u"brak w oknie statystyk (zadanie nie działało albo dysku nie było)")))
     return pairs
 
 
@@ -4775,13 +4775,13 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
         det_title = _(u"stany nośnika")
         det = [(_(MEDIA_STATES[k][0]), _(MEDIA_STATES[k][2])) for k in ("here", "available", "away", "wrong_medium")]
     return render_tabbed(data, width, height, now, ch, "nosniki", _(u"Repliki backupu kolektora (%d)") % len(reps),
-                         [_(u"Replika"), _(u"Typ"), _(u"Zajęte"), _(u"Wykonana"), _(u"Ostatni bieg"), _(u"Harmonogram")], cells, cursor,
+                         [_(u"Replika"), _(u"Typ"), _(u"Zajęte"), _(u"Wykonana"), _(u"Przebieg"), _(u"Harmonogram")], cells, cursor,
                          (_(u"Enter szczegóły   Ins nowa   Del usuń   Tab do przebiegów")) if reps else _(u"Ins nowa replika"),
                          det_title, det, child, focus, pair_cursor, screen_actions("nosniki"), empty, prio=[0, 4, 1, 2, 3, 5], flex=5)
 
 
 # --- F5 Szablony (uwaga 24, 2026-10-09) ------------------------------------
-TEMPLATE_KIND = {"package": u"fabryczny", "user": u"własny", "shadow": u"POMIJANY"}
+TEMPLATE_KIND = {"package": u"wbudowany", "user": u"własny", "shadow": u"POMIJANY"}
 
 
 def template_detail_pairs(p):
@@ -4790,7 +4790,7 @@ def template_detail_pairs(p):
     w = profile_words(p)
     pairs = []
     if p.get("source") == "shadow":
-        pairs.append((_(u"Uwaga"), _(u"ma nazwę fabrycznego, pakiet go pomija; zmień nazwę pliku")))
+        pairs.append((_(u"Uwaga"), _(u"ma nazwę wbudowanego, pakiet go pomija; zmień nazwę pliku")))
     pairs += [(_(u"Opis"), _(p.get("description") or "-")),
               (_(u"Jak liczy"), u"%s, %s" % (w["mech"], w["shape"]))]
     if p.get("error"):
@@ -4828,14 +4828,14 @@ def render_szablony(data, cursor, width, height, now, ch, message="", rows=None,
                          [_(u"Nazwa"), _(u"Rodzaj"), _(u"Sposób"), _(u"Trzyma"), _(u"Użyty")], cells, cursor,
                          _(u"Enter szczegóły   Ins nowy z zaznaczonego   Del usuń własny   Tab niżej"),
                          det_title, det, child, focus, pair_cursor, screen_actions("szablony"),
-                         [_(u"Brak szablonów (list-profiles).")], prio=[0, 3, 2, 4, 1], flex=3)
+                         [_(u"Brak szablonów.")], prio=[0, 3, 2, 4, 1], flex=3)
 
 
 # --- Odzysk (F11) ----------------------------------------------------------
 # WLASCICIEL 2026-10-18: odzysk to osobny ekran glowny, nie litera 'p' obok "e
 # zmien" w oknie relacji ani F9 na Replice -- "ktos moze sie machnac". Jedna droga:
 # relacja (albo dysk) -> te same okna "Przywroc" co wczesniej (dataset, migawka,
-# plan, WYKONAJ). Logika jest w `restore --ask`; ten ekran tylko wybiera skad.
+# plan, Uruchom). Logika jest w `restore --ask`; ten ekran tylko wybiera skad.
 def odzysk_rows(rows, data=None, now=None):
     """Relacje, z ktorych jest co odzyskac (maja kopie), plus wiersz "z innego
     dysku". Migawki lokalne i zdalne nie maja kopii -- nie ma ich na liscie."""
@@ -4865,16 +4865,16 @@ def odzysk_detail(row, copies=()):
         return [(_(u"Skąd"), _(u"kopia na dysku podłączonym do tego hosta -- nośnik repliki albo dysk przyniesiony po awarii")),
                 (_(u"Kiedy"), _(u"także bez relacji i bez replik, np. czysty serwer po ransomware")),
                 group(None, _(u"Zgody")),
-                (_(u"Na bok"), _(u"tak -- do nowego datasetu, istniejące dane nietknięte")),
+                (_(u"Obok oryginału"), _(u"tak -- do nowego datasetu, istniejące dane nietknięte")),
                 (_(u"Przeglądanie"), _(u"Enter: migawka tylko do odczytu, mc")),
-                (_(u"Przywracanie"), _(u"F9: okna Przywróć -- plan i WYKONAJ"))]
+                (_(u"Przywracanie"), _(u"F9: okna Przywróć -- plan i Uruchom"))]
     path = compact_paths(list(copies)) if copies else "?"
     return [group(None, _(u"Kopie")),
             (_(u"Ścieżka"), path),
             (_(u"Kierunek"), row.get("dir") or "?"),
             group(None, _(u"Odzysk")),
             (_(u"Na źródło"), _(u"wymaga zgody źródła (deploy.sh --allow-restore)")),
-            (_(u"Na bok"), _(u"do nowego datasetu obok, oryginał nietknięty"))]
+            (_(u"Obok oryginału"), _(u"do nowego datasetu obok, oryginał nietknięty"))]
 
 
 def render_odzysk(data, rows, cursor, width, height, now, ch, message="", focus="list", pair_cursor=0, ti=0, ctx=None):
@@ -4889,7 +4889,7 @@ def render_odzysk(data, rows, cursor, width, height, now, ch, message="", focus=
         if ctx and ctx.get("rel") == x.get("name") and (ctx.get("dataset") or ctx.get("at")):
             det = [group(ch, _(u"Wskazane")),
                    (_(u"Dataset"), ctx.get("dataset") or _(u"(wybierzesz w oknie)")),
-                   (_(u"Chwila"), time.strftime(DT_FMT, time.localtime(ctx["at"])) if ctx.get("at") else _(u"najnowsza migawka"))] + det
+                   (_(u"Czas"), time.strftime(DT_FMT, time.localtime(ctx["at"])) if ctx.get("at") else _(u"najnowsza migawka"))] + det
         child.update({"name": x["name"], "tabs": TABS["odzysk"], "ti": 0})
     host = (data.jobs or {}).get("host") or ""
     return render_tabbed(data, width, height, now, ch, "odzysk", (_(u"Kopie na %s") % host).strip(),
@@ -5105,7 +5105,7 @@ def render_kopie_tab(data, items, selix, cursor, focus, scur, snaps, snaps_err, 
         if ctx and (ctx.get("dataset") or ctx.get("at")) and ctx.get("rel") == g["name"]:
             det = [group(ch, _(u"Wskazane")),
                    (_(u"Dataset"), ctx.get("dataset") or _(u"(wybierzesz w oknie)")),
-                   (_(u"Chwila"), time.strftime(DT_FMT, time.localtime(ctx["at"])) if ctx.get("at") else _(u"najnowsza migawka"))] + det
+                   (_(u"Czas"), time.strftime(DT_FMT, time.localtime(ctx["at"])) if ctx.get("at") else _(u"najnowsza migawka"))] + det
         sitems = []
         for x in snaps or []:
             y = dict(x)
@@ -5268,19 +5268,19 @@ HELP = [
     u"                 zapisuje, domyślnie w /etc/zfs-snapshot-all/relations) albo",
     u"                 import: lista plików eksportu z tego katalogu, potem wynik",
     u"                 porównania (już jest / różni się / plan), t wykonuje plan.",
-    u"                 Ins i Del przełączają terminal do whiptaila i wracają tu",
+    u"                 Ins i Del otwierają okno dialogowe i wracają tu",
     u"                 z odświeżonymi danymi: Ins -- kreator krok po kroku (backup: 7",
     u"                 kroków -- rodzaj, host, datasety, dokąd, szablon, ile trzyma",
     u"                 źródło, nazwa; Wstecz = poprzedni krok), potem podsumowanie",
     u"                 (pozycja = popraw krok; dodatki w Zaawansowane) i",
-    u"                 Utwórz -> plan -> WYKONAJ z oknem postępu. Del to",
+    u"                 Utwórz -> plan -> Uruchom z oknem postępu. Del to",
     u"                 usunięcie całej relacji (źródło, nazwa, opcjonalnie kopie).",
     u"                 Pozostałe akcje: NAJPIERW komenda bash, potem 't', potem",
-    u"                 wyjście na żywo. Esc zamyka okno, a proces biegnie dalej.",
+    u"                 wyjście na żywo. Esc zamyka okno, a proces działa dalej.",
     u"  F4  Kopie      kopie relacji i dysk z repliką: Enter przegląda (migawka",
     u"                 tylko do odczytu, mc, potem odmontowanie; dysk VM: partycja),",
     u"                 F9 przywraca (okna Przywróć -- dataset, cel, migawka, plan,",
-    u"                 WYKONAJ). Z Przebiegów albo z datasetu relacji F4 otwiera od",
+    u"                 Uruchom). Z Przebiegów albo z datasetu relacji F4 otwiera od",
     u"                 razu tę kopię i tę chwilę.",
     u"  F5  Szablony   szablony retencji: Ins nowy na podstawie zaznaczonego,",
     u"                 Enter szczegóły ('e' zmienia własny), Del usuwa własny",
@@ -5289,9 +5289,9 @@ HELP = [
     u"  F10 Ustawienia ustawienia hosta (/etc/zfs-snapshot-all/settings.ini): alerty",
     u"                 (adres, tryb, godzina maila, mail 'wszystko OK'), próg pojemności,",
     u"                 strażnik, szablon nowej relacji, aktualizacja, język GUI; wysłanie",
-    u"                 maila testowego. Zapis: najpierw lista zmian, potem WYKONAJ.",
-    u"                 Pasek u góry: „kasowanie przy pełnej puli” i „alarm przyrostu”",
-    u"                 -- czy na tym hoście działa strażnik pojemności i strażnik",
+    u"                 maila testowego. Zapis: najpierw lista zmian, potem Uruchom.",
+    u"                 Pasek u góry: „ochrona pojemności” i „monitor przyrostu”",
+    u"                 -- czy na tym hoście działa ochrona pojemności i monitor",
     u"                 nagłego przyrostu danych; włączasz je w F10.",
     u"  Kierunek       strzałka idzie jak dane: pve9 → pve10 pobieram z pve9,",
     u"                 pve10 → pve9 wysyłam, pve10 ↔ pve9 obie strony, lokalnie = na tym hoście;",
@@ -5330,12 +5330,12 @@ HELP = [
     u"Słowa w kolumnie 'Kopie':",
     u"  aktualne       najnowsza migawka mieści się w progu ostrzegawczym",
     u"  spóźnione      przekroczony próg ostrzegawczy, nie krytyczny",
-    u"  stare          przekroczony próg krytyczny",
+    u"  krytyczne      przekroczony próg krytyczny",
     u"  nie odpowiada  monitor PYTAŁ i nie dostał odpowiedzi (np. dataset zniknął)",
     u"  bez monitora   NIKT nie pyta: kopia się robi, nikt nie sprawdza czy dalej",
     "",
     u"Źródła: status, list-jobs, monitor, progress, list-replicas, show-config --json.",
-    u"Ekran nie ma własnej kopii żadnej reguły: czego nie ma w JSON, nie ma tutaj.",
+    u"Reguły czyta z zfs-backup.sh.",
 ]
 
 
@@ -5579,7 +5579,7 @@ class UI(object):
         sekund (pve10: ~5,6 s). Klawisz tylko ZAMAWIA odswiezenie i wypisuje
         'odswiezam...'; petla najpierw to rysuje, potem wola run_pending()."""
         self.pending_refresh = True
-        self.message = _(u"odświeżam… (czasowniki: status, list-jobs, monitor, job-stats -- kilka sekund)")
+        self.message = _(u"odświeżam… (polecenia: status, list-jobs, monitor, job-stats -- kilka sekund)")
 
     def run_pending(self):
         if getattr(self, "pending_refresh", False):
@@ -5756,7 +5756,7 @@ class UI(object):
         data = bg[1].get("data")
         self.start_slow()
         if data is None:
-            self.message = (self.message or "") + _(u"   odświeżenie w tle nie wyszło: %s") % bg[1].get("err", "?")
+            self.message = (self.message or "") + _(u"   odświeżenie w tle nie powiodło się: %s") % bg[1].get("err", "?")
             self.bg_failed = True   # REV-172: wiersze zostają stare -- czynności czekają na Ctrl-R
             return True
         self.files["_data"] = data
@@ -5915,7 +5915,7 @@ class UI(object):
         if r["kind"] != "relation":
             return None, _(u"to nie jest relacja (%s) -- akcje dotyczą rekordów relacji") % (_("zadanie bez rekordu") if r["kind"] == "job" else "nieczytelny blok")
         if r["rel"].get("state") == "removed" and not allow_removed:
-            return None, _(u"relacja '%s' jest już usunięta (removed_at %s)") % (r["name"], dshow(r["rel"].get("removed_at") or "?"))
+            return None, _(u"relacja '%s' jest już usunięta (%s)") % (r["name"], dshow(r["rel"].get("removed_at") or "?"))
         return r, ""
 
     def confirm(self, title, argv, note_lines=None, redirect=None, on_yes=None, alt=None):
@@ -6029,11 +6029,11 @@ class UI(object):
             obj["rc"] = rc
         out.append("")
         if rc is None and proc is not None:
-            out.append(_(u"--- trwa (pid %d). Esc zamyka okno, proces biegnie dalej; wyjście w %s") % (proc.pid, obj["path"]))
+            out.append(_(u"--- trwa (pid %d). Esc zamyka okno, proces działa dalej; wyjście w %s") % (proc.pid, obj["path"]))
         elif rc == 0:
             out.append(_(u"--- zakończone, rc=0") + (u"   zapisano: %s" % obj["redirect"] if obj.get("redirect") else "") + (_(u"   (dziennik: %s)") % obj["path"] if obj.get("path") else ""))
         else:
-            out.append(_(u"--- zakończone, rc=%s -- czasownik ODMÓWIŁ albo padł; przeczytaj powyżej") % rc + (_(u"   (dziennik: %s)") % obj["path"] if obj.get("path") else ""))
+            out.append(_(u"--- zakończone, rc=%s -- polecenie odmówiło albo się wysypało; przeczytaj powyżej") % rc + (_(u"   (dziennik: %s)") % obj["path"] if obj.get("path") else ""))
         return out
 
     def ensure_profiles(self):
@@ -6053,7 +6053,7 @@ class UI(object):
         profs = self.data.profiles or []
         c = self.cursor["szablony"]
         if not profs or not (0 <= c < len(profs)):
-            self.message = _(u"brak szablonów (list-profiles nie odpowiedział?)")
+            self.message = _(u"brak szablonów (lista szablonów nie odpowiedziała?)")
             return
         n = profs[c].get("name")
         if k == "ins":
@@ -6072,7 +6072,7 @@ class UI(object):
             self.message = _(u"brak zadań -- nie ma czego uruchomić")
             return
         if rows[c].get("past"):
-            self.message = _(u"ten bieg już był -- F7 uruchamia zadanie z wiersza nadchodzącego")
+            self.message = _(u"ten przebieg już był -- F7 uruchamia zadanie z wiersza nadchodzącego")
             return
         if rows[c].get("static"):
             self.message = _(u"brak zadań -- nie ma czego uruchomić")
@@ -6082,7 +6082,7 @@ class UI(object):
         # list-replicas, list-jobs replik nie zwraca) -- F7 robi to samo co F7 na F6.
         if r.get("kind") == "replica":
             n = (r.get("replica") or {}).get("name") or r.get("name")
-            self.run_detached(_(u"Replika %s -- biegnie teraz") % n, [self.zb(), "run-replicas", "--name=%s" % n])
+            self.run_detached(_(u"Replika %s -- w toku") % n, [self.zb(), "run-replicas", "--name=%s" % n])
             return
         j = r.get("job") or {}
         sched = (r.get("schedule") or "").split()
@@ -6110,7 +6110,7 @@ class UI(object):
             return
         # X9 (wlasciciel 2026-10-12): bez okna potwierdzenia, jak F7 na replice -- bieg
         # robi dokladnie to, co nocny cron (prune tez: kasuje tylko wg retencji).
-        self.run_detached(_(u"Zadanie %s -- bieg teraz (konto %s)") % (r.get("name") or "", acct), argv, logname="zadanie")
+        self.run_detached(_(u"Zadanie %s -- uruchom teraz (konto %s)") % (r.get("name") or "", acct), argv, logname="zadanie")
 
     def kopie_state(self):
         """F4 Kopie: (wiersze lewego panelu, indeksy wierszy do wyboru)."""
@@ -6258,10 +6258,10 @@ class UI(object):
         if k == "F7":
             # ZAZNACZONA replika, od razu, bez pytania (uwaga 18, 2026-10-08): kopia niczego
             # nie niszczy, a "t" niczego nie chronilo. Wynik w oknie, jak kazdy bieg w tle.
-            self.run_detached(_(u"Replika %s -- biegnie teraz") % n, [self.zb(), "run-replicas", "--name=%s" % n])
+            self.run_detached(_(u"Replika %s -- w toku") % n, [self.zb(), "run-replicas", "--name=%s" % n])
             return
         if k == "del":
-            # Okna whiptail (remove-replica --ask): plan, potem WYKONAJ; dane na
+            # Okna whiptail (remove-replica --ask): plan, potem Uruchom; dane na
             # dyskach zostaja (W12).
             return self.run_dialog([self.zb(), "remove-replica", n, "--ask"])
         if k == "F8":
@@ -6313,13 +6313,13 @@ class UI(object):
             # UROCHOM TERAZ, jak F7 na F2 i F6: bez okna potwierdzenia (kopia niczego nie
             # niszczy), wynik w oknie wyjscia. Czasownik bierze z zainstalowanego crona
             # najdrobniejsze zadanie kazdego datasetu relacji; wstrzymanej odmawia.
-            self.run_detached(_(u"Relacja %s -- bieg teraz: każdy dataset relacji raz, poza harmonogramem (np. przed przeniesieniem kolektora)") % n, [self.zb(), "run-relation", n], logname="relacja")
+            self.run_detached(_(u"Relacja %s -- uruchom teraz: każdy dataset relacji raz, poza harmonogramem (np. przed przeniesieniem kolektora)") % n, [self.zb(), "run-relation", n], logname="relacja")
         elif k == "F8":
             if rel.get("disabled"):
                 self.confirm(_(u"Włącz relację %s") % n, [self.zb(), "enable-client", n], [_(x) for x in ENABLE_NOTE])
             elif rel.get("paused_local"):
                 self.confirm(_(u"Wznów relację %s") % n, [self.zb(), "resume-client", n],
-                             [_(u"Zdejmuje pauzę: następny bieg z crona rusza normalnie i dogania przyrostowo.")])
+                             [_(u"Zdejmuje pauzę: następny przebieg z crona rusza normalnie i dogania przyrostowo.")])
             else:
                 note = [_(u"Pauza LOGICZNA: linie w cronie zostają, ale nic nie wysyła i nie kasuje;"),
                         _(u"monitor nie alarmuje (pokazuje PAUZA). Cofnięcie: F8 jeszcze raz (resume-client).")]
@@ -6377,7 +6377,7 @@ class UI(object):
     # jego dwiema bramkami (walidator i prawdziwy render). Mechanizm i ksztalt
     # sa z bazy: save-profile zmienia pola szczebli, nie sklada profilu z niczego.
     def profile_form_fields(self, base):
-        fields = [("name", u"Nazwa nowego szablonu", "text", _(u"litery, cyfry, . _ - ; plik NAZWA.conf w /etc/zfs-snapshot-all/profiles. Nazwa w stylu d7h48 obiecuje retencję -- czasownik sprawdzi")),
+        fields = [("name", u"Nazwa nowego szablonu", "text", _(u"litery, cyfry, . _ - ; plik NAZWA.conf w /etc/zfs-snapshot-all/profiles. Nazwa w stylu d7h48 obiecuje retencję -- polecenie sprawdzi")),
                   ("desc", u"Opis", "text", _(u"jedno zdanie, co ten szablon robi (pole description)")),
                   ("base", _(u"Na bazie"), "pick", _(u"wybór z listy szablonów; z bazy idą mechanizm, kształt i wszystko, czego nie zmienisz"))]
         for t in base.get("tiers", []):
@@ -6389,9 +6389,9 @@ class UI(object):
             if t.get("keep"):
                 fields.append(("t|%s|keep" % tn, u"  trzymaj %s" % tier_unit(tn), "num", _(u"licznik: ile %s zostaje (0 = nic z tego szczebla)") % tier_unit(tn)))
             elif t.get("retain"):
-                fields.append(("t|%s|retain" % tn, u"  trzymaj wg wieku", "text", _(u"flaga silnika, np. -h24 = młodsze niż 24 godziny")))
+                fields.append(("t|%s|retain" % tn, u"  trzymaj wg wieku", "text", _(u"opcja czyszczenia, np. -h24 = młodsze niż 24 godziny")))
             if t.get("prune_schedule"):
-                fields.append(("t|%s|prune_schedule" % tn, _(u"  porządki co (cron)"), "cron", _(u"kiedy kasować nadmiar")))
+                fields.append(("t|%s|prune_schedule" % tn, _(u"  czyszczenie co (cron)"), "cron", _(u"kiedy czyścić nadmiar")))
             if t.get("send_schedule"):
                 qh = _(u"tak = auto,degrade (spójna migawka; gdy nie da się zamrozić, robi zwykłą)")
                 if base.get("shape") == "one-family":
@@ -6399,8 +6399,8 @@ class UI(object):
                 fields.append(("t|%s|quiesce" % tn, _(u"  zamrażaj system plików"), "toggle", qh))
             if t.get("monitor_warn") or t.get("monitor_crit"):
                 fields.append(("t|%s|monitor_warn" % tn, _(u"  monitor: ostrzeż po"), "text", _(u"np. 90m, 30h, 8d -- kopia starsza niż to = ostrzeżenie")))
-                fields.append(("t|%s|monitor_crit" % tn, _(u"  monitor: alarm po"), "text", _(u"np. 150m, 48h, 10d -- starsza niż to = alarm")))
-        fields.append(("go", _(u"[ ZAPISZ ]"), "go", _(u"pokazuje komendy save-profile do potwierdzenia (nic nie jest zapisane wcześniej)")))
+                fields.append(("t|%s|monitor_crit" % tn, _(u"  monitor: krytyczny po"), "text", _(u"np. 150m, 48h, 10d -- starsza niż to = krytyczne")))
+        fields.append(("go", _(u"[ ZAPISZ ]"), "go", _(u"pokazuje polecenia zapisu szablonu do potwierdzenia (nic nie jest zapisane wcześniej)")))
         return fields
 
     def profile_form_vals(self, base, keep=None):
@@ -6478,7 +6478,7 @@ class UI(object):
             self.message = _(u"nazwa: tylko litery, cyfry, kropka, podkreślnik, myślnik")
             return
         if name == base.get("name"):
-            self.message = _(u"nazwa musi być inna niż baza (fabrycznego szablonu nie nadpiszemy)")
+            self.message = _(u"nazwa musi różnić się od szablonu bazowego (wbudowanego szablonu nie nadpiszemy)")
             return
         for key, _l, kind, _h in obj["fields"]:
             if kind == "cron" and len((vals.get(key) or "").split()) != 5:
@@ -6498,11 +6498,11 @@ class UI(object):
         w = profile_words(synth)
         note = wrap(u"Szablon %s: %s · %s · %s · %s · %s · %s" % (name, w["cadence"], w["retention"], w["mech"], w["shape"], w["quiesce"], w["monitor"]), 72) + [""]
         if len(argvs) > 1:
-            note += wrap(_(u"Zmienione szczeble: %s -- %d wywołania save-profile po kolei (jeden --tier na raz):") % (", ".join(tn for tn, _ in changes), len(argvs)), 72)
+            note += wrap(_(u"Zmienione szczeble: %s -- zapis w %d krokach (po jednym szczeblu):") % (", ".join(tn for tn, _ in changes), len(argvs)), 72)
             for a in argvs[1:]:
                 note += wrap("  " + self.shell_line(a), 72)
             note.append("")
-        note += wrap(_(u"Zapis idzie do /etc/zfs-snapshot-all/profiles/%s.conf. Dwie bramki czasownika: walidator i prawdziwy render.") % name, 72)
+        note += wrap(_(u"Zapis idzie do /etc/zfs-snapshot-all/profiles/%s.conf. Dwie kontrole: walidator i prawdziwy render.") % name, 72)
         back_form = obj.get("back")
         argv = argvs[0] if len(argvs) == 1 else ["bash", "-c", " && ".join(self.shell_line(a) for a in argvs)]
 
@@ -6563,12 +6563,12 @@ class UI(object):
         out.append("")
         if obj.get("kind") == "profile":
             out.append(fit(_(u" Sposób liczenia i układ migawek bierze się z szablonu bazowego -- inny = wybierz inną bazę."), width - 4))
-            out.append(fit(_(u" Zapis = save-profile do /etc/zfs-snapshot-all/profiles; nic zbudowanego nie rusza."), width - 4))
+            out.append(fit(_(u" Zapis szablonu do /etc/zfs-snapshot-all/profiles; nic zbudowanego nie rusza."), width - 4))
             if self.message:
                 out += ["", fit(u" ! " + self.message, width - 4)]
             return out
         if obj.get("perr"):
-            out.append(fit(_(u" list-profiles: błąd źródła -- wpisz nazwę szablonu ręcznie (%s)") % obj["perr"][:40], width - 4))
+            out.append(fit(_(u" lista szablonów: błąd źródła -- wpisz nazwę szablonu ręcznie (%s)") % obj["perr"][:40], width - 4))
         else:
             out.append(fit(_(u" szablonów do wyboru: %d (pole Szablon)") % len(obj.get("profiles") or []), width - 4))
         if self.message:
@@ -6593,7 +6593,7 @@ class UI(object):
             if i == obj["cur"]:
                 out.append(fit(u"      %s · %s · %s · %s" % (w["shape"], w["quiesce"], w["monitor"], _(pr.get("description", "") or "")), width - 4))
         if not obj["items"]:
-            out.append(_(u" brak szablonów (list-profiles nic nie zwrócił) -- wpisz nazwę ręcznie w polu"))
+            out.append(_(u" brak szablonów (lista jest pusta) -- wpisz nazwę ręcznie w polu"))
         elif obj.get("allow_new"):
             out += ["", fit(_(u" Ins = nowy szablon na bazie podświetlonego (liczniki, harmonogramy, zamrażanie, progi)"), width - 4)]
         return out
@@ -6678,7 +6678,7 @@ class UI(object):
         zostaje w CLI (import na innym kolektorze pod inna nazwa)."""
         argv = [self.zb(), "import-relation", path]
         if self.exec_log:
-            preview, rc = [_(u"[atrapa] podgląd: ") + self.shell_line(argv), self.IMPORT_PLAN_MARK], 0
+            preview, rc = [_(u"[tryb testowy] podgląd: ") + self.shell_line(argv), self.IMPORT_PLAN_MARK], 0
         else:
             try:
                 p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=self.repo)
@@ -6698,7 +6698,7 @@ class UI(object):
             self.scroll = 0
             return
         self.confirm(_(u"Import relacji z %s") % os.path.basename(path), argv + ["--yes"],
-                     [_(u"Plan (to samo, co czasownik pokazał bez --yes):"), ""] + sum((wrap("  " + x, 72) for x in preview), []))
+                     [_(u"Plan (to samo, co polecenie pokazało bez --yes):"), ""] + sum((wrap("  " + x, 72) for x in preview), []))
 
     def key(self, k, height=24, raw=None):
         """Jeden klawisz -> nowy stan. `k` to nazwa: 'down', 'F2', 'enter', 'q', 'esc'...;
@@ -6731,7 +6731,7 @@ class UI(object):
                                       u"„odświeżam w tle”; F12 wychodzi.%s") % (self.BG_KEY_WAIT, _(self.BG_NOTE)))
                     return "stay"
             if getattr(self, "bg_failed", False) and not self.row_free(k):
-                self.message = (_(u"Odświeżenie danych nie wyszło -- ekran jest NIEAKTUALNY, czynność pominięta. "
+                self.message = (_(u"Odświeżenie danych nie powiodło się -- ekran jest NIEAKTUALNY, czynność pominięta. "
                                   u"Ctrl-R odświeża; po udanym odświeżeniu naciśnij klawisz ponownie."))
                 return "stay"
         if self.window and self.window[0] == "prompt":
@@ -6931,7 +6931,7 @@ class UI(object):
                     # biegło, nic do czytania (wlasciciel 2026-10-29, Esc po F8 Klucz).
                     return "stay"
                 if obj["proc"].poll() is None:
-                    self.message = _(u"proces biegnie dalej (pid %d); wyjście: %s") % (obj["proc"].pid, obj["path"])
+                    self.message = _(u"proces działa dalej (pid %d); wyjście: %s") % (obj["proc"].pid, obj["path"])
                 self.refresh_bg()
                 self.wait_fresh = True
             elif k in ("down", "j"):
@@ -7806,7 +7806,7 @@ def main(argv):
     ap.add_argument("--render-once", action="store_true", help="wydrukuj ekran jako tekst i zakoncz (testy, podglad przez ssh bez terminala)")
     ap.add_argument("--screen", default="zadania", choices=[s[0] for s in SCREENS], help="ktory ekran (z --render-once)")
     ap.add_argument("--keys", default="", help="sekwencja klawiszy po przecinku, np. down,down,enter,pgdn; 'text:abc' wpisuje tekst, 'bs' kasuje (z --render-once)")
-    ap.add_argument("--exec-log", help="TESTY: zamiast uruchamiac czasowniki, dopisuj komendy do tego pliku")
+    ap.add_argument("--exec-log", help="Tryb testowy: zamiast uruchamiać polecenia, dopisuj je do tego pliku")
     ap.add_argument("--width", type=int, default=80)
     ap.add_argument("--height", type=int, default=24)
     ap.add_argument("--now", type=int, help="epoch 'teraz' (testy: deterministyczny nastepny bieg)")
@@ -7825,8 +7825,8 @@ def main(argv):
     ap.add_argument("--check-source", help="czytaj check-source HOST --json z pliku (kreator: diagnoza hosta)")
     ap.add_argument("--zfs-tree", help="czytaj zfs-tree --json z pliku (F4 Kopie, lewy panel)")
     ap.add_argument("--zfs-snapshots", help="plik {\"by_dataset\": {DS: [migawki]}} zamiast zfs-snapshots --json (F4 Kopie)")
-    ap.add_argument("--offline", action="store_true", help="nie uruchamiaj czasownikow; zrodla bez pliku sa puste")
-    ap.add_argument("--host-ip", help="R3-1: IP hosta w pasku tytulu (testy/offline; na zywo liczony z trasy domyslnej)")
+    ap.add_argument("--offline", action="store_true", help="nie uruchamiaj poleceń; źródła bez pliku są puste")
+    ap.add_argument("--host-ip", help="IP hosta w pasku tytulu (testy/offline; na zywo liczony z trasy domyslnej)")
     ap.add_argument("--lang", choices=LANGS, help="window language (default: [gui] language in settings.ini, then en)")
     a = ap.parse_args(argv)
     # Okna whiptail (tui/*.sh) dziedziczą język przez środowisko.

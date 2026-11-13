@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""hand-edits.py PLAN NAME -- reczne zmiany w configu relacji, ktore WYKONAJ nadpisze.
+"""hand-edits.py PLAN NAME -- reczne zmiany w configu relacji, ktore Uruchom nadpisze.
 
 X6 (wlasciciel 2026-10-12): config jest zrodlem prawdy, a GUI generuje sekcje relacji od
 nowa z jej szablonu -- reczna zmiana (np. minuta sprzatania 31 -> 29) przepadala bez
@@ -28,7 +28,7 @@ def _(s):
 
 
 TIERS = {"hourly": u"godzinowe", "daily": u"dobowe", "weekly": u"tygodniowe", "monthly": u"miesięczne", "yearly": u"roczne"}
-KEYS = {"exclude_child": u"wyjątek", "send_schedule": u"godzina kopii", "prune_schedule": u"godzina sprzątania",
+KEYS = {"exclude_child": u"wyjątek", "send_schedule": u"godzina kopii", "prune_schedule": u"godzina czyszczenia",
         "keep": u"trzyma", "retain": u"trzyma (wiek)", "schedule": u"harmonogram"}
 
 
@@ -146,7 +146,7 @@ def main(argv):
                 if o[k] != n.get(k) and not (k.startswith("exclude_child") and o[k] in dropped):
                     rows.append(u"  %s, %s:  %s -> %s" % (label(sec), _(KEYS[re.sub(r"_[0-9]+$", "", k)]) if re.sub(r"_[0-9]+$", "", k) in KEYS else k, o[k], n.get(k, _(u"(brak)"))))
     if rows:
-        out = [_(u"UWAGA: relacja ma ustawienia inne niż jej szablon (tabela, silnik albo ręcznie w configu)."),
+        out = [_(u"UWAGA: relacja ma ustawienia inne niż jej szablon (tabela, ustawienia kopiowania albo ręcznie w configu)."),
                _(u"Szablon zastąpi je swoimi:")] + rows + \
               [_(u"Chcesz zachować swoje wartości? Wróć (Wstecz) i popraw liczby w 'Harmonogram i retencja' zamiast zmieniać szablon."), u""]
         sys.stdout.write(u"\n".join(out) + u"\n")

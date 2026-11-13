@@ -264,7 +264,7 @@ przez SIGTERM i tak eksportuje swój dysk.
 
 **Pierwsza kopia, która się nie zmieści, jest odmawiana.** Przed zapisem bramka sumuje źródła, które nie mają jeszcze
 kopii na nośniku, i porównuje sumę z wolnym miejscem nośnika; gdy brakuje, eksportuje dysk i odmawia z obiema
-liczbami (kod 2, alert). `add-replica` i kreator repliki pokazują rozmiar pierwszej kopii w planie, przed WYKONAJ,
+liczbami (kod 2, alert). `add-replica` i kreator repliki pokazują rozmiar pierwszej kopii w planie, przed Uruchom,
 wraz z wolnym miejscem, gdy pula nośnika jest zaimportowana, oraz `!!!`, gdy się nie zmieści. Gdy przy zakładaniu
 nowej repliki dysk jest już podłączony, kreator pyta, czy zacząć pierwszą kopię teraz (w tle, jak F7; stan jest
 w F2).

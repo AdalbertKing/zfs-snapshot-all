@@ -270,7 +270,7 @@ exports its disk.
 **A first copy that cannot fit is refused.** Before writing, the gate adds up the sources that have no copy on the
 medium yet and compares the sum with the medium's free space; when it is short, the gate exports the disk and
 refuses with both numbers (rc 2, an alert). `add-replica` and the replica wizard show the size of the first copy
-in the plan, before EXECUTE, with the free space when the medium's pool is imported, and `!!!` when it cannot fit.
+in the plan, before Run, with the free space when the medium's pool is imported, and `!!!` when it cannot fit.
 When the disk is already attached while a new replica is created, the wizard asks whether to start the first copy
 now (in the background, as F7; the state is in F2).
 

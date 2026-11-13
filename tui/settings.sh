@@ -4,7 +4,7 @@
 # Właściciel 2026-10-19: "nowy plik ustawień z sekcjami", "ustawienia F10". Okno NIE ma
 # własnej logiki: listę kluczy, wartości i ich źródło bierze z `zfs-backup.sh settings
 # --tsv`, zmiany zbiera na liście (jak zmiana repliki, U8), a "Zapisz" pokazuje PLAN
-# `settings set K=V ...` i po WYKONAJ uruchamia go z --yes. Walidacja, zapis pliku i
+# `settings set K=V ...` i po Uruchom uruchamia go z --yes. Walidacja, zapis pliku i
 # przeliczenie crona są w czasowniku. "Mail próbny" = `settings test-mail`.
 #
 # Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka.
@@ -12,7 +12,7 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
-. "$HERE/tui/wt-lib.sh" || { echo "settings: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/wt-lib.sh" || { echo "settings: brak $HERE/tui/wt-lib.sh -- katalog programu jest niekompletny" >&2; exit 1; }
 WT_BACKTITLE="$(T 'Ustawienia hosta -- %s' "$(hostname)")"
 TMPD="$(mktemp -d)" || exit 1
 trap 'rm -rf "$TMPD"' EXIT
@@ -28,7 +28,7 @@ while IFS=$'\t' read -r k v s kind help; do
     [ -n "$k" ] || continue
     KEYS+=("$k"); VAL[$k]="$v"; SRC[$k]="$s"; KIND[$k]="$kind"; HELP[$k]="${TCAT[$help]-$help}"   # opis z rejestru czasownika = dane; tłumaczony jako klucz katalogu
 done <"$TMPD/rows.tsv"
-[ "${#KEYS[@]}" -gt 0 ] || { wt --title "$(T Ustawienia)" --msgbox "$(T 'Czasownik nie zwrócił żadnego klucza.')" 8 "$W"; exit 1; }
+[ "${#KEYS[@]}" -gt 0 ] || { wt --title "$(T Ustawienia)" --msgbox "$(T 'Polecenie nie zwróciło żadnego klucza.')" 8 "$W"; exit 1; }
 
 SECT_PL() { case "$1" in gui) echo "GUI" ;; alerts) T Alerty ;; capacity) T Pojemność ;; growth) T 'Przyrost (ransomware)' ;; replica) T 'Replika (dysk wymienny)' ;;
             monitor) T Strażnik ;; new_relation) T 'Nowa relacja' ;; update) T Aktualizacja ;; *) echo "$1" ;; esac; }
@@ -60,7 +60,7 @@ for p in rows:
     own = "" if p.get("source") == "package" else _("  [własny]")
     print("%s\t%s%s" % (p.get("name"), _(p.get("description") or "").replace("\t", " "), own))
 ' | tr -d '\r' >"$TMPD/prof.tsv"
-            [ -s "$TMPD/prof.tsv" ] || { wt --title "$k" --msgbox "$(T 'Nie mogę odczytać listy szablonów (list-profiles).')" 8 "$W"; return 0; }
+            [ -s "$TMPD/prof.tsv" ] || { wt --title "$k" --msgbox "$(T 'Nie mogę odczytać listy szablonów.')" 8 "$W"; return 0; }
             local n d
             while IFS=$'\t' read -r n d; do
                 opts+=("$n" "$(clip_label "$(printf '%-16s %s' "$n" "$d")" $((W - 12)))")
@@ -76,17 +76,17 @@ for p in rows:
     if [ "$WT_OUT" = "${VAL[$k]}" ]; then unset "NEW[$k]"; else NEW[$k]="$WT_OUT"; fi
 }
 
-save() {   # plan czasownika, potem WYKONAJ
+save() {   # plan czasownika, potem Uruchom
     local args=() k
     for k in "${KEYS[@]}"; do [ -n "${NEW[$k]+x}" ] && args+=("$k=${NEW[$k]}"); done
     if [ "${#args[@]}" -eq 0 ]; then
         geom; wt --title "$(T Ustawienia)" --msgbox "$(T 'Nic nie zmieniono -- nie ma czego zapisać.')" 8 "$W"; return 1
     fi
     "$ZB" settings set "${args[@]}" >"$TMPD/plan.txt" 2>&1 || {
-        geom; wt --title "$(T 'Czasownik odmówił -- nic nie zapisano')" --msgbox "$(verb_refusal "$TMPD/plan.txt")" 10 "$W"; return 1; }
+        geom; wt --title "$(T 'Polecenie odmówiło -- nic nie zapisano')" --msgbox "$(verb_refusal "$TMPD/plan.txt")" 10 "$W"; return 1; }
     { T 'PLAN -- nic jeszcze nie zostało zmienione:'; echo; echo; grep -v '^plan only' "$TMPD/plan.txt"; echo
       printf '%s  %s settings set' "$(T 'Komenda:')" "$(shq "$ZB")"; for a in "${args[@]}"; do printf ' %s' "$(shq "$a")"; done; echo " --yes"; } >"$TMPD/plan2.txt"
-    yesno_text "$TMPD/plan2.txt" "$(T 'Ustawienia -- plan')" "$(T WYKONAJ)" "$(T Wstecz)" --defaultno || return 1
+    yesno_text "$TMPD/plan2.txt" "$(T 'Ustawienia -- plan')" "$(T Uruchom)" "$(T Wstecz)" --defaultno || return 1
     : >"$TMPD/run.log"
     RC=0; run_progress "$(T Ustawienia)" "$TMPD/run.log" "$ZB" settings set "${args[@]}" --yes || RC=$?
     [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
@@ -152,9 +152,9 @@ while :; do
         [ "$first" = 1 ] && items+=("$k" "$c1    $c2")
     done
     n=0; for k in "${KEYS[@]}"; do [ -n "${NEW[$k]+x}" ] && n=$((n + 1)); done
-    items+=("#_" " " mail "$(T 'Wyślij mail próbny (na obecny adres)')" zapisz "$(Tv 'Zapisz zmiany ($n) -- plan, WYKONAJ' '$n' "$n")")
+    items+=("#_" " " mail "$(T 'Wyślij mail próbny (na obecny adres)')" zapisz "$(Tv 'Zapisz zmiany ($n) -- plan, Uruchom' '$n' "$n")")
     wt --title "$(T 'Ustawienia hosta')" --ok-button "$(T Wybierz)" --cancel-button "$(T Wyjdź)" --notags --default-item "$LAST" \
-       --menu "$(T 'Wybierz pozycję, aby zmienić jej wartość. Nic nie zostanie zapisane, dopóki nie wybierzesz „Zapisz zmiany” i WYKONAJ. Nawias przy wartości mówi, skąd ona pochodzi, jeśli nie ma jej w pliku ustawień.')" \
+       --menu "$(T 'Wybierz pozycję, aby zmienić jej wartość. Nic nie zostanie zapisane, dopóki nie wybierzesz „Zapisz zmiany” i Uruchom. Nawias przy wartości mówi, skąd ona pochodzi, jeśli nie ma jej w pliku ustawień.')" \
        "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 3)" "${items[@]}" \
        || { clear 2>/dev/null; wt_end_nochange "$(T 'Ustawienia: wyjście, nic nie zapisano')"; exit 1; }
     LAST="$WT_OUT"

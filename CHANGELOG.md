@@ -4,6 +4,17 @@ Every release of this repository is one commit; its message and the `RELEASE-OF`
 development revision it was built from. Releases between tagged versions are listed here only
 when they change how the tool is used.
 
+## [Unreleased]
+
+- **GUI wording, Polish and English, reviewed as an admin reads it.** Internal terms are gone
+  from the windows ("czasownik"/"verb" is now "polecenie"/"command", seed, profile and engine
+  names, a developer note). One name per thing: pruning is "czyszczenie", a run is "przebieg",
+  the button is "Uruchom"/"Run", a failure is "BŁĄD"/"FAILED", the thresholds are "krytyczny" and
+  "ostrzegawczy", child datasets are "potomne", templates are "wbudowane"/"built-in". The top bar
+  reads "ochrona pojemności · monitor przyrostu". English fixes: a ZFS bookmark is no longer called
+  a "tab", "medium" is now "removable disk", and labels that were left in Polish are translated.
+  F6's column is "Przebieg". Keys, commands and screen layout are unchanged.
+
 ## [1.0.21] — 2026-11-13
 
 - **Under `-R`, a quiesced dataset whose window snapshot is missing fails** (REV-20261112-197

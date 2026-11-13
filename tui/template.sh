@@ -23,7 +23,7 @@ case "$ACTION" in new|edit|delete) ;; relation) [ -n "$ROUT" ] || { echo "usage:
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
-. "$HERE/tui/wt-lib.sh" || { echo "template: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/wt-lib.sh" || { echo "template: brak $HERE/tui/wt-lib.sh -- katalog programu jest niekompletny" >&2; exit 1; }
 WT_BACKTITLE="$(Tv 'Szablony -- kolektor $(hostname)' '$(hostname)' "$(hostname)")"
 TMPD="$(mktemp -d)" || exit 1
 trap 'rm -rf "$TMPD"' EXIT
@@ -69,7 +69,7 @@ else
 fi
 case "$USED" in ''|*[!0-9]*) USED=0 ;; esac
 
-SHADOW_MSG="$(Tv 'Plik szablonu '\''$NAME'\'' w /etc/zfs-snapshot-all/profiles ma nazwę fabrycznego i pakiet go pomija. Zmień nazwę pliku.' '$NAME' "$NAME")"
+SHADOW_MSG="$(Tv 'Plik szablonu '\''$NAME'\'' w /etc/zfs-snapshot-all/profiles ma nazwę wbudowanego i pakiet go pomija. Zmień nazwę pliku.' '$NAME' "$NAME")"
 
 # Wspólny ogon wykonania: <komunikat sukcesu> <polecenie...>
 run_cmd() {
@@ -84,7 +84,7 @@ run_cmd() {
     fi
     echo
     if [ "$RC" -eq 0 ]; then Tv '=== GOTOWE: $okmsg (rc=$RC). Enter = dalej' '$okmsg' "$okmsg" '$RC' "$RC"; echo
-    else Tv '=== NIE UDAŁO SIĘ (rc=$RC) -- powód powyżej. Enter = dalej' '$RC' "$RC"; echo; fi
+    else Tv '=== BŁĄD (rc=$RC) -- powód powyżej. Enter = dalej' '$RC' "$RC"; echo; fi
     [ -t 0 ] && read -r _
     exit "$RC"
 }
@@ -92,13 +92,13 @@ run_cmd() {
 # ---------------------------------------------------------------- usuwanie
 if [ "$ACTION" = delete ]; then
     case "$SRC" in
-        package) wt --title "$(T 'Szablon fabryczny')" --msgbox "$(T 'Fabrycznego szablonu nie usuniesz.')" 8 "$W"; exit 0 ;;
-        shadow)  wt --title "$(T 'Szablon fabryczny')" --msgbox "$SHADOW_MSG" 10 "$W"; exit 0 ;;
+        package) wt --title "$(T 'Szablon wbudowany')" --msgbox "$(T 'Wbudowanego szablonu nie usuniesz.')" 8 "$W"; exit 0 ;;
+        shadow)  wt --title "$(T 'Szablon wbudowany')" --msgbox "$SHADOW_MSG" 10 "$W"; exit 0 ;;
     esac
     "$ZB" delete-profile "$NAME" >"$TMPD/dplan.txt" 2>&1
     if [ $? -ne 0 ]; then
         tail -5 "$TMPD/dplan.txt" | fold -s -w $((W - 6)) >"$TMPD/why.txt"
-        wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
+        wt --title "$(T 'Polecenie odmówiło -- nic nie zmieniono')" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
         exit 1
     fi
     {
@@ -118,8 +118,8 @@ if [ "$ACTION" = relation ]; then
     TITLE="$NEW"
 elif [ "$ACTION" = edit ]; then
     case "$SRC" in
-        package) wt --title "$(T 'Szablon fabryczny')" --msgbox "$(Tv 'Fabrycznego szablonu '\''$NAME'\'' nie zmienisz -- Ins na nim tworzy kopię, którą można zmienić.' '$NAME' "$NAME")" 9 "$W"; exit 0 ;;
-        shadow)  wt --title "$(T 'Szablon fabryczny')" --msgbox "$SHADOW_MSG" 10 "$W"; exit 0 ;;
+        package) wt --title "$(T 'Szablon wbudowany')" --msgbox "$(Tv 'Wbudowanego szablonu '\''$NAME'\'' nie zmienisz -- Ins na nim tworzy kopię, którą można zmienić.' '$NAME' "$NAME")" 9 "$W"; exit 0 ;;
+        shadow)  wt --title "$(T 'Szablon wbudowany')" --msgbox "$SHADOW_MSG" 10 "$W"; exit 0 ;;
     esac
     NEW="$NAME"
     TITLE="$(Tv 'Zmiana szablonu $NAME' '$NAME' "$NAME")"
@@ -131,7 +131,7 @@ fi
 # JEDNO OKNO-TABELA (właściciel 2026-10-09: "Uprośćmy tworzenie szablonów" -- jak w
 # menedżerach migawek QNAP/Synology): nazwa, szczeble (włącz / ile trzyma / zamrażanie)
 # i opis w tui/grid.py (curses -- wyjątek od whiptail, whiptail nie ma takiego wiersza).
-# Potem plan i WYKONAJ jak dotąd. Zapis robi save-profile; okno niczego nie zapisuje.
+# Potem plan i Uruchom jak dotąd. Zapis robi save-profile; okno niczego nie zapisuje.
 GRID_CMD="${ZFS_GRID:-$PY $HERE/tui/grid.py}"
 SPEC="$TMPD/spec.json"; OUTJ="$TMPD/grid.json"
 "$PY" - "$TMPD/tiers.tsv" "$TMPD/names.txt" "$ACTION" "$NAME" "$NEW" "$BDESC" "$SPEC" <<'PYEOF'
@@ -224,17 +224,17 @@ choice = {"key": "method", "label": _(u"Sposób"), "value": base_m, "base": base
                       {"key": "flat", "label": _(u"PŁASKI (flat)"),
                        "help": [_(u"Trzyma N najnowszych migawek szczebla, bez względu na ich wiek."),
                                 _(u"Seria migawek w krótkim czasie wypycha starsze.")]}],
-          "locked": (_(u"Drabina na jednej rodzinie migawek liczy tylko GFS.") if ladder else None)}
+          "locked": (_(u"Poziomy GFS na jednej rodzinie migawek liczą tylko GFS.") if ladder else None)}
 title = (_(u"Zmiana szablonu %s") % name) if action == "edit" else (_(u"Nowy szablon na podstawie %s") % name)
 if action == "relation":
     title = new
-s = {"title": title, "head": [_(u"SZCZEBEL"), _(u"TRZYMA"), _(u"KOHERENTNE (zamrażanie)")],
+s = {"title": title, "head": [_(u"SZCZEBEL"), _(u"TRZYMA"), _(u"SPÓJNE (zamrażanie)")],
      "fields": ([] if action in ("edit", "relation") else [{"key": "name", "label": _(u"Nazwa"), "value": new}]),
      "after": ([] if action == "relation" else [{"key": "desc", "label": _(u"Opis"), "value": bdesc if action == "edit" else ""}]),
      # X19: w relacji szczeble sa z jej CONFIGU, nie z "bazowego" szablonu.
      "note": [(_(u"Liczby i sposób są z configu tej relacji; godziny zostają, jak są.") if action == "relation"
                else _(u"Harmonogram i sposób (płaski / wiek / GFS) są z bazowego.")),
-              _(u"Szczebel wyłączysz tylko, gdy jego migawki sprząta inny.")],
+              _(u"Szczebel wyłączysz tylko, gdy jego migawki czyści inny.")],
      "rows": rows, "taken": [x.strip() for x in open(names, encoding="utf-8") if x.strip()],
      "name_key": ("" if action in ("edit", "relation") else "name"), "auto_desc": ("" if action in ("edit", "relation") else "desc"),
      "choice": choice}
@@ -342,7 +342,7 @@ PYEOF
         echo
         printf '%s  ' "$(T 'Komenda:')"; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done; echo
     } >"$TMPD/plan.txt"
-    if yesno_text "$TMPD/plan.txt" "$TITLE -- $(T plan)" "$(T WYKONAJ)" "$(T Wstecz)" --defaultno; then
+    if yesno_text "$TMPD/plan.txt" "$TITLE -- $(T plan)" "$(T Uruchom)" "$(T Wstecz)" --defaultno; then
         run_cmd "$(Tv 'szablon '\''$NEW'\'' zapisany' '$NEW' "$NEW")" "${ARGV[@]}"
     fi
 done
