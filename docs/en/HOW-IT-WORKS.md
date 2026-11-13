@@ -16,7 +16,9 @@ A **passive** copy or replica takes no snapshots: it carries the ones that alrea
 on the source. The target therefore holds the state as of the source's newest snapshot,
 not the current state — if the newest is a month old, the copy is a month old. A dataset
 without snapshots is not copied at all. Only the mode with its own snapshots gives the
-current state.
+current state. A passive copy never takes a Proxmox-reserved snapshot (`__replicate_`,
+`vzdump`, `__migration__`) as the newest one: Proxmox replaces them all the time. A dataset
+with only such snapshots is refused (skipped under `-R`).
 
 ## Engines: four scripts that touch snapshots
 
@@ -50,8 +52,10 @@ arguments and do one thing.
 ## GUI
 
 `zfs-backup gui` opens a screen in the terminal (whiptail), driven by function
-keys: F2 Runs, F3 Relations (Ins new, Enter window, `e` edit), F4 Copies (F7 or Enter on a snapshot
-browses files, F9 restores, also from a disk), F6 Replica, F10 Settings. These are the same operations as in the `zfs-backup.sh` CLI, only in windows —
+keys: F2 Runs (newest first: the next 6 hours on top, finished runs below), F3 Relations (Ins new, Enter window,
+`e` edit), F4 Copies (F7 or Enter on a snapshot browses files, F9 restores; the row "from another disk" takes a
+replica disk plugged into this host), F5 Templates, F6 Replica (is the disk connected, how full, is a copy
+running), F10 Settings, F12 quit. These are the same operations as in the `zfs-backup.sh` CLI, only in windows —
 the GUI calls the same verbs, so the config and the crontab come out identical.
 
 ## The script that writes the crontab

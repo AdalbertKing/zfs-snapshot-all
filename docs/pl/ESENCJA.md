@@ -14,7 +14,7 @@ Wszystko w bashu, zadania chodzą z crona, a do codziennej pracy jest tekstowe G
 | rodzaje relacji | **backup** (kolektor pobiera kopie i trzyma własną historię), **lustro** (to samo co na źródle), **kopia lokalna** (na tym samym hoście), **migawki lokalne / zdalne** (same migawki, bez kopii) |
 | **szablon** | ile migawek trzymać na każdym szczeblu (godzinne, dobowe, tygodniowe…); w GUI do wyboru `default`, `full`, `d7h24`, `d30h24`, `m12w4d7h24-gfs` |
 | **replika** | kopia kopii na osobny nośnik (USB albo druga pula), raz na dobę w nocy |
-| **pasywnie** (kopia, replika) | przenosi migawki, które już są na źródle — stan z chwili ostatniej z nich, **nie stan bieżący**; dataset bez migawek nie jest kopiowany. Bieżący stan daje tylko tryb z własnymi migawkami (kopia robi migawkę sama) |
+| **pasywnie** (kopia, replika) | przenosi migawki, które już są na źródle — stan z chwili ostatniej z nich, **nie stan bieżący**; dataset bez migawek nie jest kopiowany. Bieżący stan daje tylko tryb z własnymi migawkami (kopia robi migawkę sama). Migawek zarezerwowanych przez Proxmoksa (`__replicate_`, `vzdump`, `__migration__`) kopia pasywna nigdy nie bierze za najnowsze |
 | **strażnik** | sprawdza wiek najnowszej migawki i alarmuje, gdy kopia przestała przychodzić |
 
 ## Pierwsze uruchomienie
@@ -48,6 +48,8 @@ Wszystko w bashu, zadania chodzą z crona, a do codziennej pracy jest tekstowe G
 
    Do hosta źródłowego kolektor potrzebuje wstępu SSH jako root; pakiet na źródle kreator zainstaluje sam.
 
+   Pasek tytułowy pokazuje wersję pakietu (np. `zfs-snapshot-all 1.0.21`).
+
    GUI startuje po angielsku. Po polsku: **F10** (ustawienia hosta), pozycja `language` = `pl`, albo
 
    ```bash
@@ -56,7 +58,11 @@ Wszystko w bashu, zadania chodzą z crona, a do codziennej pracy jest tekstowe G
 
    Komunikaty poleceń zostają po angielsku.
 
-3. Sprawdź po godzinie: **F2 Przebiegi** (co biegło i co pobiegnie, z błędami).
+3. Sprawdź po godzinie: **F2 Przebiegi**. Lista idzie od najnowszych: na górze biegi nadchodzące z najbliższych
+   6 godzin, potem kreska „teraz”, pod nią biegi zakończone z ostatnich 72 godzin (wynik, czas, powód błędu);
+   kursor staje na ostatnim zakończonym biegu. Linie crona jednej relacji, zadania i szczebla, które startują
+   w odstępie najwyżej 5 minut (po jednej linii na dataset), to jeden wiersz, `N datasetów`, z najgorszym
+   wynikiem; Enter rozwija go do wiersza na dataset. Bieg, który padł bez zakończenia, pokazuje się jako PRZERWANY.
 
 ## Na co dzień
 
@@ -68,6 +74,8 @@ Wszystko w bashu, zadania chodzą z crona, a do codziennej pracy jest tekstowe G
 | odzyskać dane | F4 Kopie, F9 Przywróć |
 | przejrzeć pliki z migawki | F4 Kopie, Enter (albo F4 z biegu na F2) |
 | dodać replikę na dysk | F6 Replika, Ins |
+| zobaczyć, czy dysk repliki jest podłączony, jak jest pełny i czy kopia trwa | F6: kolumny Typ (podłączony / odłączony / wewnętrzny) i Zajęte; trwająca kopia pokazuje `kopia trwa od …` |
+| odróżnić maile | temat: `[ZFS][REPORT]` raport dzienny, `[ZFS][WARNING]` ostrzeżenie, pojemność puli, przyrost danych, `[ZFS][ALERT]` nieudany bieg; F10 `alerts.site` wstawia do niego nazwę instalacji |
 | zrobić to samo z linii poleceń | [KOMENDY.md](KOMENDY.md) |
 
 ## Gdzie dalej

@@ -51,7 +51,7 @@ zfs-backup.sh restore \
 ```
 
 Cel **musi istnieć**. Schodzi delta albo samo cofnięcie — komunikat
-`SAM ROLLBACK, bez transferu` znaczy: kopia miała już najnowszy punkt repliki, więc
+`ROLLBACK ONLY, no transfer` (w linii Strategy planu) znaczy: kopia miała już najnowszy punkt repliki, więc
 zeszły tylko snapshoty nowsze, **zero bajtów na łączu**.
 
 To jest powód, dla którego ten tryb istnieje. Lądowanie w wolne miejsce (4b) przy
@@ -74,6 +74,12 @@ swojej pozycji względnej.
 Domyślnie ląduje **sam punkt** (jeden snapshot). `--with-history` przenosi wszystkie
 snapshoty kopii do tego punktu (najstarszy w całości, potem przyrost) -- odtworzona kopia
 kolektora ma wtedy historię i retencja nie zaczyna się od zera.
+
+## 4c. To samo z GUI
+
+Po `attach` (sekcja 2): **F4 Kopie**, wiersz „z innego dysku” (dysk podłączony do tego hosta). Enter przegląda
+go (migawka zamontowana tylko do odczytu, mc), F9 przywraca w tych samych oknach co kopię relacji (dataset, cel,
+migawka, plan, WYKONAJ). Dopóki pula nie jest zaimportowana, wiersz mówi, żeby ją najpierw zaimportować.
 
 ## 5. Odłącz
 

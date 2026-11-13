@@ -218,6 +218,14 @@ Rodziny flag, które warto znać:
 | `-f` | pełny wysył: **niszczy i odtwarza cel**, wymaga roota |
 | `-F` | *snapget*: rekoncyliacja przy kolizji nazw pod innym GUID |
 | `-t` | cel jest **dokładną ścieżką**, nie bazą (ścieżka odtwarzania) |
+| `-e` / `-E PREFIKS` | weź **najnowszy istniejący** snapshot i nie rób żadnego (kopia pasywna); `-E` nigdy nie przyjmuje tej rodziny snapshotów. Pod `-e` zarezerwowane przez Proxmoxa `__replicate_`, `vzdump` i `__migration__` są pomijane samoczynnie |
+| `-i` | pomiń snapshoty pośrednie: jedna różnica do najnowszego zamiast wszystkich snapshotów pomiędzy |
+| `-M` | *snapget*: lustro: po pobraniu zniszcz na celu snapshoty, których źródło już nie ma (według GUID, więc przemianowany snapshot zostaje) |
+| `-s` | *snapget*: tylko snapshoty: zrób snapshot tam, gdzie żyje źródło, nic nie przesyłaj |
+| `--source-keep=N` | *snapget*, replika aktywna: po udanym pobraniu zniszcz na **źródle** starsze własne snapshoty zadania poza N najnowszymi (tylko te, które oznaczył ten cel) |
+
+Silnik, który zastaje blokadę trzymaną przez inny przebieg tego samego zadania, kończy się z **rc 75**:
+przebieg został pominięty, nic nie skopiowano. `zfs-job.sh` zgłasza to jako ostrzeżenie, a nie jako błąd.
 
 **`-H`/`-D`/`-W`/`-M`/`-Y`** w `delsnaps.sh` to *ile sztuk zostawić*; małe litery
 `-h`/`-d`/`-w`/`-m`/`-y` ustawiają próg wieku — kasowane są snapshoty starsze niż
@@ -246,11 +254,17 @@ gdzie leży skrypt, więc root wygeneruje ścieżki roota.
 ```bash
 zfs-backup.sh status                 # stan wszystkich relacji
 zfs-backup.sh progress               # postęp trwających transferów
+zfs-backup.sh settings               # ustawienia hosta i skąd bierze się każda wartość
+zfs-backup.sh settings set alerts.site=Site-A --yes   # nazwa instalacji w tematach maili
 zfs-backup.sh test NAZWA             # próbny pull (dry-run) każdego datasetu relacji
 zfs-backup.sh --version
 deploy.sh --check-only               # audyt hosta
 deploy.sh --test-mail                # czy alerty wychodzą
 ```
+
+Temat maila mówi, jaki to rodzaj maila: `[ZFS][REPORT]` dzienne podsumowanie, `[ZFS][WARNING]`
+ostrzeżenie, zapełnienie puli lub przyrost danych, `[ZFS][ALERT]` nieudany przebieg. Przy ustawionym
+`alerts.site` mail podsumowania i alertu brzmi `[ZFS][ALERT] Site-A pve2: ...`; bez niego na jego miejscu stoi pełna nazwa hosta.
 
 ---
 
@@ -294,6 +308,17 @@ Pełne flagi: `zfs-backup.sh --help`. Czasowniki bez `--yes` tylko planują.
 | `list-replicas` | lista replik i stan nośnika: here, available, away, wrong_medium | `zfs-backup.sh list-replicas` |
 | `run-replicas` | uruchom teraz wszystkie repliki; brak nośnika to ciche pominięcie | `zfs-backup.sh run-replicas --name=usb1` |
 | `prepare-media` | przygotuj dysk na nośnik repliki (**kasuje go**); `--list` pokazuje wolne dyski | `zfs-backup.sh prepare-media usbrep1 /dev/sdX --yes` |
+| `run-relation` | jedna kopia teraz każdego datasetu relacji, jej najdrobniejszym zainstalowanym zadaniem; odmowa, gdy relacja jest spauzowana | `zfs-backup.sh run-relation NAZWA` |
+| `replica-restart` | replika ze zerwanym łańcuchem zaczyna od nowa na tym samym dysku: pełna kopia obok starej, którą niszczy dopiero udana nowa | `zfs-backup.sh replica-restart usb1 --yes` |
+| `remove-replica` | zatrzymaj zadanie, a z `--install` usuń jego pliki stanu; kopia na nośniku zostaje, kopia trwająca w tej chwili jest nazwana i nie jest zatrzymywana | `zfs-backup.sh remove-replica usb1 --install` |
+| `install-media-trigger` / `remove-media-trigger` | opcjonalna reguła udev, która uruchamia repliki po pojawieniu się dysku z etykietą ZFS: tylko te repliki, których to nośnik (według GUID puli, a bez listy GUID według nazwy puli). Na hoście ze starszą regułą uruchom ponownie `install-media-trigger --install` | `zfs-backup.sh install-media-trigger --install` |
+
+Opcje `add-replica` warte znania: `--passive` (bez własnych snapshotów, niesie istniejące;
+`--exclude-family=A,B` pomija rodziny takie jak `__replicate_`), `--keep=N` (nośnik trzyma własnych N
+najnowszych snapshotów), `--media-guid=GUID` (dyski repliki według GUID puli, powtarzaj dla rotacji),
+`--on-insert=yes` (uruchom też po włożeniu dysku), `--schedule=auto|'30 2 * * *'|on-insert`.
+Przebiegi jednej repliki nigdy się nie nakładają: drugi kończy się z rc 75. Pierwsza kopia, która się
+nie zmieści na dysku, jest odrzucana, zanim cokolwiek zostanie zapisane.
 
 ### Retencja
 
@@ -310,12 +335,14 @@ Pełne flagi: `zfs-backup.sh --help`. Czasowniki bez `--yes` tylko planują.
 | `restore --plan` | co da się odtworzyć i skąd (tylko odczyt) | `zfs-backup.sh restore --plan` |
 | `restore RELACJA` | odtwórz relację z jej kopii (patrz punkt 4) | `zfs-backup.sh restore NAZWA --yes` |
 | `restore --from-copy` | odtwórz z kopii na tej puli, gdy rekordów relacji już nie ma — opis w [ODZYSK-Z-REPLIKI.md](ODZYSK-Z-REPLIKI.md) | `zfs-backup.sh restore --from-copy KOPIA --onto DATASET` |
+| `browse` | snapshot kopii zamontowany tylko do odczytu w katalogu tymczasowym, pliki kopiujesz na zewnątrz, po wyjściu odmontowany (tylko systemy plików; root) | `zfs-backup.sh browse NAZWA --ask` |
 
 ### GUI
 
 | czasownik | po co | przykład |
 |---|---|---|
-| `gui` | ekran sterowania (wymaga `python3`; F3 Relacje, F6 Replika) | `zfs-backup.sh gui` |
+| `gui` | ekran sterowania (wymaga `python3`; F3 Relacje, F6 Replika); pasek tytułu pokazuje wersję pakietu | `zfs-backup.sh gui` |
+| `settings` | ustawienia hosta (`settings.ini`): lista, `get KLUCZ`, `set KLUCZ=WARTOŚĆ... --yes`, `test-mail`, `--ask` | `zfs-backup.sh settings set alerts.site=Site-A --yes` |
 
 ---
 

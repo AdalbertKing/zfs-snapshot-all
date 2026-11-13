@@ -168,6 +168,9 @@ przez `--base=`) i eksportuje pulę, więc dysk można od razu wypiąć:
 
 Taka pula pasuje do `--dst=repl/replica` z następnej sekcji.
 
+`prepare-media` kończy się sprawdzeniem, że zwykłe `zpool import` wymienia nową pulę: czeka na udev, raz prosi
+o ponowne odczytanie dysku i odmawia, jeśli puli nadal nie widać (bieg repliki wziąłby ten dysk za nieobecny).
+
 Plan ostrzega, gdy jądro widzi mniejszy sektor fizyczny niż podaje dysk (`smartctl`).
 Tak robi część mostków USB (512 B zamiast 4096 B); `ashift=12` i tak trzyma pulę w
 wyrównaniu.
@@ -203,6 +206,27 @@ replika zostaje przy swoim harmonogramie. Replika **nie jest lustrem online**:
 nośnik jest zagrożony tylko wtedy, gdy jego pula jest zaimportowana, więc liczba
 biegów **jest** ekspozycją.
 
+**Co trzyma dysk** — trzy kształty, wybierane w kreatorze repliki (F6) albo flagami:
+
+- **własna migawka, odbicie kolektora** (domyślnie; własna rodzina `replica_`): każdy bieg robi migawkę `replica_`
+  i ją kopiuje, po czym nośnik gubi to, co zgubił kolektor (`-M`);
+- **`--keep=N`**: nośnik trzyma własnych N najnowszych migawek `replica_`, niezależnie od kolektora (bez `-M`;
+  dysk wkładany raz w miesiącu może mieć 12 stanów). Idzie tylko własna migawka repliki (`-i`, o ile nie ustawiono
+  `history`). Gdy bieg używa `-i`, także kolektor trzyma tylko najnowszą własną migawkę `replica_` na nośnik
+  (`snapget.sh --source-keep=1`): po udanej kopii kasuje starsze, a zakładka `#tgt-` niesie następny przyrost.
+  Kasowane są tylko migawki, które oznaczył bieg dla tego właśnie nośnika (`zfsbackup:srckeep-owner`: cel i GUID
+  puli, więc dwa dyski rotacyjne o tej samej nazwie puli to dwóch właścicieli) i które nośnik trzyma; migawka bez
+  oznaczenia nigdy nie jest ruszana, a nieudane kasowanie to ostrzeżenie, nie nieudany bieg. Przy jawnym
+  `history = all` albo `auto:N` na kolektorze nic nie jest kasowane;
+- **`--passive`**: bez własnych migawek; przenosi te, które już są, więc dysk ma stan z chwili najnowszej z nich.
+  Pierwsza kopia takiego odbicia niesie historię: najstarsza kwalifikująca się migawka w całości, potem każda
+  następna do najnowszej. Replika założona wcześniej zostaje przy tym, co ma; uzupełnia ją dopiero F6, Enter, `e`,
+  „Zacznij od nowa na tym dysku (pełna kopia)”. Replika pasywna pomija rodziny migawek jak relacja:
+  `--exclude-family=A,B` (litery, cyfry, `_ . : -`) daje jej to samo `-E`; kreator ustawia
+  `__replicate_,vzdump,__migration__` pasywnej replice, która ich nie ma, żeby kopia stała na własnych migawkach
+  narzędzia, a nie na tych, które replikacja Proxmoksa przemianowuje co kilka godzin. `list-replicas --json`
+  pokazuje tę listę jako `exclude_family`.
+
 Uruchomienie poza harmonogramem:
 
 ```bash
@@ -225,10 +249,36 @@ polecenie raz jeszcze i sprawdź, że
 Po włożeniu dysku i zwłoce (`replica.insert_wait`, domyślnie 60 s) ruszają tylko repliki,
 których nośnikiem jest ten dysk: po GUID puli, gdy replika ma listę dysków, inaczej po nazwie
 puli (reguła podaje urządzenie, `blkid` czyta z niego pulę; gdy nie odczyta ani nazwy, ani
-GUID, nie rusza żadna replika, a w logu jest o tym jedna linia -- od następnego wydania po 1.0.17). Inny dysk ZFS (np. dopiero
+GUID, nie rusza żadna replika, a w logu jest o tym jedna linia, od 1.0.18). Inny dysk ZFS (np. dopiero
 co sformatowany, zanim kreator zapisze jego GUID) nie uruchamia repliki, która ma listę dysków (GUID), i nie daje alarmu;
 w logu zostaje po jednej linii na pominiętą replikę. Reguła wywołuje `systemd-run --collect`, więc nieudany bieg nie
 blokuje następnych włożeń. Regułę bez `--collect` kreator repliki odnawia w planie.
+
+**Jeden bieg naraz.** Kopia, która jeszcze trwa, gdy przychodzi następne wyzwolenie (harmonogram albo ponowne
+podłączenie), nie startuje drugi raz: nowy bieg kończy się kodem 75 i mówi, od kiedy kopia trwa, a jego detach nie
+eksportuje dysku spod trwającej kopii. Kod 75 to pominięcie, nie błąd; monitor wieku zgłasza trwającą kopię jako OK
+(WARNING po przekroczeniu wieku krytycznego). Bieg, który nie umie się zapisać, nie startuje: gdy bramka nie może
+założyć blokady ani zapisać i odczytać rekordu biegu, attach kończy się kodem 2 przed jakimkolwiek importem, a detach,
+który trafi na nieczytelny rekord, nie eksportuje puli (przy zaimportowanej puli pisze DO NOT UNPLUG). Kopia zabita
+przez SIGTERM i tak eksportuje swój dysk.
+
+**Pierwsza kopia, która się nie zmieści, jest odmawiana.** Przed zapisem bramka sumuje źródła, które nie mają jeszcze
+kopii na nośniku, i porównuje sumę z wolnym miejscem nośnika; gdy brakuje, eksportuje dysk i odmawia z obiema
+liczbami (kod 2, alert). `add-replica` i kreator repliki pokazują rozmiar pierwszej kopii w planie, przed WYKONAJ,
+wraz z wolnym miejscem, gdy pula nośnika jest zaimportowana, oraz `!!!`, gdy się nie zmieści. Gdy przy zakładaniu
+nowej repliki dysk jest już podłączony, kreator pyta, czy zacząć pierwszą kopię teraz (w tle, jak F7; stan jest
+w F2).
+
+Źródło repliki, którego nazwa zawiera `:` (`tank/data:part`), jest kopiowane jako dataset lokalny.
+
+**F6 w GUI.** Kolumny: Replika, Typ (podłączony / odłączony / wewnętrzny), Zajęte (jak pełny jest nośnik, gdy jego
+pula jest zaimportowana), Wykonana, Ostatni bieg, Harmonogram; `list-replicas --json` niesie `medium_size`
+i `medium_alloc` w bajtach (puste, gdy pula nie jest zaimportowana). Trwająca kopia pokazuje `kopia trwa od …`
+(`running_since`) zamiast ostatniego zakończonego biegu; dysk dopiero co włożony, którego kopia czeka
+(`replica.insert_wait`), pokazuje `dysk podłączony, kopia za ~N s` (`insert_in`). F6 czyta listę ponownie przy
+wejściu i co 15 s. W F4 dataset repliki bez żadnej migawki mówi `kopia trwa`, dopóki kopia biegnie, i `przerwana,
+wznowi się`, gdy przerwany odbiór zostawił token wznowienia. Kreator repliki pokazuje przy każdym datasecie liczbę
+migawek, a przy zerze uwagę, że replika pasywna go nie skopiuje.
 
 ## 6. Scenariusz A: co ląduje w configu
 
@@ -348,7 +398,14 @@ you mean by its id and re-run -- this will not choose for you.
 **Nośnik z cudzą linią też jest odmawiany.** Jeśli dysk niesie replikę relacji,
 której już nie ma, a kolektor ma nową rodzinę snapshotów bez wspólnego przodka —
 bramka nazwie obie rodziny i postawi wybór (inny `--dst` albo `zfs destroy -r` na
-celu), zamiast sypać co noc błędem ZFS-a.
+celu), zamiast sypać co noc błędem ZFS-a. „Brak wspólnego przodka” rozstrzyga GUID: dysk jest odmawiany tylko wtedy,
+gdy żadna jego migawka nie dzieli GUID-u z migawką ani zakładką na źródle. Migawka przemianowana po którejkolwiek
+stronie liczy się jako wspólna, tak samo migawka, którą retencja kolektora już usunęła, a jej zakładka została (dysk
+dostaje wtedy przyrost od zakładki). Dowód, którego nie da się odczytać, nie prowadzi ani do odmowy, ani do rady
+`zfs destroy`. Te same sprawdzenia (pochodzenie, wolne miejsce) idą, gdy pula była zaimportowana przed biegiem, przez
+przerwany bieg naszego narzędzia albo przez operatora; przy odmowie import operatora zostaje zaimportowany. Drzewo
+źródła, którego nie da się wylistować w całości, nie liczy się jako „brak nowych danych”, więc kopia nie jest na tej
+podstawie pomijana.
 
 Czasy i statystyki — dwa poziomy, oba już zapisywane:
 
@@ -436,6 +493,12 @@ zostaje przy serwerze 1. Harmonogram pasywny to `:31` (pół godziny za
 producentem), progi monitora 3h/5h (kadencja łańcucha). Podgląd aktywacji mówi o
 pasywności wprost.
 
+Ogniwo pasywne nigdy nie bierze migawki zarezerwowanej przez Proxmoksa (`__replicate_`, `vzdump`, `__migration__`)
+za najnowszą ani za bazę, z `-E` czy bez; dataset mający tylko takie migawki jest odmawiany („Every source snapshot
+on '<dataset>' matches an -E exclusion”), a przy `-R` pomijany jako rusztowanie. Poddrzewo bez żadnej migawki
+(`-e -R`) nie jest nieudanym biegiem: mówi „nothing to copy” i kończy się kodem 0. Ogniwo B jest też lustrem
+(`-M`): migawka przemianowana na źródle zostaje na dublecie, bo „zniknęła ze źródła” rozstrzyga GUID.
+
 Weryfikacja końca łańcucha:
 
 ```bash
@@ -491,7 +554,7 @@ nośniku: „unpairing ends the relationship, not the backup".
 `remove-replica --install` usuwa też pliki stanu repliki w
 `/var/lib/zfs-snapshot-all/media/` (`<nazwa>.current`, `.synced`, `.last-seen` i rekordy
 biegu), więc nowa replika o tej samej nazwie zaczyna od zera. Kopia, która właśnie biegnie,
-jest wymieniona w planie i nie jest przerywana: dobiega do końca, odłącza dysk i do tego
+jest wymieniona w planie i w oknie Del na F6 i nie jest przerywana: dobiega do końca, odłącza dysk i do tego
 czasu zachowuje własne rekordy biegu.
 
 **Kopii na nośniku pakiet nie kasuje** — nie ma na to osobnego czasownika. Dysk

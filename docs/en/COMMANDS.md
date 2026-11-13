@@ -217,6 +217,14 @@ Flag families worth knowing:
 | `-f` | full send: **destroys and recreates the target**, requires root |
 | `-F` | *snapget*: reconciliation on a name collision under a different GUID |
 | `-t` | the target is an **exact path**, not a base (the restore path) |
+| `-e` / `-E PREFIX` | take the **newest existing** snapshot and make none (passive copy); `-E` never adopts that snapshot family. Under `-e` the Proxmox-reserved `__replicate_`, `vzdump` and `__migration__` are skipped on their own |
+| `-i` | skip the snapshots in between: one diff to the newest instead of every snapshot between |
+| `-M` | *snapget*: mirror: after a pull, destroy on the target the snapshots the source no longer has (judged by GUID, so a renamed snapshot stays) |
+| `-s` | *snapget*: snapshot-only: take the snapshot where the source lives, transfer nothing |
+| `--source-keep=N` | *snapget*, an active replica: after a successful pull, destroy on the **source** this job's own older snapshots beyond the N newest (only those this target stamped) |
+
+An engine that finds its lock held by another run of the same job ends with **rc 75**: the run was
+skipped, nothing was copied. `zfs-job.sh` reports that as a warning, not as a failure.
 
 **`-H`/`-D`/`-W`/`-M`/`-Y`** in `delsnaps.sh` mean *how many to keep*; the lowercase
 `-h`/`-d`/`-w`/`-m`/`-y` set an age threshold: snapshots older than the
@@ -245,11 +253,17 @@ where the script lies, so root will generate root's paths.
 ```bash
 zfs-backup.sh status                 # state of all relations
 zfs-backup.sh progress               # progress of running transfers
+zfs-backup.sh settings               # host settings and where each value comes from
+zfs-backup.sh settings set alerts.site=Site-A --yes   # name the installation in mail subjects
 zfs-backup.sh test NAME             # trial pull (dry-run) of every dataset of the relation
 zfs-backup.sh --version
 deploy.sh --check-only               # host audit
 deploy.sh --test-mail                # whether alerts get out
 ```
+
+The mail subject says what kind of mail it is: `[ZFS][REPORT]` the daily summary, `[ZFS][WARNING]`
+a warning, pool capacity or data growth, `[ZFS][ALERT]` a failed run. With `alerts.site` set, the
+summary and alert mails read `[ZFS][ALERT] Site-A pve2: ...`; without it the host's full name stands in its place.
 
 ---
 
@@ -293,6 +307,17 @@ Full flags: `zfs-backup.sh --help`. Verbs without `--yes` only plan.
 | `list-replicas` | list of replicas and medium state: here, available, away, wrong_medium | `zfs-backup.sh list-replicas` |
 | `run-replicas` | run all replicas now; a missing medium is a silent skip | `zfs-backup.sh run-replicas --name=usb1` |
 | `prepare-media` | prepare a disk as a replica medium (**erases it**); `--list` shows free disks | `zfs-backup.sh prepare-media usbrep1 /dev/sdX --yes` |
+| `run-relation` | one copy now of every dataset of a relation, by its finest installed job; refused while the relation is paused | `zfs-backup.sh run-relation NAME` |
+| `replica-restart` | a replica whose chain broke starts again on the same disk: a full copy next to the old one, destroyed only after the new one succeeded | `zfs-backup.sh replica-restart usb1 --yes` |
+| `remove-replica` | stop the job and, with `--install`, drop its state files; the copy on the medium stays, a copy running at that moment is named and not stopped | `zfs-backup.sh remove-replica usb1 --install` |
+| `install-media-trigger` / `remove-media-trigger` | optional udev rule that runs the replicas when a disk carrying a ZFS label appears: only the replicas whose medium it is (by pool GUID, else by pool name). Re-run `install-media-trigger --install` on a host with an older rule | `zfs-backup.sh install-media-trigger --install` |
+
+`add-replica` options worth knowing: `--passive` (no snapshots of its own, it carries the existing ones;
+`--exclude-family=A,B` skips families such as `__replicate_`), `--keep=N` (the medium keeps its own N
+newest snapshots), `--media-guid=GUID` (the disks of the replica by pool GUID, repeat for a rotation),
+`--on-insert=yes` (also run when the disk is plugged in), `--schedule=auto|'30 2 * * *'|on-insert`.
+A run of one replica never overlaps another: the second ends with rc 75. A first copy that cannot fit
+on the disk is refused before anything is written.
 
 ### Retention
 
@@ -309,12 +334,14 @@ Full flags: `zfs-backup.sh --help`. Verbs without `--yes` only plan.
 | `restore --plan` | what can be restored and from where (read only) | `zfs-backup.sh restore --plan` |
 | `restore RELATION` | restore a relation from its copy (see section 4) | `zfs-backup.sh restore NAME --yes` |
 | `restore --from-copy` | restore from a copy on this pool when the relation records are gone; described in [RESTORE-FROM-REPLICA.md](RESTORE-FROM-REPLICA.md) | `zfs-backup.sh restore --from-copy COPY --onto DATASET` |
+| `browse` | a copy's snapshot mounted read-only in a temporary directory, copy files out, unmounted on exit (filesystems only; root) | `zfs-backup.sh browse NAME --ask` |
 
 ### GUI
 
 | verb | what for | example |
 |---|---|---|
-| `gui` | the control screen (requires `python3`; F3 Relacje (relations), F6 Replika (replica)) | `zfs-backup.sh gui` |
+| `gui` | the control screen (requires `python3`; F3 Relacje (relations), F6 Replika (replica)); the title bar shows the package version | `zfs-backup.sh gui` |
+| `settings` | host settings (`settings.ini`): list, `get KEY`, `set KEY=VALUE... --yes`, `test-mail`, `--ask` | `zfs-backup.sh settings set alerts.site=Site-A --yes` |
 
 ---
 
