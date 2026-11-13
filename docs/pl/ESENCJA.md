@@ -48,7 +48,7 @@ Wszystko w bashu, zadania chodzą z crona, a do codziennej pracy jest tekstowe G
 
    Do hosta źródłowego kolektor potrzebuje wstępu SSH jako root; pakiet na źródle kreator zainstaluje sam.
 
-   Pasek tytułowy pokazuje wersję pakietu (np. `zfs-snapshot-all 1.0.21`).
+   Pasek tytułowy pokazuje wersję pakietu (np. `zfs-snapshot-all 1.0.22`).
 
    GUI startuje po angielsku. Po polsku: **F10** (ustawienia hosta), pozycja `language` = `pl`, albo
 
