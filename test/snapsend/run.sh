@@ -28,8 +28,8 @@ SNAPGET="${SNAPGET:-$REPO/snapget.sh}"
 
 # SUITE_ONLY=<word>: run the preamble, the helpers, every section whose
 # "# --- " header contains <word> (case-insensitive) and the summary -- nothing
-# else. One section takes a minute or two; the whole suite takes 25-40 minutes
-# on pve9 (measured 2026-11-13). Use it while a change is being worked on; the
+# else. Measured on pve9 2026-11-13: SUITE_ONLY=W5 took 10m40s for 31 checks,
+# the whole suite takes 25-40 minutes for 466. Use it while a change is being worked on; the
 # whole suite still runs once on the final head before the PR. A section that
 # reads state an earlier section left behind fails here and not in the full
 # run: that is the section's defect, not the selector's.
