@@ -5,8 +5,8 @@
 > What the freeze was for is enforced at publish by `release/coverage-gate.sh`.
 
 
-<!-- frozen: snapsend.sh 100755 705d3e2f57c06cf5c6ebe2c7bcecc84424344b76 -->
-<!-- frozen: snapget.sh 100755 a199fac63fa50468f86eb5deceb9da89111f123a -->
+<!-- frozen: snapsend.sh 100755 f03e48a74b1de1dd5429f96a3abe464d8f48b4fa -->
+<!-- frozen: snapget.sh 100755 fd69b62e50537bff39d9c7c8a5d3904a7ec7518d -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
 <!-- frozen: lib-zfs-snap.sh 100644 4024c09b357197732632d04a24cf020c8cf92433 -->
@@ -1481,6 +1481,14 @@ Owner-authorized refreezes:
   stamped too, only under its exact name `${SNAP_MESSAGE}${RUN_SUFFIX}`. Tests: test/snapsend
   REV-197 r3 F1c (two file pools of one name) and r3 F2 (fake /etc/pve, pct stub).
   twin: snapsend.sh unchanged -- it refuses --source-keep (pull-only).
+- 2026-11-13 (snapget.sh, snapsend.sh): **REV-20261112-197 F1, round 4** (re-review on
+  `f350fe36`). F1d: after a successful quiesce window, `process_dataset` copied the newest
+  snapshot of the family, which can be another job's point made meanwhile. It now copies
+  exactly this run's `${SNAP_MESSAGE}${RUN_SUFFIX}`, and refuses if that snapshot is gone.
+  Tests: test/snapsend REV-197 r4 F1d (zfs wrapper runs job B between A's window and its
+  selection; the snapshot-gone case; the own-window control; the push twin).
+  twin: snapsend.sh changed the same way -- the selection after a quiesce window is shared
+  logic. Only the stamp stays pull-only.
 
 ## How it is enforced
 

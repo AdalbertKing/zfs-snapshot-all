@@ -326,6 +326,9 @@ snapshotted as normal, with no attempt to quiesce.
 
 The freeze window contains **only** `zfs snapshot`, never the transfer. A guest owning several
 disks is quiesced once per run and all its disks are snapshotted together in one atomic window.
+The run then copies exactly the snapshot that window made, even when another job has made a newer
+snapshot of the same family in the meantime. If that snapshot is gone before the copy, the run
+refuses instead of copying another one.
 `zfs snapshot` accepts several names only within one pool, so datasets spanning several pools get
 one atomic call per pool; every guest stays frozen until the last call returns, so all disks still
 land on the same instant. Thaw is guaranteed by an `EXIT` trap. Quiescing is ignored together with

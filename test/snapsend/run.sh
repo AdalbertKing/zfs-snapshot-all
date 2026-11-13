@@ -2499,6 +2499,59 @@ done
 check "REV-197 r3 F2: three successful quiesced runs -- rc 0, no crash form, one stamped own snapshot left" "000|0|1|1" \
       "$qrc|$qcr|$(zfs list -H -o name -t snapshot -d 1 "$SQ" | grep -c '@rep_')|$(zfs list -H -o zfsbackup:srckeep-owner -t snapshot -d 1 "$SQ" | grep -vc '^-$')"
 rm -rf "$QD"; zfs destroy -r "$SQ" 2>/dev/null; zfs destroy -r "$TQ" 2>/dev/null
+# Round 4 (F1d): after a successful quiesce window the run copies ITS OWN snapshot,
+# never a newer one of the family. A zfs wrapper on PATH acts right after A's window
+# snapshot: "foreign" runs job B (another target, same source) which creates and
+# stamps a newer rep_ point; "gone" destroys A's own snapshot. Then A's bookmark is
+# removed (a failed refresh), B runs again and prunes; A's next run must still work.
+QD="$(mktemp -d)"; mkdir -p "$QD/bin" "$QD/pve/lxc" "$QD/pve/qemu-server"
+SQ="$POOL/subvol-901-disk-0"; TA="$POOL/m197a"; TB="$POOL/m197b"
+zfs create -p "$SQ"; zfs create -p "$TA"; zfs create -p "$TB"
+echo "rootfs: x:subvol-901-disk-0,size=1G" > "$QD/pve/lxc/901.conf"
+printf '#!/bin/sh\ncase "$1" in status) echo "status: running";; exec) exit 0;; esac\n' > "$QD/bin/pct"; chmod +x "$QD/bin/pct"
+cat > "$QD/bin/zfs" <<'ZEOF'
+#!/bin/bash
+"$F1D_REALZFS" "$@"; rc=$?
+if [ "$1" = snapshot ] && [ -n "${F1D_MODE:-}" ] && [ ! -e "$F1D_DONE" ]; then
+    case "$*" in *"$F1D_SRC@rep_"*)
+        touch "$F1D_DONE"
+        case "$F1D_MODE" in
+            foreign) sleep 1; F1D_MODE= "$F1D_ENGINE" -v 2 -i -m rep_ --source-keep=1 "$F1D_SRC" "$F1D_TB" >>"$F1D_LOG" 2>&1
+                     echo "B rc=$?" >>"$F1D_LOG" ;;
+            gone)    for a in "${@:2}"; do case "$a" in *@*) "$F1D_REALZFS" destroy "$a" ;; esac; done ;;
+        esac ;;
+    esac
+fi
+exit $rc
+ZEOF
+chmod +x "$QD/bin/zfs"
+export F1D_REALZFS="$(command -v zfs)" F1D_SRC="$SQ" F1D_TB="$TB" F1D_ENGINE="$SNAPGET" F1D_LOG="$QD/b.log" F1D_DONE="$QD/done"
+qa() { QUIESCE_PVE_DIR="$QD/pve" PATH="$QD/bin:$PATH" run_get_out -v 2 -q sync -i -m "rep_" --source-keep=1 "$SQ" "$TA"; }
+hd() { zfs list -H -o name -t snapshot -s createtxg -d 1 "$1/$SQ" 2>/dev/null | tail -1 | sed 's/.*@//'; }
+tick; F1D_MODE=foreign qa; ra=$RC; oa=$(printf '%s\n' "$OUT" | grep -c "copying this run's")
+brc=$(sed -n 's/^B rc=//p' "$QD/b.log"); ha=$(hd "$TA"); hb=$(hd "$TB")
+for b in $(zfs list -H -o name -t bookmark "$SQ" 2>/dev/null); do zfs destroy "$b"; done
+tick; run_get_out -v 2 -i -m "rep_" --source-keep=1 "$SQ" "$TB"; rb2=$RC
+hbgone=$(zfs list -H -o name "$SQ@$hb" >/dev/null 2>&1 && echo kept || echo pruned)
+tick; qa; ra2=$RC; fa2=$(printf '%s\n' "$OUT" | grep -c 'full pull')
+check "REV-197 r4 F1d: B snapshots between A's quiesce and selection -- A copies its own point, B prunes its own, A's next run is incremental" \
+      "0|1|0|differ|0|pruned|0 0" "$ra|$oa|$brc|$([ -n "$ha" ] && [ "$ha" != "$hb" ] && echo differ || echo same:$ha)|$rb2|$hbgone|$ra2 $fa2"
+# Own-window control: no foreign point -- A copies its own snapshot, nothing logged.
+tick; qa; check "REV-197 r4 F1d: own-window control -- rc 0, no substitution message" "0|0" \
+      "$RC|$(printf '%s\n' "$OUT" | grep -c "copying this run's")"
+# Exact name missing: A's window snapshot is gone before selection -- refuse, copy nothing.
+rm -f "$F1D_DONE"; before=$(hd "$TA")
+tick; F1D_MODE=gone qa
+check "REV-197 r4 F1d: this run's quiesced snapshot missing -- refused, nothing copied in its place" "1|1|same" \
+      "$RC|$(printf '%s\n' "$OUT" | grep -c 'refusing to copy another snapshot')|$([ "$(hd "$TA")" = "$before" ] && echo same || echo moved)"
+# Push twin (snapsend.sh): the same rule, without --source-keep.
+rm -f "$F1D_DONE"; PB="$POOL/m197p"; zfs create -p "$PB"
+export F1D_ENGINE="$SNAPGET" F1D_TB="$TB"
+tick; F1D_MODE=foreign QUIESCE_PVE_DIR="$QD/pve" PATH="$QD/bin:$PATH" run_send_out -v 2 -q sync -i -m "rep_" "$SQ" "$PB"
+check "REV-197 r4 F1d: push twin -- a newer foreign point appears, snapsend copies its own window snapshot" "0|1" \
+      "$RC|$(printf '%s\n' "$OUT" | grep -c "copying this run's")"
+unset F1D_REALZFS F1D_SRC F1D_TB F1D_ENGINE F1D_LOG F1D_DONE
+rm -rf "$QD"; zfs destroy -r "$SQ" 2>/dev/null; zfs destroy -r "$TA" 2>/dev/null; zfs destroy -r "$TB" 2>/dev/null; zfs destroy -r "$PB" 2>/dev/null
 zfs destroy -r "$S7" 2>/dev/null; zfs destroy -r "$A7" 2>/dev/null; zfs destroy -r "$B7" 2>/dev/null; zfs destroy -r "$C7" 2>/dev/null
 rm -rf "$R197D"
 zfs destroy -r "$W5S" 2>/dev/null; zfs destroy -r "$W5R" 2>/dev/null; zfs destroy -r "$W5P" 2>/dev/null

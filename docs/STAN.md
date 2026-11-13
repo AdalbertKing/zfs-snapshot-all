@@ -4,7 +4,7 @@ Zastępuje `docs/PROJECT_STATUS.md` (zamrożony 2026-11-13). Najwyżej 150 linii
 Odświeżany raz na wydanie (`docs/project/WORKFLOW.md` W9). Każda pozycja ma źródło;
 pozycja bez dzisiejszego sprawdzenia jest tak oznaczona.
 
-Stan na: 2026-11-13, `main` = `4915483b`.
+Stan na: 2026-11-13, `main` = `0d60f6b1`.
 
 ## Wydanie
 
@@ -20,7 +20,7 @@ Kto ma ruch: job CI `ledger` w najnowszym biegu na `main`.
 
 | REV | stan 2026-11-13 | źródło |
 |---|---|---|
-| REV-20261112-197 (`--source-keep`) | CHANGES-REQUIRED po rundzie 3, ruch implementera (runda 4) | `docs/internal/reviews/REV-20261112-197.md`, PR #1214 |
+| REV-20261112-197 (`--source-keep`) | odrzucony po rundzie 3 (PR #1214); runda 4 scalona (PR #1215), werdyktu jeszcze nie ma | `docs/internal/reviews/REV-20261112-197.md`, `responses/REV-20261112-197.md` |
 
 ## Hosty
 
