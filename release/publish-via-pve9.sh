@@ -60,7 +60,8 @@ echo "   staged $relsha on top of $base ($(( $(date +%s) - t0 )) s)"
 
 echo "== 2/3 here: fetch, check, push"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-MSYS_NO_PATHCONV=1 pscp -batch -q "root@$HOST:$STAGE/out.bundle" "$tmp/out.bundle" || die "cannot copy the bundle from pve9"
+lb="$tmp/out.bundle"; command -v cygpath >/dev/null && lb=$(cygpath -w "$lb")   # pscp is a Windows program
+MSYS_NO_PATHCONV=1 pscp -batch -q "root@$HOST:$STAGE/out.bundle" "$lb" || die "cannot copy the bundle from pve9"
 git clone -q "$REL_URL" "$tmp/rel"
 cur=$(git -C "$tmp/rel" rev-parse HEAD)
 [ "$cur" = "$base" ] || die "the release repository moved since pve9 built on it ($base -> $cur); run again"
