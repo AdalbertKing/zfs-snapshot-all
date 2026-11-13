@@ -89,6 +89,13 @@ remote_cmd="set -e
 cd $CLONE
 git fetch -q origin '+refs/heads/*:refs/remotes/origin/*'
 git checkout -q -f -B remotesuite $ref
-${only:+SUITE_ONLY=$only }./test/$suite/run.sh"
+set +e
+# A fresh progress directory per run (2026-11-13): suites left their records in the
+# host's real one, and 2999 of them made every engine call 9.7 s instead of 0.4 s.
+pd=\$(mktemp -d)
+ZFS_PROGRESS_DIR=\$pd ${only:+SUITE_ONLY=$only }./test/$suite/run.sh
+rc=\$?
+rm -rf \"\$pd\"
+exit \$rc"
 
 MSYS_NO_PATHCONV=1 plink -batch "root@$HOST" "$remote_cmd"

@@ -81,6 +81,12 @@ zpool create -f -m none "$POOL" "$IMG" || { echo "zpool create failed" >&2; exit
 
 export STATS_LOG="$TMPD/stats.log"
 export LOCKDIR="$TMPD"
+# Progress records too. Every engine run reaps the progress directory with a
+# grep and a stat per file, and every run of this suite used to leave ~80 new
+# records (fresh pool name, fresh keys) in the host's real directory. On pve9
+# that reached 2999 files: 9.7 s per engine call instead of 0.4 s, which made
+# this suite 25-40 minutes long (measured 2026-11-13).
+export ZFS_PROGRESS_DIR="$TMPD/progress"
 # Alerting must NEVER touch the host's real queue. Any script under test that
 # hits a pool-health problem calls $NOTIFY_SCRIPT, which by default queues into
 # /var/lib/zfs-snapshot-all/alert-queue.log -- and the 07:00 digest then mails
