@@ -2428,6 +2428,40 @@ wn=$(printf '%s\n' "$OUT" | grep -c 'cannot mark'); st9=$(zfs list -H -o name,zf
 check "REV-197 r2: the stamp cannot be set -- rc 0, said, nothing pruned (3 unstamped, still 3 stamped)" "0|1|3|3" \
       "$rn|$wn|$(printf '%s\n' "$st9" | awk -F'\t' '$2=="-"' | grep -c .)|$(printf '%s\n' "$st9" | awk -F'\t' '$2!="-"' | grep -c .)"
 zfs destroy -r "$S9" 2>/dev/null; zfs destroy -r "$A9" 2>/dev/null; zfs destroy -r "$B9" 2>/dev/null; zfs destroy -r "$C9" 2>/dev/null
+# Round 3 (F1c): two rotating disks -- same pool name and base, different pool GUIDs.
+# A runs, is exported; B (the other disk, same path) is seeded -H -i and runs healthy;
+# A comes back. The owner stamp names the pool GUID, so B never prunes A's head.
+RD="$(mktemp -d)"; RP="r197rot$$"; SA="$POOL/s197rot"; zfs create -p "$SA"
+truncate -s 128M "$RD/a.img" "$RD/b.img"
+zpool create -O mountpoint=none "$RP" "$RD/a.img" && zfs create "$RP/rep"
+kr() { run_get_out -v 2 -i -m "rep_" --source-keep=1 "$SA" "$RP/rep"; }
+tick; kr; r1=$RC; tick; kr; r2=$RC
+ah=$(zfs list -H -o name -t snapshot -s createtxg -d 1 "$RP/rep/$SA" | tail -1 | sed 's/.*@//'); ga=$(zpool get -H -o value guid "$RP")
+zpool export "$RP"
+zpool create -O mountpoint=none "$RP" "$RD/b.img" && zfs create "$RP/rep"
+tick; run_get_out -v 2 -H -i -m "rep_" --source-keep=1 "$SA" "$RP/rep"; r3=$RC
+onb=$(zfs list -H -o name "$RP/rep/$SA@$ah" >/dev/null 2>&1 && echo yes || echo no)
+tick; kr; r4=$RC; ahs=$(zfs list -H -o name "$SA@$ah" >/dev/null 2>&1 && echo yes || echo no)
+zpool export "$RP"; zpool import -d "$RD" "$ga" >/dev/null 2>&1
+tick; kr; r5=$RC; i5=$(printf '%s\n' "$OUT" | grep -c 'full pull')
+check "REV-197 r3 F1c: rotating disks of one pool name -- B holds A's head and runs healthy, A's head stays, A's next run is incremental" \
+      "0 0 0 0|yes|yes|0 0" "$r1 $r2 $r3 $r4|$onb|$ahs|$r5 $i5"
+zpool destroy "$RP" 2>/dev/null; zpool import -d "$RD" "$RP" >/dev/null 2>&1 && zpool destroy "$RP" 2>/dev/null
+rm -rf "$RD"; zfs destroy -r "$SA" 2>/dev/null
+# Round 3 (F2): a successful local quiesce window makes the snapshot before the loop;
+# it is stamped too, so retention holds (fake /etc/pve with container 901, pct stub).
+QD="$(mktemp -d)"; mkdir -p "$QD/bin" "$QD/pve/lxc" "$QD/pve/qemu-server"
+SQ="$POOL/subvol-901-disk-0"; TQ="$POOL/m197q"; zfs create -p "$SQ"; zfs create -p "$TQ"
+echo "rootfs: x:subvol-901-disk-0,size=1G" > "$QD/pve/lxc/901.conf"
+printf '#!/bin/sh\ncase "$1" in status) echo "status: running";; exec) exit 0;; esac\n' > "$QD/bin/pct"; chmod +x "$QD/bin/pct"
+qrc=""; qcr=0
+for _ in 1 2 3; do
+    tick; QUIESCE_PVE_DIR="$QD/pve" PATH="$QD/bin:$PATH" run_get_out -v 2 -q sync -i -m "rep_" --source-keep=1 "$SQ" "$TQ"
+    qrc="$qrc$RC"; qcr=$((qcr + $(printf '%s\n' "$OUT" | grep -c '_crash_')))
+done
+check "REV-197 r3 F2: three successful quiesced runs -- rc 0, no crash form, one stamped own snapshot left" "000|0|1|1" \
+      "$qrc|$qcr|$(zfs list -H -o name -t snapshot -d 1 "$SQ" | grep -c '@rep_')|$(zfs list -H -o zfsbackup:srckeep-owner -t snapshot -d 1 "$SQ" | grep -vc '^-$')"
+rm -rf "$QD"; zfs destroy -r "$SQ" 2>/dev/null; zfs destroy -r "$TQ" 2>/dev/null
 zfs destroy -r "$S7" 2>/dev/null; zfs destroy -r "$A7" 2>/dev/null; zfs destroy -r "$B7" 2>/dev/null; zfs destroy -r "$C7" 2>/dev/null
 rm -rf "$R197D"
 zfs destroy -r "$W5S" 2>/dev/null; zfs destroy -r "$W5R" 2>/dev/null; zfs destroy -r "$W5P" 2>/dev/null
