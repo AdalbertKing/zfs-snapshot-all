@@ -2387,6 +2387,15 @@ check "REV-197 retention: after every medium ran healthy, the source holds exact
 # the remote source path lists name,guid over ssh: same answer
 tick; PATH="$R197D/bin:$PATH" run_get_out -v 2 -i -m "rep_" --source-keep=1 "root@r197host:$S7" "$A7"
 check "REV-197 remote source: rc 0, still one own snapshot per medium" "0|3" "$RC|$(own197)"
+# flat -R reaches the pruner once per dataset: each dataset keeps one own snapshot per medium
+S8="$POOL/s197r"; A8="$POOL/m197ra"; B8="$POOL/m197rb"
+zfs create -p "$S8/c"; zfs create -p "$A8"; zfs create -p "$B8"
+k197r() { run_get_out -v 2 -R -i -m "rep_" --source-keep=1 "$S8" "$1"; }
+tick; k197r "$A8"; r1=$RC; tick; k197r "$B8"; r2=$RC; tick; k197r "$A8"; r3=$RC; f3=$(printf '%s\n' "$OUT" | grep -c 'full pull')
+tick; k197r "$B8"; r4=$RC; f4=$(printf '%s\n' "$OUT" | grep -c 'full pull')
+check "REV-197 flat -R: two media A B A B -- rc 0, incrementals, parent and child each keep one own snapshot per medium" "0 0 0 0|0 0|2 2" \
+      "$r1 $r2 $r3 $r4|$f3 $f4|$(zfs list -H -o name -t snapshot -d 1 "$S8" | grep -c '@rep_') $(zfs list -H -o name -t snapshot -d 1 "$S8/c" | grep -c '@rep_')"
+zfs destroy -r "$S8" 2>/dev/null; zfs destroy -r "$A8" 2>/dev/null; zfs destroy -r "$B8" 2>/dev/null
 zfs destroy -r "$S7" 2>/dev/null; zfs destroy -r "$A7" 2>/dev/null; zfs destroy -r "$B7" 2>/dev/null; zfs destroy -r "$C7" 2>/dev/null
 rm -rf "$R197D"
 zfs destroy -r "$W5S" 2>/dev/null; zfs destroy -r "$W5R" 2>/dev/null; zfs destroy -r "$W5P" 2>/dev/null

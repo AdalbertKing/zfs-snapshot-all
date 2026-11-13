@@ -11,7 +11,7 @@ Chat transcripts, local notes, and unpushed files are not project state.
 
 The roles may be swapped for a specific task only when the owner says so explicitly.
 
-For detailed review ownership, state derivation and transitions, `docs/project/PROTOCOL.md` (REVIEW PROTOCOL V3: V2.2 plus its "V3 amendments" section) is authoritative.
+For detailed review ownership, state derivation and transitions, `docs/project/PROTOCOL.md` (REVIEW PROTOCOL V4, published by PR #1195; until 2026-11-13 this line said "V3: V2.2 plus its V3 amendments") is authoritative.
 
 ## AI-to-AI disagreement and Owner escalation
 
@@ -128,7 +128,7 @@ prevent its publication. The transition decision is recorded in
 
 Durable review communication lives under `docs/internal/reviews/`.
 
-The authoritative specification is `docs/project/PROTOCOL.md` (V3).
+The authoritative specification is `docs/project/PROTOCOL.md` (V4).
 
 Canonical new artifacts:
 
