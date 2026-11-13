@@ -2158,6 +2158,22 @@ check. On this box it costs as much as one.
 *Rule.* R9 now names `reviewctl --generate`/`--derive`/`--verify` explicitly. A check that runs
 the whole generator goes to pve9 or CI with the suites.
 
+### E132 — a stale release checkout cost a whole publish (2026-11-13, W10)
+**2026-11-13, release 1.0.21.**
+
+*Genesis.* On "publikuj" I ran `publish.sh` here with a release checkout left on 1.0.19. It
+ran its gates for more than 10 minutes and the push was rejected as non-fast-forward; a fresh
+clone and a second full run followed. Together with waiting for the :15 cron and a separate
+STAN PR, "publikuj" to fleet read-back took about 1 h 20 min. The Owner: "Dlaczego wciąż to
+robisz i jak skutecznie ci tego zakazać?"
+
+*Cause.* The rule "publish from a fresh clone" was in memory as text; I did not recall it at
+the moment of action. Text rules fail this way in a long session; the hook for suites holds.
+
+*Rule.* W10 (a rule broken twice becomes a mechanism) and W11 (release path). `publish.sh --push`
+now refuses a release checkout behind its origin before its gates (test/release case
+"behind its origin"). pve9 cannot publish yet: no GitHub credentials, no name list.
+
 ### E131 — a night of waiting on a suite nobody measured (2026-11-13, R16, repeat of E120/E123)
 **2026-11-12/13, REV-20261112-197, PRs #1207, #1209, #1211.**
 

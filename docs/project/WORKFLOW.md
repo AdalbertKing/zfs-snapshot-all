@@ -106,3 +106,27 @@ every run; it is the first to be fixed or marked.)
   and kept as history.
 - `text-checker` runs on the response and on release notes.
 - The error log gets an entry when a mistake produces a new rule or repeats an old one.
+
+## W10. A rule broken twice becomes a mechanism (Owner, 2026-11-13)
+
+A rule kept only as text (CLAUDE.md, memory, this file) is not applied reliably in a long
+session. When the implementer breaks the same written rule a second time, the next change
+is a mechanism that refuses the wrong action: a hook in `.claude/hooks/` or a preflight
+check in the tool itself, failing in seconds. The mechanism gets a regression test.
+Evidence: no-suites-on-Windows was broken as text (E120b, 2026-11-05) and then given the
+hook `suites-on-pve9.sh`, which refuses `test/*/run.sh` and `test/impact.sh` here; what the
+hook does not match was broken again (E130, a whole `reviewctl --derive`, 2026-11-12). The
+stale release checkout (1.0.21) is now refused by `publish.sh --push` before the gates.
+
+## W11. Release path (Owner, 2026-11-13)
+
+1. "publikuj" -> one PR with the release notes: CHANGELOG, `docs/pl`, `docs/en`, `--help`
+   and `docs/STAN.md` (state before the host read-back), `text-checker` on all of it.
+2. Merge on green, then `publish.sh <fresh main> <fresh clone of zfsbackup> --push`. A
+   checkout behind its origin is refused by `publish.sh` itself.
+3. Lab hosts update at once (`update-control.sh --self-update`); production follows its
+   update cron (default :15). The host read-back goes into `docs/STAN.md` with the next
+   release's notes PR, not in a PR of its own.
+4. A tool whose gates take minutes on Windows (`publish.sh`) still runs here until pve9
+   can push to GitHub and holds the private name list (measured 2026-11-13: it cannot,
+   no key, no list). Moving it to pve9 is an Owner decision (token on a lab host).
