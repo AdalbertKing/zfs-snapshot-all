@@ -6,6 +6,8 @@ when they change how the tool is used.
 
 ## [Unreleased]
 
+## [1.0.22] — 2026-11-13
+
 - **GUI wording, Polish and English, reviewed as an admin reads it.** Internal terms are gone
   from the windows ("czasownik"/"verb" is now "polecenie"/"command", seed, profile and engine
   names, a developer note). One name per thing: pruning is "czyszczenie", a run is "przebieg",

@@ -49,7 +49,7 @@ server console.
 
    The collector needs SSH access to the source host as root; the wizard installs the package on the source by itself.
 
-   The title bar shows the package version (e.g. `zfs-snapshot-all 1.0.21`).
+   The title bar shows the package version (e.g. `zfs-snapshot-all 1.0.22`).
 
    The GUI starts in English. For Polish: **F10** (host settings), item `language` = `pl`, or
 

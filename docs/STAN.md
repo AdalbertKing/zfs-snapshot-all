@@ -4,13 +4,13 @@ Zastępuje `docs/PROJECT_STATUS.md` (zamrożony 2026-11-13). Najwyżej 150 linii
 Odświeżany raz na wydanie (`docs/project/WORKFLOW.md` W9). Każda pozycja ma źródło;
 pozycja bez dzisiejszego sprawdzenia jest tak oznaczona.
 
-Stan na: 2026-11-13, `main` = `d09c6e87`.
+Stan na: 2026-11-13, `main` = `22756d43`.
 
 ## Wydanie
 
 | co | wartość | źródło |
 |---|---|---|
-| ostatnia wersja | 1.0.21 (2026-11-13), zfsbackup `46135c2` = release of `d09c6e87` | `CHANGELOG.md`, `git ls-remote` zfsbackup |
+| ostatnia wersja | 1.0.22 (2026-11-13): napisy GUI PL/EN (PR #1229); poprzednia 1.0.21, zfsbackup `46135c2` = release of `d09c6e87` | `CHANGELOG.md`, `git ls-remote` zfsbackup |
 | scalone, niewydane | brak | `CHANGELOG.md` |
 | co blokuje `publish.sh --push` | każdy REV w stanie OPEN lub IMPLEMENTED | `release/review-gate.sh` |
 
@@ -24,7 +24,7 @@ Kto ma ruch: job CI `ledger` w najnowszym biegu na `main`.
 
 ## Hosty
 
-Odczyt 2026-11-13 16:18–16:25, po cronie :15 (`git log -1` w checkoucie roota i konta `zfsbackup`).
+Odczyt 1.0.21: 2026-11-13 16:18–16:25, po cronie :15. Odczyt 1.0.22 trafi tu z notą następnego wydania (W11.3) (`git log -1` w checkoucie roota i konta `zfsbackup`).
 
 | host | rola | wersja | sprawdzone |
 |---|---|---|---|
