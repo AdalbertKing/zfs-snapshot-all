@@ -328,6 +328,9 @@ zamrażania.
 
 Okno zamrożenia zawiera **wyłącznie** `zfs snapshot`, nigdy transfer. Gość z kilkoma dyskami jest
 zamrażany raz na przebieg, a wszystkie jego dyski dostają migawkę razem w jednym atomowym oknie.
+Przebieg kopiuje potem dokładnie migawkę z tego okna, nawet gdy w międzyczasie inne zadanie zrobiło
+nowszą migawkę tej samej rodziny. Jeśli tej migawki zabraknie przed kopią, przebieg odmawia,
+zamiast skopiować inną.
 `zfs snapshot` przyjmuje kilka nazw tylko w obrębie jednej puli, więc datasety rozłożone na kilka
 pul dostają jedno atomowe wywołanie na pulę; każdy gość pozostaje zamrożony do powrotu ostatniego
 wywołania, więc wszystkie dyski nadal lądują w tej samej chwili. Odmrożenie gwarantuje pułapka
