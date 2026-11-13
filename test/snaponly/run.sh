@@ -121,6 +121,11 @@ case "$cmd" in
         # against the zfs/qm stubs, instead of choosing its return code.
         [ "${SSH_RUN_PAYLOAD:-0}" = 1 ] && exec env REMOTE_SIDE=1 bash -c "$cmd"
         cat >/dev/null
+        # A faked clean window still leaves its snapshots behind, as the real one does:
+        # the engine checks for them afterwards (REV-20261112-197 round 5).
+        if [ "${SSH_QUIESCE_RC:-0}" = 0 ]; then
+            for a in $cmd; do case "$a" in *@*) echo "$a" >> "$ZFS_SNAPS" ;; esac; done
+        fi
         exit "${SSH_QUIESCE_RC:-0}" ;;
     *machine-id*) echo "remote-machine-id"; exit 0 ;;
     "hostname -f") echo "remote.example"; exit 0 ;;
@@ -174,6 +179,7 @@ done
 
 reset_world() {
     : > "$TRACE"
+    : > "$ZFS_SNAPS"
     rm -f "$WORK/stats.log"
     printf '%s\n' tank tank/vm-100-disk-0 tank/vm-101-disk-0 tank/vm-101-disk-0/extra tank/skipme > "$ZFS_DATASETS"
 }
