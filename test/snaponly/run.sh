@@ -45,7 +45,8 @@ STUB="$WORK/bin"
 mkdir -p "$STUB" "$WORK/rel" "$WORK/lock"
 TRACE="$WORK/trace"
 ZFS_DATASETS="$WORK/datasets"
-export TRACE ZFS_DATASETS
+ZFS_SNAPS="$WORK/snaps"
+export TRACE ZFS_DATASETS ZFS_SNAPS
 
 cat > "$STUB/zfs" <<'EOF'
 #!/bin/bash
@@ -79,6 +80,14 @@ case "$1" in
         if [ -n "${ZFS_SNAP_FAIL:-}" ] && [ "${last%@*}" = "$ZFS_SNAP_FAIL" ]; then
             echo "cannot create snapshot '$last': permission denied" >&2; exit 1
         fi
+        # Remembered only for the GUID read: under quiesce the engine checks
+        # that the window's own snapshot exists (REV-20261112-197 round 5).
+        for a in "${@:2}"; do case "$a" in -*) ;; *) echo "$a" >> "$ZFS_SNAPS" ;; esac; done
+        exit 0 ;;
+    get)
+        case " $* " in
+            *" guid "*) grep -qxF -- "$last" "$ZFS_SNAPS" 2>/dev/null && echo 4242 ;;
+        esac
         exit 0 ;;
 esac
 exit 0

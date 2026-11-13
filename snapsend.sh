@@ -1382,6 +1382,11 @@ process_dataset() {
         # multi-dataset `zfs snapshot` it came from. Checked separately from
         # USE_EXISTING_SNAPSHOT so -e keeps its own meaning.
         if [ "${QUIESCE_SNAPPED:-0}" -eq 1 ]; then
+            # Round 5 (F1e): report it only if it is there.
+            if [ -z "$(get_snapshot_guid "$src_dataset" "${SNAP_MESSAGE}${RUN_SUFFIX}")" ]; then
+                log 0 "Quiesce: this run's snapshot '${src_dataset}@${SNAP_MESSAGE}${RUN_SUFFIX}' is not on the source -- snapshot-only fails"
+                return 1
+            fi
             log 1 "Snapshot for $src_dataset was already taken inside the quiesce window -- not creating a second, unquiesced one"
             return 0
         fi
@@ -1443,7 +1448,14 @@ process_dataset() {
                     [ -n "$resumed_snap" ] && release_snapshot "$resumed_snap" "" ""
                     clear_inflight_snap "$tgt_dataset" "$src_dataset"
                     log 1 "Resumed transfer completed successfully"
-                    return 0
+                    # Round 5 (adversarial pass): the resumed stream is an
+                    # older run's point. Inside a quiesce window this member
+                    # still owes its own snapshot -- go on and copy it, the
+                    # way the abandon branch above falls through.
+                    if [ "${QUIESCE_SNAPPED:-0}" -ne 1 ]; then
+                        return 0
+                    fi
+                    log 1 "Quiesce: continuing to this run's snapshot '${SNAP_MESSAGE}${RUN_SUFFIX}'"
                 else
                     log 0 "Resume attempt failed"
                     # Still under MAX_RESUME_ATTEMPTS -- leave the hold in
@@ -1505,6 +1517,25 @@ process_dataset() {
     if [ "$USE_EXISTING_SNAPSHOT" -eq 1 ]; then
         local src_snaps
         src_snaps=($(get_sorted_snapshots "$src_dataset")) || return 1
+        # REV-20261112-197 round 5 (F1e), same rule as snapget.sh: a successful quiesce
+        # window made THIS member's snapshot, and that comes before every generic
+        # passive return below. Absent or explicitly excluded: the member fails.
+        if [ "$QUIESCE_SNAPPED" -eq 1 ]; then
+            local _qown="${SNAP_MESSAGE}${RUN_SUFFIX}" _qhit=0 _qs _qx
+            for _qs in "${src_snaps[@]}"; do
+                [ "$_qs" = "$_qown" ] && { _qhit=1; break; }
+            done
+            if [ $_qhit -eq 0 ]; then
+                log 0 "Quiesce: this run's snapshot '${src_dataset}@${_qown}' is not on the source -- this member fails, it is not scaffolding"
+                return 1
+            fi
+            for _qx in ${EXCLUDE_SNAPS[@]+"${EXCLUDE_SNAPS[@]}"}; do
+                case "$_qown" in "$_qx"*)
+                    log 0 "Quiesce: this run's snapshot '${src_dataset}@${_qown}' matches the -E exclusion '$_qx' -- refusing, the window's own point cannot be excluded"
+                    return 1 ;;
+                esac
+            done
+        fi
         if [ ${#src_snaps[@]} -eq 0 ]; then
             if [ $FLAT_RECURSE -eq 1 ]; then
                 # Under -R the request is a SUBTREE and -e's family defines
@@ -1605,6 +1636,12 @@ process_dataset() {
     # falls back to it when the source rotated the snapshot away meanwhile.
     local sent_guid
     sent_guid=$(get_snapshot_guid "$src_dataset" "$latest_snap")
+    # Round 5 (F1e, path map item 7): the window's own point vanished after its
+    # selection. Fail the member here, before the target is touched.
+    if [ "$QUIESCE_SNAPPED" -eq 1 ] && [ -z "$sent_guid" ]; then
+        log 0 "Quiesce: this run's snapshot '${snapshot}' is gone or unreadable after selection -- this member fails"
+        return 1
+    fi
 
     # Hold it for the whole transfer window, including across a resume that
     # spans later cron runs -- see HOLD-BASED PROTECTION in lib-zfs-snap.sh.
