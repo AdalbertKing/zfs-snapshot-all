@@ -154,6 +154,10 @@ So:
   once, on the final head, before the PR.
 - **A commit that touches no engine or test file** (docs, response, status) never
   restarts a suite. Do not kill a running suite because the head moved.
+- **Enforced in code, not left to memory:** `test/remote-suite.sh` keys every result to
+  the tree without `docs/` and `*.md`. The same code returns the stored result in about
+  a second (`CACHED`); `REMOTE_SUITE_FRESH=1` reruns it. Every run prints its time, and
+  past `REMOTE_SUITE_BUDGET` (600 s) it prints `SLOW`. Treat `SLOW` like a red check.
 - **Negative control:** a script that reproduces the defect on real ZFS (minutes), run
   on the rejected SHA. Not a second whole-suite run on an old commit.
 - **Before writing destructive code** (anything that destroys snapshots or data), list
