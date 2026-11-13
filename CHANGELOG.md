@@ -6,7 +6,7 @@ when they change how the tool is used.
 
 ## [Unreleased]
 
-- **An active replica with `keep` keeps only its newest own snapshot on the source** (W5-1). New
+- **An active replica with `keep` keeps only its newest own snapshot on the source** (W5-1; one per medium when it has several). New
   `snapget.sh --source-keep=N`: after a successful pull of the snapshot the run made with `-m`
   (not under `-r`; under `-R` each dataset is pruned on its own), the job's own older snapshots
   (exact `-m` prefix plus the engine's timestamp, or its quiesce crash form) beyond the N newest

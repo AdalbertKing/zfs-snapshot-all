@@ -5,7 +5,7 @@ implementer.
 
 The authoritative workflow specification is:
 
-`docs/project/PROTOCOL.md` — **REVIEW PROTOCOL V3** (V2.2 plus the "V3 amendments" section).
+`docs/project/PROTOCOL.md` — **REVIEW PROTOCOL V4** (published by PR #1195; until 2026-11-13 this line said "V3: V2.2 plus the V3 amendments").
 The V2 names below (FSM, loop) are unchanged in V3.
 
 If this README and `PROTOCOL.md` disagree about state, routing, ownership,

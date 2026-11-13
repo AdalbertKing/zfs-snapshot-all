@@ -2824,11 +2824,11 @@ if [ "$SOURCE_KEEP" -gt 0 ] && { [ $USE_EXISTING_SNAPSHOT -eq 1 ] || [ -z "$MESS
     echo "Error: --source-keep needs -m and no -e and no -s: it prunes only the snapshots this job makes and sends" >&2
     exit 1
 fi
-# REV-20261112-197: and -i. Without it a run carries the intermediate snapshots -- another
-# medium's of the same family among them -- onto this target, which would make them prunable
-# here and take that medium's only base.
+# REV-20261112-197: and -i, so each run adds one snapshot to each medium. Safety does NOT
+# rest on -i (round 2: earlier history or an -H seed can still put another medium's base on
+# this target); it rests on the owner stamp, see prune_source_family.
 if [ "$SOURCE_KEEP" -gt 0 ] && [ $SKIP_INTERMEDIATES -ne 1 ]; then
-    echo "Error: --source-keep needs -i: only the snapshot this run makes may reach this target, so another medium's base is never prunable here" >&2
+    echo "Error: --source-keep needs -i (one new snapshot per run on each medium)" >&2
     exit 1
 fi
 # W5 (2026-11-12): under a DECLARED -e the Proxmox-reserved families are never adopted.
