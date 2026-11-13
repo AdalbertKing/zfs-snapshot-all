@@ -1340,7 +1340,7 @@ summary_text() {
         if [ -n "$_here" ]; then
             echo "$(Tv 'UWAGA: na TYM hoście już jest $_here -- lustro pisze pod tą samą nazwą.' '$_here' "$_here")"
             echo "$(T '  Jeśli to nie jest wcześniejsza kopia tego źródła (wspólna migawka), pierwsza kopia odmówi i relacja')"
-            echo "$(T '  zostanie w stanie '\''pierwsza kopia'\'' -- niczego nie nadpisze. Inaczej: backup (kopie pod hdd/backups/<host>).')"
+            echo "$(T '  zostanie w stanie '\''1. kopia'\'' -- niczego nie nadpisze. Inaczej: backup (kopie pod hdd/backups/<host>).')"
         fi
     fi
     [ "$RAW" -eq 1 ] && echo "$(T 'Wysyłka zaszyfrowana (raw): kopia leży w celu zaszyfrowana, ten host nie potrzebuje klucza.')"
@@ -1417,7 +1417,7 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
         # tu tylko angielskie "RUX plan" bez komendy, retencji źródła, pomijanych i konta.
         # Linia "--grant-remotely is noted, but --plan is read-only" myliła (grant NASTĄPI
         # po Uruchom), więc jej tu nie ma.
-        { echo "$(T 'Po Uruchom uruchomi się DOKŁADNIE:')"
+        { echo "$(T 'Po kliknięciu Uruchom wykona się DOKŁADNIE:')"
           build_argv install; cmd_oneline; echo; build_argv
           echo
           if [ "$NOCOPY" -eq 1 ]; then echo "$(Tv 'Cel: brak (same migawki).  Szablon: $PROFILE.' '$PROFILE' "$PROFILE")"

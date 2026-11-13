@@ -1476,8 +1476,8 @@ def transfer_word(t, now):
     return _(TRANSFER_STATES.get(st, (st or "?", 0))[0]), ""
 
 
-STATE_PL = {"active": u"działa", "removed": u"usunięta", "pending_enroll": u"zakładana", "seeding": u"pierwsza kopia",
-            "seed_complete": u"po pierwszej kopii", "endpoint_verified": u"sprawdzona"}
+STATE_PL = {"active": u"działa", "removed": u"usunięta", "pending_enroll": u"zakładana", "seeding": u"1. kopia",
+            "seed_complete": u"po 1. kopii", "endpoint_verified": u"sprawdzona"}
 
 
 def pl_relacje(n):
@@ -1552,7 +1552,7 @@ ENABLE_NOTE = [u"Relacja jest WYŁĄCZONA: pauza tutaj i zamek na źródle.",
 
 def finish_argv(rel):
     """Nastepny krok relacji, ktora nie jest aktywna (bez sciezki do programu):
-    'pierwsza kopia' (seeding) -> seed, reszta cyklu -> activate (wznawialne, samo
+    '1. kopia' (seeding) -> seed, reszta cyklu -> activate (wznawialne, samo
     sprawdza zrodlo i instaluje). Aktywna albo usunieta -- nic."""
     n = rel.get("name")
     s = rel.get("state", "")
@@ -3190,7 +3190,7 @@ def rel_panel_pairs(row, data, now, ch):
         prof += _(u"   źródło: %s") % rel["source_profile"]
     pairs.append((_(u"Szablon"), prof))
     if rel.get("recursion"):
-        pairs.append((_(u"Tryb"), {"flat": _(u"każdy dataset osobno"), "atomic": _(u"całe drzewo datasetów atomowo")}.get(rel["recursion"], rel["recursion"])))
+        pairs.append((_(u"Sposób"), {"flat": _(u"każdy dataset osobno"), "atomic": _(u"całe drzewo datasetów atomowo")}.get(rel["recursion"], rel["recursion"])))
     if rel.get("passive") == "1":
         pairs.append((_(u"Tryb"), _(u"pasywny")))
     if rel.get("bandwidth"):
@@ -3917,7 +3917,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     if any(job_is_mirror(j) for j in row.get("jobs") or []):
         pairs.append((_(u"Cel"), _(u"lustro źródła: trzyma to, co źródło (bez własnej retencji)")))
     if rel.get("recursion"):
-        pairs.append((_(u"Tryb"), {"flat": _(u"każdy dataset osobno"), "atomic": _(u"całe drzewo datasetów atomowo")}.get(rel["recursion"], rel["recursion"])))
+        pairs.append((_(u"Sposób"), {"flat": _(u"każdy dataset osobno"), "atomic": _(u"całe drzewo datasetów atomowo")}.get(rel["recursion"], rel["recursion"])))
     if rel.get("passive") == "1":
         pairs.append((_("Tryb"), _("pasywny")))
     if rel.get("bandwidth"):

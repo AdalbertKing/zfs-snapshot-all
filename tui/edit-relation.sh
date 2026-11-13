@@ -693,7 +693,7 @@ pending_count() {
 save_all() {
     local n rc=0 a k=0
     {
-        echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione. Po Uruchom, po kolei:')"
+        echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione. Po kliknięciu Uruchom, po kolei:')"
         echo
         [ -n "$P_HOST" ] && { k=$((k + 1)); echo "$(Tv '$k. Adres źródła: $P_HOST  (activate --host, sprawdzenie, że to ten sam host)' '$k' "$k" '$P_HOST' "$P_HOST")"; echo; }
         if [ -n "$P_ENT" ]; then

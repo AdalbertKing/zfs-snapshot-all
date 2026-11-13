@@ -327,7 +327,7 @@ fi
 H1="$(screen zadania F1 --width 100 --height 120)"
 # A-1 (kampania 2026-10-21): po przebudowie (U66) kreator idzie krok po kroku z podsumowaniem.
 if ! has "$H1" 'kreator w 7 krokach' && ! has "$H1" 'Enter na źródle/celu' && ! has "$H1" 'kreator w 10 krokach' \
-   && has "$H1" 'kreator krok po kroku' && has "$H1" 'Wstecz = poprzedni krok' && has "$H1" 'Zaawansowane' && has "$H1" 'whiptail'; then
+   && has "$H1" 'kreator krok po kroku' && has "$H1" 'Wstecz = poprzedni krok' && has "$H1" 'Zaawansowane' && has "$H1" 'okno dialogowe'; then
     ok "pomoc: opisuje kreator, ktory NAPRAWDE sie otwiera (krok po kroku, podsumowanie, Zaawansowane), a nie poprzednikow"
 else
     bad "pomoc: nieaktualny opis kreatora" "$(printf '%s' "$H1" | sed -n '4,14p')"
@@ -2057,7 +2057,7 @@ fi
 A="$(act enter)"
 B="$(act enter,d)"
 if has "$A" 'd dokańcza   e zmienia' && has "$B" 'POTWIERDZENIE: Dokończ relację duplikat' && has "$B" 'seed duplikat --yes' && [ ! -s "$XL" ]; then
-    ok "akcje: okno relacji w stanie 'pierwsza kopia' -- stopka 'd dokończ', 'd' pokazuje 'seed NAZWA --yes' i niczego nie uruchamia"
+    ok "akcje: okno relacji w stanie '1. kopia' -- stopka 'd dokończ', 'd' pokazuje 'seed NAZWA --yes' i niczego nie uruchamia"
 else
     bad "akcje: d dokończ (podgląd)" "$(printf '%s' "$A" | tail -3)" "$B"
 fi
@@ -6456,9 +6456,9 @@ print("C", zt.guard_states(os.path.join(d, "brak.ini"), [os.path.join(d, "brak.c
 class D: pass
 x = D(); x.jobs = {"host": "pve10", "jobs": [{"account": "root"}]}; x.read_at = 0; x.host_ip = None; x.guards = ("on", "off")
 print("WIDE", u"ochrona pojemności: wł. · monitor przyrostu: wył." in zt.top_bar(x, 140, 0, False, 0))
-print("NARROW", u"pełnej puli" not in zt.top_bar(x, 70, 0, False, 0), len(zt.top_bar(x, 70, 0, False, 0)) <= 70)
+print("NARROW", u"ochrona pojemności" not in zt.top_bar(x, 70, 0, False, 0), len(zt.top_bar(x, 70, 0, False, 0)) <= 70)
 w = zt.top_bar(x, 200, 0, False, 0)
-print("CREDIT", u"by Wojciech Król (Adalbert King)" in w and u"pełnej puli" in w and len(w) <= 200, u"Król" not in zt.top_bar(x, 80, 0, False, 0))
+print("CREDIT", u"by Wojciech Król (Adalbert King)" in w and u"ochrona pojemności" in w and len(w) <= 200, u"Król" not in zt.top_bar(x, 80, 0, False, 0))
 cl = os.path.join(d, "CHANGELOG.md"); open(cl, "w").write("# Changelog\n\nintro [1.2] text\n## [9.8.7] - 2026\n## [9.8.6]\n")
 zt._PKG_VERSION[:] = [zt.pkg_version(cl)]
 print("VER", zt.pkg_version(cl), zt.top_bar(x, 80, 0, False, 0).startswith(" zfs-snapshot-all 9.8.7 "), zt.pkg_version(os.path.join(d, "brak.md")) == "")

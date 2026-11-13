@@ -529,7 +529,7 @@ PYEOF
     3)  # rodzaj nośnika -- PRZED wyborem nośnika (P5, uwaga 7): od niego zależy lista
         wt --title "$(rtitle 4 "$(T 'rodzaj nośnika')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$MEDIA" \
            --menu "$(T 'Wymienny: dysk jest podłączany do systemu na czas kopii i odłączany po niej (można go wyjąć).\nStały: dysk zawsze podłączony (np. osobna pula), nic się nie podłącza ani odłącza.')" 14 "$W" 2 \
-           removable "$(T 'wymienny (USB, dysk do sejfu)')" fixed "$(T 'stały (inna pula w tej maszynie)')" || { [ "$PASSIVE" = yes ] && step=25 || step=26; continue; }
+           removable "$(T 'wymienny (USB, dysk do sejfu)')" fixed "$(T 'stały (inna pula na tym hoście)')" || { [ "$PASSIVE" = yes ] && step=25 || step=26; continue; }
         MEDIA="$WT_OUT"; [ "$MEDIA" = fixed ] && GUIDS=""
         step=4 ;;
     4)  # nośnik -- tylko PODŁĄCZONY (uwaga 7: "wykluczamy definicje ad-hoc")
@@ -615,7 +615,7 @@ PYEOF
             fi
             prep_media "$cur" "${DST#*/}" || continue
             add_guid "$PREP_GUID"
-            wt --title "$(T 'Kolejny dysk gotowy')" --msgbox "$(Tv 'Dysk dopisany do repliki '\''$NAME'\'' (ID puli $PREP_GUID).\nDyski są równorzędne: replika kopiuje na ten, który jest podłączony.\nPodłączaj JEDEN naraz. Zapisze się po Uruchom w planie.' '$NAME' "$NAME" '$PREP_GUID' "$PREP_GUID")" 11 "$W"
+            wt --title "$(T 'Kolejny dysk gotowy')" --msgbox "$(Tv 'Dysk dopisany do repliki '\''$NAME'\'' (ID puli $PREP_GUID).\nDyski są równorzędne: replika kopiuje na ten, który jest podłączony.\nPodłączaj JEDEN naraz. Zapisze się po kliknięciu Uruchom w planie.' '$NAME' "$NAME" '$PREP_GUID' "$PREP_GUID")" 11 "$W"
             step=5; continue
         fi
         if [ "$pool" = "$cur" ]; then
@@ -626,7 +626,7 @@ PYEOF
         if grep -qxF "$pool" "$TMPD/pools.here" && ! zfs list -H -o name "$d" >/dev/null 2>&1; then
             wt --title "$(Tv 'Brak $d' '$d' "$d")" --yes-button "$(T Utwórz)" --no-button "$(T Wstecz)" \
                --yesno "$(Tv 'Pula '\''$pool'\'' jest zaimportowana, ale nie ma na niej '\''$d'\''.\nUtworzyć go teraz (zfs create -p $d)? Tylko na dysku przeznaczonym na replikę.' '$pool' "$pool" '$d' "$d")" 10 "$W" || continue
-            zfs create -p "$d" 2>"$TMPD/zc.err" || { wt --title "$(T 'zfs create nie wyszedł')" --msgbox "$(tail -3 "$TMPD/zc.err")" 10 "$W"; continue; }
+            zfs create -p "$d" 2>"$TMPD/zc.err" || { wt --title "$(T 'zfs create nie powiódł się')" --msgbox "$(tail -3 "$TMPD/zc.err")" 10 "$W"; continue; }
         fi
         # ID dysku (P5): inna pula = nowa tożsamość; ta sama -- obecny dysk dopisany,
         # jeśli go jeszcze nie ma (replika sprzed P5 dostaje ID przy pierwszej zmianie).

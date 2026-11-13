@@ -52,8 +52,8 @@ while :; do
     [ -n "$COPIES" ] && items+=(data "$(T 'SKASUJ KOPIE na tym hoście (nieodwracalne)')" "$DATA")
     # Stan słowem z F3 (STATE_PL w zfs-tui.py), nie surowym słowem rekordu.
     case "$STATE" in
-        active) st="$(T działa)" ;; pending_enroll) st="$(T zakładana)" ;; seeding) st="$(T 'pierwsza kopia')" ;;
-        seed_complete) st="$(T 'po pierwszej kopii')" ;; endpoint_verified) st="$(T sprawdzona)" ;; *) st="${STATE:-?}" ;;
+        active) st="$(T działa)" ;; pending_enroll) st="$(T zakładana)" ;; seeding) st="$(T '1. kopia')" ;;
+        seed_complete) st="$(T 'po 1. kopii')" ;; endpoint_verified) st="$(T sprawdzona)" ;; *) st="${STATE:-?}" ;;
     esac
     head="$(Tv 'Relacja '\''$NAME'\'' (stan: $st) przestanie działać: znikną jej zadania z crona.' '$NAME' "$NAME" '$st' "$st")"
     [ "$STATE" = removed ] && head="$(Tv 'Relacja '\''$NAME'\'' jest już usunięta -- zostało po niej to, co niżej.' '$NAME' "$NAME")"
