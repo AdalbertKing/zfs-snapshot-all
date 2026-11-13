@@ -1,8 +1,9 @@
 # Review exchange protocol
 
 > **Workflow V5 (2026-11-13): `docs/project/WORKFLOW.md` is the rule text for a round and wins
-> where this file disagrees.** For the Reviewer: W6 (a rejection names the class, every
-> instance seen, and carries the reproduction) is proposed and needs your acceptance.
+> where this file disagrees.** W6 (class, every observed instance, runnable reproduction;
+> repeated-class rejection requires design before more code) was accepted by the Reviewer
+> in [PR #1216](https://github.com/AdalbertKing/zfs-snapshot-all/pull/1216#issuecomment-6853698121).
 
 
 This directory is the durable communication channel between the reviewer and
