@@ -1903,12 +1903,28 @@ process_dataset() {
         fi
 
         local latest_snap="${src_snaps[-1]}"
+        # REV-20261112-197 round 4 (F1d): a successful quiesce window made this run's
+        # snapshot, always named ${SNAP_MESSAGE}${RUN_SUFFIX}. Copy exactly that one.
+        # The newest of the family may belong to another job that ran meanwhile, and
+        # copying it makes this target depend on a point the other job owns and
+        # prunes. If this run's snapshot is not there, refuse; do not substitute.
+        if [ "$QUIESCE_SNAPPED" -eq 1 ]; then
+            local _own="${SNAP_MESSAGE}${RUN_SUFFIX}" _found=0 _s
+            for _s in "${src_snaps[@]}"; do
+                [ "$_s" = "$_own" ] && { _found=1; break; }
+            done
+            if [ $_found -eq 0 ]; then
+                log 0 "Quiesce: this run's snapshot '${src_dataset}@${_own}' is not on the source -- refusing to copy another snapshot in its place"
+                return 1
+            fi
+            [ "$latest_snap" = "$_own" ] \
+                || log 1 "Quiesce: '${src_dataset}@${latest_snap}' is newer than this run's snapshot -- copying this run's '${_own}', not it"
+            latest_snap="$_own"
+        fi
         snapshot="${src_dataset}@${latest_snap}"
-        # REV-20261112-197 round 3 (F2): a successful quiesce window made this run's
-        # snapshot before this loop. --source-keep refuses -e, so here it is the
-        # quiesce path; stamp only the exact name this run gave, never an adopted one.
-        if [ "$SOURCE_KEEP" -gt 0 ] && [ "$QUIESCE_SNAPPED" -eq 1 ] \
-           && [ "$latest_snap" = "${SNAP_MESSAGE}${RUN_SUFFIX}" ]; then
+        # Round 3 (F2): stamp only this run's own quiesced snapshot. --source-keep
+        # refuses -e, so in this branch it is always the quiesce path.
+        if [ "$SOURCE_KEEP" -gt 0 ] && [ "$QUIESCE_SNAPPED" -eq 1 ]; then
             mark_source_owner "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
         fi
     else
