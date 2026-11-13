@@ -345,6 +345,12 @@ okno dłuższe niż budżet (`QUIESCE_MAX_WINDOW`, domyślnie 5 sekund), powoduj
 migawki, zamiast robić ją na zamrożeniu, które mogło już zniknąć. Zwiększaj budżet tylko wtedy,
 gdy wiesz, że dane goście utrzymają zamrożenie.
 
+**Co kopiuje przebieg z udanym zamrożeniem.** Każdy dataset objęty oknem kopiuje dokładnie migawkę
+zrobioną w tym oknie, nigdy nowszą, którą w międzyczasie zrobiło inne zadanie. Jeśli tej migawki
+brakuje (usunięta albo wyłączona przez `-E`), ten dataset kończy się błędem, a przebieg też;
+pod `-R` nie jest pomijany jako pusty dataset. Migawka awaryjna (`_crash_`) jest robiona osobno
+dla każdego datasetu i tej zasady nie dotyczy.
+
 **Polityka błędu.** Nieudane zamrożenie nadal robi migawkę, spójną po awarii, chyba że szczebel
 mówi `,strict`:
 
