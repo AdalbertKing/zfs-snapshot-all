@@ -35,12 +35,15 @@ SNAPGET="${SNAPGET:-$REPO/snapget.sh}"
 # run: that is the section's defect, not the selector's.
 if [ -n "${SUITE_ONLY:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
     case "$SUITE_ONLY" in
-        *[!A-Za-z0-9_.-]*) echo "SUITE_ONLY: a plain word, not '$SUITE_ONLY'" >&2; exit 2 ;;
+        [!A-Za-z0-9]*|*[!A-Za-z0-9_.-]*) echo "SUITE_ONLY: a plain word starting with a letter or digit, not '$SUITE_ONLY'" >&2; exit 2 ;;
     esac
     only_f="$(mktemp)"
+    # The word is matched against the header TITLE (after "# --- "), so it cannot
+    # match the prefix every header shares; helpers and summary are always kept and
+    # do not count as a match.
     awk -v w="$SUITE_ONLY" '
-        /^# --- / { h = tolower($0); keep = (h ~ /^# --- (helpers|summary) /) || index(h, tolower(w)) > 0
-                    if (keep && h !~ /^# --- (helpers|summary) /) hit++ }
+        /^# --- / { h = tolower(substr($0, 7)); keep = (h ~ /^(helpers|summary) /) || index(h, tolower(w)) > 0
+                    if (keep && h !~ /^(helpers|summary) /) hit++ }
         !seen && /^# --- / { seen = 1 }
         !seen || keep
         END { if (!hit) exit 3 }' "${BASH_SOURCE[0]}" > "$only_f" \
@@ -81,7 +84,8 @@ zpool create -f -m none "$POOL" "$IMG" || { echo "zpool create failed" >&2; exit
 
 export STATS_LOG="$TMPD/stats.log"
 export LOCKDIR="$TMPD"
-# Progress records too. Every engine run reaps the progress directory with a
+# Progress records too. Every transfer (snapget.sh/snapsend.sh transfer_data)
+# reaps the progress directory with a
 # grep and a stat per file, and every run of this suite used to leave ~80 new
 # records (fresh pool name, fresh keys) in the host's real directory. On pve9
 # that reached 2999 files: 9.7 s per engine call instead of 0.4 s, which made
