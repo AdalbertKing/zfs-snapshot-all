@@ -46,10 +46,8 @@ set -o pipefail
 #                    quiesce crash form) beyond the N newest (2026-11-12, W5:
 #                    an active replica's snapshots piled up on both pvesr nodes).
 #                    The per-target bookmark keeps the next increment possible.
-#                    Only snapshots a run of THIS target made (stamped on the
-#                    source, zfsbackup:srckeep-owner) and that the target holds
-#                    (by GUID): another medium of the same family never loses
-#                    its base; unstamped ones stay (REV-20261112-197).
+#                    Only snapshots THIS target holds (by GUID): another medium
+#                    of the same family never loses its base (REV-20261112-197).
 #                    Needs -m and -i; not with -e or -s; under -r nothing is
 #                    pruned (level 1).
 #                    A failed listing or destroy is a warning, never a failed run.
@@ -1330,37 +1328,14 @@ guest_disk_is_live() {   # <dataset> -> 0 if it IS a live guest disk, 1 otherwis
 #   only snapshots THIS target holds, by GUID (REV-20261112-197). Two media of one
 #   replica share the family (same -m): B's run must never take the base of A, whose
 #   bookmark refresh may have failed or not happened yet -- record_send_bookmark is
-#   best-effort and runs after the hold is released. Holding is not enough, see
-#   round 2 below: only snapshots stamped as THIS target's own count. A prunes A's
-#   stamped snapshots itself, on A's run, and never its own head; B never touches
-#   them. Correctness does not depend on any bookmark.
-#
-# Round 2 (REV-20261112-197 re-review): a GUID on this target is NOT proof that the
-# snapshot is this target's own -- history copied before (a history-all run, an -H
-# seed, an import) can put A's base on B as well. So ownership is recorded where it
-# is created: the run that makes the snapshot for a --source-keep job stamps it on
-# the source with SOURCE_OWNER_PROP = this target's tag (bookmark_target_tag of the
-# target and -j). Only snapshots carrying THIS target's stamp AND held by this
-# target are prunable. An unstamped snapshot (made before, by hand, by another job,
-# or when the stamp could not be set) is ambiguous and stays on the source.
-SOURCE_OWNER_PROP="zfsbackup:srckeep-owner"
-
-mark_source_owner() {   # <src_dataset@snap> <tgt_dataset> [remote_user remote_host]
-    local snap="$1" tag ruser="${3:-}" rhost="${4:-}"
-    tag=$(bookmark_target_tag "$2" "$IDENTIFIER")
-    if [ -n "$rhost" ]; then
-        ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" "zfs set $SOURCE_OWNER_PROP=$tag '$snap'"
-    else
-        zfs set "$SOURCE_OWNER_PROP=$tag" "$snap"
-    fi || log 1 "Warning: --source-keep: cannot mark '$snap' as this target's own -- it will never be pruned by --source-keep"
-    return 0
-}
-
+#   best-effort and runs after the hold is released. Under -i (required with
+#   --source-keep) each run sends only the snapshot it made, so A's snapshots never
+#   reach B's medium and B never prunes them; A prunes them itself, on A's run,
+#   and never its own head. Correctness does not depend on any bookmark.
 prune_source_family() {   # <src_dataset> <sent_snap> <tgt_dataset> [remote_user remote_host]
-    local src="$1" sent="$2" tgt="$3" ruser="${4:-}" rhost="${5:-}" list rc crash s n g o i idx=-1
+    local src="$1" sent="$2" tgt="$3" ruser="${4:-}" rhost="${5:-}" list rc crash s n g i idx=-1
     local ts='[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-    local own=() doomed=() gone=0 stuck=0 d tguids mytag
-    mytag=$(bookmark_target_tag "$tgt" "$IDENTIFIER")
+    local own=() doomed=() gone=0 stuck=0 d tguids
     if [ "${DRY_RUN:-0}" -eq 1 ]; then
         log 1 "--source-keep=$SOURCE_KEEP: dry run -- the job's own snapshots on '$src' that '$tgt' holds, beyond the $SOURCE_KEEP newest, would be destroyed"
         return 0
@@ -1374,26 +1349,26 @@ prune_source_family() {   # <src_dataset> <sent_snap> <tgt_dataset> [remote_user
         return 0
     fi
     if [ -n "$rhost" ]; then
-        list=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" "zfs list -H -o name,guid,$SOURCE_OWNER_PROP -s createtxg -t snapshot -d 1 '$src'"); rc=$?
+        list=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" "zfs list -H -o name,guid -s createtxg -t snapshot -d 1 '$src'"); rc=$?
     else
-        list=$(zfs list -H -o "name,guid,$SOURCE_OWNER_PROP" -s createtxg -t snapshot -d 1 "$src"); rc=$?
+        list=$(zfs list -H -o name,guid -s createtxg -t snapshot -d 1 "$src"); rc=$?
     fi
     if [ $rc -ne 0 ]; then
         log 1 "Warning: --source-keep: cannot list the snapshots of '$src'${rhost:+ on $rhost} -- nothing pruned"
         return 0
     fi
-    while IFS=$'\t' read -r s g o; do
+    while IFS=$'\t' read -r s g; do
         n="${s#"$src"@}"
         [ -n "$s" ] && [ "$n" != "$s" ] || continue
         [[ "$g" =~ ^[0-9]+$ ]] || continue
         case "$n" in
             "$MESSAGE"$ts|"$crash"$ts)
-                [ "$o" = "$mytag" ] && grep -qxF -- "$g" <<< "$tguids" && own+=("$n") ;;
+                grep -qxF -- "$g" <<< "$tguids" && own+=("$n") ;;
         esac
     done <<< "$list"
     for i in "${!own[@]}"; do [ "${own[$i]}" = "$sent" ] && idx=$i; done
     if [ $idx -lt 0 ]; then
-        log 1 "Warning: --source-keep: '$src@$sent' is not among the snapshots marked as this target's own that both the source and '$tgt' hold -- nothing pruned"
+        log 1 "Warning: --source-keep: '$src@$sent' is not among the job's own snapshots that both the source and '$tgt' hold -- nothing pruned"
         return 0
     fi
     for (( i = 0; i <= idx - SOURCE_KEEP; i++ )); do doomed+=("${own[$i]}"); done
@@ -1888,7 +1863,6 @@ process_dataset() {
     else
         snapshot=$(create_snapshot "$src_dataset" "$remote_user" "$remote_host") || return 1
         latest_snap="${snapshot##*@}"
-        [ "$SOURCE_KEEP" -gt 0 ] && mark_source_owner "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
     fi
 
     # A20: the identity of what is sent, recorded before the send -- the proof below
