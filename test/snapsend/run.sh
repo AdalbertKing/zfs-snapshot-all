@@ -2561,6 +2561,52 @@ check "REV-197 r4 F1d: push twin -- a newer foreign point appears, snapsend copi
       "$RC|$(printf '%s\n' "$OUT" | grep -c "copying this run's")"
 unset F1D_REALZFS F1D_SRC F1D_TB F1D_ENGINE F1D_LOG F1D_DONE
 rm -rf "$QD"; zfs destroy -r "$SQ" 2>/dev/null; zfs destroy -r "$TA" 2>/dev/null; zfs destroy -r "$TB" 2>/dev/null; zfs destroy -r "$PB" 2>/dev/null
+# Round 5 (F1e): flat -R with a quiesce window. Parent qr (not a guest disk) and the
+# guest disk below it are both members; the window snapshots both. A zfs wrapper
+# removes the guest disk's own point: "gone" right after the window, "vanish" at the
+# GUID read after its selection. The member must fail, and with it the run; the
+# parent still transfers. A passive -R -e over the same shapes keeps 2026-11-07.
+QD="$(mktemp -d)"; mkdir -p "$QD/bin" "$QD/pve/lxc" "$QD/pve/qemu-server"
+echo "rootfs: x:subvol-901-disk-0,size=1G" > "$QD/pve/lxc/901.conf"
+printf '#!/bin/sh\ncase "$1" in status) echo "status: running";; exec) exit 0;; esac\n' > "$QD/bin/pct"; chmod +x "$QD/bin/pct"
+cat > "$QD/bin/zfs" <<'ZEOF'
+#!/bin/bash
+if [ "${F1E_MODE:-}" = vanish ] && [ ! -e "$F1E_DONE" ] && [ "$1" = get ]; then
+    for a in "$@"; do case "$a" in "$F1E_MEMBER@rep_"*) touch "$F1E_DONE"; "$F1E_REALZFS" destroy "$a" ;; esac; done
+fi
+"$F1E_REALZFS" "$@"; rc=$?
+if [ "${F1E_MODE:-}" = gone ] && [ ! -e "$F1E_DONE" ] && [ "$1" = snapshot ]; then
+    for a in "${@:2}"; do case "$a" in "$F1E_MEMBER@"*) touch "$F1E_DONE"; "$F1E_REALZFS" destroy "$a" ;; esac; done
+fi
+exit $rc
+ZEOF
+chmod +x "$QD/bin/zfs"
+QR="$POOL/qr"; QM="$QR/subvol-901-disk-0"
+export F1E_REALZFS="$(command -v zfs)" F1E_MEMBER="$QM" F1E_DONE="$QD/done"
+qr_case() {   # <label> <mode> <engine: get|send> <extra member snapshot or -> -> RC, OUT, parent copied?
+    local label="$1" mode="$2" eng="$3" extra="$4" t="$POOL/m197e$RANDOM"
+    zfs destroy -r "$QR" 2>/dev/null; zfs create -p "$QM"; zfs create -p "$t"
+    [ "$extra" != - ] && zfs snapshot "$QM@$extra"
+    rm -f "$F1E_DONE"; tick
+    if [ "$eng" = get ]; then F1E_MODE=$mode QUIESCE_PVE_DIR="$QD/pve" PATH="$QD/bin:$PATH" run_get_out -v 2 -R -q sync -m "rep_" "$QR" "$t"
+    else F1E_MODE=$mode QUIESCE_PVE_DIR="$QD/pve" PATH="$QD/bin:$PATH" run_send_out -v 2 -R -q sync -m "rep_" "$QR" "$t"; fi
+    local par; par=$(zfs list -H -o name -t snapshot -d 1 "$t/$QR" 2>/dev/null | grep -c '@rep_')
+    check "REV-197 r5 F1e: $label -- the member fails, the run is not a success, the parent still transfers" \
+          "fail|1|1" "$([ "$RC" -ne 0 ] && echo fail || echo success)|$(printf '%s\n' "$OUT" | grep -c 'this member fails')|$par"
+    zfs destroy -r "$t" 2>/dev/null
+}
+qr_case "pull, flat -R, member's own point gone, member otherwise empty" gone get -
+qr_case "pull, flat -R, member's own point gone, member has another family" gone get other_1
+qr_case "push, flat -R, member's own point gone, member otherwise empty" gone send -
+qr_case "pull, own point vanishes after its selection (GUID read)" vanish get -
+check "REV-197 r5 F1e: the vanish case is caught at the boundary after selection, not earlier" "1" \
+      "$(printf '%s\n' "$OUT" | grep -c 'after selection')"
+# Passive control: no window, -R -e over a member with no family -- still scaffolding (2026-11-07).
+zfs destroy -r "$QR" 2>/dev/null; zfs create -p "$QM"; zfs snapshot "$QR@rep_1"; t="$POOL/m197epass"; zfs create -p "$t"
+tick; run_get_out -v 2 -R -e -m "rep_" "$QR" "$t"
+check "REV-197 r5 F1e: passive -R -e control -- the family-less member is scaffolding, the run succeeds" "0" "$RC"
+unset F1E_REALZFS F1E_MEMBER F1E_DONE
+rm -rf "$QD"; zfs destroy -r "$QR" 2>/dev/null; zfs destroy -r "$t" 2>/dev/null
 zfs destroy -r "$S7" 2>/dev/null; zfs destroy -r "$A7" 2>/dev/null; zfs destroy -r "$B7" 2>/dev/null; zfs destroy -r "$C7" 2>/dev/null
 rm -rf "$R197D"
 zfs destroy -r "$W5S" 2>/dev/null; zfs destroy -r "$W5R" 2>/dev/null; zfs destroy -r "$W5P" 2>/dev/null
