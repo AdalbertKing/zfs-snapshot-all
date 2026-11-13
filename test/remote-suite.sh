@@ -79,6 +79,11 @@ case "${3:-}" in
     *) die "third word may only be only=<word>, not '$3'" ;;
 esac
 
+fresh="${REMOTE_SUITE_FRESH:-}"
+case "$fresh" in ""|1) ;; *) die "REMOTE_SUITE_FRESH is 1 or unset" ;; esac
+budget="${REMOTE_SUITE_BUDGET:-600}"
+case "$budget" in ""|*[!0-9]*) die "REMOTE_SUITE_BUDGET is a number of seconds" ;; esac
+
 # The full refspec matters. `git fetch origin main` writes only FETCH_HEAD, and
 # several suites resolve origin/main as a ref -- without it dozens of assertions
 # fail for a reason that has nothing to do with the code under test.
@@ -90,12 +95,30 @@ cd $CLONE
 git fetch -q origin '+refs/heads/*:refs/remotes/origin/*'
 git checkout -q -f -B remotesuite $ref
 set +e
+# Owner, 2026-11-13: the rules were written down and still broken, so the code
+# enforces two of them.
+# 1. The same code never runs twice. The key is the tree without docs/ and *.md:
+#    a commit that changes only prose returns the stored result at once.
+#    REMOTE_SUITE_FRESH=1 forces a new run.
+# 2. Every run is timed; past ${budget}s it says SLOW -- a slow suite is a defect
+#    to measure (one engine call), not a wait.
+key=\$(git ls-tree -r HEAD | grep -vP '\t(docs/|.*\.md\$)' | git hash-object --stdin)
+cache=/var/tmp/remote-suite-cache/$suite${only:+-$only}-\$key
+mkdir -p /var/tmp/remote-suite-cache
+if [ -z \"$fresh\" ] && [ -f \"\$cache.log\" ]; then
+    echo \"remote-suite: CACHED -- same code (tree \${key:0:12}) as the run of \$(date -r \"\$cache.log\" '+%F %T'); REMOTE_SUITE_FRESH=1 reruns\"
+    cat \"\$cache.log\"; exit \$(cat \"\$cache.rc\")
+fi
 # A fresh progress directory per run (2026-11-13): suites left their records in the
 # host's real one, and 2999 of them made every engine call 9.7 s instead of 0.4 s.
-pd=\$(mktemp -d)
-ZFS_PROGRESS_DIR=\$pd ${only:+SUITE_ONLY=$only }./test/$suite/run.sh
-rc=\$?
+pd=\$(mktemp -d); t0=\$(date +%s)
+ZFS_PROGRESS_DIR=\$pd ${only:+SUITE_ONLY=$only }./test/$suite/run.sh 2>&1 | tee \"\$cache.part\"
+rc=\${PIPESTATUS[0]}
 rm -rf \"\$pd\"
+mv -f \"\$cache.part\" \"\$cache.log\"; echo \$rc > \"\$cache.rc\"
+el=\$(( \$(date +%s) - t0 ))
+echo \"remote-suite: $suite${only:+ only=$only} took \${el}s, rc=\$rc (tree \${key:0:12})\"
+[ \$el -le $budget ] || echo \"remote-suite: SLOW -- \${el}s is over ${budget}s. Measure one engine call before running it again.\"
 exit \$rc"
 
 MSYS_NO_PATHCONV=1 plink -batch "root@$HOST" "$remote_cmd"
