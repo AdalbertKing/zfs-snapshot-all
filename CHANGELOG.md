@@ -11,7 +11,9 @@ when they change how the tool is used.
   (not under `-r`; under `-R` each dataset is pruned on its own), the job's own older snapshots
   (exact `-m` prefix plus the engine's timestamp, or its quiesce crash form) beyond the N newest
   are destroyed on the source, and only those a run of this same target made (the run stamps its snapshot on the source with
-  the user property `zfsbackup:srckeep-owner`) and the target holds (by GUID); a snapshot without
+  the user property `zfsbackup:srckeep-owner`, naming the target and its pool GUID, so two
+  rotating disks of one pool name are two owners; a successful quiesce window's snapshot is
+  stamped too) and the target holds (by GUID); a snapshot without
   that stamp (older history, an `-H` seed, one made by hand) is never pruned: with two media
   of one replica, each medium's head stays on the source until that medium's own next run, so
   one medium never takes another's base, even when a bookmark could not be made

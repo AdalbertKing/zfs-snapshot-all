@@ -47,7 +47,8 @@ set -o pipefail
 #                    an active replica's snapshots piled up on both pvesr nodes).
 #                    The per-target bookmark keeps the next increment possible.
 #                    Only snapshots a run of THIS target made (stamped on the
-#                    source, zfsbackup:srckeep-owner) and that the target holds
+#                    source, zfsbackup:srckeep-owner, naming the target path and
+#                    its pool GUID, so rotating disks differ) and the target holds
 #                    (by GUID): another medium of the same family never loses
 #                    its base; unstamped ones stay (REV-20261112-197).
 #                    Needs -m and -i; not with -e or -s; under -r nothing is
