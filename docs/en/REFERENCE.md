@@ -1081,7 +1081,8 @@ notify       = pulled
 - **Active replica with `keep`, and Proxmox's own snapshots.** An active replica with `keep = N`
   keeps only its newest own snapshot on the source (`--source-keep=1`), one per medium when the
   replica has several: older ones go after a successful copy, each medium removes only the
-  snapshots it holds itself, and the `#tgt-` bookmark carries the next increment. `--source-keep`
+  snapshots its own runs made (stamped on the source, `zfsbackup:srckeep-owner`) and it holds;
+  unstamped ones stay, and the `#tgt-` bookmark carries the next increment. `--source-keep`
   is refused with `-e`, with `-s`, without `-m` and without `-i`; with `history = all` or
   `auto:N` the generator does not use it. A passive replica (`-e`) never adopts Proxmox's own
   snapshots (`__replicate_`, `vzdump`, `__migration__`), with or without `-E`, unless its `-m`
