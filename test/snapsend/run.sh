@@ -2605,7 +2605,9 @@ check "REV-197 r5 F1e: the vanish case is caught at the boundary after selection
 # interrupted stream. The resume must not stand in for this window's point: after
 # it lands, the member still copies its own snapshot.
 zfs destroy -r "$QR" 2>/dev/null; zfs create -p "$QM"
-dd if=/dev/urandom of="$(zfs get -H -o value mountpoint "$QM")/f" bs=1M count=4 2>/dev/null
+zfs set mountpoint="$QD/mnt" "$QM" && zfs mount "$QM" 2>/dev/null   # pool is -m none
+dd if=/dev/urandom of="$QD/mnt/f" bs=1M count=4 2>/dev/null
+zfs umount "$QM"; zfs inherit mountpoint "$QM"; zpool sync "$POOL"
 zfs snapshot -r "$QR@rep_old"; t="$POOL/m197eres"; zfs create -p "$t/$POOL"
 zfs send "$QR@rep_old" | zfs recv -u "$t/$QR"
 zfs send "$QM@rep_old" | head -c 1000000 | zfs recv -s -u "$t/$QM" 2>/dev/null
