@@ -2552,7 +2552,7 @@ tick; qa; check "REV-197 r4 F1d: own-window control -- rc 0, no substitution mes
 rm -f "$F1D_DONE"; before=$(hd "$TA")
 tick; F1D_MODE=gone qa
 check "REV-197 r4 F1d: this run's quiesced snapshot missing -- refused, nothing copied in its place" "1|1|same" \
-      "$RC|$(printf '%s\n' "$OUT" | grep -c 'refusing to copy another snapshot')|$([ "$(hd "$TA")" = "$before" ] && echo same || echo moved)"
+      "$RC|$(printf '%s\n' "$OUT" | grep -c 'this member fails')|$([ "$(hd "$TA")" = "$before" ] && echo same || echo moved)"
 # Push twin (snapsend.sh): the same rule, without --source-keep.
 rm -f "$F1D_DONE"; PB="$POOL/m197p"; zfs create -p "$PB"
 export F1D_ENGINE="$SNAPGET" F1D_TB="$TB"
