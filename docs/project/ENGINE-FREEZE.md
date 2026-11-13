@@ -1467,7 +1467,8 @@ Owner-authorized refreezes:
   only snapshots carrying this target's stamp that the target holds. Unstamped ones stay. The
   correction to the earlier entry: "under -i another medium never loses its base" was wrong.
   Tests: test/snapsend REV-197 r2 cases (F1a earlier history, F1b `-H -i` seed, stamp
-  retention, stamp cannot be set). twin: snapsend.sh unchanged (pull-only).
+  retention, stamp cannot be set).
+  twin: snapsend.sh unchanged -- it refuses --source-keep (pull-only).
 
 ## How it is enforced
 
