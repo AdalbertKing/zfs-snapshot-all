@@ -2601,6 +2601,22 @@ qr_case "push, flat -R, member's own point gone, member otherwise empty" gone se
 qr_case "pull, own point vanishes after its selection (GUID read)" vanish get -
 check "REV-197 r5 F1e: the vanish case is caught at the boundary after selection, not earlier" "1" \
       "$(printf '%s\n' "$OUT" | grep -c 'after selection')"
+# Adversarial pass: the member's target holds a resume token from an older run's
+# interrupted stream. The resume must not stand in for this window's point: after
+# it lands, the member still copies its own snapshot.
+zfs destroy -r "$QR" 2>/dev/null; zfs create -p "$QM"
+dd if=/dev/urandom of="$(zfs get -H -o value mountpoint "$QM")/f" bs=1M count=4 2>/dev/null
+zfs snapshot -r "$QR@rep_old"; t="$POOL/m197eres"; zfs create -p "$t/$POOL"
+zfs send "$QR@rep_old" | zfs recv -u "$t/$QR"
+zfs send "$QM@rep_old" | head -c 1000000 | zfs recv -s -u "$t/$QM" 2>/dev/null
+tok=$(zfs get -H -o value receive_resume_token "$t/$QM" 2>/dev/null)
+rm -f "$F1E_DONE"; tick
+QUIESCE_PVE_DIR="$QD/pve" PATH="$QD/bin:$PATH" run_get_out -v 2 -R -q sync -m "rep_" "$QR" "$t"
+own=$(zfs list -H -o name -t snapshot -s createtxg -d 1 "$QM" | tail -1); own=${own#*@}
+last=$(zfs list -H -o name -t snapshot -s createtxg -d 1 "$t/$QM" 2>/dev/null | tail -1); last=${last#*@}
+check "REV-197 r5: a resumed older stream does not stand in for the window's own point" \
+      "token|0|1|own" "$([ -n "$tok" ] && [ "$tok" != - ] && echo token || echo none)|$RC|$(printf '%s\n' "$OUT" | grep -c 'Resumed transfer completed')|$([ "$last" = "$own" ] && [ "$own" != rep_old ] && echo own || echo "$last")"
+zfs destroy -r "$t" 2>/dev/null
 # Passive control: no window, -R -e over a member with no family -- still scaffolding (2026-11-07).
 zfs destroy -r "$QR" 2>/dev/null; zfs create -p "$QM"; zfs snapshot "$QR@rep_1"; t="$POOL/m197epass"; zfs create -p "$t"
 tick; run_get_out -v 2 -R -e -m "rep_" "$QR" "$t"

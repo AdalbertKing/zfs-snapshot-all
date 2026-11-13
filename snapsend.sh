@@ -1448,7 +1448,14 @@ process_dataset() {
                     [ -n "$resumed_snap" ] && release_snapshot "$resumed_snap" "" ""
                     clear_inflight_snap "$tgt_dataset" "$src_dataset"
                     log 1 "Resumed transfer completed successfully"
-                    return 0
+                    # Round 5 (adversarial pass): the resumed stream is an
+                    # older run's point. Inside a quiesce window this member
+                    # still owes its own snapshot -- go on and copy it, the
+                    # way the abandon branch above falls through.
+                    if [ "${QUIESCE_SNAPPED:-0}" -ne 1 ]; then
+                        return 0
+                    fi
+                    log 1 "Quiesce: continuing to this run's snapshot '${SNAP_MESSAGE}${RUN_SUFFIX}'"
                 else
                     log 0 "Resume attempt failed"
                     # Still under MAX_RESUME_ATTEMPTS -- leave the hold in

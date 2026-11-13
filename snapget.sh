@@ -1700,6 +1700,16 @@ process_dataset() {
 
     if [[ "$src_dataset" == "$tgt_dataset" && -z "$remote_host" ]]; then
         log 1 "Running in local snapshot-only mode"
+        # Round 5 (adversarial pass), the snapsend.sh twin: the quiesce window
+        # already took this member's snapshot; a second one would be unfrozen.
+        if [ "${QUIESCE_SNAPPED:-0}" -eq 1 ]; then
+            if [ -z "$(get_snapshot_guid "$src_dataset" "${SNAP_MESSAGE}${RUN_SUFFIX}")" ]; then
+                log 0 "Quiesce: this run's snapshot '${src_dataset}@${SNAP_MESSAGE}${RUN_SUFFIX}' is not on the source -- snapshot-only fails"
+                return 1
+            fi
+            log 1 "Snapshot for $src_dataset was already taken inside the quiesce window -- not creating a second, unquiesced one"
+            return 0
+        fi
         snapshot=$(create_snapshot "$src_dataset" "$remote_user" "$remote_host") || return 1
         log 1 "Successfully created local snapshot: $snapshot"
         return 0
@@ -1773,7 +1783,14 @@ process_dataset() {
                     [ -n "$resumed_snap" ] && release_snapshot "$resumed_snap" "$remote_user" "$remote_host"
                     clear_inflight_snap "$tgt_dataset" "$src_dataset"
                     log 1 "Resumed transfer completed successfully"
-                    return 0
+                    # Round 5 (adversarial pass): the resumed stream is an
+                    # older run's point. Inside a quiesce window this member
+                    # still owes its own snapshot -- go on and copy it, the
+                    # way the abandon branch above falls through.
+                    if [ "${QUIESCE_SNAPPED:-0}" -ne 1 ]; then
+                        return 0
+                    fi
+                    log 1 "Quiesce: continuing to this run's snapshot '${SNAP_MESSAGE}${RUN_SUFFIX}'"
                 else
                     log 0 "Resume attempt failed"
                     # Still under MAX_RESUME_ATTEMPTS -- leave the hold in
