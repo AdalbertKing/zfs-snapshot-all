@@ -2323,7 +2323,7 @@ case "${R197_FAIL:-}:$1" in
     bmdestroy:destroy) case "$*" in *'#'*) echo "simulated: permission denied (destroy bookmark)" >&2; exit 1 ;; esac ;;
     tlist:list) case "$*" in *'-o guid -t snapshot'*) echo "simulated: cannot list target" >&2; exit 1 ;; esac ;;
     slist:list) case "$*" in *'-o name,guid -s createtxg'*) echo "simulated: cannot list source" >&2; exit 1 ;; esac ;;
-    race:bookmark) sleep 1; R197_FAIL= timeout 120 "$R197_SNAPGET" -i -m rep_ --source-keep=1 "$R197_SRC" "$R197_B" >"$R197_RACELOG" 2>&1 ;;
+    race:bookmark) sleep 1; R197_FAIL= timeout 120 "$R197_SNAPGET" -i -m rep_ --source-keep=1 "$R197_SRC" "$R197_B" >"$R197_RACELOG" 2>&1; echo "B rc=$?" >> "$R197_RACELOG" ;;
 esac
 exec "$R197_REAL" "$@"
 SHIM
@@ -2373,7 +2373,7 @@ check "REV-197 F1: a new medium's first bookmark fails; B's prune leaves its bas
 # the window: B's whole job runs INSIDE A's bookmark call (A's hold released, no bookmark yet)
 tick; k197f race "$A7"; ra=$RC; ah=$(head197 "$A7")
 check "REV-197 F1: B runs inside A's hold-to-bookmark window -- B rc 0, A's head stays, A rc 0" "0|yes|0" \
-      "$(grep -q 'Transfer completed successfully' "$R197_RACELOG" && echo 0 || echo 1)|$(onsrc197 "$ah")|$ra"
+      "$(sed -n 's/^B rc=//p' "$R197_RACELOG")|$(onsrc197 "$ah")|$ra"
 tick; k197 "$A7"
 check "REV-197 F1: ... and A's next run is incremental" "0|incr" "$RC|$(incr197)"
 # a failed listing of the target's or the source's snapshots prunes nothing (the copy itself stands)
