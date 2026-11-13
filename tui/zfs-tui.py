@@ -119,7 +119,7 @@ VERDICTS = {
     "BLAD":         (u"błąd przebiegu",   1),
     "OK":           ("aktualne",      2),
     "WARNING":      (u"spóźnione",    3),
-    "CRITICAL":     ("stare",         1),
+    "CRITICAL":     ("krytyczne",     1),
     "UNKNOWN":      ("nie odpowiada", 4),
     "BEZ MONITORA": ("bez monitora",  4),
     # Start dwuetapowy (2026-10-29): monitor jeszcze nie odpowiedzial -- NIE "bez monitora".
@@ -190,7 +190,7 @@ def tier_line(m, rel, data, now):
         a = reason_age(m.get("reason"))
         if a:
             out += _(u"   najnowsza sprzed %s") % a
-    return out + _(u"   alarm po %s") % (m.get("crit") or "?")
+    return out + _(u"   krytyczny po %s") % (m.get("crit") or "?")
 
 
 def reason_age(reason):
@@ -289,7 +289,7 @@ def media_state_line(r, st):
 # zeby nie byly podciagami zwyklego tekstu.
 COLOR_WORDS = [
     ("nie odpowiada", 4), ("bez monitora", 4), ("aktualne", 2), (u"spóźnione", 3),
-    (" stare", 1), ("NIE TEN DYSK", 1), ("Podłączony", 3), ("ODŁĄCZONY", 4), (" TU ", 2),
+    (" krytyczne", 1), ("NIE TEN DYSK", 1), ("Podłączony", 3), ("ODŁĄCZONY", 4), (" TU ", 2),
     (u"BŁĄD", 1), ("PRZERWANY", 1), (u"BŁĄD", 1), ("w toku", 3), ("PAUZA", 3), ("NIEwdro", 1), ("nieczytelny", 1),
     (u"błąd źródła", 1), (" OK ", 2), (" OK", 2),
 ]
@@ -297,7 +297,7 @@ COLOR_WORDS = [
 def color_words():
     """COLOR_WORDS plus ich tłumaczenia (w polskim: dokładnie COLOR_WORDS). Liczone przy
     rysowaniu, bo katalog języka wchodzi dopiero po imporcie; odstępy z brzegów słowa
-    zostają (" stare" -> " stale")."""
+    zostają (" krytyczne" -> " critical")."""
     out = list(COLOR_WORDS)
     if LANG_CAT:
         for w, pair in COLOR_WORDS:
@@ -1476,8 +1476,8 @@ def transfer_word(t, now):
     return _(TRANSFER_STATES.get(st, (st or "?", 0))[0]), ""
 
 
-STATE_PL = {"active": u"działa", "removed": u"usunięta", "pending_enroll": u"zakładana", "seeding": u"1. kopia",
-            "seed_complete": u"po 1. kopii", "endpoint_verified": u"sprawdzona"}
+STATE_PL = {"active": u"działa", "removed": u"usunięta", "pending_enroll": u"zakładana", "seeding": u"pierwsza kopia",
+            "seed_complete": u"po pierwszej kopii", "endpoint_verified": u"sprawdzona"}
 
 
 def pl_relacje(n):
@@ -1552,7 +1552,7 @@ ENABLE_NOTE = [u"Relacja jest WYŁĄCZONA: pauza tutaj i zamek na źródle.",
 
 def finish_argv(rel):
     """Nastepny krok relacji, ktora nie jest aktywna (bez sciezki do programu):
-    '1. kopia' (seeding) -> seed, reszta cyklu -> activate (wznawialne, samo
+    'pierwsza kopia' (seeding) -> seed, reszta cyklu -> activate (wznawialne, samo
     sprawdza zrodlo i instaluje). Aktywna albo usunieta -- nic."""
     n = rel.get("name")
     s = rel.get("state", "")
@@ -2890,12 +2890,12 @@ def tpl_children(tab, p, rows, now, ch):
     for t in p.get("tiers", []):
         keep = t.get("keep") or (t.get("retain") or "").lstrip("-") or _(u"wg poziomów GFS")
         when = cron_words(t["send_schedule"]) if t.get("send_schedule") else \
-            (_(u"porządki %s") % cron_words(t["prune_schedule"]) if t.get("prune_schedule") else _(u"bez własnych migawek"))
+            (_(u"czyszczenie %s") % cron_words(t["prune_schedule"]) if t.get("prune_schedule") else _(u"bez własnych migawek"))
         fam = (t.get("prefix") or t.get("pattern") or "-").rstrip("_")
         pairs = [(_(u"Szczebel"), tier_unit(t.get("name", ""))), (_(u"Kiedy"), when), (_(u"Trzyma"), keep),
                  (_(u"Prefiks migawek"), fam), (_(u"Zamraża"), _(u"tak") if t.get("quiesce") else _(u"nie"))]
         if t.get("monitor_warn") or t.get("monitor_crit"):
-            pairs.append((_(u"Strażnik"), _(u"ostrzeżenie po %s, alarm po %s") % (t.get("monitor_warn") or "?", t.get("monitor_crit") or "?")))
+            pairs.append((_(u"Strażnik"), _(u"ostrzeżenie po %s, krytyczny po %s") % (t.get("monitor_warn") or "?", t.get("monitor_crit") or "?")))
         items.append({"cells": [tier_unit(t.get("name", "")), when, keep, fam], "pairs": pairs,
                       "title": _(u"%s -- szczebel %s") % (p.get("name"), tier_unit(t.get("name", "")))})
     return {"heads": [_(u"Szczebel"), _(u"Kiedy"), _(u"Trzyma"), _(u"Prefiks migawek")], "items": items, "empty": _(u"szablon bez szczebli")}
@@ -3059,7 +3059,7 @@ def job_panel_pairs(row, data, now, ch):
                 mons.append(m)
     if mons:
         m0 = mons[0]
-        pairs.append((_(u"Strażnik"), _(u"ostrzeżenie po %s, alarm po %s   sprawdza %s") % (
+        pairs.append((_(u"Strażnik"), _(u"ostrzeżenie po %s, krytyczny po %s   sprawdza %s") % (
             m0.get("warn") or "?", m0.get("crit") or "?", cron_words(m0.get("schedule") or "?"))))
     pairs.append(group(ch, _(u"Uprawnienia")))
     pairs.append((_(u"Konto"), j.get("account", "?")))
@@ -3203,7 +3203,7 @@ def rel_panel_pairs(row, data, now, ch):
     n_prune = len(prunes) + sum(1 for j in sends for cl in own_inline_prunes(j)
                                 if (j.get("label") or "", " ".join(cl.split()[:5]), j.get("retain") or j.get("keep") or "") not in _ps)
     if sends or n_prune:
-        pairs.append((_(u"Zadania"), _(u"%d: kopie lub migawki %d, porządki %d") % (len(sends) + n_prune, len(sends), n_prune)))
+        pairs.append((_(u"Zadania"), _(u"%d: kopie lub migawki %d, czyszczenie %d") % (len(sends) + n_prune, len(sends), n_prune)))
     if rel.get("created_at"):
         pairs.append((_(u"Powstała"), dshow(rel["created_at"])))
     for key, fld in ((_(u"Pełna kopia"), "seed_completed_at"), (_(u"Aktywna od"), "activated_at"), (_(u"Usunięta"), "removed_at")):
@@ -3380,7 +3380,7 @@ def guard_label(states):
     cap, gro = states
     # U119: "ochrona: bezpiecznik · przyrost" bylo zargonem -- slowa mowia, co strażnik
     # ROBI (kasuje przy pelnej puli / alarmuje przy skoku danych), jak sekcje F10.
-    return _(u"kasowanie przy pełnej puli: %s · alarm przyrostu: %s") % (pl.get(cap, u"?"), pl.get(gro, u"?"))
+    return _(u"ochrona pojemności: %s · monitor przyrostu: %s") % (pl.get(cap, u"?"), pl.get(gro, u"?"))
 
 
 _PKG_VERSION = []
@@ -3415,7 +3415,7 @@ def top_bar(data, width, now, ascii_only, err_count):
     jobs = (data.jobs or {}).get("jobs", [])
     accounts = sorted({j.get("account", "") for j in jobs} |
                       {u.get("account", "") for u in (data.jobs or {}).get("unreadable", [])})
-    acct = ", ".join(a for a in accounts if a) or _("(brak bloku)")
+    acct = ", ".join(a for a in accounts if a) or _("(brak)")
     ver = pkg_version()
     left = " zfs-snapshot-all" + (" " + ver if ver else "")
     mid = _("%s%s | konto %s%s") % (host, (" " + ip) if ip else "", acct,
@@ -3903,7 +3903,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     else:
         pairs.append((_("Cel"), (rel.get("client_target") or "") + _sync or "?"))
     if rel.get("managed_prune_scope"):
-        pairs.append((_(u"Prune"), ",  ".join(rel["managed_prune_scope"])))
+        pairs.append((_(u"Czyszczenie (prune)"),",  ".join(rel["managed_prune_scope"])))
     if rel.get("local_user"):
         pairs.append((_("Konto"), rel["local_user"]))
     out.extend(detail_kv(ch, pairs, w))
@@ -3913,7 +3913,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     # tylko informacja, z czego relacja powstała.
     pairs = [(_(u"Powstała z"), profile_word(rel.get("profile"), rel.get("name")))]
     if not rel.get("source_profile") and (rel.get("passive") == "1" or rel.get("mode") == "sync"):
-        pairs.append((_(u"Źródło"), _(u"bez sprzątania (źródło nie kasuje)")))
+        pairs.append((_(u"Źródło"), _(u"bez czyszczenia (źródło nie czyści)")))
     if any(job_is_mirror(j) for j in row.get("jobs") or []):
         pairs.append((_(u"Cel"), _(u"lustro źródła: trzyma to, co źródło (bez własnej retencji)")))
     if rel.get("recursion"):
@@ -4640,7 +4640,7 @@ def replica_when(r, long=False):
 def replica_disks_words(r):
     """Dyski repliki po ID puli (P5): ile, albo że rozpoznawane tylko po nazwie."""
     if r.get("media") != "removable":
-        return _(u"stały nośnik (pula w maszynie)")
+        return _(u"stały nośnik (pula zawsze podłączona)")
     g = [x for x in (r.get("media_guids") or "").split(",") if x]
     if not g:
         return _(u"po nazwie puli -- ID nieznane (zmiana repliki dopisze ID podłączonego dysku)")
@@ -4775,13 +4775,13 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
         det_title = _(u"stany nośnika")
         det = [(_(MEDIA_STATES[k][0]), _(MEDIA_STATES[k][2])) for k in ("here", "available", "away", "wrong_medium")]
     return render_tabbed(data, width, height, now, ch, "nosniki", _(u"Repliki backupu kolektora (%d)") % len(reps),
-                         [_(u"Replika"), _(u"Typ"), _(u"Zajęte"), _(u"Wykonana"), _(u"Ostatni przebieg"), _(u"Harmonogram")], cells, cursor,
+                         [_(u"Replika"), _(u"Typ"), _(u"Zajęte"), _(u"Wykonana"), _(u"Przebieg"), _(u"Harmonogram")], cells, cursor,
                          (_(u"Enter szczegóły   Ins nowa   Del usuń   Tab do przebiegów")) if reps else _(u"Ins nowa replika"),
                          det_title, det, child, focus, pair_cursor, screen_actions("nosniki"), empty, prio=[0, 4, 1, 2, 3, 5], flex=5)
 
 
 # --- F5 Szablony (uwaga 24, 2026-10-09) ------------------------------------
-TEMPLATE_KIND = {"package": u"fabryczny", "user": u"własny", "shadow": u"POMIJANY"}
+TEMPLATE_KIND = {"package": u"wbudowany", "user": u"własny", "shadow": u"POMIJANY"}
 
 
 def template_detail_pairs(p):
@@ -4790,7 +4790,7 @@ def template_detail_pairs(p):
     w = profile_words(p)
     pairs = []
     if p.get("source") == "shadow":
-        pairs.append((_(u"Uwaga"), _(u"ma nazwę fabrycznego, pakiet go pomija; zmień nazwę pliku")))
+        pairs.append((_(u"Uwaga"), _(u"ma nazwę wbudowanego, pakiet go pomija; zmień nazwę pliku")))
     pairs += [(_(u"Opis"), _(p.get("description") or "-")),
               (_(u"Jak liczy"), u"%s, %s" % (w["mech"], w["shape"]))]
     if p.get("error"):
@@ -5268,7 +5268,7 @@ HELP = [
     u"                 zapisuje, domyślnie w /etc/zfs-snapshot-all/relations) albo",
     u"                 import: lista plików eksportu z tego katalogu, potem wynik",
     u"                 porównania (już jest / różni się / plan), t wykonuje plan.",
-    u"                 Ins i Del przełączają terminal do whiptaila i wracają tu",
+    u"                 Ins i Del otwierają okno dialogowe i wracają tu",
     u"                 z odświeżonymi danymi: Ins -- kreator krok po kroku (backup: 7",
     u"                 kroków -- rodzaj, host, datasety, dokąd, szablon, ile trzyma",
     u"                 źródło, nazwa; Wstecz = poprzedni krok), potem podsumowanie",
@@ -5290,8 +5290,8 @@ HELP = [
     u"                 (adres, tryb, godzina maila, mail 'wszystko OK'), próg pojemności,",
     u"                 strażnik, szablon nowej relacji, aktualizacja, język GUI; wysłanie",
     u"                 maila testowego. Zapis: najpierw lista zmian, potem Uruchom.",
-    u"                 Pasek u góry: „kasowanie przy pełnej puli” i „alarm przyrostu”",
-    u"                 -- czy na tym hoście działa strażnik pojemności i strażnik",
+    u"                 Pasek u góry: „ochrona pojemności” i „monitor przyrostu”",
+    u"                 -- czy na tym hoście działa ochrona pojemności i monitor",
     u"                 nagłego przyrostu danych; włączasz je w F10.",
     u"  Kierunek       strzałka idzie jak dane: pve9 → pve10 pobieram z pve9,",
     u"                 pve10 → pve9 wysyłam, pve10 ↔ pve9 obie strony, lokalnie = na tym hoście;",
@@ -5330,12 +5330,12 @@ HELP = [
     u"Słowa w kolumnie 'Kopie':",
     u"  aktualne       najnowsza migawka mieści się w progu ostrzegawczym",
     u"  spóźnione      przekroczony próg ostrzegawczy, nie krytyczny",
-    u"  stare          przekroczony próg krytyczny",
+    u"  krytyczne      przekroczony próg krytyczny",
     u"  nie odpowiada  monitor PYTAŁ i nie dostał odpowiedzi (np. dataset zniknął)",
     u"  bez monitora   NIKT nie pyta: kopia się robi, nikt nie sprawdza czy dalej",
     "",
     u"Źródła: status, list-jobs, monitor, progress, list-replicas, show-config --json.",
-    u"Ekran nie ma własnej kopii żadnej reguły: czego nie ma w JSON, nie ma tutaj.",
+    u"Reguły czyta z zfs-backup.sh.",
 ]
 
 
@@ -6391,7 +6391,7 @@ class UI(object):
             elif t.get("retain"):
                 fields.append(("t|%s|retain" % tn, u"  trzymaj wg wieku", "text", _(u"opcja czyszczenia, np. -h24 = młodsze niż 24 godziny")))
             if t.get("prune_schedule"):
-                fields.append(("t|%s|prune_schedule" % tn, _(u"  porządki co (cron)"), "cron", _(u"kiedy kasować nadmiar")))
+                fields.append(("t|%s|prune_schedule" % tn, _(u"  czyszczenie co (cron)"), "cron", _(u"kiedy czyścić nadmiar")))
             if t.get("send_schedule"):
                 qh = _(u"tak = auto,degrade (spójna migawka; gdy nie da się zamrozić, robi zwykłą)")
                 if base.get("shape") == "one-family":
@@ -6399,7 +6399,7 @@ class UI(object):
                 fields.append(("t|%s|quiesce" % tn, _(u"  zamrażaj system plików"), "toggle", qh))
             if t.get("monitor_warn") or t.get("monitor_crit"):
                 fields.append(("t|%s|monitor_warn" % tn, _(u"  monitor: ostrzeż po"), "text", _(u"np. 90m, 30h, 8d -- kopia starsza niż to = ostrzeżenie")))
-                fields.append(("t|%s|monitor_crit" % tn, _(u"  monitor: alarm po"), "text", _(u"np. 150m, 48h, 10d -- starsza niż to = alarm")))
+                fields.append(("t|%s|monitor_crit" % tn, _(u"  monitor: krytyczny po"), "text", _(u"np. 150m, 48h, 10d -- starsza niż to = krytyczne")))
         fields.append(("go", _(u"[ ZAPISZ ]"), "go", _(u"pokazuje polecenia zapisu szablonu do potwierdzenia (nic nie jest zapisane wcześniej)")))
         return fields
 
@@ -7826,7 +7826,7 @@ def main(argv):
     ap.add_argument("--zfs-tree", help="czytaj zfs-tree --json z pliku (F4 Kopie, lewy panel)")
     ap.add_argument("--zfs-snapshots", help="plik {\"by_dataset\": {DS: [migawki]}} zamiast zfs-snapshots --json (F4 Kopie)")
     ap.add_argument("--offline", action="store_true", help="nie uruchamiaj poleceń; źródła bez pliku są puste")
-    ap.add_argument("--host-ip", help="R3-1: IP hosta w pasku tytulu (testy/offline; na zywo liczony z trasy domyslnej)")
+    ap.add_argument("--host-ip", help="IP hosta w pasku tytulu (testy/offline; na zywo liczony z trasy domyslnej)")
     ap.add_argument("--lang", choices=LANGS, help="window language (default: [gui] language in settings.ini, then en)")
     a = ap.parse_args(argv)
     # Okna whiptail (tui/*.sh) dziedziczą język przez środowisko.

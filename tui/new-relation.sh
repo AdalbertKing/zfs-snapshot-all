@@ -84,7 +84,7 @@ step_mode() {
     # zdalnych nie mieściła się wcale, a ostatnia mówiła o klawiszach w treści okna (E88).
     # Teksty przez T (język okien; pilot P0 tłumaczenia).
     wt --title "$(title 1 "$(T 'Jaka relacja?')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wyjdź)" --notags --default-item "$cur" \
-       --menu "$(T 'Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\nKopia lokalna: kopia na tym samym hoście, np. rpool/data -> hdd/backup.\nMigawki lokalne: migawki i ich sprzątanie w datasetach tego hosta, bez kopii.\nMigawki zdalne: ten host robi i sprząta migawki NA innym hoście, bez kopii.')" "$(fit 13)" "$W" 5 \
+       --menu "$(T 'Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\nKopia lokalna: kopia na tym samym hoście, np. rpool/data -> hdd/backup.\nMigawki lokalne: migawki i ich czyszczenie w datasetach tego hosta, bez kopii.\nMigawki zdalne: ten host robi i czyści migawki NA innym hoście, bez kopii.')" "$(fit 13)" "$W" 5 \
        backup "$(T 'Backup    (ten host pobiera ze źródła)')" \
        sync   "$(T 'Lustro    (to samo po obu stronach)')" \
        local  "$(T 'Kopia lokalna  (na tym hoście)')" \
@@ -1267,13 +1267,13 @@ plan_only_this() {   # <nazwa relacji> ; plan na stdin -> stdout
 summary_text() {
     local i a; a="$(account_name)"
     if [ "$NOCOPY" -eq 1 ]; then
-        echo "$(Tv 'MIGAWKI LOKALNE: $(hostname) robi i sprząta migawki u siebie, nic nie kopiuje:' '$(hostname)' "$(hostname)")"
+        echo "$(Tv 'MIGAWKI LOKALNE: $(hostname) robi i czyści migawki u siebie, nic nie kopiuje:' '$(hostname)' "$(hostname)")"
     elif [ "$MODE" = local ]; then
         echo "$(Tv 'LOKALNIE: $(hostname) kopiuje u siebie do $TARGET/<źródło>:' '$(hostname)' "$(hostname)" '$TARGET' "$TARGET")"
     elif [ "$MODE" = sync ]; then
         echo "$(Tv 'LUSTRO: $(hostname) i $HOST' '$(hostname)' "$(hostname -s 2>/dev/null || hostname)" '$HOST' "$(hostw)")$([ "$(hostw)" = "$HOST" ] || echo " ($HOST)")$(T ' będą trzymać to samo pod tą samą ścieżką:')"
     elif [ "$MODE" = snaponly ]; then
-        echo "$(Tv 'MIGAWKI ZDALNE: $(hostname) będzie robić i sprzątać migawki NA $HOST' '$(hostname)' "$(hostname -s 2>/dev/null || hostname)" '$HOST' "$(hostw)")$([ "$(hostw)" = "$HOST" ] || echo " ($HOST)")$(T ', nic nie kopiuje:')"
+        echo "$(Tv 'MIGAWKI ZDALNE: $(hostname) będzie robić i czyścić migawki NA $HOST' '$(hostname)' "$(hostname -s 2>/dev/null || hostname)" '$HOST' "$(hostw)")$([ "$(hostw)" = "$HOST" ] || echo " ($HOST)")$(T ', nic nie kopiuje:')"
     else
         echo "$(Tv 'BACKUP: $(hostname) będzie POBIERAĆ z $HOST' '$(hostname)' "$(hostname -s 2>/dev/null || hostname)" '$HOST' "$(landing)")$([ "$(landing)" = "$HOST" ] || echo " ($HOST)")$(Tv ' do $TARGET/$HOST/...' '$TARGET' "$TARGET" '$HOST' "$(landing)")"
     fi
@@ -1282,7 +1282,7 @@ summary_text() {
         echo "$(T '   Relacja obejmie:')"
         basket_entries "$BASKET_DS_JSON" | while IFS=$'\t' read -r n r; do
             [ -n "$n" ] || continue
-            if [ "$r" = flat ]; then echo "     [x] $n  $(T '(z podrzędnymi, także przyszłymi)')"; else echo "     [-] $n  $(T '(sam dataset; podrzędne tylko wymienione)')"; fi
+            if [ "$r" = flat ]; then echo "     [x] $n  $(T '(z potomnymi, także przyszłymi)')"; else echo "     [-] $n  $(T '(sam dataset; potomne tylko wymienione)')"; fi
         done
     else
         for i in "${!B_ROOT[@]}"; do echo "    ${B_ROOT[$i]}  -- $(describe "$i")"; done
@@ -1301,7 +1301,7 @@ summary_text() {
     if [ "$MODE" = snaponly ] || [ "$NOCOPY" -eq 1 ]; then :    # bez kopii: prefiksy nie dotyczą
     elif [ -n "$EXFAM" ]; then echo "$(T 'Pomijane migawki z prefiksami:') ${EXFAM//,/, }."
     else echo "$(T 'Pomijane migawki: żadne (kopiowane wszystkie).')"; fi
-    [ "$RECURSION" = atomic ] && echo "$(T 'U ŹRÓDŁA migawek nie sprząta nikt (tak działa atomowo) -- trzeba samemu.')"
+    [ "$RECURSION" = atomic ] && echo "$(T 'U ŹRÓDŁA migawek nie czyści nikt (tak działa atomowo) -- trzeba samemu.')"
     if sync_from_chain; then
         # Plan mówi to, co wyjdzie (kampania 2026-10-24: obiecywał "WŁASNE migawki", a lustro
         # wychodziło pasywne -- sonda przy generowaniu configu robi je pasywnym mimo szablonu).
@@ -1374,7 +1374,7 @@ check_pruners() {
     [ "$MODE" = backup ] || return 0
     case "$PROFILE" in passive|passive-flat) return 0 ;; esac
     [ "$RECURSION" = atomic ] && return 0
-    info "$(title 10 "$(T 'Plan')")" "$(T 'Sprawdzam, czy inny kolektor nie przycina już tych datasetów...')"
+    info "$(title 10 "$(T 'Plan')")" "$(T 'Sprawdzam, czy inny kolektor nie czyści już tych datasetów...')"
     if ! "$ZB" source-pruners "$(hostport)" "${B_ROOT[@]}" >"$TMPD/pruners.tsv" 2>"$TMPD/pruners.err"; then
         wt --title "$(T 'Nie sprawdzono innych kolektorów')" --msgbox "$(Tv 'source-pruners nie odpowiedział:\n$(tail -2 "$TMPD/pruners.err")\n\nAktywacja i tak to sprawdzi -- przed instalacją crona.' '$(tail -2 "$TMPD/pruners.err")' "$(tail -2 "$TMPD/pruners.err")")" 12 "$W"
         return 0
@@ -1382,7 +1382,7 @@ check_pruners() {
     [ -s "$TMPD/pruners.tsv" ] || return 0
     local lst; lst=$(awk -F'\t' '{printf "    %s  -- %s\n", $1, $2}' "$TMPD/pruners.tsv")
     geom
-    wt --title "$(T 'Inny kolektor już przycina te datasety')" --notags --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
+    wt --title "$(T 'Inny kolektor już czyści te datasety')" --notags --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
        --menu "$(Tv 'Na $HOST migawki tych datasetów może już kasować inny kolektor:\n$lst\nDwie retencje na jednym źródle kasują sobie nawzajem bazy -- aktywacja odmówi.\nAlbo usuń tamtą relację (na tamtym kolektorze), albo:' '$HOST' "$(hostw)" '$lst' "$lst")" "$H" "$W" 2 \
        pasywnie "$(T 'Pasywnie -- bez retencji u źródła (szablon passive)')" \
        datasety "$(T 'Inne datasety -- wróć do wyboru')" || return 1

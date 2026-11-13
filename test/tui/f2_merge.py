@@ -116,7 +116,7 @@ def main():
     setup(True)
     c = ui.cursor["zadania"]
     r = ui.runrows[c]
-    check("u171-failure-padl-1-3-collapsed", r.get("agg") and m.run_result(r) == u"PADŁ 1/3"
+    check("u171-failure-padl-1-3-collapsed", r.get("agg") and m.run_result(r) == u"BŁĄD 1/3"
           and not any(x.get("child") for x in ui.runrows), "res=%r" % m.run_result(r))
     ui.key("enter", 40)
     rows = ui.runrows

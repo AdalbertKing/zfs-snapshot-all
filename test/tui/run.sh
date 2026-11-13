@@ -169,7 +169,7 @@ if has "$S4" 'lab-vm101 -- relacja' && hasE "$S4" 'Następny +2026\.09\.09 [0-9]
 else
     bad "relacje: kursor i nastepny bieg" "$S4" "$S4Z"
 fi
-if hasE "$S4" 'Kopie +aktualne' && hasE "$S4" 'hourly +aktualne   alarm po 150m'; then
+if hasE "$S4" 'Kopie +aktualne' && hasE "$S4" 'hourly +aktualne   krytyczny po 150m'; then
     ok "relacje: panel -- werdykt relacji, a pod nim szczebel z wlasnym progiem alarmu (U144)"
 else
     bad "relacje: progi w panelu" "$S4"
@@ -207,8 +207,8 @@ PYEOF
 S4W="$(screen relacje down,down,down,down --width 260 --height 40 --monitors "$C3D/monitor.json" --jobs "$C3D/list-jobs.json")"
 F2W="$(screen zadania '' --width 220 --height 400 --monitors "$C3D/monitor.json" --jobs "$C3D/list-jobs.json")"
 # W2 (kampania 2026-11-03): szczebel chodzi, drugi czeka -- relacja "aktualne", nie "czeka".
-if hasE "$S4W" 'Kopie +aktualne' && hasE "$S4W" 'hourly +aktualne   alarm po 150m' \
-   && hasE "$S4W" 'daily +czeka na pierwszy termin   pierwsza: .*alarm po 48h' && ! hasE "$S4W" 'daily +.*najnowsza sprzed' \
+if hasE "$S4W" 'Kopie +aktualne' && hasE "$S4W" 'hourly +aktualne   krytyczny po 150m' \
+   && hasE "$S4W" 'daily +czeka na pierwszy termin   pierwsza: .*krytyczny po 48h' && ! hasE "$S4W" 'daily +.*najnowsza sprzed' \
    && has "$F2W" 'tylko migawka' && ! has "$F2W" 'src_' && ! hasE "$S4" 'czeka na pierwszy'; then
     ok "U137 C3: szczebel przed pierwszym biegiem -- 'czeka na pierwszy termin' z data najblizszego biegu z crona, kazdy szczebel osobno z progiem; F2: 'tylko migawka' bez lsrc_; kontrola bez WAITING -- bez 'czeka'"
 else
@@ -624,7 +624,7 @@ fi
 # DYSKRYMINATOR DOPASOWANIA: dla POBRANIA monitor pilnuje lokalnego CELU, a
 # zakres zadania to zdalne ZRODLO; laczy je etykieta relacji. Bez tego wiersz
 # pull mial 'bez monitora' przy monitorze mowiacym CRITICAL.
-if hasE "$H" 'vm-100-disk-0 .*stare'; then
+if hasE "$H" 'vm-100-disk-0 .*krytyczne'; then
     ok "relacje: werdykt pobrania dopasowany po ETYKIECIE relacji (stare, nie 'bez monitora')"
 else
     bad "relacje: werdykt pull po etykiecie" "$H"
@@ -750,7 +750,7 @@ ZH3_LINE=$(printf '%s\n' "$ZH3" | grep -E "^║ $KD +pve9 +wysyłka ")
 # Werdykt 'spóźnione' tego zadania jest na F3 (nie na F2 Przebiegi); tu: wiersz biegu
 # istnieje, a panel mowi 'brak biegow' zamiast zer.
 if [ -n "$ZH3_LINE" ] && printf '%s' "$ZH3_LINE" | grep -qF 'nadchodzący' \
-   && has "$ZH3" 'brak biegów w dzienniku z tego okna'; then
+   && has "$ZH3" 'brak przebiegów w dzienniku z tego okna'; then
     ok "zadania: zadanie, ktorego nie ma w dzienniku, ma wiersz biegu, a panel mowi 'brak biegow'"
 else
     bad "zadania: brak biegow" "$ZH3_LINE" "$ZH3"
@@ -980,7 +980,7 @@ W1D="$(mktemp -d)"
 printf '%s' '{"relations":[{"name":"sx","state":"active","peer":"192.168.28.99","profile":"p"}]}' > "$W1D/status.json"
 W1S="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $FPARGS --status "$W1D/status.json" --screen relacje --width 200 --height 50 2>&1)"
 rm -rf "$W1D"
-if hasE "$W1S" 'Zadania +2: kopie lub migawki 1, porządki 1'; then
+if hasE "$W1S" 'Zadania +2: kopie lub migawki 1, czyszczenie 1'; then
     ok "relacje W1: szczebel plaski -- licznik 'porządki' widzi wlasne porzadki z sekcji [dataset:] (1), bez cudzej linii z bloku"
 else
     bad "relacje W1: licznik porzadkow" "$(printf '%s\n' "$W1S" | grep -E 'Zadania|── ' | head -4)"
@@ -1015,7 +1015,7 @@ FPZ80="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $FPARGS --stat
 FZP="$(lst "$FPZ" | grep -cE "lokalny prune .*(OK|BŁĄD)")"; FZN="$(lst "$FPZ" | grep -cE "lokalny prune .*nadchodzący")"
 FZT="$(lst "$FPZ" | grep -cE "pobranie .*nadchodzący")"
 if [ "$FZP" = 2 ] && hasE "$FPZ" "lokalny prune .* OK ×10 \(błędy: 1\)" && hasE "$FPZ" "lokalny prune .* BŁĄD rc=1" \
-   && [ "$FZN" = 1 ] && [ "$FZT" -gt 1 ] && hasE "$FPZD" "Zwinięte +udane biegi: 10, od" && hasE "$(lst "$FPZ80")" "OK ×10"; then
+   && [ "$FZN" = 1 ] && [ "$FZT" -gt 1 ] && hasE "$FPZD" "Zwinięte +udane przebiegi: 10, od" && hasE "$(lst "$FPZ80")" "OK ×10"; then
     ok "zadania U112: udane prune jednej linii w jednym wierszu x10 (bledy osobno), z nadchodzacych prune tylko najblizszy, pobrania bez zmian"
 else
     bad "zadania U112: zwijanie prune" "wykonane prune: $FZP (2), nadchodzace prune: $FZN (1), nadchodzace pobrania: $FZT (>1)" "$(lst "$FPZ" | grep -E 'prune|pobranie' | head -20)"
@@ -1074,8 +1074,8 @@ fi
 # 2026-10-20): check-snap-age pisze linie tylko dla datasetow nie-OK -- brak linii = OK (E94).
 # Kontrola na #631 (zalozyl linie OK): 4 x "stare".
 GRP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$FIX/monitors-group-perds.json" --screen relacje --width 200 2>&1)"
-if hasE "$GRP" 'hdd/lab/a +aktualne' && hasE "$GRP" 'hdd/lab/b +aktualne' && hasE "$GRP" 'hdd/lab/c +stare' \
-   && hasE "$GRP" 'hdd/lab/d +aktualne' && hasE "$GRP" '^║ sync-test .* stare'; then
+if hasE "$GRP" 'hdd/lab/a +aktualne' && hasE "$GRP" 'hdd/lab/b +aktualne' && hasE "$GRP" 'hdd/lab/c +krytyczne' \
+   && hasE "$GRP" 'hdd/lab/d +aktualne' && hasE "$GRP" '^║ sync-test .* krytyczne'; then
     ok "relacje: U26 -- monitor wielu datasetow: para ma werdykt swojego datasetu (1 stara, 3 aktualne), relacja najgorszy"
 else
     bad "relacje: U26 werdykt per dataset" "$(printf '%s\n' "$GRP" | grep -E 'hdd/lab/[a-d] |^║ sync-test')"
@@ -1327,8 +1327,8 @@ fi
 PRF="$(prz F7 --exec-log "$PXL")"
 PRF_LOG="$(cat "$PXL")"
 PRG="$(prz up,F7 --exec-log "$PXL")"
-if has "$PRF" 'ten bieg już był -- F7 uruchamia zadanie z wiersza nadchodzącego' && [ -z "$PRF_LOG" ] \
-   && ! has "$PRG" 'ten bieg już był' && grep -q 'zfs-job.sh' "$PXL"; then
+if has "$PRF" 'ten przebieg już był -- F7 uruchamia zadanie z wiersza nadchodzącego' && [ -z "$PRF_LOG" ] \
+   && ! has "$PRG" 'ten przebieg już był' && grep -q 'zfs-job.sh' "$PXL"; then
     ok "przebiegi: wiersze tylko do czytania (c) -- F7 na wykonanym biegu mowi 'ten bieg już był' i nic nie uruchamia; ten sam F7 na nadchodzacym uruchamia linie crona"
 else
     bad "przebiegi: F7 na wykonanym biegu" "$(printf '%s\n' "$PRF" | tail -3)" "log: $(cat "$PXL")"
@@ -1529,7 +1529,7 @@ fi
 # U166: nadchodzace tylko z 6 h -- "kopia" (dobowa, 00:21) widac godzine przed jej biegiem.
 NOWK="$(now_before 00:21)"
 ZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOWK" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 160 --height 100 2>&1)"
-if hasE "$ZH" "^║ $KD +pve9 +wysyłka " && hasE "$ZH" "^║ $KD +pve1 +pobranie " && hasE "$ZH" "^║ $KD +\(bez rel\.\) +kopia "; then
+if hasE "$ZH" "^║ $KD +pve9 +wysyłka " && hasE "$ZH" "^║ $KD +pve1 +pobranie " && hasE "$ZH" "^║ $KD +\(bez relacji\) +kopia "; then
     ok "zadania: wysylka, pobranie i kopia na hoscie w liscie; zadanie bez etykiety mowi '(bez relacji)' (kierunek w panelu, U21)"
 else
     bad "zadania: trzy kierunki na hostA" "$ZH"
@@ -1547,7 +1547,7 @@ fi
 # progi -- wchodzi teraz do panelu F2 (rel_detail_pairs), dopasowane TA SAMA
 # regula co werdykt (monitors_for_job); R3-3 laczy straznik+progi w JEDNA
 # linie. Z fikstur pve10: lab-vm101 ma monitor "*/15 * * * *", warn 90m, crit 150m.
-if hasE "$ZE" 'Strażnik +ostrzeżenie po 90m, alarm po 150m   sprawdza co 15 min'; then
+if hasE "$ZE" 'Strażnik +ostrzeżenie po 90m, krytyczny po 150m   sprawdza co 15 min'; then
     ok "zadania: panel F2 nazywa straznika (progi i harmonogram) w JEDNEJ linii -- to, co dawal usuniety F5"
 else
     bad "zadania: straznik/progi w panelu F2" "$ZE"
@@ -2057,7 +2057,7 @@ fi
 A="$(act enter)"
 B="$(act enter,d)"
 if has "$A" 'd dokańcza   e zmienia' && has "$B" 'POTWIERDZENIE: Dokończ relację duplikat' && has "$B" 'seed duplikat --yes' && [ ! -s "$XL" ]; then
-    ok "akcje: okno relacji w stanie '1. kopia' -- stopka 'd dokończ', 'd' pokazuje 'seed NAZWA --yes' i niczego nie uruchamia"
+    ok "akcje: okno relacji w stanie 'pierwsza kopia' -- stopka 'd dokończ', 'd' pokazuje 'seed NAZWA --yes' i niczego nie uruchamia"
 else
     bad "akcje: d dokończ (podgląd)" "$(printf '%s' "$A" | tail -3)" "$B"
 fi
@@ -2350,7 +2350,7 @@ fi
 # szczeblami; Ins = nowy NA PODSTAWIE zaznaczonego, Enter+'e' = zmiana, Del = usun --
 # kazde oddaje terminal oknom tui/template.sh przez czasownik --ask.
 SZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --screen szablony --width 160 --height 30 2>&1)"
-if hasE "$SZ" '║ d7h24 +fabryczny +N najnowszych +24 godz., 7 dni +0 ' && has "$SZ" 'Szablony retencji (17)' \
+if hasE "$SZ" '║ d7h24 +wbudowany +N najnowszych +24 godz., 7 dni +0 ' && has "$SZ" 'Szablony retencji (17)' \
    && hasE "$SZ" 'Jak liczy +' && has "$SZ" '[Szczeble]  Używają' && has "$SZ" 'Ins nowy z zaznaczonego' && has "$SZ" 'F5 Szablony'; then
     ok "szablony: F5 -- tabela (nazwa, rodzaj, sposob, trzyma, uzyty), panel 'Jak liczy', zakladki Szczeble/Uzywaja, stopka z Ins/Del"
 else
@@ -2592,7 +2592,7 @@ if hasE "$NB" 'Źródło → cel +[^ ]+ → ' && hasE "$NB" 'Rekurencyjnie +tak'
 else
     bad "nosniki: pola repliki --fixed" "$NB" "$NBT"
 fi
-if hasE "$NB" 'Nośnik +ODŁĄCZONY -- nośnik jest odłączony od hosta'; then
+if hasE "$NB" 'Nośnik +ODŁĄCZONY -- nośnik jest odłączony'; then
     ok "nosniki: stan nosnika ma jedno zdanie wyjasnienia"
 else
     bad "nosniki: wyjasnienie stanu" "$NB"
@@ -2746,7 +2746,7 @@ fi
 # kolumna Rodzaj (historia / migawki xN), panel: Rodzaj, Na dysku (z przykladem), Szyfrowane.
 # U93: "zdjecia" -> migawki; U99: kolumny listy Replika | Typ | Wykonana | Harmonogram.
 F6R="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen nosniki --width 200 --height 40 2>&1)"
-if hasE "$F6R" '║ Replika +Typ +Zajęte +Wykonana +Ostatni przebieg +Harmonogram' && hasE "$F6R" 'Rodzaj +własne migawki -- replika' \
+if hasE "$F6R" '║ Replika +Typ +Zajęte +Wykonana +Przebieg +Harmonogram' && hasE "$F6R" 'Rodzaj +własne migawki -- replika' \
    && hasE "$F6R" 'Na dysku +2 najnowsze migawki [a-z_]+ \(ok\. 2 dni wstecz\)' && hasE "$F6R" 'Ile migawek +nieustawione -- tyle, ile trzyma kolektor' && hasE "$F6R" 'Szyfrowane +nie' && ! has "$F6R" 'zdjęc'; then
     ok "nosniki: X11 -- panel: Rodzaj, Na dysku z przykladem, Szyfrowane (U21: rodzaj w panelu, nie w liscie)"
 else
@@ -4194,10 +4194,10 @@ NROUT=$(nr_run "0${T}backup
 " NR_PRUNERS='hdd/test-kreator\tzfsbackup-pve10\n' NR_TREE="$NRTK|goto:hdd/backups,enter"); NRRC=$?
 if [ "$NRRC" -eq 0 ] && has "$NROUT" " --profile=passive " && grep -q '^source-pruners 192.168.28.98 hdd/test-kreator$' "$NR/zb.log" \
    && [ "$(grep -c '^source-pruners' "$NR/zb.log")" = 1 ] \
-   && grep -F 'Inny kolektor już przycina' "$NR/wt.log" | grep -qF 'hdd/test-kreator  -- zfsbackup-pve10'; then
+   && grep -F 'Inny kolektor już czyści' "$NR/wt.log" | grep -qF 'hdd/test-kreator  -- zfsbackup-pve10'; then
     ok "new-relation: konflikt z innym kolektorem wychodzi PRZED planem, z nazwa konta; 'Pasywnie' daje --profile=passive i nie pyta drugi raz"
 else
-    bad "new-relation: konflikt z innym kolektorem" "rc=$NRRC" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'przycina' "$NR/wt.log" | cut -c1-400)"
+    bad "new-relation: konflikt z innym kolektorem" "rc=$NRRC" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'czyści' "$NR/wt.log" | cut -c1-400)"
 fi
 # ...a bez konfliktu: pytanie padlo (source-pruners w dzienniku), okna nie ma.
 NROUT=$(nr_run "0${T}backup
@@ -5543,7 +5543,7 @@ RP12="$(grep -F 'Ustawienia kopiowania: replika usb12' "$RP/wt.log" | head -1)"
 # X10 (2026-10-14): wybor "6 ostatnich" kasuje wczesniejsze "tylko roznica" (sprzeczne) --
 # do add-replica nie idzie --history, wiersz Historia znika, plan mowi, co naprawde idzie.
 RPLAST="$(grep -F 'Ustawienia kopiowania: replika usb12' "$RP/wt.log" | tail -1)"
-if grep -q '^add-replica usb12 --source=hdd/data --dst=repl/replica --schedule=0 22 \* \* \* --removable --recursive=yes --exclude-child=^hdd/data/mail\$ .*--keep=6 --media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log"    && ! grep -q -- '--history=' "$RP/zb.log" && has "$RP12" 'Historia' && has "$RP12" '(fabryczne)' && ! has "$RP12" 'Kompresja'    && ! has "$RPLAST" 'Historia ' && has "$RPLAST" '6 ostatnich migawek replica_' && grep -qF 'Historia:   tylko najnowsza migawka replica_' "$RP/wt.log"; then
+if grep -q '^add-replica usb12 --source=hdd/data --dst=repl/replica --schedule=0 22 \* \* \* --removable --recursive=yes --exclude-child=^hdd/data/mail\$ .*--keep=6 --media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log"    && ! grep -q -- '--history=' "$RP/zb.log" && has "$RP12" 'Historia' && has "$RP12" '(wbudowane)' && ! has "$RP12" 'Kompresja'    && ! has "$RPLAST" 'Historia ' && has "$RPLAST" '6 ostatnich migawek replica_' && grep -qF 'Historia:   tylko najnowsza migawka replica_' "$RP/wt.log"; then
     ok "replica: Ustawienia kopiowania -- 'na dysku' 6 ostatnich zmienione, reszta bez zmian; X10: przy N ostatnich bez wyboru Historii (sprzeczne), plan mowi co idzie"
 else
     bad "replica: ustawienia silnika" "$RPOUT" "$(cat "$RP/zb.log")" "$(printf '%s' "$RP12" | cut -c1-300)" "$(cat "$RP/err")"
@@ -6124,7 +6124,7 @@ EROUT=$(er_run "0${T}silnik
 "); ERRC=$?
 ERS="$(grep -F 'Ustawienia kopiowania: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)"
 if [ "$ERRC" -eq 0 ] && grep -qx 'set-transfer r1 --history=newest --plan' "$ER/zb.log" && grep -qx 'set-transfer r1 --history=newest --yes' "$ER/zb.log" \
-   && has "$ERS" 'Kompresja        nie ~ ' && ! has "$ERS" 'Kompresja        nie (fabryczne)' \
+   && has "$ERS" 'Kompresja        nie ~ ' && ! has "$ERS" 'Kompresja        nie (wbudowane)' \
    && has "$ERS" 'Szyfr SSH'; then
     ok "edit-relation: Ustawienia kopiowania (W16) -- obecne wartosci z show-config, zmiana historii -> set-transfer --plan, po Uruchom --yes"
 else
@@ -6279,7 +6279,7 @@ ERC1="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | head 
 if [ "$ERRC" -eq 1 ] && has "$ERC1" 'backup z pve9   nazwa r1   konto root   cel ' \
    && ! has "$ERC1" ' ~ rodzaj ~ ' && ! has "$ERC1" ' ~ cel ~ ' && ! has "$ERC1" ' ~ nazwa ~ ' && ! has "$ERC1" ' ~ konto ~ ' \
    && ! has "$ERC1" ' ~ teraz ~ ' && ! has "$ERC1" ' ~ config ~ ' && ! has "$ERC1" ' ~ zapisz ~ ' \
-   && has "$ERC1" ' ~ wykonaj ~ Zapisz zmiany (brak zmian)' && hasE "$ERC1" ' ~ dane ~   Datasety +'    && ! has "$ERC1" 'jak w configu' && hasE "$ERC1" 'Silnik +(fabryczne|historia|kompresja|szyfr|autodobór|raw)'    && hasE "$ERC1" 'Retencja źródła +(tyle samo co w kopii|godzinowe|dobowe|tygodniowe|miesięczne|roczne|[A-Za-z0-9])'; then
+   && has "$ERC1" ' ~ wykonaj ~ Zapisz zmiany (brak zmian)' && hasE "$ERC1" ' ~ dane ~   Datasety +'    && ! has "$ERC1" 'jak w configu' && hasE "$ERC1" 'Silnik +(wbudowane|historia|kompresja|szyfr|autodobór|raw)'    && hasE "$ERC1" 'Retencja źródła +(tyle samo co w kopii|godzinowe|dobowe|tygodniowe|miesięczne|roczne|[A-Za-z0-9])'; then
     ok "edit-relation: karta U65 -- stale fakty w naglowku, na liscie tylko zmienialne (wartosci slowami, nie jak w configu), pod kreska tylko Zapisz zmiany"
 else
     bad "edit-relation: karta U65" "rc=$ERRC" "$(printf '%s' "$ERC1" | cut -c1-700)"
@@ -6312,7 +6312,7 @@ PYEOF
 sr_eq="$(srf hourly:24,daily:7 hourly:24,daily:7)"; sr_val="$(srf hourly:24,daily:7 hourly:12,daily:7)"
 sr_miss="$(srf hourly:24,daily:7 hourly:24)"; sr_extra="$(srf hourly:24 hourly:24,daily:7)"; sr_empty="$(srf hourly:24,daily:7 '')"; sr_none="$(srf '' '')"
 if [ "$sr_eq" = "tyle samo co w kopii" ] && [ "$sr_val" = "godzinowe 12, dobowe 7" ] && [ "$sr_miss" = "godzinowe 24" ] \
-   && [ "$sr_extra" = "godzinowe 24, dobowe 7" ] && [ "$sr_empty" = "bez retencji (źródło nie przycina migawek)" ]    && [ "$sr_none" = "tyle samo co w kopii" ]; then
+   && [ "$sr_extra" = "godzinowe 24, dobowe 7" ] && [ "$sr_empty" = "bez retencji (źródło nie czyści migawek)" ]    && [ "$sr_none" = "tyle samo co w kopii" ]; then
     ok "edit-relation: karta -- retencja zrodla rowna celowi tylko przy identycznych zbiorach szczebli (REV-171: brak, nadmiar, inna liczba, puste zrodlo; dwie puste strony = rowne)"
 else
     bad "edit-relation: karta -- rownosc retencji zrodla (REV-171)" "eq=[$sr_eq] val=[$sr_val] miss=[$sr_miss] extra=[$sr_extra] empty=[$sr_empty] none=[$sr_none]"
@@ -6455,7 +6455,7 @@ print("B", zt.guard_states(si, [cf]))
 print("C", zt.guard_states(os.path.join(d, "brak.ini"), [os.path.join(d, "brak.conf")]))
 class D: pass
 x = D(); x.jobs = {"host": "pve10", "jobs": [{"account": "root"}]}; x.read_at = 0; x.host_ip = None; x.guards = ("on", "off")
-print("WIDE", u"kasowanie przy pełnej puli: wł. · alarm przyrostu: wył." in zt.top_bar(x, 140, 0, False, 0))
+print("WIDE", u"ochrona pojemności: wł. · monitor przyrostu: wył." in zt.top_bar(x, 140, 0, False, 0))
 print("NARROW", u"pełnej puli" not in zt.top_bar(x, 70, 0, False, 0), len(zt.top_bar(x, 70, 0, False, 0)) <= 70)
 w = zt.top_bar(x, 200, 0, False, 0)
 print("CREDIT", u"by Wojciech Król (Adalbert King)" in w and u"pełnej puli" in w and len(w) <= 200, u"Król" not in zt.top_bar(x, 80, 0, False, 0))
@@ -6669,7 +6669,7 @@ EROUT=$(er_run "0${T}harmon
 1${T}
 " "enter")
 ERP0=$(cat "$ER/wt.log")
-if has "$ERP" 'UWAGA: relacja ma ustawienia inne niż jej szablon' && has "$ERP" 'dobowe, godzina sprzątania:  29 1 * * * -> 31 1 * * *' \
+if has "$ERP" 'UWAGA: relacja ma ustawienia inne niż jej szablon' && has "$ERP" 'dobowe, godzina czyszczenia:  29 1 * * * -> 31 1 * * *' \
    && has "$ERP" 'zamiast zmieniać szablon' && ! has "$ERP0" 'inne niż jej szablon'; then
     ok "edit-relation: X6 -- reczna zmiana configu (29 -> 31) na gorze planu przed Uruchom; bez recznych zmian -- bez ostrzezenia"
 else
@@ -6688,7 +6688,7 @@ printf '[template:profile__relacja-r1__lsrc_daily]\n\tprune_schedule = 29 1 * * 
 HE1="$("$PY" "$REPO/tui/hand-edits.py" "$HE/plan.txt" r1)"
 sed -i 's/29 1/31 1/' "$HE/c.conf"; sed -i '/vm3/d' "$HE/c.conf"
 HE2="$("$PY" "$REPO/tui/hand-edits.py" "$HE/plan.txt" r1)"
-if has "$HE1" 'źródło, dobowe, godzina sprzątania:  29 1 * * * -> 31 1 * * *' && ! has "$HE1" 'wyjątek' && ! has "$HE1" 'other' && [ -z "$HE2" ]; then
+if has "$HE1" 'źródło, dobowe, godzina czyszczenia:  29 1 * * * -> 31 1 * * *' && ! has "$HE1" 'wyjątek' && ! has "$HE1" 'other' && [ -z "$HE2" ]; then
     ok "hand-edits.py: postac lokalna -- zmienione pole zgloszone, wyjatek zdjety przez czasownik pominiety, inne relacje pominiete; bez roznic pusto"
 else
     bad "hand-edits.py: postac lokalna" "$HE1" "po wyrownaniu: [$HE2]"

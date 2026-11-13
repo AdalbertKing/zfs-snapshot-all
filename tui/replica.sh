@@ -246,8 +246,8 @@ replica_engine() {   # 0 = coś zmienione (ARGV zbuduje krok 6), 1 = Wstecz bez 
         # przenosi wszystkie istniejące migawki, a "N ostatnich migawek" -- tylko migawki replica_
         # (silnik wysyła wtedy samo najnowsze: pośrednie trafiałyby na dysk bez sprzątania).
         # W obu wiersz Historia nie ma czego wybierać.
-        [ "$p_pas" != yes ] && [ -z "$p_keep" ] && items+=(hist "$(T 'Historia         ')$(eng_hist_words "$p_h")$([ "$p_h" = all ] && T ' (fabryczne)')")
-        [ "$p_pas" = yes ] || items+=(disk "$(T 'Na dysku         ')$([ -n "$p_keep" ] && T '%s ostatnich migawek replica_ (pośrednie nie trafiają)' "$p_keep" || T 'odbicie kolektora (fabryczne)')")
+        [ "$p_pas" != yes ] && [ -z "$p_keep" ] && items+=(hist "$(T 'Historia         ')$(eng_hist_words "$p_h")$([ "$p_h" = all ] && T ' (wbudowane)')")
+        [ "$p_pas" = yes ] || items+=(disk "$(T 'Na dysku         ')$([ -n "$p_keep" ] && T '%s ostatnich migawek replica_ (pośrednie nie trafiają)' "$p_keep" || T 'odbicie kolektora (wbudowane)')")
         [ "$RAW" = yes ] && items+=(raw "$(T 'Szyfrowane       wysyłka zaszyfrowana (raw)')")
         items+=(__done__ "$(T Gotowe)")
         wt --title "$(Tv 'Ustawienia kopiowania: replika $NAME' '$NAME' "$NAME")" --ok-button "$(T Wybierz)" --cancel-button "$(T Wstecz)" --notags --default-item __done__ \
@@ -528,7 +528,7 @@ PYEOF
         step=3 ;;
     3)  # rodzaj nośnika -- PRZED wyborem nośnika (P5, uwaga 7): od niego zależy lista
         wt --title "$(rtitle 4 "$(T 'rodzaj nośnika')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$MEDIA" \
-           --menu "$(T 'Wymienny: dysk jest podłączany do systemu na czas kopii i odłączany po niej (można go wyjąć).\nStały: dysk zawsze w maszynie (np. osobna pula), nic się nie podłącza ani odłącza.')" 14 "$W" 2 \
+           --menu "$(T 'Wymienny: dysk jest podłączany do systemu na czas kopii i odłączany po niej (można go wyjąć).\nStały: dysk zawsze podłączony (np. osobna pula), nic się nie podłącza ani odłącza.')" 14 "$W" 2 \
            removable "$(T 'wymienny (USB, dysk do sejfu)')" fixed "$(T 'stały (inna pula w tej maszynie)')" || { [ "$PASSIVE" = yes ] && step=25 || step=26; continue; }
         MEDIA="$WT_OUT"; [ "$MEDIA" = fixed ] && GUIDS=""
         step=4 ;;
@@ -558,7 +558,7 @@ PYEOF
         fi
         # Zmiana repliki, której dysku teraz nie ma: zostaje przy swoim (bez wpisywania).
         if [ "$EDIT" -eq 1 ] && [ -n "$cur" ]; then
-            case "$seen" in *"|$cur|"*) ;; *) items+=("$cur" "$cur  $(T 'obecny dysk repliki (teraz odłączony)')") ;; esac
+            case "$seen" in *"|$cur|"*) ;; *) items+=("$cur" "$cur  $(T 'bieżący dysk repliki (teraz odłączony)')") ;; esac
         fi
         # FORMATOWANIE NIGDY NICZEGO NIE WYŁĄCZA (właściciel 2026-10-09): nowa replika --
         # nowy nośnik; zmiana wymiennej -- kolejny dysk tej repliki (ta sama pula, dyski
@@ -647,7 +647,7 @@ PYEOF
         def="$SCHED"; case "$SCHED" in auto|"0 22 * * *"|"0 22 * * 5"|"0 22 1 * *"|on-insert) ;; *) def=__other__ ;; esac
         [ "$MEDIA" = fixed ] && [ "$SCHED" = on-insert ] && def=auto
         wt --title "$(rtitle 6 "$(T 'kiedy kopiować?')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
-           --menu "$([ "$MEDIA" = removable ] && T 'Nośnik wymienny jest podłączany tylko na czas kopii.' || T 'Nośnik stały jest stale w maszynie: kopia idzie o tej porze.')$([ "$EDIT" -eq 1 ] && printf '%s' " $(T 'Teraz:') $([ "$SCHED" = on-insert ] && T 'tylko po podłączeniu' || echo "$SCHED")")" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || { step=4; continue; }
+           --menu "$([ "$MEDIA" = removable ] && T 'Nośnik wymienny jest podłączany tylko na czas kopii.' || T 'Nośnik stały jest stale podłączony: kopia idzie o tej porze.')$([ "$EDIT" -eq 1 ] && printf '%s' " $(T 'Teraz:') $([ "$SCHED" = on-insert ] && T 'tylko po podłączeniu' || echo "$SCHED")")" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || { step=4; continue; }
         if [ "$WT_OUT" = __other__ ]; then
             # Błąd wpisu wraca DO POLA z tym, co wpisano (kampania pve10, 2026-10-29: po "Zły
             # harmonogram" kreator wracał do menu z "auto" podświetlonym -- Enter dawał auto po
@@ -736,7 +736,7 @@ PYEOF
             echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione:')"
             echo
             echo "$(T 'Replika:    ')$NAME$([ "$EDIT" -eq 1 ] && T '  (zmiana istniejącej)')"
-            echo "$(Tv 'Źródła:     ${SRCS//,/, }  (z tym, co pod nimi jest i powstanie)' '${SRCS//,/, }' "${SRCS//,/, }")"
+            echo "$(Tv 'Źródła:     ${SRCS//,/, }  (z potomnymi, także przyszłymi)' '${SRCS//,/, }' "${SRCS//,/, }")"
             for _i in "${!B_ROOT[@]}"; do
                 [ -n "${B_EXCL[$_i]}" ] && echo "$(T 'Pomijane:   ')$(printf '%s' "${B_EXCL[$_i]}" | paste -sd, - | sed 's/,/, /g')"
             done
@@ -756,7 +756,7 @@ PYEOF
                 else echo "$(T 'Dyski:      rozpoznawane po nazwie puli (ID nieznane -- dysk odłączony)')"; fi
             fi
             echo "$(T 'Kiedy:      ')$([ "$SCHED" = on-insert ] && T 'tylko po podłączeniu dysku' || echo "$SCHED")"
-            if [ -n "$MONDAYS" ]; then echo "$(Tv 'Ostrzeżenie: po $MONDAYS dniach bez kopii, alarm po $_crit' '$MONDAYS' "$MONDAYS" '$_crit' "$(( (MONDAYS * 3 + 1) / 2 ))")"
+            if [ -n "$MONDAYS" ]; then echo "$(Tv 'Ostrzeżenie: po $MONDAYS dniach bez kopii, krytyczny po $_crit' '$MONDAYS' "$MONDAYS" '$_crit' "$(( (MONDAYS * 3 + 1) / 2 ))")"
             elif [ "$SCHED" = on-insert ]; then echo "$(T 'Ostrzeżenie: brak (replika po podłączeniu bez progu)')"
             else echo "$(T 'Ostrzeżenie: z harmonogramu (dobowo 2/4 dni, tygodniowo 9/14, miesięcznie 35/45)')"; fi
             if [ "$MEDIA" = removable ]; then

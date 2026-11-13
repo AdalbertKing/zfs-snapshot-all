@@ -367,7 +367,7 @@ harm_flow() {
     local nsrc; nsrc=$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1],encoding="utf-8")).get("source",[])))' "$TMPD/rt.json")
     if [ -n "$only_src" ]; then
         if [ "$nsrc" -eq 0 ]; then
-            wt --title "$(T 'Retencja źródła')" --msgbox "$(T 'Źródło tej relacji nie ma własnej retencji (sprząta je tylko cel).')" 8 "$W"
+            wt --title "$(T 'Retencja źródła')" --msgbox "$(T 'Źródło tej relacji nie ma własnej retencji (czyści je tylko cel).')" 8 "$W"
             PROFILE="$SAVE_P"; CUR_S="$SAVE_S"; return 0
         fi
         mapfile -t RARGS <"$TMPD/rargs.acc"; hs=2
@@ -450,7 +450,7 @@ ptransfer_words() {   # P_TRANSFER (--history=.. --compression=.. --cipher=.. --
             --compression=*) a="$(T 'kompresja: %s' "$(eng_comp_words "${a#*=}")")" ;;
             --cipher=default) a="$(T 'szyfr: domyślny SSH')" ;;
             --cipher=*)      a="$(T 'szyfr: %s' "${a#*=}")"; a="${a%%@*}" ;;
-            --autotune=*)    a="$(T 'autodobór: %s' "$(case "${a#*=}" in no) T nie ;; default) T fabryczny ;; *) T tak ;; esac)")" ;;
+            --autotune=*)    a="$(T 'autodobór: %s' "$(case "${a#*=}" in no) T nie ;; default) T wbudowany ;; *) T tak ;; esac)")" ;;
             *) continue ;;
         esac
         out="${out:+$out, }$a"
@@ -493,7 +493,7 @@ for n, k in sr.items():
 if sr == tg:
     print(_(u"tyle samo co w kopii"))
 elif not sr:
-    print(_(u"bez retencji (źródło nie przycina migawek)"))
+    print(_(u"bez retencji (źródło nie czyści migawek)"))
 else:
     print(", ".join(out))
 PYEOF
@@ -536,7 +536,7 @@ try:
             break
 except Exception:
     print("?"); sys.exit(0)
-print(", ".join(out) if out else _(u"fabryczne"))
+print(", ".join(out) if out else _(u"wbudowane"))
 PYEOF
 }
 engine_settings() {
@@ -580,7 +580,7 @@ PYEOF
         geom
         # X10 (właściciel 2026-10-14): lustro (synchro) ma to samo co źródło -- "tylko różnica"
         # by temu przeczyła, więc w lustrze wiersza Historia nie ma.
-        items=(); fab=" $(T '(fabryczne)')"
+        items=(); fab=" $(T '(wbudowane)')"
         [ "${MIRROR:-0}" = 1 ] || items+=(hist "$(eng_lbl "$(T Historia)")$(eng_hist_words "$p_h")$([ "$p_h" = default ] && echo "$fab")")
         # X2 (właściciel 2026-10-12): kopia LOKALNA nie ma łącza -- kompresji, szyfru SSH
         # ani autodoboru nie ma tu czego ustawiać (silnik i tak je pomija).
@@ -596,7 +596,7 @@ PYEOF
         # W17: wysyłka zaszyfrowana tylko do wglądu -- decyduje o niej pierwsza kopia,
         # zmiana = nowa kopia od zera (silniki odmawiają mieszania trybów).
         case "${c_r:-default}" in yes|1|true) items+=(raw "$(eng_lbl "$(T Szyfrowane)")$(T 'wysyłka zaszyfrowana (raw)')") ;; esac
-        items+=(__reset__ "$(T 'Przywróć fabryczne')" __done__ "$(T Gotowe)")
+        items+=(__reset__ "$(T 'Przywróć wbudowane')" __done__ "$(T Gotowe)")
         wt --title "$(Tv 'Ustawienia kopiowania: $NAME' '$NAME' "$NAME")" --ok-button "$(T Wybierz)" --cancel-button "$(T Wstecz)" --notags --default-item __done__ \
            --menu "$(T 'Jak przesyłane są kopie tej relacji.')" "$(fit $((${#items[@]} / 2 + 2)))" "$W" "$(lhfit $((${#items[@]} / 2)) 2)" "${items[@]}" || return 0
         case "$WT_OUT" in
@@ -623,7 +623,7 @@ PYEOF
                 esac ;;
             comp)
                 eng_pick "$(T Kompresja)" "$(T 'Czy kompresować strumień kopii.')" "$p_c" \
-                    default "$(T 'Fabryczna -- zdalnie zstd, lokalnie nic')" \
+                    default "$(T 'Wbudowana -- zdalnie zstd, lokalnie nic')" \
                     zstd    "zstd" \
                     gzip    "gzip (pigz)" \
                     none    "$(T 'Bez kompresji')" || continue
@@ -711,7 +711,7 @@ save_all() {
             echo "$(T '   Po zmianie relacja obejmuje:')"
             printf '%s\n' "$P_ENT" | while IFS=$'\t' read -r n r; do
                 [ -n "$n" ] || continue
-                if [ "$r" = flat ]; then echo "     [x] $n  $(T '(z podrzędnymi, także przyszłymi)')"; else echo "     [-] $n  $(T '(sam dataset; podrzędne tylko wymienione)')"; fi
+                if [ "$r" = flat ]; then echo "     [x] $n  $(T '(z potomnymi, także przyszłymi)')"; else echo "     [-] $n  $(T '(sam dataset; potomne tylko wymienione)')"; fi
             done
             echo
         fi

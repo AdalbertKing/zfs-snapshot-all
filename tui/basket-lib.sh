@@ -88,7 +88,7 @@ basket_step() {
     q="$(Tv 'Co kopiować z $HOST?' '$HOST' "$hn")"
     if [ "${NOCOPY:-0}" = 1 ] || [ "${MODE:-}" = snaponly ]; then
         q="$(Tv 'Gdzie robić migawki na $HOST?' '$HOST' "$hn")"
-        lg="$(T ' [x] z migawkami, razem z tym, co pod nim POWSTANIE   [-] tylko obecne albo część   [ ] bez')"
+        lg="$(T ' [x] z migawkami, razem z potomnymi, także przyszłymi   [-] tylko obecne albo część   [ ] bez')"
     fi
     BASKET_CLOSED="${B_CLOSED:-}" BASKET_LEGEND="$lg" "$PY" - "$BASKET_DS_JSON" "$TMPD/tree-spec.json" "$(title 4 "$q")" "$HOST" "$mode" "$noexc" \
         "${RECURSION:-flat}" "${BASKET_HIDE:-}" "${#B_ROOT[@]}" ${B_ROOT[@]+"${B_ROOT[@]}"} ${B_EXCL[@]+"${B_EXCL[@]}"} <<'PYEOF' || return 1

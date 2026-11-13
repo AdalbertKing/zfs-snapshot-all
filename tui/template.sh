@@ -69,7 +69,7 @@ else
 fi
 case "$USED" in ''|*[!0-9]*) USED=0 ;; esac
 
-SHADOW_MSG="$(Tv 'Plik szablonu '\''$NAME'\'' w /etc/zfs-snapshot-all/profiles ma nazwę fabrycznego i pakiet go pomija. Zmień nazwę pliku.' '$NAME' "$NAME")"
+SHADOW_MSG="$(Tv 'Plik szablonu '\''$NAME'\'' w /etc/zfs-snapshot-all/profiles ma nazwę wbudowanego i pakiet go pomija. Zmień nazwę pliku.' '$NAME' "$NAME")"
 
 # Wspólny ogon wykonania: <komunikat sukcesu> <polecenie...>
 run_cmd() {
@@ -92,8 +92,8 @@ run_cmd() {
 # ---------------------------------------------------------------- usuwanie
 if [ "$ACTION" = delete ]; then
     case "$SRC" in
-        package) wt --title "$(T 'Szablon fabryczny')" --msgbox "$(T 'Fabrycznego szablonu nie usuniesz.')" 8 "$W"; exit 0 ;;
-        shadow)  wt --title "$(T 'Szablon fabryczny')" --msgbox "$SHADOW_MSG" 10 "$W"; exit 0 ;;
+        package) wt --title "$(T 'Szablon wbudowany')" --msgbox "$(T 'Wbudowanego szablonu nie usuniesz.')" 8 "$W"; exit 0 ;;
+        shadow)  wt --title "$(T 'Szablon wbudowany')" --msgbox "$SHADOW_MSG" 10 "$W"; exit 0 ;;
     esac
     "$ZB" delete-profile "$NAME" >"$TMPD/dplan.txt" 2>&1
     if [ $? -ne 0 ]; then
@@ -118,8 +118,8 @@ if [ "$ACTION" = relation ]; then
     TITLE="$NEW"
 elif [ "$ACTION" = edit ]; then
     case "$SRC" in
-        package) wt --title "$(T 'Szablon fabryczny')" --msgbox "$(Tv 'Fabrycznego szablonu '\''$NAME'\'' nie zmienisz -- Ins na nim tworzy kopię, którą można zmienić.' '$NAME' "$NAME")" 9 "$W"; exit 0 ;;
-        shadow)  wt --title "$(T 'Szablon fabryczny')" --msgbox "$SHADOW_MSG" 10 "$W"; exit 0 ;;
+        package) wt --title "$(T 'Szablon wbudowany')" --msgbox "$(Tv 'Wbudowanego szablonu '\''$NAME'\'' nie zmienisz -- Ins na nim tworzy kopię, którą można zmienić.' '$NAME' "$NAME")" 9 "$W"; exit 0 ;;
+        shadow)  wt --title "$(T 'Szablon wbudowany')" --msgbox "$SHADOW_MSG" 10 "$W"; exit 0 ;;
     esac
     NEW="$NAME"
     TITLE="$(Tv 'Zmiana szablonu $NAME' '$NAME' "$NAME")"
@@ -234,7 +234,7 @@ s = {"title": title, "head": [_(u"SZCZEBEL"), _(u"TRZYMA"), _(u"SPÓJNE (zamraż
      # X19: w relacji szczeble sa z jej CONFIGU, nie z "bazowego" szablonu.
      "note": [(_(u"Liczby i sposób są z configu tej relacji; godziny zostają, jak są.") if action == "relation"
                else _(u"Harmonogram i sposób (płaski / wiek / GFS) są z bazowego.")),
-              _(u"Szczebel wyłączysz tylko, gdy jego migawki sprząta inny.")],
+              _(u"Szczebel wyłączysz tylko, gdy jego migawki czyści inny.")],
      "rows": rows, "taken": [x.strip() for x in open(names, encoding="utf-8") if x.strip()],
      "name_key": ("" if action in ("edit", "relation") else "name"), "auto_desc": ("" if action in ("edit", "relation") else "desc"),
      "choice": choice}

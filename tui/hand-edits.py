@@ -28,7 +28,7 @@ def _(s):
 
 
 TIERS = {"hourly": u"godzinowe", "daily": u"dobowe", "weekly": u"tygodniowe", "monthly": u"miesięczne", "yearly": u"roczne"}
-KEYS = {"exclude_child": u"wyjątek", "send_schedule": u"godzina kopii", "prune_schedule": u"godzina sprzątania",
+KEYS = {"exclude_child": u"wyjątek", "send_schedule": u"godzina kopii", "prune_schedule": u"godzina czyszczenia",
         "keep": u"trzyma", "retain": u"trzyma (wiek)", "schedule": u"harmonogram"}
 
 
