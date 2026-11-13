@@ -1,8 +1,8 @@
 # Workflow V5
 
 Status: **proposed by the Owner's instruction of 2026-11-13; active for the implementer
-from the merge of this file; the Reviewer-side rules (W6) are active once the Reviewer
-accepts them.** Where this file and `PROTOCOL.md`, `AI_PROJECT_RULES.md`,
+from the merge of this file; W6 was accepted by the Reviewer in
+[PR #1216](https://github.com/AdalbertKing/zfs-snapshot-all/pull/1216#issuecomment-6853698121) and is active.** Where this file and `PROTOCOL.md`, `AI_PROJECT_RULES.md`,
 `reviews/README.md` or `CLAUDE.md` disagree, this file wins. Everything it does not
 mention stays as those files say.
 
@@ -72,7 +72,7 @@ plus the real function cut out of the engine, or real ZFS on pve9), not an opini
 reproduction that fails sends the round back to step 2. This moves the method that found
 most defects to the implementer's side of the boundary.
 
-## W6. The class rule (needs the Reviewer's acceptance)
+## W6. The class rule (accepted by the Reviewer)
 
 - A rejection names the **class** of the defect and every instance of it the Reviewer
   sees, and carries the Reviewer's reproduction (script or commands). The implementer
@@ -93,7 +93,7 @@ every run; it is the first to be fixed or marked.)
 | removed | what it was for | what enforces that now |
 |---|---|---|
 | PROJECT_STATUS digest (`status-covers-digest`, `--refresh-status`, obligation `project-status`) | the status text follows the code | `docs/STAN.md`, at most 150 lines, refreshed once per release |
-| ENGINE-FREEZE (`frozen:` markers, `--refreeze`, the `twin:` line) | no silent engine change | `release/coverage-gate.sh`: no changed shipped file is published outside a submitted, reviewed range; it has no override |
+| ENGINE-FREEZE (`frozen:` markers, `--refreeze`, the `twin:` line) | no silent engine change | `release/coverage-gate.sh` requires submitted coverage, without override; `release/review-gate.sh` separately requires the review verdict, with the existing named Owner risk-acceptance exception |
 | the `file:line` in a twins `direction:` reason | a checkable reason | one sentence; the hash check and sections A-M of `test/twins` are unchanged |
 | two ledger read-backs per round through pve9 | whose move | CI job `ledger` on every push and PR |
 | `gate-runner` agent | explaining a gate's drift report | the gate's own output |
