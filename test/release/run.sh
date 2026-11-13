@@ -606,6 +606,20 @@ if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
     else
         bad "publish F4a: an unknown published baseline" "rc=$r $o" "rc=$rn $on"
     fi
+    # A release checkout BEHIND its origin (someone published since it was cloned) is refused
+    # before the gates, not by a rejected push at the end (1.0.21, 2026-11-13).
+    mkrel "$WORK/f4s" "$d0"
+    git clone -q "$WORK/f4s.git" "$WORK/f4s2" && git -C "$WORK/f4s2" commit -q --allow-empty -m newer \
+        && git -C "$WORK/f4s2" push -q origin main
+    st="$(git -C "$WORK/f4s.git" rev-parse main)"
+    o="$(bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4s" --push 2>&1)"; r=$?
+    if [ "$r" -ne 0 ] && printf '%s\n' "$o" | grep -q 'is behind (or off) its origin/main' \
+       && ! printf '%s\n' "$o" | grep -q 'reviewctl: derived' \
+       && [ "$(git -C "$WORK/f4s.git" rev-parse main)" = "$st" ]; then
+        ok "publish: a release checkout behind its origin is refused before the gates, nothing pushed"
+    else
+        bad "publish: a release checkout behind its origin" "rc=$r" "$o"
+    fi
     mkdir -p "$DEVW/docs/internal/reviews/responses"
     printf '<!-- rev: REV-20990101-005 -->\n<!-- response-status: IMPLEMENTED -->\n<!-- implementation: %s -->\n<!-- base: %s -->\n' "$d1" "$d0" \
         > "$DEVW/docs/internal/reviews/responses/REV-20990101-005.md"
