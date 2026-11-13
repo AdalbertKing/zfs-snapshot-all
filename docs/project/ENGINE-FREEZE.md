@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 705d3e2f57c06cf5c6ebe2c7bcecc84424344b76 -->
-<!-- frozen: snapget.sh 100755 c8fe8cd5c7e4d82c07cc06dc8e0fee91ccbc542e -->
+<!-- frozen: snapget.sh 100755 a199fac63fa50468f86eb5deceb9da89111f123a -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
 <!-- frozen: lib-zfs-snap.sh 100644 4024c09b357197732632d04a24cf020c8cf92433 -->
@@ -1468,6 +1468,13 @@ Owner-authorized refreezes:
   correction to the earlier entry: "under -i another medium never loses its base" was wrong.
   Tests: test/snapsend REV-197 r2 cases (F1a earlier history, F1b `-H -i` seed, stamp
   retention, stamp cannot be set).
+  twin: snapsend.sh unchanged -- it refuses --source-keep (pull-only).
+- 2026-11-13 (snapget.sh): **REV-20261112-197 F1, round 3** (re-review on `e6d7a410`). F1c: two
+  rotating disks share the target path, so the owner tag now also names the GUID of the pool
+  that holds the target (`source_owner_tag`); an unreadable pool GUID means nothing stamped and
+  nothing pruned. F2: a successful quiesce window makes the snapshot before the loop; it is
+  stamped too, only under its exact name `${SNAP_MESSAGE}${RUN_SUFFIX}`. Tests: test/snapsend
+  REV-197 r3 F1c (two file pools of one name) and r3 F2 (fake /etc/pve, pct stub).
   twin: snapsend.sh unchanged -- it refuses --source-keep (pull-only).
 
 ## How it is enforced

@@ -47,7 +47,8 @@ set -o pipefail
 #                    an active replica's snapshots piled up on both pvesr nodes).
 #                    The per-target bookmark keeps the next increment possible.
 #                    Only snapshots a run of THIS target made (stamped on the
-#                    source, zfsbackup:srckeep-owner) and that the target holds
+#                    source, zfsbackup:srckeep-owner, naming the target path and
+#                    its pool GUID, so rotating disks differ) and the target holds
 #                    (by GUID): another medium of the same family never loses
 #                    its base; unstamped ones stay (REV-20261112-197).
 #                    Needs -m and -i; not with -e or -s; under -r nothing is
@@ -1339,15 +1340,30 @@ guest_disk_is_live() {   # <dataset> -> 0 if it IS a live guest disk, 1 otherwis
 # snapshot is this target's own -- history copied before (a history-all run, an -H
 # seed, an import) can put A's base on B as well. So ownership is recorded where it
 # is created: the run that makes the snapshot for a --source-keep job stamps it on
-# the source with SOURCE_OWNER_PROP = this target's tag (bookmark_target_tag of the
-# target and -j). Only snapshots carrying THIS target's stamp AND held by this
+# the source with SOURCE_OWNER_PROP = this target's tag (source_owner_tag: the
+# target, -j and, since round 3, the target pool's GUID). Only snapshots carrying THIS target's stamp AND held by this
 # target are prunable. An unstamped snapshot (made before, by hand, by another job,
 # or when the stamp could not be set) is ambiguous and stays on the source.
 SOURCE_OWNER_PROP="zfsbackup:srckeep-owner"
 
+# Round 3 (F1c): two rotating disks share the target path (same pool name and base,
+# different pool GUIDs admitted by media_guids), so the path alone names both. The
+# owner is the target path, -j AND the GUID of the pool that holds the target -- the
+# physical medium. An unreadable pool GUID gives no owner: nothing stamped, nothing
+# pruned.
+source_owner_tag() {   # <tgt_dataset> -> tag on stdout, rc 1 when the pool GUID is unreadable
+    local pg
+    pg=$(zpool get -H -o value guid "${1%%/*}" 2>/dev/null) || return 1
+    [[ "$pg" =~ ^[0-9]+$ ]] || return 1
+    bookmark_target_tag "$1" "${IDENTIFIER}:pool-guid:$pg"
+}
+
 mark_source_owner() {   # <src_dataset@snap> <tgt_dataset> [remote_user remote_host]
     local snap="$1" tag ruser="${3:-}" rhost="${4:-}"
-    tag=$(bookmark_target_tag "$2" "$IDENTIFIER")
+    if ! tag=$(source_owner_tag "$2"); then
+        log 1 "Warning: --source-keep: cannot read the pool GUID of '$2' -- '$snap' is not marked and will never be pruned by --source-keep"
+        return 0
+    fi
     if [ -n "$rhost" ]; then
         ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" "zfs set $SOURCE_OWNER_PROP=$tag '$snap'"
     else
@@ -1360,7 +1376,10 @@ prune_source_family() {   # <src_dataset> <sent_snap> <tgt_dataset> [remote_user
     local src="$1" sent="$2" tgt="$3" ruser="${4:-}" rhost="${5:-}" list rc crash s n g o i idx=-1
     local ts='[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
     local own=() doomed=() gone=0 stuck=0 d tguids mytag
-    mytag=$(bookmark_target_tag "$tgt" "$IDENTIFIER")
+    if ! mytag=$(source_owner_tag "$tgt"); then
+        log 1 "Warning: --source-keep: cannot read the pool GUID of '$tgt' -- nothing pruned"
+        return 0
+    fi
     if [ "${DRY_RUN:-0}" -eq 1 ]; then
         log 1 "--source-keep=$SOURCE_KEEP: dry run -- the job's own snapshots on '$src' that '$tgt' holds, beyond the $SOURCE_KEEP newest, would be destroyed"
         return 0
@@ -1885,6 +1904,13 @@ process_dataset() {
 
         local latest_snap="${src_snaps[-1]}"
         snapshot="${src_dataset}@${latest_snap}"
+        # REV-20261112-197 round 3 (F2): a successful quiesce window made this run's
+        # snapshot before this loop. --source-keep refuses -e, so here it is the
+        # quiesce path; stamp only the exact name this run gave, never an adopted one.
+        if [ "$SOURCE_KEEP" -gt 0 ] && [ "$QUIESCE_SNAPPED" -eq 1 ] \
+           && [ "$latest_snap" = "${SNAP_MESSAGE}${RUN_SUFFIX}" ]; then
+            mark_source_owner "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
+        fi
     else
         snapshot=$(create_snapshot "$src_dataset" "$remote_user" "$remote_host") || return 1
         latest_snap="${snapshot##*@}"
