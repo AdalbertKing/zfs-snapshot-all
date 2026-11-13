@@ -2176,7 +2176,8 @@ reaches a medium. That gap cost two review rounds (F1a/F1b, then F1c/F2).
 
 *Rule.* R16 point 5; CLAUDE.md "Owner, 2026-11-13". Fixed in the suites: `ZFS_PROGRESS_DIR` is
 isolated in snapsend and in every `remote-suite.sh` run, and `SUITE_ONLY` / `only=<word>` select
-sections.
+sections. Measured after the fix on pve9: the whole snapsend suite took 7m46s, with the same
+result (466/2, the known P2 pair); `only=W5` took 101 s (31/0).
 
 ### E128 — the heredoc ate the backslashes three more times (2026-11-11, R16 point 4, repeat of E124)
 **2026-11-11, batch 1.0.18 (`batch/gui-1-0-18`).**

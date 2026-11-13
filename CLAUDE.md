@@ -146,7 +146,8 @@ So:
 
 - **A slow suite is a defect. Measure it before you wait on it.** Snapsend took 25-40
   minutes because the suites left 2999 progress records on pve9, and every transfer
-  read all of them (9.7 s instead of 0.4 s per `snapget` call). If a suite runs longer than its checks
+  read all of them (9.7 s instead of 0.4 s per `snapget` call). With them isolated, the
+  whole suite takes 7m46s. If a suite runs longer than its checks
   explain, time one engine call before running anything else.
 - **During a round, run only the sections the change touches:**
   `./test/remote-suite.sh snapsend origin/<branch> only=<word>`. The whole suite runs
