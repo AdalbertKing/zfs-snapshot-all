@@ -1,7 +1,12 @@
-# REVIEW PROTOCOL V3
+# REVIEW PROTOCOL V4
 ## Claude + Reviewer + Owner workflow
 
-Status: **ACTIVE since 2026-11-07. V3 = V2.2 + the "V3 amendments" section below.**
+Status: **REVIEW PROTOCOL V4 is ACTIVE since its merge in PR #1195 (2026-11-12): the V3 base
+below plus the "V4 Lean protocol" section; V4.4 and V4.5 are active (PR #1203, #1202). Name it
+"PROTOCOL V4".** The heading said "V3" until 2026-11-13, so both sides named the same rules
+differently (Owner, 2026-11-13).
+
+V3 = V2.2 + the "V3 amendments" section below, ACTIVE since 2026-11-07:
 
 - The Reviewer accepted it in PR #1127 at `a5677ad94035f57e5a9d42da3361ee861fb9eefe`.
 - It was merged as `632af1b5f29d0d90ad80c1ed4c42131d3fc1c4f8`.

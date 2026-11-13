@@ -1793,6 +1793,12 @@ fo=$(for_run); frc=$?
 _l=$(printf '%s\n' "$fo" | grep 'replica copy (mies)')
 check "PRK1 keep = 12 renders rc=0: snapget with --source-keep=1 (W5), without -M and with -i (only its own snapshot travels), then delsnaps -R usb/rep/tank/a replica_ -M12 only after a good copy" "0:1:0:1" \
       "$frc:$(printf '%s' "$_l" | grep -c 'snapget.sh -m "replica_" --source-keep=1 -R -i "tank/a"'):$(printf '%s' "$_l" | grep -c 'snapget.sh -m "replica_" -M'):$(printf '%s' "$_l" | grep -c '\[ \$m -eq 0 \] && { /R/delsnaps.sh -R "usb/rep/tank/a" "replica_" -M12; m=\$?; }')"
+printf '\thistory  = all\n' >> "$FOR/c.conf"
+fo=$(for_run); frc=$?
+_l=$(printf '%s\n' "$fo" | grep 'replica copy (mies)')
+check "PRK1b keep with history = all (no -i): no --source-keep (REV-20261112-197: it needs -i), no -M, delsnaps still prunes the medium" "0:0:1:0:1" \
+      "$frc:$(printf '%s' "$_l" | grep -c -- '--source-keep'):$(printf '%s' "$_l" | grep -c 'snapget.sh -m "replica_" -R "tank/a"'):$(printf '%s' "$_l" | grep -c 'snapget.sh -m "replica_" -M'):$(printf '%s' "$_l" | grep -c 'delsnaps.sh -R "usb/rep/tank/a" "replica_" -M12')"
+sed -i '/^\thistory  = all$/d' "$FOR/c.conf"
 sed -i 's/^\tkeep     = 12$//' "$FOR/c.conf"
 fo=$(for_run)
 check "PRK2 control: without keep the engine mirrors (-M), nothing prunes the medium, and no --source-keep (-M would carry a pruned source onto the medium)" "1:0:0" \

@@ -6,14 +6,18 @@ when they change how the tool is used.
 
 ## [Unreleased]
 
-- **An active replica with `keep` keeps only its newest snapshot on the source** (W5-1). New
+- **An active replica with `keep` keeps only its newest own snapshot on the source** (W5-1). New
   `snapget.sh --source-keep=N`: after a successful pull of the snapshot the run made with `-m`
   (not under `-r`; under `-R` each dataset is pruned on its own), the job's own older snapshots
   (exact `-m` prefix plus the engine's timestamp, or its quiesce crash form) beyond the N newest
-  are destroyed on the source. Other families and other jobs' snapshots are never touched; a
+  are destroyed on the source, and only those the target itself holds (by GUID): with two media
+  of one replica, each medium's head stays on the source until that medium's own next run, so
+  one medium never takes another's base, even when a bookmark could not be made
+  (REV-20261112-197). Other families and other jobs' snapshots are never touched; a
   failed listing or destroy is a warning, not a failed run; `-n` destroys nothing. Refused with
-  `-e`, with `-s`, or without `-m`; `snapsend.sh` refuses it (pull-only). `gen-cron.sh` passes
-  `--source-keep=1` only to an active replica with `keep = N`; the mirror variant (`-m P -M`)
+  `-e`, with `-s`, without `-m`, or without `-i`; `snapsend.sh` refuses it (pull-only).
+  `gen-cron.sh` passes `--source-keep=1` only to an active replica with `keep = N` that runs
+  with `-i` (an explicit `history = all` or `auto:N` gets none); the mirror variant (`-m P -M`)
   does not get it, because under `-M` the medium follows the source, so the pruning would delete
   the medium's copies too.
 - **A passive copy never adopts a Proxmox-reserved snapshot** (W5-2). Under `-e` both engines skip

@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 705d3e2f57c06cf5c6ebe2c7bcecc84424344b76 -->
-<!-- frozen: snapget.sh 100755 5989afb8345646f17f764868ab1f4dfeb8bbb622 -->
+<!-- frozen: snapget.sh 100755 ba85e45dbcb5bcafc35e5528eb2fdcc1052dfaf4 -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
 <!-- frozen: lib-zfs-snap.sh 100644 4024c09b357197732632d04a24cf020c8cf92433 -->
@@ -1453,6 +1453,13 @@ Owner-authorized refreezes:
   test/snapsend W5 cases (real ZFS), test/cron PRK1/PRK2.
   twin: W5-2 ported to snapsend.sh; `--source-keep` is parsed by the shared
   translate_long_options and refused by snapsend.sh (pull-only), reason in twins.sha256.
+- 2026-11-13 (snapget.sh): **REV-20261112-197 F1**, the reviewer's CHANGES-REQUIRED on W5,
+  under the same owner opening. `prune_source_family` prunes only own-family snapshots whose
+  GUID the target holds; `--source-keep` needs `-i`. Under -i another medium of the same family
+  never loses its base through this prune, whatever happened to its bookmark. Tests: test/snapsend REV-197 cases (real
+  ZFS: failed refresh, failed old-bookmark removal, failed first bookmark, B inside A's
+  bookmark call, two-media control, remote source via an ssh shim, -i refusal), test/cron PRK1b.
+  twin: snapsend.sh unchanged -- it refuses --source-keep (pull-only).
 
 ## How it is enforced
 
