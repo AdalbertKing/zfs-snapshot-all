@@ -609,7 +609,7 @@ if git -C "$REPO" worktree add -q --detach "$DEVW" HEAD 2>/dev/null; then
     # A release checkout BEHIND its origin (someone published since it was cloned) is refused
     # before the gates, not by a rejected push at the end (1.0.21, 2026-11-13).
     mkrel "$WORK/f4s" "$d0"
-    git clone -q "$WORK/f4s.git" "$WORK/f4s2" && git -C "$WORK/f4s2" commit -q --allow-empty -m newer \
+    git clone -q -b main "$WORK/f4s.git" "$WORK/f4s2" && git -C "$WORK/f4s2" commit -q --allow-empty -m newer \
         && git -C "$WORK/f4s2" push -q origin main
     st="$(git -C "$WORK/f4s.git" rev-parse main)"
     o="$(bash "$DEVW/release/publish.sh" "$d1" "$WORK/f4s" --push 2>&1)"; r=$?
