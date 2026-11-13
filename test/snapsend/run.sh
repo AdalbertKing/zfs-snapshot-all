@@ -2321,8 +2321,9 @@ cat > "$R197D/bin/zfs" <<'SHIM'
 case "${R197_FAIL:-}:$1" in
     bookmark:bookmark) echo "simulated: permission denied (bookmark)" >&2; exit 1 ;;
     bmdestroy:destroy) case "$*" in *'#'*) echo "simulated: permission denied (destroy bookmark)" >&2; exit 1 ;; esac ;;
+    noset:set) echo "simulated: permission denied (set)" >&2; exit 1 ;;
     tlist:list) case "$*" in *'-o guid -t snapshot'*) echo "simulated: cannot list target" >&2; exit 1 ;; esac ;;
-    slist:list) case "$*" in *'-o name,guid -s createtxg'*) echo "simulated: cannot list source" >&2; exit 1 ;; esac ;;
+    slist:list) case "$*" in *'-o name,guid,zfsbackup:srckeep-owner -s createtxg'*) echo "simulated: cannot list source" >&2; exit 1 ;; esac ;;
     race:bookmark) sleep 1; R197_FAIL= timeout 120 "$R197_SNAPGET" -i -m rep_ --source-keep=1 "$R197_SRC" "$R197_B" >"$R197_RACELOG" 2>&1; echo "B rc=$?" >> "$R197_RACELOG" ;;
 esac
 exec "$R197_REAL" "$@"
@@ -2396,6 +2397,37 @@ tick; k197r "$B8"; r4=$RC; f4=$(printf '%s\n' "$OUT" | grep -c 'full pull')
 check "REV-197 flat -R: two media A B A B -- rc 0, incrementals, parent and child each keep one own snapshot per medium" "0 0 0 0|0 0|2 2" \
       "$r1 $r2 $r3 $r4|$f3 $f4|$(zfs list -H -o name -t snapshot -d 1 "$S8" | grep -c '@rep_') $(zfs list -H -o name -t snapshot -d 1 "$S8/c" | grep -c '@rep_')"
 zfs destroy -r "$S8" 2>/dev/null; zfs destroy -r "$A8" 2>/dev/null; zfs destroy -r "$B8" 2>/dev/null
+# Round 2 (re-review): a GUID on the target is not ownership. Older shared history
+# (F1a) or an -H seed (F1b) can put A's head on B or C. Only snapshots a run of
+# THIS target stamped (zfsbackup:srckeep-owner) are prunable; A has no bookmark in
+# both cases, so its head on the source is its only base.
+S9="$POOL/s197o"; A9="$POOL/m197oa"; B9="$POOL/m197ob"; C9="$POOL/m197oc"
+zfs create -p "$S9"; zfs create -p "$A9"; zfs create -p "$B9"; zfs create -p "$C9"
+h9() { zfs list -H -o name -t snapshot -s createtxg -d 1 "$1/$S9" 2>/dev/null | tail -1 | sed 's/.*@//'; }
+on9() { zfs list -H -o name "$S9@$1" >/dev/null 2>&1 && echo yes || echo no; }
+nobm9() { local b; zfs list -H -o name -t bookmark "$S9" 2>/dev/null | while read -r b; do zfs destroy "$b"; done; }
+k9() { run_get_out -v 2 -i -m "rep_" --source-keep=1 "$S9" "$1"; }
+tick; run_get_out -m "rep_" "$S9" "$A9"; r0=$RC; tick; run_get_out -H -m "rep_" "$S9" "$B9"; r1=$RC; ah=$(h9 "$A9")
+onb=$(zfs list -H -o name "$B9/$S9@$ah" >/dev/null 2>&1 && echo yes || echo no)
+nobm9; tick; k9 "$B9"; rb=$RC; ahs=$(on9 "$ah"); tick; k9 "$A9"; ra=$RC
+check "REV-197 r2 F1a: B holds A's head from earlier history, A has no bookmark; B runs -i --source-keep -- A's head stays, A's next run rc 0" \
+      "0 0|yes|0|yes|0" "$r0 $r1|$onb|$rb|$ahs|$ra"
+tick; ah=$(h9 "$A9"); nobm9
+tick; run_get_out -v 2 -H -i -m "rep_" --source-keep=1 "$S9" "$C9"; rc9=$RC
+onc=$(zfs list -H -o name "$C9/$S9@$ah" >/dev/null 2>&1 && echo yes || echo no); ahs=$(on9 "$ah")
+tick; k9 "$A9"; ra=$RC
+check "REV-197 r2 F1b: C's first run -H -i --source-keep holds A's head, A has no bookmark -- A's head stays, A's next run rc 0" \
+      "0|yes|yes|0" "$rc9|$onc|$ahs|$ra"
+tick; k9 "$B9"; tick; k9 "$C9"; tick; k9 "$A9"
+st9=$(zfs list -H -o name,zfsbackup:srckeep-owner -t snapshot -d 1 "$S9" | grep '@rep_')
+check "REV-197 r2 retention: the unstamped earlier history stays (2), one stamped own snapshot per medium (3)" "2|3" \
+      "$(printf '%s\n' "$st9" | awk -F'\t' '$2=="-"' | grep -c .)|$(printf '%s\n' "$st9" | awk -F'\t' '$2!="-"' | grep -c .)"
+# the stamp cannot be set (no 'userprop' delegation): the copy stands, nothing is pruned
+tick; R197_FAIL=noset PATH="$R197D/bin:$PATH" run_get_out -v 2 -i -m "rep_" --source-keep=1 "$S9" "$A9"; rn=$RC
+wn=$(printf '%s\n' "$OUT" | grep -c 'cannot mark'); st9=$(zfs list -H -o name,zfsbackup:srckeep-owner -t snapshot -d 1 "$S9" | grep '@rep_')
+check "REV-197 r2: the stamp cannot be set -- rc 0, said, nothing pruned (3 unstamped, still 3 stamped)" "0|1|3|3" \
+      "$rn|$wn|$(printf '%s\n' "$st9" | awk -F'\t' '$2=="-"' | grep -c .)|$(printf '%s\n' "$st9" | awk -F'\t' '$2!="-"' | grep -c .)"
+zfs destroy -r "$S9" 2>/dev/null; zfs destroy -r "$A9" 2>/dev/null; zfs destroy -r "$B9" 2>/dev/null; zfs destroy -r "$C9" 2>/dev/null
 zfs destroy -r "$S7" 2>/dev/null; zfs destroy -r "$A7" 2>/dev/null; zfs destroy -r "$B7" 2>/dev/null; zfs destroy -r "$C7" 2>/dev/null
 rm -rf "$R197D"
 zfs destroy -r "$W5S" 2>/dev/null; zfs destroy -r "$W5R" 2>/dev/null; zfs destroy -r "$W5P" 2>/dev/null
