@@ -4,7 +4,7 @@
 #
 # Okno NIE ma własnej logiki: pyta o to, o co pyta `zfs-backup.sh add-replica`
 # (nazwa, źródła, nośnik, rodzaj, harmonogram), pokazuje PLAN tego czasownika (bez
-# --install) i po "WYKONAJ" uruchamia go z --install --yes. add-replica z istniejącą
+# --install) i po "Uruchom" uruchamia go z --install --yes. add-replica z istniejącą
 # nazwą nadpisuje jej sekcję -- to jest zmiana repliki. Czego czasownik odmawia (zły
 # dataset, nośnik zajęty przez inną replikę), odmawia tu tak samo, jego słowami.
 #
@@ -13,8 +13,8 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
-. "$HERE/tui/wt-lib.sh" || { echo "replica: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
-. "$HERE/tui/basket-lib.sh" || { echo "replica: brak $HERE/tui/basket-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/wt-lib.sh" || { echo "replica: brak $HERE/tui/wt-lib.sh -- katalog programu jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/basket-lib.sh" || { echo "replica: brak $HERE/tui/basket-lib.sh -- katalog programu jest niekompletny" >&2; exit 1; }
 NAME="${1:-}"
 EDIT=0; [ -n "$NAME" ] && EDIT=1
 if [ "$EDIT" -eq 1 ]; then WT_BACKTITLE="$(Tv 'Zmiana repliki $NAME -- kolektor $(hostname)' '$NAME' "$NAME" '$(hostname)' "$(hostname)")"
@@ -203,7 +203,7 @@ prep_media() {   # <pula> <baza> -> PREP_DST, PREP_GUID ; 0 = sformatowany, 1 = 
     fi
     "$ZB" prepare-media "$pool" "$dev" --base="$base" "${enc[@]}" >"$TMPD/prep.plan" 2>&1
     if ! grep -q '^PLAN' "$TMPD/prep.plan"; then
-        wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(grep -E 'FATAL' "$TMPD/prep.plan" | sed 's/^FATAL: //' | fold -s -w $((W - 6)))" 12 "$W"
+        wt --title "$(T 'Polecenie odmówiło -- nic nie zmieniono')" --msgbox "$(grep -E 'FATAL' "$TMPD/prep.plan" | sed 's/^FATAL: //' | fold -s -w $((W - 6)))" 12 "$W"
         return 1
     fi
     # Wiersz CLI ("Re-run with --yes") nie jest dla okna: tu zatwierdza przycisk (pve1, 2026-11-09).
@@ -211,7 +211,7 @@ prep_media() {   # <pula> <baza> -> PREP_DST, PREP_GUID ; 0 = sformatowany, 1 = 
     yesno_text "$TMPD/prep.plan" "$(Tv 'Replika $NAME -- formatowanie nośnika' '$NAME' "$NAME")" "$(T 'Sformatuj (KASUJE dysk)')" "$(T Wstecz)" --defaultno || return 1
     info "$(Tv 'Replika $NAME -- nośnik' '$NAME' "$NAME")" "$(Tv 'Formatuję $dev...' '$dev' "$dev")"
     if ! "$ZB" prepare-media "$pool" "$dev" --base="$base" "${enc[@]}" --yes >"$TMPD/prep.log" 2>&1; then
-        wt --title "$(T 'Formatowanie nie wyszło')" --msgbox "$(tail -4 "$TMPD/prep.log" | fold -s -w $((W - 6)))" 12 "$W"
+        wt --title "$(T 'Formatowanie nie powiodło się')" --msgbox "$(tail -4 "$TMPD/prep.log" | fold -s -w $((W - 6)))" 12 "$W"
         return 1
     fi
     PREP_DST="$pool/$base"
@@ -235,7 +235,7 @@ add_guid() {   # <id> -> GUIDS bez powtórzeń
 # USTAWIENIA SILNIKA REPLIKI (właściciel 2026-10-12, "tak, rób okno ustawień silnika dla
 # repliki"): to samo okno co dla relacji (W16), trzy wiersze, które dla repliki mają sens --
 # kopia jest lokalna, więc bez kompresji, szyfru i limitu łącza. Zmiana idzie tym samym
-# add-replica co cały kreator (plan, potem WYKONAJ), z pozostałymi ustawieniami bez zmian.
+# add-replica co cały kreator (plan, potem Uruchom), z pozostałymi ustawieniami bez zmian.
 eng_hist_words() { case "$1" in all) echo "$(T 'wszystkie migawki pomiędzy')" ;; newest) echo "$(T 'tylko różnica do najnowszej')" ;; auto:*) echo "$(T 'auto (po %s odstępach tylko różnica)' "${1#auto:}")" ;; *) echo "$1" ;; esac; }
 replica_engine() {   # 0 = coś zmienione (ARGV zbuduje krok 6), 1 = Wstecz bez zmian
     local p_pas="$PASSIVE" p_keep="$KEEP" p_h="$HIST" items v N
@@ -250,7 +250,7 @@ replica_engine() {   # 0 = coś zmienione (ARGV zbuduje krok 6), 1 = Wstecz bez 
         [ "$p_pas" = yes ] || items+=(disk "$(T 'Na dysku         ')$([ -n "$p_keep" ] && T '%s ostatnich migawek replica_ (pośrednie nie trafiają)' "$p_keep" || T 'odbicie kolektora (fabryczne)')")
         [ "$RAW" = yes ] && items+=(raw "$(T 'Szyfrowane       wysyłka zaszyfrowana (raw)')")
         items+=(__done__ "$(T Gotowe)")
-        wt --title "$(Tv 'Ustawienia silnika: replika $NAME' '$NAME' "$NAME")" --ok-button "$(T Wybierz)" --cancel-button "$(T Wstecz)" --notags --default-item __done__ \
+        wt --title "$(Tv 'Ustawienia kopiowania: replika $NAME' '$NAME' "$NAME")" --ok-button "$(T Wybierz)" --cancel-button "$(T Wstecz)" --notags --default-item __done__ \
            --menu "$(T 'Jak replika przenosi kopie na dysk.')" "$(fit $((${#items[@]} / 2 + 2)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || return 1
         case "$WT_OUT" in
             mig)
@@ -269,8 +269,8 @@ replica_engine() {   # 0 = coś zmienione (ARGV zbuduje krok 6), 1 = Wstecz bez 
                     N=3; case "$p_h" in auto:*) N="${p_h#auto:}" ;; esac
                     wt --title "$(T 'Historia: auto')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
                        --inputbox "$(T 'Po ilu zgubionych przebiegach przejść na migawkę różnicową?')" 9 "$W" "$N" || continue
-                    case "$WT_OUT" in ''|*[!0-9]*|0*) wt --title "$(T 'Zła liczba')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- liczba od 1 do 999.' '$WT_OUT' "$WT_OUT")" 8 "$W"; continue ;; esac
-                    [ "${#WT_OUT}" -le 3 ] || { wt --title "$(T 'Zła liczba')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- liczba od 1 do 999.' '$WT_OUT' "$WT_OUT")" 8 "$W"; continue; }
+                    case "$WT_OUT" in ''|*[!0-9]*|0*) wt --title "$(T 'Nieprawidłowa liczba')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- liczba od 1 do 999.' '$WT_OUT' "$WT_OUT")" 8 "$W"; continue ;; esac
+                    [ "${#WT_OUT}" -le 3 ] || { wt --title "$(T 'Nieprawidłowa liczba')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- liczba od 1 do 999.' '$WT_OUT' "$WT_OUT")" 8 "$W"; continue; }
                     p_h="auto:$WT_OUT"
                 else
                     p_h="$WT_OUT"
@@ -283,7 +283,7 @@ replica_engine() {   # 0 = coś zmienione (ARGV zbuduje krok 6), 1 = Wstecz bez 
                 if [ "$WT_OUT" = keep ]; then
                     wt --title "$(T 'Ile kopii na dysku')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
                        --inputbox "$(T 'Ile ostatnich kopii (migawek replica_) ma zostawać na dysku?')" 9 "$W" "${p_keep:-12}" || continue
-                    case "$WT_OUT" in ''|*[!0-9]*|0*) wt --title "$(T 'Zła liczba')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- liczba całkowita większa od 0.' '$WT_OUT' "$WT_OUT")" 8 "$W"; continue ;; esac
+                    case "$WT_OUT" in ''|*[!0-9]*|0*) wt --title "$(T 'Nieprawidłowa liczba')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- liczba całkowita większa od 0.' '$WT_OUT' "$WT_OUT")" 8 "$W"; continue ;; esac
                     p_keep="$WT_OUT"; p_h=all
                 else
                     p_keep=""
@@ -302,7 +302,7 @@ step=1
 # ZMIANA REPLIKI = JEDNA LISTA (U8, właściciel 2026-10-18: "musiałem przejść całą ścieżkę
 # repliki, żeby wybrać »nie« przy »uruchom po włożeniu« -- kreator jest do bani"). Lista
 # pokazuje OBECNE wartości; pozycja uruchamia tylko swój krok kreatora i wraca tutaj (ONE),
-# "Po podłączeniu dysku" przełącza się od razu, "Zapisz zmiany" = plan i WYKONAJ (krok 6,
+# "Po podłączeniu dysku" przełącza się od razu, "Zapisz zmiany" = plan i Uruchom (krok 6,
 # ta sama komenda add-replica co w kreatorze).
 MENU=0; ONE=""
 trig_calc() {    # TRIG/UNTRIG: czy plan zakłada albo zdejmuje regułę udev "po włożeniu"
@@ -389,12 +389,12 @@ edit_menu() {    # -> step ustawiony na pierwszy krok pozycji (albo exit)
             restart)
             # W18 (właściciel 2026-10-12): gdy łańcuch repliki się zerwał (relację usunięto
             # i założono od nowa), jedyna droga to pełna kopia. Nowa obok starej, stara znika
-            # dopiero po udanej nowej -- plan i WYKONAJ, jak każda zmiana.
+            # dopiero po udanej nowej -- plan i Uruchom, jak każda zmiana.
             info "$(Tv 'Replika $NAME' '$NAME' "$NAME")" "$(T 'Liczę plan...')"
-            "$ZB" replica-restart "$NAME" >"$TMPD/rs.txt" 2>&1 || { wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(verb_refusal "$TMPD/rs.txt")" 10 "$W"; continue; }
+            "$ZB" replica-restart "$NAME" >"$TMPD/rs.txt" 2>&1 || { wt --title "$(T 'Polecenie odmówiło -- nic nie zmieniono')" --msgbox "$(verb_refusal "$TMPD/rs.txt")" 10 "$W"; continue; }
             { echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione:')"; echo; grep -v '^plan only' "$TMPD/rs.txt"; echo
               echo "$(T 'Komenda:')  $(shq "$ZB") replica-restart $NAME --yes"; } >"$TMPD/rs2.txt"
-            yesno_text "$TMPD/rs2.txt" "$(Tv 'Replika $NAME -- zacznij od nowa' '$NAME' "$NAME")" "$(T WYKONAJ)" "$(T Wstecz)" --defaultno || continue
+            yesno_text "$TMPD/rs2.txt" "$(Tv 'Replika $NAME -- zacznij od nowa' '$NAME' "$NAME")" "$(T Uruchom)" "$(T Wstecz)" --defaultno || continue
             : >"$TMPD/run.log"
             RC=0; run_progress "$(Tv 'Replika $NAME: zacznij od nowa' '$NAME' "$NAME")" "$TMPD/run.log" "$ZB" replica-restart "$NAME" --yes || RC=$?
             [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
@@ -520,7 +520,7 @@ PYEOF
         while :; do
             wt --title "$(rtitle 3 "$(T 'migawki: ile kopii na dysku')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
                --inputbox "$(T 'Ile ostatnich kopii (migawek replica_) ma zostawać na dysku?\nNp. 12 = rok przy dysku wkładanym raz w miesiącu.')" 10 "$W" "${KEEP:-12}" || { WT_OUT=""; break; }
-            case "$WT_OUT" in ''|*[!0-9]*|0*) wt --title "$(T 'Zła liczba')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- liczba całkowita większa od 0.' '$WT_OUT' "$WT_OUT")" 8 "$W"; continue ;; esac
+            case "$WT_OUT" in ''|*[!0-9]*|0*) wt --title "$(T 'Nieprawidłowa liczba')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- liczba całkowita większa od 0.' '$WT_OUT' "$WT_OUT")" 8 "$W"; continue ;; esac
             break
         done
         [ -n "$WT_OUT" ] || continue
@@ -615,7 +615,7 @@ PYEOF
             fi
             prep_media "$cur" "${DST#*/}" || continue
             add_guid "$PREP_GUID"
-            wt --title "$(T 'Kolejny dysk gotowy')" --msgbox "$(Tv 'Dysk dopisany do repliki '\''$NAME'\'' (ID puli $PREP_GUID).\nDyski są równorzędne: replika kopiuje na ten, który jest podłączony.\nPodłączaj JEDEN naraz. Zapisze się po WYKONAJ w planie.' '$NAME' "$NAME" '$PREP_GUID' "$PREP_GUID")" 11 "$W"
+            wt --title "$(T 'Kolejny dysk gotowy')" --msgbox "$(Tv 'Dysk dopisany do repliki '\''$NAME'\'' (ID puli $PREP_GUID).\nDyski są równorzędne: replika kopiuje na ten, który jest podłączony.\nPodłączaj JEDEN naraz. Zapisze się po Uruchom w planie.' '$NAME' "$NAME" '$PREP_GUID' "$PREP_GUID")" 11 "$W"
             step=5; continue
         fi
         if [ "$pool" = "$cur" ]; then
@@ -677,7 +677,7 @@ PYEOF
                           } }'; then
                     break
                 fi
-                wt --title "$(T 'Zły harmonogram')" --msgbox "$(Tv ''\''$_c'\'' -- potrzeba pięciu pól crona (minuta 0-59, godzina 0-23, dzień 1-31, miesiąc 1-12, dzień tygodnia 0-7), np. 30 21 * * 1-5.' '$_c' "$_c")" 9 "$W"
+                wt --title "$(T 'Nieprawidłowy harmonogram')" --msgbox "$(Tv ''\''$_c'\'' -- potrzeba pięciu pól crona (minuta 0-59, godzina 0-23, dzień 1-31, miesiąc 1-12, dzień tygodnia 0-7), np. 30 21 * * 1-5.' '$_c' "$_c")" 9 "$W"
             done
             [ "$_back" -eq 1 ] && continue
             SCHED="$_c"
@@ -729,7 +729,7 @@ PYEOF
         if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
             verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)) >"$TMPD/why.txt"
             [ -s "$TMPD/why.txt" ] || tail -5 "$TMPD/plan.txt" >"$TMPD/why.txt"
-            wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
+            wt --title "$(T 'Polecenie odmówiło -- nic nie zmieniono')" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
             step=2; continue
         fi
         {
@@ -764,7 +764,7 @@ PYEOF
                     if [ "$TRIG" = yes ]; then
                         _rw="$([ "$RULE_HERE" = old ] && T 'ODNOWIONA' || T 'ZAŁOŻONA')"
                         echo "$(Tv 'Po podłączeniu: kopia z opóźnieniem (replica.insert_wait, domyślnie 60 s) -- krok: reguła udev ZOSTANIE $_rw' '$_rw' "$_rw")"
-                        echo "                $(T '(install-media-trigger --install; jedna na host)')"
+                        echo "                $(T '(wyzwalacz podłączenia nośnika (--install); jedna na host)')"
                     else
                         echo "$(T 'Po podłączeniu: kopia z opóźnionym startem (replica.insert_wait, domyślnie 60 s); reguła udev jest na hoście')"
                     fi
@@ -788,8 +788,8 @@ PYEOF
             echo
             echo "$(T 'Komenda:')  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--install --yes"
         } >"$TMPD/plan2.txt"
-        # Enter = WYKONAJ, jak w kreatorze relacji (jedno zachowanie planów).
-        if ! yesno_text "$TMPD/plan2.txt" "$(Tv 'Replika $NAME -- plan' '$NAME' "$NAME")" "$(T WYKONAJ)" "$(T Wstecz)"; then
+        # Enter = Uruchom, jak w kreatorze relacji (jedno zachowanie planów).
+        if ! yesno_text "$TMPD/plan2.txt" "$(Tv 'Replika $NAME -- plan' '$NAME' "$NAME")" "$(T Uruchom)" "$(T Wstecz)"; then
             if [ "$ENGINE_ONLY" -eq 1 ]; then
                 replica_engine && continue
                 clear 2>/dev/null; wt_end_nochange "$(T 'Replika: przerwane, nic nie zmieniono')"; exit 1
@@ -828,7 +828,7 @@ PYEOF
             # czasownik co F7, przeżywa wyjście z GUI.
             if [ "$_ask_now" -eq 1 ] \
                && wt --title "$(Tv 'Replika $NAME' '$NAME' "$NAME")" --yes-button "$(T 'Tak, teraz')" --no-button "$(T 'Nie')" \
-                     --yesno "$(Tv 'Dysk $POOL jest podłączony. Zacząć pierwszą kopię teraz?\n\nKopia biegnie w tle, także po wyjściu z programu. Stan: F2 Przebiegi.' '$POOL' "$_pool")" 10 "$W"; then
+                     --yesno "$(Tv 'Dysk $POOL jest podłączony. Zacząć pierwszą kopię teraz?\n\nKopia działa w tle, także po wyjściu z programu. Stan: F2 Przebiegi.' '$POOL' "$_pool")" 10 "$W"; then
                 setsid -f "$ZB" run-replicas --name="$NAME" </dev/null >/dev/null 2>&1 || :
             fi
         else

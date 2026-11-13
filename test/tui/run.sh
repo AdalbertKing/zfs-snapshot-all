@@ -103,7 +103,7 @@ if hasE "$S" '^║ lab-ct201 +działa +aktualne +║│' && hasE "$S" '^║ Rela
 else
     bad "relacje: kolumny listy rosna z szerokoscia" "$S" "$S120"
 fi
-if hasE "$S120" 'Ostatni bieg +brak wpisu w'; then
+if hasE "$S120" 'Ostatni przebieg +brak wpisu w'; then
     ok "relacje: ostatni bieg jest w panelu (U21: grupa Teraz)"
 else
     bad "relacje: ostatni wynik w panelu" "$S120"
@@ -676,7 +676,7 @@ fi
 # Szerokosc 200: przy ciasnej liscie odpada kolumna Co (prio), a ona niesie zadanie.
 ZW="$(screen zadania "$(zkeys "^║ $KD +lab-vm101 +pobranie " $ALL)" --width 200 --height 60)"
 if hasE "$ZW" "^║ $KD +lab-vm101 +pobranie +standard_hourly: vm-101 +nadchodzący" && hasE "$ZW" 'Kierunek +pve9 → pve10' \
-   && has "$ZW" 'Nadchodzący bieg' && ! has "$ZW" 'Zakres'; then
+   && has "$ZW" 'Nadchodzący przebieg' && ! has "$ZW" 'Zakres'; then
     ok "zadania: POBRANIE nazywa sie pobraniem (nie 'wysylka'), w Co ma szczebel, kierunek 'pve10<peer' w panelu (U21), bez 'Zakres' dla jednego datasetu"
 else
     bad "zadania: wiersz wysylki" "$ZW"
@@ -1115,8 +1115,8 @@ else
 fi
 # BLAD BIEGU I WYRZUCENIA (2026-10-08, wlasciciel "rob 1 i 2"): monitor patrzy
 # tylko na wiek kopii -- na pve10 lustro, ktore odmowilo pobrania (dzialajacy
-# gosc 901), bylo "aktualne" na F2 i F3. Ostatni bieg z rc != 0 (poza 75 =
-# pominiety przez blokade) daje "błąd biegu"; to, co bieg wyrzucil (P-0), panel.
+# gosc 901), bylo "aktualne" na F2 i F3. Ostatni przebieg z rc != 0 (poza 75 =
+# pominiety przez blokade) daje "błąd przebiegu"; to, co bieg wyrzucil (P-0), panel.
 GEJ="$(mktemp)"; GES="$(mktemp)"
 "$PY" - "$GJ" "$GEJ" "$GES" "$NOW" <<'PYEOF'
 import datetime, json, sys
@@ -1165,7 +1165,7 @@ json.dump({"window_days": 7, "runs": runs, "jobs": [row("a", 0), row("b", 1), ro
            "datasets": [], "volume": []}, open(sys.argv[3], "w", encoding="utf-8"))
 PYEOF
 GE="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES" --screen zadania --width 200 --height 50 2>&1)"
-# F2 PRZEBIEGI: slowa 'błąd biegu' w liscie juz nie ma (to byl werdykt zadania; jest na F3, test
+# F2 PRZEBIEGI: slowa 'błąd przebiegu' w liscie juz nie ma (to byl werdykt zadania; jest na F3, test
 # 'relacje: relacja z nieudanym ostatnim biegiem' nizej). Lista mowi o KONKRETNYM biegu: wykonany
 # bieg z rc=1 to wiersz "BŁĄD rc=1", rc=75 (blokada) to "pominięty" -- nie blad, inna relacja
 # bez biegow w oknie ma tylko wiersze nadchodzace; kreska "teraz" dzieli wykonane od nadchodzacych.
@@ -1175,10 +1175,10 @@ GEL="$(lst "$GE")"
 if [ "$(printf '%s\n' "$GEL" | grep -cE "^║ $KD +sync-test .*BŁĄD rc=1")" = 1 ] && ! hasE "$GEL" "^║ $KD +sync-test .*BŁĄD rc=75" \
    && [ "$(printf '%s\n' "$GEL" | grep -cE "^║ $KD +sync-test .*pominięty")" = 1 ] && ! hasE "$GEL" '^║ [0-9. :]+ +backup-test .*BŁĄD' \
    && hasE "$GEL" '^║ ── teraz [0-9]{2}:[0-9]{2}' \
-   && hasE "$GEP" 'Wynik +BŁĄD rc=1' && hasE "$GEP" 'Powód +Refusing' && has "$GEP" '── Ten bieg'; then
-    ok "zadania: wykonany bieg z rc=1 to wiersz 'BŁĄD rc=1' z powodem w panelu ('Ten bieg'); rc=75 (blokada) to 'pominięty', nie blad; inna relacja bez bledu; kreska 'teraz' dzieli wykonane od nadchodzacych"
+   && hasE "$GEP" 'Wynik +BŁĄD rc=1' && hasE "$GEP" 'Powód +Refusing' && has "$GEP" '── Ten przebieg'; then
+    ok "zadania: wykonany bieg z rc=1 to wiersz 'BŁĄD rc=1' z powodem w panelu ('Ten przebieg'); rc=75 (blokada) to 'pominięty', nie blad; inna relacja bez bledu; kreska 'teraz' dzieli wykonane od nadchodzacych"
 else
-    bad "zadania: błąd biegu na F2" "$(printf '%s\n' "$GE" | grep -E '^║ (sync|backup)-test|teraz' | head -8)" "$(printf '%s\n' "$GEP" | grep -E 'Wynik|Powód|Ten bieg')"
+    bad "zadania: błąd przebiegu na F2" "$(printf '%s\n' "$GE" | grep -E '^║ (sync|backup)-test|teraz' | head -8)" "$(printf '%s\n' "$GEP" | grep -E 'Wynik|Powód|Ten przebieg')"
 fi
 # U166/U171: kursor startuje pod "teraz" (bieg jednego datasetu); panel trzech zadan ma wiersz
 # zbiorczy a/b/c -- ustawiamy kursor na nim.
@@ -1192,8 +1192,8 @@ else
     bad "zadania: panel błąd/wyrzucono" "$(printf '%s\n' "$GEA" | grep -E 'Błąd|Wyrzuc|błędów|Zakres')"
 fi
 # PRZEBIEGI: WIERSZE TYLKO DO CZYTANIA. Kreska "── teraz HH:MM" (i w grupach naglowek
-# "▸ NAZWA") nie jest biegiem: kursor jej nie zaznacza (panel zawsze mowi o biegu: 'Ten bieg'
-# albo 'Nadchodzący bieg'), a F7 na wykonanym biegu niczego nie uruchamia. Fikstura: jeden
+# "▸ NAZWA") nie jest biegiem: kursor jej nie zaznacza (panel zawsze mowi o biegu: 'Ten przebieg'
+# albo 'Nadchodzący przebieg'), a F7 na wykonanym biegu niczego nie uruchamia. Fikstura: jeden
 # wykonany bieg OK (etykieta pierwszej linii sync-test), reszta nadchodzaca; stan jak po
 # pierwszej godzinie dzialania -- [0] wykonany OK, [1] kreska, [2] pierwszy nadchodzacy.
 PRS="$(mktemp)"
@@ -1229,22 +1229,22 @@ fi
 PRD="$(prz up)"; PRU="$(prz up,down)"; PRUU="$(prz up,up,down,down)"; PRUP="$(prz down)"
 # Start na wykonanym (pod kreska): 'up' przeskakuje kreske na najblizszy nadchodzacy; 'down' z niego
 # wraca na wykonany (nie na kreske -- na kresce panel by zniknal); 'down' z ostatniego wiersza zostaje.
-if has "$PRD" 'Nadchodzący bieg' && ! has "$PRD" '── Ten bieg' \
-   && has "$PRU" '── Ten bieg' && ! has "$PRU" 'Nadchodzący bieg' \
-   && has "$PRUU" '── Ten bieg' && ! has "$PRUU" 'Nadchodzący bieg' \
-   && has "$PRUP" '── Ten bieg'; then
+if has "$PRD" 'Nadchodzący przebieg' && ! has "$PRD" '── Ten przebieg' \
+   && has "$PRU" '── Ten przebieg' && ! has "$PRU" 'Nadchodzący przebieg' \
+   && has "$PRUU" '── Ten przebieg' && ! has "$PRUU" 'Nadchodzący przebieg' \
+   && has "$PRUP" '── Ten przebieg'; then
     ok "przebiegi: wiersze tylko do czytania (b) -- kursor nie staje na kresce 'teraz': up przeskakuje ja, down z najblizszego nadchodzacego wraca na wykonany (panel zawsze o biegu)"
 else
-    bad "przebiegi: kursor na kresce" "up: $(printf '%s\n' "$PRD" | grep -E 'Ten bieg|Nadchodzący')" "up,down: $(printf '%s\n' "$PRU" | grep -E 'Ten bieg|Nadchodzący')" "up,up,down,down: $(printf '%s\n' "$PRUU" | grep -E 'Ten bieg|Nadchodzący')"
+    bad "przebiegi: kursor na kresce" "up: $(printf '%s\n' "$PRD" | grep -E 'Ten przebieg|Nadchodzący')" "up,down: $(printf '%s\n' "$PRU" | grep -E 'Ten przebieg|Nadchodzący')" "up,up,down,down: $(printf '%s\n' "$PRUU" | grep -E 'Ten przebieg|Nadchodzący')"
 fi
 PXL="$(mktemp)"; : > "$PXL"
 # Start BEZ klawiszy: kursor zaraz pod "teraz" -- na najswiezszym wykonanym biegu (U166, wlasciciel
 # 2026-11-09; wczesniej najblizszy nadchodzacy, przejscie GUI pve10 2026-10-28).
 PRZS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PRARGS --screen zadania --keys "" --width 200 --height 60 2>&1)"
-if hasE "$PRZS" '── Ten bieg' && ! hasE "$PRZS" 'Nadchodzący bieg'; then
+if hasE "$PRZS" '── Ten przebieg' && ! hasE "$PRZS" 'Nadchodzący przebieg'; then
     ok "przebiegi: F2 otwiera sie z kursorem zaraz pod 'teraz' (najswiezszy wykonany bieg, U166)"
 else
-    bad "przebiegi: start kursora" "$(printf '%s\n' "$PRZS" | grep -E 'Ten bieg|Nadchodzący')"
+    bad "przebiegi: start kursora" "$(printf '%s\n' "$PRZS" | grep -E 'Ten przebieg|Nadchodzący')"
 fi
 # A15 (SITE-C 2026-11-06): okno wykonanych to 72 h (bylo 12 h), a bieg TRWAJACY (koniec "-", rc -1) stoi
 # na liscie zawsze -- tez po F8 (schowane wykonane) i gdy ruszyl dawniej niz okno. Fikstura: zadanie a --
@@ -1272,11 +1272,11 @@ PRW2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PRWARGS --scre
 rm -f "$PRW"
 PRW1L="$(lst "$PRW1")"; PRW2L="$(lst "$PRW2")"
 # wiersz wykonanego OK = data w Kiedy i wynik 'OK' na koncu wiersza (nadchodzace maja 'nadchodzący')
-if [ "$(printf '%s\n' "$PRW1L" | grep -cE "^║ $KD .* OK( |$)")" = 1 ] && [ "$(printf '%s\n' "$PRW1L" | grep -cE "^║ $KD .* biegnie( |$)")" = 1 ] \
-   && [ "$(printf '%s\n' "$PRW2L" | grep -cE "^║ $KD .* OK( |$)")" = 0 ] && [ "$(printf '%s\n' "$PRW2L" | grep -cE "^║ $KD .* biegnie( |$)")" = 1 ]; then
+if [ "$(printf '%s\n' "$PRW1L" | grep -cE "^║ $KD .* OK( |$)")" = 1 ] && [ "$(printf '%s\n' "$PRW1L" | grep -cE "^║ $KD .* trwa( |$)")" = 1 ] \
+   && [ "$(printf '%s\n' "$PRW2L" | grep -cE "^║ $KD .* OK( |$)")" = 0 ] && [ "$(printf '%s\n' "$PRW2L" | grep -cE "^║ $KD .* trwa( |$)")" = 1 ]; then
     ok "przebiegi: wykonany bieg sprzed 30 h jest w oknie 72 h; po F8 znika, a bieg trwajacy od 40 h zostaje ('biegnie')"
 else
-    bad "przebiegi: okno 72 h i bieg trwajacy" "pokazane: $(printf '%s\n' "$PRW1L" | grep -E 'OK|biegnie')" "schowane: $(printf '%s\n' "$PRW2L" | grep -E 'OK|biegnie')"
+    bad "przebiegi: okno 72 h i bieg trwajacy" "pokazane: $(printf '%s\n' "$PRW1L" | grep -E 'OK|trwa')" "schowane: $(printf '%s\n' "$PRW2L" | grep -E 'OK|trwa')"
 fi
 # U167 (wlasciciel 2026-11-09): bez END, a procesu zfs-job juz nie ma (job-stats: rc -2) -- PRZERWANY,
 # nie "biegnie" bez konca; jak wykonany, F8 go chowa. Kontrola: rc -1 wyzej nadal 'biegnie'.
@@ -1295,11 +1295,11 @@ PYEOF
 PRX1L="$(lst "$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$PRX" --screen zadania --keys home --width 200 --height 60 2>&1)")"
 PRX2L="$(lst "$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$PRX" --screen zadania --keys home,F8 --width 200 --height 60 2>&1)")"
 rm -f "$PRX"
-if [ "$(printf '%s\n' "$PRX1L" | grep -cE "^║ $KD .* PRZERWANY( |$)")" = 1 ] && ! printf '%s\n' "$PRX1L" | grep -qE "^║ $KD .* biegnie( |$)" \
+if [ "$(printf '%s\n' "$PRX1L" | grep -cE "^║ $KD .* PRZERWANY( |$)")" = 1 ] && ! printf '%s\n' "$PRX1L" | grep -qE "^║ $KD .* trwa( |$)" \
    && ! printf '%s\n' "$PRX2L" | grep -q 'PRZERWANY'; then
     ok "przebiegi U167: bieg bez END i bez zywego procesu (rc -2) -- 'PRZERWANY', nie 'biegnie'; F8 chowa go jak wykonany"
 else
-    bad "przebiegi U167: przerwany bieg" "$(printf '%s\n' "$PRX1L" | grep -E 'PRZERWANY|biegnie|BŁĄD')" "F8: $(printf '%s\n' "$PRX2L" | grep -E 'PRZERWANY')"
+    bad "przebiegi U167: przerwany bieg" "$(printf '%s\n' "$PRX1L" | grep -E 'PRZERWANY|trwa|BŁĄD')" "F8: $(printf '%s\n' "$PRX2L" | grep -E 'PRZERWANY')"
 fi
 # Kursor na OSTATNIM wierszu okna, gdy nizej sa dalsze: wiersz byl zastepowany przez
 # "... jeszcze N" i biegu z panelu nie bylo na liscie. Niska wysokosc, kursor przy "teraz":
@@ -1370,7 +1370,7 @@ pr_when() { printf '%s\n' "$1" | grep -oE 'Kiedy +20[0-9]{2}\.[0-9]{2}\.[0-9]{2}
 PRH="$(prz F8)"; PRHH="$(prz up,F8)"; PRHR="$(prz up,F8,F8)"; PRN="$(prz up)"
 PRG9="$(prz up,F9)"
 PRHL="$(lst "$PRH")"; PRHRL="$(lst "$PRHR")"; PRG9L="$(lst "$PRG9")"
-if ! hasE "$PRHL" "^║ $KD +sync-test +pobranie .* OK( |$)" && ! hasE "$PRHL" '^║ ── teraz' && has "$PRH" '-- tylko nadchodzące' && has "$PRH" 'Nadchodzący bieg' \
+if ! hasE "$PRHL" "^║ $KD +sync-test +pobranie .* OK( |$)" && ! hasE "$PRHL" '^║ ── teraz' && has "$PRH" '-- tylko nadchodzące' && has "$PRH" 'Nadchodzący przebieg' \
    && [ -n "$(pr_when "$PRN")" ] && [ "$(pr_when "$PRN")" = "$(pr_when "$PRH")" ] && [ "$(pr_when "$PRN")" = "$(pr_when "$PRHH")" ] \
    && [ "$(pr_when "$PRN")" = "$(pr_when "$PRHR")" ] && hasE "$PRHRL" "^║ $KD +sync-test +pobranie .* OK( |$)" && hasE "$PRHRL" '^║ ── teraz' \
    && [ "$(pr_when "$PRN")" = "$(pr_when "$PRG9")" ] && hasE "$PRG9L" '^║ ▸ sync-test' && hasE "$PRG9L" '^║ ── teraz'; then
@@ -1380,28 +1380,28 @@ else
 fi
 rm -f "$PRS"
 GER="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES" --screen relacje --width 200 2>&1)"
-if hasE "$GER" '^║ sync-test .*błąd biegu' && ! hasE "$GER" '^║ backup-test .*błąd biegu'; then
-    ok "relacje: relacja z nieudanym ostatnim biegiem jest na F3 'błąd biegu', nie 'aktualne'"
+if hasE "$GER" '^║ sync-test .*błąd przebiegu' && ! hasE "$GER" '^║ backup-test .*błąd przebiegu'; then
+    ok "relacje: relacja z nieudanym ostatnim biegiem jest na F3 'błąd przebiegu', nie 'aktualne'"
 else
-    bad "relacje: błąd biegu na F3" "$(printf '%s\n' "$GER" | grep -E '^║ (sync|backup)-test')"
+    bad "relacje: błąd przebiegu na F3" "$(printf '%s\n' "$GER" | grep -E '^║ (sync|backup)-test')"
 fi
-# U61 (kampania 2026-10-21): relacja "błąd biegu", panel "Ostatni bieg OK", wiersz datasetu
+# U61 (kampania 2026-10-21): relacja "błąd przebiegu", panel "Ostatni przebieg OK", wiersz datasetu
 # "aktualne" -- trzy werdykty o tym samym. Teraz panel mowi BŁĄD i przyczyne (ktory dataset,
-# dlaczego), a wiersz pary nieudanego zadania to "błąd biegu"; pary udanych zostaja "aktualne".
+# dlaczego), a wiersz pary nieudanego zadania to "błąd przebiegu"; pary udanych zostaja "aktualne".
 u61_ok=0; u61_dump=""
 for u61k in "" down down,down; do
     U61="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES" --screen relacje --width 200 --height 60 --keys "$u61k" 2>&1)"
     has "$U61" 'Przyczyna' || continue
     u61_dump="$U61"
-    if hasE "$U61" 'Ostatni bieg +BŁĄD +2026\.09\.08 13:48 +rc=1' && hasE "$U61" 'Przyczyna +[^ ]*b: Refusing' \
-       && ! hasE "$U61" 'Ostatni bieg +OK' && printf '%s\n' "$U61" | grep 'lab/b' | grep -q 'błąd biegu' \
-       && printf '%s\n' "$U61" | grep 'lab/c' | grep -vq 'błąd biegu'; then u61_ok=1; fi
+    if hasE "$U61" 'Ostatni przebieg +BŁĄD +2026\.09\.08 13:48 +rc=1' && hasE "$U61" 'Przyczyna +[^ ]*b: Refusing' \
+       && ! hasE "$U61" 'Ostatni przebieg +OK' && printf '%s\n' "$U61" | grep 'lab/b' | grep -q 'błąd przebiegu' \
+       && printf '%s\n' "$U61" | grep 'lab/c' | grep -vq 'błąd przebiegu'; then u61_ok=1; fi
     break
 done
 if [ "$u61_ok" -eq 1 ]; then
-    ok "relacje U61: jeden werdykt -- panel 'Ostatni bieg BŁĄD ... rc=1' i 'Przyczyna: b: Refusing...', wiersz pary b 'błąd biegu', c bez bledu"
+    ok "relacje U61: jeden werdykt -- panel 'Ostatni przebieg BŁĄD ... rc=1' i 'Przyczyna: b: Refusing...', wiersz pary b 'błąd przebiegu', c bez bledu"
 else
-    bad "relacje U61: sprzeczne werdykty" "$(printf '%s\n' "$u61_dump" | grep -E 'Ostatni bieg|Przyczyna|lab/[abcd]' | head -10)"
+    bad "relacje U61: sprzeczne werdykty" "$(printf '%s\n' "$u61_dump" | grep -E 'Ostatni przebieg|Przyczyna|lab/[abcd]' | head -10)"
 fi
 # ONE CRON LINE, SEVERAL DATASETS (pve2, 2026-10-27): subvol-103 and ROOT/pve-1 went in one
 # snapget call, the refusal was on pve-1, and the panel said "Przyczyna subvol-103: ..." with
@@ -1429,7 +1429,7 @@ for sjk in "" down down,down; do
     has "$SJ" 'Przyczyna' || continue
     sj_dump="$SJ"
     pl="$(printf '%s\n' "$SJ" | grep 'Przyczyna')"
-    if hasE "$SJ" 'Ostatni bieg +BŁĄD +2026\.09\.08 13:48 +rc=1 ' && ! hasE "$SJ" 'rc=1 +\(\+' \
+    if hasE "$SJ" 'Ostatni przebieg +BŁĄD +2026\.09\.08 13:48 +rc=1 ' && ! hasE "$SJ" 'rc=1 +\(\+' \
        && printf '%s' "$pl" | grep -q 'lab/a' && printf '%s' "$pl" | grep -q 'lab/b' \
        && has "$SJ" 'dataset is busy'; then sj_ok=1; fi
     break
@@ -1437,7 +1437,7 @@ done
 if [ "$sj_ok" -eq 1 ]; then
     ok "relacje: jedna linia crona dla kilku datasetow -- blad liczony raz, bez '(+N)', Przyczyna nie zrzuca go na pierwszy dataset"
 else
-    bad "relacje: wspolna linia crona" "$(printf '%s\n' "$sj_dump" | grep -E 'Ostatni bieg|Przyczyna' | head -4)"
+    bad "relacje: wspolna linia crona" "$(printf '%s\n' "$sj_dump" | grep -E 'Ostatni przebieg|Przyczyna' | head -4)"
 fi
 rm -f "$GSJ" "$GSS"
 # REV-20261027-177: the dataset the error names is matched as a WHOLE name -- 'pool/vm-10'
@@ -1459,7 +1459,7 @@ def reason(scopes, err):
     out = {}
     for k, v in m.rel_panel_pairs(row, D(), 0, m.Chars(False)):
         out[k.strip()] = v
-    return out.get("Przyczyna", "?") + " || " + out.get("Ostatni bieg", "?")
+    return out.get("Przyczyna", "?") + " || " + out.get("Ostatni przebieg", "?")
 for name, sc, err in [
     ("prefix", ["pool/vm-10", "pool/vm-100"], "cannot receive pool/vm-100: dataset is busy"),
     ("short", ["data", "metadata"], "cannot receive metadata: dataset is busy"),
@@ -1530,7 +1530,7 @@ fi
 NOWK="$(now_before 00:21)"
 ZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOWK" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 160 --height 100 2>&1)"
 if hasE "$ZH" "^║ $KD +pve9 +wysyłka " && hasE "$ZH" "^║ $KD +pve1 +pobranie " && hasE "$ZH" "^║ $KD +\(bez rel\.\) +kopia "; then
-    ok "zadania: wysylka, pobranie i kopia na hoscie w liscie; zadanie bez etykiety mowi '(bez rel.)' (kierunek w panelu, U21)"
+    ok "zadania: wysylka, pobranie i kopia na hoscie w liscie; zadanie bez etykiety mowi '(bez relacji)' (kierunek w panelu, U21)"
 else
     bad "zadania: trzy kierunki na hostA" "$ZH"
 fi
@@ -1706,7 +1706,7 @@ fi
 # F7 = URUCHOM TERAZ (wlasciciel 2026-10-17, jednolicie z F2/F6): bez potwierdzenia,
 # run-relation NAZWA, okno wyjscia.
 A="$(act down,F7)"
-if grep -q "run-relation lab-ct201$" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ] && ! has "$A" 'POTWIERDZENIE' && has "$A" 'WYJŚCIE: Relacja lab-ct201 -- bieg teraz'; then
+if grep -q "run-relation lab-ct201$" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ] && ! has "$A" 'POTWIERDZENIE' && has "$A" 'WYJŚCIE: Relacja lab-ct201 -- uruchom teraz'; then
     ok "akcje: F7 na relacji = Uruchom teraz -- run-relation NAZWA od razu, bez potwierdzenia, okno wyjscia"
 else
     bad "akcje: F7 Uruchom teraz" "$(cat "$XL")" "$A"
@@ -1765,7 +1765,7 @@ else
     bad "akcje: F9 lista plikow" "$A"
 fi
 A="$(act down,F9,down,enter,enter)"
-if has "$A" 'POTWIERDZENIE: Import relacji z pve9-synchro.export.json' && has "$A" '[atrapa] podgląd:'; then
+if has "$A" 'POTWIERDZENIE: Import relacji z pve9-synchro.export.json' && has "$A" '[tryb testowy] podgląd:'; then
     ok "akcje: Enter na pliku z listy = werdykt/plan importu tego pliku"
 else
     bad "akcje: F9 Enter na pliku" "$A"
@@ -1783,7 +1783,7 @@ printf '{"schema":"zfs-backup/relation-export/1","name":"pve9-synchro"}' > "$IMP
 IMPP="$IMPF"; command -v cygpath >/dev/null 2>&1 && IMPP="$(cygpath -m "$IMPF")"   # Git Bash: Python spod Windows nie zna /tmp
 CLR="$(printf 'bs,%.0s' $(seq 60))"; CLR="${CLR%,}"   # zdejmuje podpowiedz katalogu domowego -- sciezka wpisana ZA nia bylaby /root//tmp/...; 60, bo Git Bash robi z HOME=/root dluga sciezke pod Program Files
 A="$(HOME=/root act "down,F9,down,enter,end,enter,$CLR,text:$IMPP,enter")"
-if has "$A" "POTWIERDZENIE: Import relacji z $(basename "$IMPF")" && has "$A" 'import-relation' && hasE "$A" "$(basename "$IMPF")'? --yes" && has "$A" '[atrapa] podgląd:'; then
+if has "$A" "POTWIERDZENIE: Import relacji z $(basename "$IMPF")" && has "$A" 'import-relation' && hasE "$A" "$(basename "$IMPF")'? --yes" && has "$A" '[tryb testowy] podgląd:'; then
     ok "akcje: F9 -> 'wpisz recznie' -> plik: PODGLAD czasownika (bez --yes) i komenda z --yes do potwierdzenia"
 else
     bad "akcje: F9" "$A"
@@ -2559,9 +2559,9 @@ rm -rf "$SOD" "$SOL"
 # ============================================================================
 N="$(screen nosniki)"
 # X11 (2026-10-12): kolumna Rodzaj po nazwie; sciezka sejf-b obcina sie wczesniej.
-# U99: kolumny Replika | Typ | Wykonana | Ostatni bieg | Harmonogram; Typ: nosnik staly = wewnętrzny, wymienny
+# U99: kolumny Replika | Typ | Wykonana | Ostatni przebieg | Harmonogram; Typ: nosnik staly = wewnętrzny, wymienny
 # poza maszyna = odłączony (stan "W SEJFIE" zostaje w panelu)
-# Piec kolumn (Ostatni bieg, 2026-10-28): przy 80 znakach Harmonogram ustepuje (jest w panelu),
+# Piec kolumn (Ostatni przebieg, 2026-10-28): przy 80 znakach Harmonogram ustepuje (jest w panelu),
 # wiec wiersze czytane przy 120.
 NW="$(screen nosniki "" --width 120)"
 if hasE "$NW" '^║ sejf-a +odłączony +- +brak +- +co dobę 02:30 +║' && hasE "$NW" '^║ sejf-b +wewnętrzny +- +brak +- +po podłączen'; then
@@ -2569,13 +2569,13 @@ if hasE "$NW" '^║ sejf-a +odłączony +- +brak +- +co dobę 02:30 +║' && has
 else
     bad "nosniki: wiersze" "$NW"
 fi
-# Ostatni bieg (przejscie GUI pve10, 2026-10-28): calapula padla 4/4 rc=1, a lista mowila
+# Ostatni przebieg (przejscie GUI pve10, 2026-10-28): calapula padla 4/4 rc=1, a lista mowila
 # tylko "Wykonana 22.10". Kolumna niesie wynik i czas ostatniego biegu z job-stats.
 NF="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" ${ALL%--stats*} --stats "$FIX/stats-replica-fail.json" --screen nosniki --width 160 --height 40 2>&1)"
 if hasE "$NF" '^║ sejf-a +odłączony +- +brak +BŁĄD rc=1 2026\.09\.11 22:02 +co dobę' && hasE "$NF" '^║ sejf-b +wewnętrzny +- +brak +- +po podłączen'; then
-    ok "nosniki: kolumna Ostatni bieg -- nieudany bieg repliki widac na liscie (BŁĄD rc=1 + czas)"
+    ok "nosniki: kolumna Ostatni przebieg -- nieudany bieg repliki widac na liscie (BŁĄD rc=1 + czas)"
 else
-    bad "nosniki: Ostatni bieg" "$NF"
+    bad "nosniki: Ostatni przebieg" "$NF"
 fi
 # KONTROLA CZYTELNIKA: sejf-b nie ma linii `media` (--fixed). Stary list-replicas
 # zwracal media="yes", recursive="latest" -- pola przesuniete o jedno przez
@@ -2592,7 +2592,7 @@ if hasE "$NB" 'Źródło → cel +[^ ]+ → ' && hasE "$NB" 'Rekurencyjnie +tak'
 else
     bad "nosniki: pola repliki --fixed" "$NB" "$NBT"
 fi
-if hasE "$NB" 'Nośnik +W SEJFIE -- nośnika nie ma w maszynie'; then
+if hasE "$NB" 'Nośnik +ODŁĄCZONY -- nośnik jest odłączony od hosta'; then
     ok "nosniki: stan nosnika ma jedno zdanie wyjasnienia"
 else
     bad "nosniki: wyjasnienie stanu" "$NB"
@@ -2626,7 +2626,7 @@ else
     bad "zadania: wiersze replik" "$(printf '%s' "$Z2" | grep -E 'sejf|replika')" "$(printf '%s' "$Z2B" | grep -E 'Kiedy')"
 fi
 N2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen nosniki --width 200 --height 60 2>&1)"
-if hasE "$N2" 'Ostatni bieg +2026\.09\.08 02:30   BŁĄD \(rc=1\)' && hasE "$N2" 'Wywołania +4, błędów 1' && hasE "$N2" 'Czas +ostatni 2s'; then
+if hasE "$N2" 'Ostatni przebieg +2026\.09\.08 02:30   BŁĄD \(rc=1\)' && hasE "$N2" 'Wywołania +4, błędów 1' && hasE "$N2" 'Czas +ostatni 2s'; then
     ok "nosniki: panel repliki pokazuje ostatni bieg (kiedy, rc), czas i wywolania/bledy z job-stats"
 else
     bad "nosniki: biegi repliki" "$(printf '%s' "$N2" | grep -E 'Ostatni|Wywołania|Czas')"
@@ -2714,11 +2714,11 @@ fi
 # harmonogramu), wynik w oknie. Sortowanie przeszlo na F8.
 : > "$XL"
 A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen zadania --keys F7 2>&1)"
-if ! has "$A" 'Uruchomić teraz?' && has "$A" 'bieg teraz' \
+if ! has "$A" 'Uruchomić teraz?' && has "$A" 'uruchom teraz' \
    && grep -q "/bin/sh -c .*zfs-job.sh" "$XL" && ! grep -Eq "sh -c '?[0-9*/,-]+ [0-9*/,-]+ " "$XL"; then
     ok "zadania: F7 uruchamia zaznaczone zadanie od razu (bez 't'), linia z crona bez pola harmonogramu"
 else
-    bad "zadania: F7 uruchom teraz (X9)" "$(cat "$XL")" "$(printf '%s' "$A" | grep -E 'Uruchom|bieg teraz|F7|F8' | head -4)"
+    bad "zadania: F7 uruchom teraz (X9)" "$(cat "$XL")" "$(printf '%s' "$A" | grep -E 'Uruchom|uruchom teraz|F7|F8' | head -4)"
 fi
 # X14 -> F2 Przebiegi: strażnik bez zadania to wiersz tylko do czytania (nie bieg) -- F7 mowi
 # 'brak zadań -- nie ma czego uruchomić'. Komunikat X14 ('ten wiersz nie ma linii w cronie ...')
@@ -2746,7 +2746,7 @@ fi
 # kolumna Rodzaj (historia / migawki xN), panel: Rodzaj, Na dysku (z przykladem), Szyfrowane.
 # U93: "zdjecia" -> migawki; U99: kolumny listy Replika | Typ | Wykonana | Harmonogram.
 F6R="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen nosniki --width 200 --height 40 2>&1)"
-if hasE "$F6R" '║ Replika +Typ +Zajęte +Wykonana +Ostatni bieg +Harmonogram' && hasE "$F6R" 'Rodzaj +własne migawki -- replika' \
+if hasE "$F6R" '║ Replika +Typ +Zajęte +Wykonana +Ostatni przebieg +Harmonogram' && hasE "$F6R" 'Rodzaj +własne migawki -- replika' \
    && hasE "$F6R" 'Na dysku +2 najnowsze migawki [a-z_]+ \(ok\. 2 dni wstecz\)' && hasE "$F6R" 'Ile migawek +nieustawione -- tyle, ile trzyma kolektor' && hasE "$F6R" 'Szyfrowane +nie' && ! has "$F6R" 'zdjęc'; then
     ok "nosniki: X11 -- panel: Rodzaj, Na dysku z przykladem, Szyfrowane (U21: rodzaj w panelu, nie w liscie)"
 else
@@ -2805,7 +2805,7 @@ rm -f "$RMK" "$KF"
 # zamiast "nie ma linii w cronie" -- wiersz repliki powstaje z list-replicas, bez linii crona.
 : > "$XL"
 A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$(now_before 02:30)" --jobs "$FIX/empty.json" --monitors "$FIX/empty-mon.json" --replicas "$P10/replicas.json" --exec-log "$XL" --screen zadania --keys F7 --width 160 2>&1)"
-if has "$A" 'Replika sejf-a -- biegnie teraz' && grep -q "run-replicas --name=sejf-a" "$XL" && ! has "$A" 'nie ma linii w cronie'; then
+if has "$A" 'Replika sejf-a -- w toku' && grep -q "run-replicas --name=sejf-a" "$XL" && ! has "$A" 'nie ma linii w cronie'; then
     ok "zadania: X23 -- F7 na wierszu repliki uruchamia run-replicas --name (jak F6)"
 else
     bad "zadania: X23 F7 na replice" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
@@ -3475,7 +3475,7 @@ nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienn
 }
 T=$'\t'
 # Pola karty z domyslnymi odpowiedziami (U25): cel, szablon, [tabela retencji zrodla: nie whiptail],
-# nazwa, konto, checklista ustawien, edytor prefiksow, KARTA (create), podsumowanie, plan (WYKONAJ)
+# nazwa, konto, checklista ustawien, edytor prefiksow, KARTA (create), podsumowanie, plan (Uruchom)
 NRT="0${T}default
 0${T}pve9b
 0${T}root
@@ -3896,7 +3896,7 @@ if has "$NRTL" 'Co kopiować z pve9b?' && has "$NRTL" 'także przyszłymi' \
 else
     bad "new-relation: drzewo miejsc" "$NRTL"
 fi
-if has "$NRTL" '[ ] mail' && has "$NRTL" 'pominięte: 1' && hasE "$NRTL" '\[x\] test-kreator' && has "$NRTL" 'Sposób: każdy dataset osobno (-R)' \
+if has "$NRTL" '[ ] mail' && has "$NRTL" 'pominięte: 1' && hasE "$NRTL" '\[x\] test-kreator' && has "$NRTL" 'Tryb: każdy dataset osobno' \
    && has "$NRTL" 'Wybrane miejsca: 2'; then
     ok "new-relation: okno koszyka POKAZUJE, co dzis lezy pod miejscem i co jest pomijane (odznaczona 'mail', 'pominięte: 1'), puste miejsce jako [x] bez dzieci, 'Sposób: każdy dataset osobno (-R)' jako akcja okna (S)"
 else
@@ -4039,9 +4039,9 @@ def desc(tag):
 d_def = desc("default"); d_30 = desc("d30"); d_g = desc("d7h24-gfs")
 # K5: [drabina] stoi przy JEDNEJ drabinie (default), nie przy retencji w szczeblach
 # -- ani przy d30 (N najnowszych), ani przy -gfs (rodzina na szczebel, kazda z GFS).
-ok = d_def is not None and "[zamraża]" not in d_def and "[drabina]" in d_def
-ok = ok and d_30 is not None and "[zamraża]" in d_30 and "[drabina]" not in d_30
-ok = ok and d_g is not None and "[drabina]" not in d_g and "[płaski]" not in d_g
+ok = d_def is not None and "[zamraża]" not in d_def and "[poziomy GFS]" in d_def
+ok = ok and d_30 is not None and "[zamraża]" in d_30 and "[poziomy GFS]" not in d_30
+ok = ok and d_g is not None and "[poziomy GFS]" not in d_g and "[płaski]" not in d_g
 # kampania 3 (2026-10-22, 80x24): sposob liczenia stoi PRZED opisem retencji, wiec przy
 # przycieciu wiersza nie ginie (full i m12w4d7h24-gfs wygladaly tak samo)
 ok = ok and "[N najnowszych]" in d_30 and 0 <= d_30.find("[N najnowszych]") < d_30.find("30 dni")
@@ -4051,7 +4051,7 @@ ok = ok and "trzyma" not in d_30 and "trzyma" not in d_g
 sys.exit(0 if ok else 1)
 PYEOF
 then
-    ok "new-relation: krok 6 -- 'default' [drabina] bez [zamraża], 'd30' [zamraża] bez [drabina], 'd7h24-gfs' bez znacznika ksztaltu (K5) -- jedna lista, zaden filtr"
+    ok "new-relation: krok 6 -- 'default' [poziomy GFS] bez [zamraża], 'd30' [zamraża] bez [poziomy GFS], 'd7h24-gfs' bez znacznika ksztaltu (K5) -- jedna lista, zaden filtr"
 else
     bad "new-relation: krok 6 lista szablonow" "$(printf '%s' "$NRL6" | cut -c1-800)"
 fi
@@ -4060,13 +4060,13 @@ if grep -qF 'zamraża: dobowe' "$NR/wt.log"; then
 else
     bad "new-relation: podsumowanie bez zamrazania" "$(grep -F 'Szablon:' "$NR/wt.log" | tail -2)"
 fi
-# Od 2026-10-29 podsumowanie i plan to JEDNO okno (tytul "Plan", przycisk WYKONAJ).
-if grep -F -e '--yesno' "$NR/wt.log" | grep -F 'WYKONAJ' | tail -1 | grep -qF 'BACKUP: ' && grep -qF 'Konto: zfsbackup.' "$NR/wt.log" \
-   && ! grep -F -e '--yesno' "$NR/wt.log" | grep -F 'WYKONAJ' | tail -1 | grep -qF -- '--scrolltext' \
+# Od 2026-10-29 podsumowanie i plan to JEDNO okno (tytul "Plan", przycisk Uruchom).
+if grep -F -e '--yesno' "$NR/wt.log" | grep -F 'Uruchom' | tail -1 | grep -qF 'BACKUP: ' && grep -qF 'Konto: zfsbackup.' "$NR/wt.log" \
+   && ! grep -F -e '--yesno' "$NR/wt.log" | grep -F 'Uruchom' | tail -1 | grep -qF -- '--scrolltext' \
    && ! grep -qF 'Plan był w poprzednim oknie' "$NR/wt.log" && ! grep -qF 'Pokaż plan' "$NR/wt.log"; then
-    ok "new-relation: podsumowanie i plan w JEDNYM oknie z WYKONAJ, bez przewijania, bez 'Plan był w poprzednim oknie' (wlasciciel 2026-10-29); BEZ przewijania (w oknie z --scrolltext Enter nie dziala, dopoki nie przejdziesz Tabem na przyciski -- zmierzone jazda po pty)"
+    ok "new-relation: podsumowanie i plan w JEDNYM oknie z Uruchom, bez przewijania, bez 'Plan był w poprzednim oknie' (wlasciciel 2026-10-29); BEZ przewijania (w oknie z --scrolltext Enter nie dziala, dopoki nie przejdziesz Tabem na przyciski -- zmierzone jazda po pty)"
 else
-    bad "new-relation: podsumowanie" "$(grep -F 'WYKONAJ' "$NR/wt.log" | tail -1 | cut -c1-600)"
+    bad "new-relation: podsumowanie" "$(grep -F 'Uruchom' "$NR/wt.log" | tail -1 | cut -c1-600)"
 fi
 
 # 3j. RETENCJA U ZRODLA (wlasciciel, uwaga 19, 2026-09-24): krok 9 -- "Inna
@@ -4213,7 +4213,7 @@ fi
 # pokazuje menu "Relacja (nowa)" z kursorem na `create`, PO oknie "Ustawienia dodatkowe" i PRZED
 # "Podsumowanie". Numery linii dziennika: kazde okno to jedna linia, wiec kolejnosc = kolejnosc numerow.
 NRLN_X="$(grep -n -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1 | cut -d: -f1)"
-NRLN_S="$(grep -n -F 'WYKONAJ' "$NR/wt.log" | grep -F -e '--yesno' | head -1 | cut -d: -f1)"
+NRLN_S="$(grep -n -F 'Uruchom' "$NR/wt.log" | grep -F -e '--yesno' | head -1 | cut -d: -f1)"
 NRLN_C="$(grep -n -F 'Nowa relacja -- podsumowanie' "$NR/wt.log" | grep -F -e '--menu' | awk -F: -v s="${NRLN_S:-0}" '$1 < s { n = $1 } END { print n }')"
 NRCARD="$(sed -n "${NRLN_C:-1}p" "$NR/wt.log")"
 if [ -n "$NRLN_X" ] && [ -n "$NRLN_C" ] && [ -n "$NRLN_S" ] && [ "$NRLN_X" -lt "$NRLN_C" ] && [ "$NRLN_C" -lt "$NRLN_S" ] \
@@ -4317,7 +4317,7 @@ NROUT=$(nr_run "0${T}local
 # Tytul i brak 'Sposób:' sprawdza ekran drzewa (tree.log), nie dziennik whiptaila.
 if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=hdd/backups/192.168.28.99/hdd/lab --target=hdd/kopie --recursive=flat --profile=default --name=lokalna-hdd-backups-192.168.28.99-hdd-lab --exclude-family=__replicate_,vzdump,__migration__ --install --yes " \
    && grep -q '^list-datasets --json --own-snapshots$' "$NR/zb.log" && ! grep -q '^check-source' "$NR/zb.log" \
-   && grep -qF 'Co kopiować z' "$NR/tree.log" && ! grep -qF 'Sposób:' "$NR/tree.log" \
+   && grep -qF 'Co kopiować z' "$NR/tree.log" && ! grep -qF 'Tryb:' "$NR/tree.log" \
    && ! grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | grep -qE ' ~ (grant|quies|man) ~ ' \
    && grep -qF 'Kopie trafią pod:  {cur}/<dataset źródła>' "$NR/tree-spec.last" \
    && grep -F 'Nazwa relacji' "$NR/wt.log" | grep -qF ' ~ lokalna-hdd-backups-192.168.28.99-hdd-lab ~ '; then
@@ -4453,7 +4453,7 @@ rm -rf "$NRL"
 #     zrodle? Wsad? GUI?"): czwarta pozycja w oknie rodzaju. Kopia lokalna BEZ celu -- bez okna
 #     "Dokad", bez ustawien dodatkowych (nazwa -> podsumowanie kreatora -> podsumowanie), komenda = wsad local-backup z --target=
 #     (pustym) i --install BEZ --yes: czasownik pusty cel potwierdza wzrokiem, wiec pyta
-#     sam w terminalu po WYKONAJ, jak przy wsadzie.
+#     sam w terminalu po Uruchom, jak przy wsadzie.
 NROUT=$(nr_run "0${T}snap
 0${T}default
 0${T}migawki-hdd-backups-192.168.28.99-hdd-lab
@@ -4468,7 +4468,7 @@ if [ "$NRRC" -eq 0 ] && [ -n "$NRSI" ] \
    && ! grep -qF 'Dokąd' "$NR/wt.log" && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log" \
    && grep -qF 'Gdzie robić migawki na' "$NR/tree.log" && grep -qF 'Jak długo trzymać migawki?' "$NR/wt.log" \
    && grep -qF 'MIGAWKI LOKALNE' "$NR/wt.log"; then
-    ok "new-relation: migawki lokalne -- bez celu i ustawien dodatkowych, komenda local-backup --target= --no-copy --install --yes (bez drugiego pytania po WYKONAJ, wlasciciel 2026-10-19)"
+    ok "new-relation: migawki lokalne -- bez celu i ustawien dodatkowych, komenda local-backup --target= --no-copy --install --yes (bez drugiego pytania po Uruchom, wlasciciel 2026-10-19)"
 else
     bad "new-relation: same migawki" "rc=$NRRC" "$(cat "$NR/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | head -10 | tr '\n' ';')" "$(cat "$NR/err" | tail -5)"
 fi
@@ -4522,11 +4522,11 @@ fi
 exit 9
 EOF
 chmod +x "$NR/bin/zb-del"
-printf '0\t\n0\t\n' > "$DRD/answers"   # checklist: domyslne; potem yesno "WYKONAJ"
+printf '0\t\n0\t\n' > "$DRD/answers"   # checklist: domyslne; potem yesno "Uruchom"
 DROUT=$( export NR_DIR="$DRD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-del"
          bash "$REPO/tui/delete-relation.sh" nazwa ) 2>"$DRD/err" </dev/null
 DRWT="$(cat "$DRD/wt.log")"   # od U66 wynik jest w oknie (--textbox), nie na stdout
-if has "$DRWT" "ZATRZYMANE" && has "$DRWT" "Rekord relacji 'nazwa' ZOSTAŁ" && has "$DRWT" "uruchom to samo jeszcze raz" \
+if has "$DRWT" "ZATRZYMANE" && has "$DRWT" "Definicja relacji 'nazwa' pozostała" && has "$DRWT" "uruchom to samo jeszcze raz" \
    && ! has "$DRWT" "USUNIĘTA Z POZOSTAŁOŚCIAMI" && ! has "$DRWT" "GOTOWE"; then
     ok "okno usuwania: gdy polowa zrodla nie wyszla i czasownik ZATRZYMAL sie przed purge (REV-144), okno mowi 'ZATRZYMANE, rekord ZOSTAL, uruchom to samo jeszcze raz' -- a nie 'usunieta z pozostalosciami'"
 else
@@ -4554,7 +4554,7 @@ for g in run idle; do
     cp "$DRD/wt.log" "$NR/rdel-$g.log" 2>/dev/null; [ -e "$DRD/zb.log" ] && cp "$DRD/zb.log" "$NR/rdel-$g.zb"
 done
 RDR="$(cat "$NR/rdel-run.log" 2>/dev/null)"; RDI="$(cat "$NR/rdel-idle.log" 2>/dev/null)"
-if has "$RDR" "UWAGA: kopia tej repliki właśnie biegnie (od 2026-11-11 09:00)" && has "$RDR" "dobiegnie do końca i odłączy dysk" \
+if has "$RDR" "UWAGA: kopia tej repliki właśnie trwa (od 2026-11-11 09:00)" && has "$RDR" "dobiegnie do końca i odłączy dysk" \
    && has "$RDI" "Replika usb1 przestanie działać" && ! has "$RDI" "UWAGA: kopia" && [ ! -e "$NR/rdel-run.zb" ] && [ ! -e "$NR/rdel-idle.zb" ]; then
     ok "okno usuwania repliki U178: biegnaca kopia -- UWAGA z czasem startu; bez biegu bez UWAGI; Wstecz nic nie usuwa"
 else
@@ -4610,7 +4610,7 @@ exit 9
 EOF
 chmod +x "$NR/bin/zb-del2"
 rm -rf "$DRD"; mkdir -p "$DRD"
-printf '0\trec\n0\t\n' > "$DRD/answers"   # checklist: zostaw 'Zwolnij nazwę'; potem WYKONAJ
+printf '0\trec\n0\t\n' > "$DRD/answers"   # checklist: zostaw 'Zwolnij nazwę'; potem Uruchom
 DROUT=$( export NR_DIR="$DRD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-del2"
          bash "$REPO/tui/delete-relation.sh" nazwa ) 2>"$DRD/err" </dev/null
 DRCL="$(grep -F -- '--checklist' "$DRD/wt.log" | head -1)"
@@ -4633,11 +4633,11 @@ drd_run() {   # <odpowiedzi> -> $DRD/wt.log, $DRD/argv
     ( export NR_DIR="$DRD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-del4"
       bash "$REPO/tui/delete-relation.sh" nazwa ) >/dev/null 2>&1 </dev/null
 }
-drd_run '0\tsrc|rec|data\n0\t\n1\t\n1\t\n'   # zaznacz kopie, WYKONAJ, SKASUJ? -> Wstecz, potem Wstecz
+drd_run '0\tsrc|rec|data\n0\t\n1\t\n1\t\n'   # zaznacz kopie, Uruchom, SKASUJ? -> Wstecz, potem Wstecz
 dk_back_win=$(grep -cF 'SKASUJ KOPIE -- nieodwracalne' "$DRD/wt.log"); dk_back_yes=$(grep -c -- '--yes' "$DRD/argv")
-drd_run '0\tsrc|rec|data\n0\t\n0\t\n'        # zaznacz kopie, WYKONAJ, SKASUJ
+drd_run '0\tsrc|rec|data\n0\t\n0\t\n'        # zaznacz kopie, Uruchom, SKASUJ
 dk_yes=$(grep -c -- 'nazwa --destroy-copies --yes' "$DRD/argv"); dk_txt=$(grep -A3 -F 'SKASUJ KOPIE -- nieodwracalne' "$DRD/wt.log" | grep -c 'tank/b/x')
-drd_run '0\tsrc|rec\n0\t\n'                  # bez kopii: WYKONAJ i od razu bieg
+drd_run '0\tsrc|rec\n0\t\n'                  # bez kopii: Uruchom i od razu bieg
 dk_ctl_win=$(grep -cF 'SKASUJ KOPIE -- nieodwracalne' "$DRD/wt.log"); dk_ctl_yes=$(grep -c -- '^delete-relation nazwa --yes' "$DRD/argv")
 if [ "$dk_back_win" = 1 ] && [ "$dk_back_yes" = 0 ] && [ "$dk_yes" = 1 ] && [ "$dk_txt" -ge 1 ] \
    && [ "$dk_ctl_win" = 0 ] && [ "$dk_ctl_yes" = 1 ]; then
@@ -4668,7 +4668,7 @@ fi
 rm -f "$GS" "$GS.out"
 
 # 3k. F10 USTAWIENIA (wlasciciel 2026-10-19): lista kluczy z `settings --tsv` w sekcjach,
-#     zmiana jednej wartosci, "Zapisz" = plan czasownika i WYKONAJ -> `settings set K=V --yes`.
+#     zmiana jednej wartosci, "Zapisz" = plan czasownika i Uruchom -> `settings set K=V --yes`.
 cat > "$NR/bin/zb-set" <<'EOF'
 #!/bin/bash
 [ "$1" = settings ] || exit 9
@@ -4694,7 +4694,7 @@ if has "$SMENU" '── Alerty ──' && has "$SMENU" '── GUI ──' && ha
    && ! printf '%s' "$SMENU" | grep -qE ' ~ -[^ ~]* ~ ── ' \
    && grep -qx 'settings set alerts.digest_time=06:30' "$SD/argv" && grep -qx 'settings set alerts.digest_time=06:30 --yes' "$SD/argv" \
    && [ "$(printf '%s\n' "$SOUT" | grep -cx 'Zapisano\.')" -eq 1 ] && ! grep -qF 'Zapisano.' "$SD/wt.log"; then   # 2026-10-29: jednozdaniowy sukces = wt_end na stdout, bez msgboxa
-    ok "F10 okno ustawien: sekcje i zrodla wartosci z czasownika, zmiana jednej pozycji, Zapisz = plan i WYKONAJ (settings set K=V --yes), 'Zapisano.' na ekranie (wt_end), bez okna"
+    ok "F10 okno ustawien: sekcje i zrodla wartosci z czasownika, zmiana jednej pozycji, Zapisz = plan i Uruchom (settings set K=V --yes), 'Zapisano.' na ekranie (wt_end), bez okna"
 else
     bad "F10 okno ustawien" "menu: $(printf '%s' "$SMENU" | cut -c1-300)" "argv: $(cat "$SD/argv" 2>/dev/null)" "$SOUT" "$(cut -c1-200 "$SD/err")"
 fi
@@ -4868,7 +4868,7 @@ NROUT=$(nr_run "0${T}backup
 " NR_TREE="$NRTK|goto:hdd/backups,enter"); NRRC=$?
 # U66 czesc 2: wynik jest w OKNIE (textbox -> dziennik atrapy), nie na czarnym ekranie.
 if [ "$NRRC" -eq 1 ] && grep -qF "ZATRZYMANE ZGODNIE Z WYBOREM" "$NR/wt.log" && grep -qF "deploy.sh --commit-scope=pve10" "$NR/wt.log" \
-   && ! grep -qF "NIE UDAŁO SIĘ" "$NR/wt.log" && ! has "$NROUT" "ZATRZYMANE" \
+   && ! grep -qF "Nowa relacja: BŁĄD" "$NR/wt.log" && ! has "$NROUT" "ZATRZYMANE" \
    && has "$NROUT" "CMD: " && ! has "$(printf '%s' "$NROUT" | grep '^CMD: ')" "--grant-remotely" && grep -q -- "--install --yes" "$NR/new-relation-pve9b.cmd"; then
     ok "new-relation: 'Zatwierdze sam' -> komenda BEZ --grant-remotely, instalacja staje i kreator mowi 'ZATRZYMANE ZGODNIE Z WYBOREM' z dwoma krokami (nie 'NIE UDALO SIE'); komenda do ponowienia zapisana w pliku"
 else
@@ -4934,12 +4934,12 @@ fi
 # R2-2: okno planu zaczyna sie od komendy, ktora sie WYKONA, i decyzji po polsku.
 # tresc okna ma wiele linii, a atrapa loguje ja doslownie -- bierzemy CALE okno: od jego
 # linii tytulowej do nastepnego wywolania (linia zaczynajaca sie od "--").
-NRPLAN="$(awk '/Plan ~ --yes-button ~ WYKONAJ/{f=1; buf=""} f && /^--/ && !/Plan ~ --yes-button ~ WYKONAJ/{f=0} f{buf=buf $0 "\n"} END{printf "%s", buf}' "$NR/wt.log")"
+NRPLAN="$(awk '/Plan ~ --yes-button ~ Uruchom/{f=1; buf=""} f && /^--/ && !/Plan ~ --yes-button ~ Uruchom/{f=0} f{buf=buf $0 "\n"} END{printf "%s", buf}' "$NR/wt.log")"
 # Od 2026-10-29 jedno okno: podsumowanie z komendą + ścieżka pełnego planu (właściciel).
 if has "$NRPLAN" 'Komenda (to samo wpisałbyś z palca):' && has "$NRPLAN" '--exclude-family=__replicate_,__migration__,_tmp' \
    && has "$NRPLAN" 'Pomijane migawki z prefiksami: __replicate_, __migration__, _tmp.' \
    && has "$NRPLAN" 'Konto: ' && has "$NRPLAN" 'Pełny plan (sekcje configu, linie crona): ' && ! has "$NRPLAN" 'grant-remotely is noted'; then
-    ok "new-relation: okno planu pokazuje komende po WYKONAJ i decyzje po polsku, bez mylacego 'grant-remotely is noted' (R2-2)"
+    ok "new-relation: okno planu pokazuje komende po Uruchom i decyzje po polsku, bez mylacego 'grant-remotely is noted' (R2-2)"
 else
     bad "new-relation: okno planu (R2-2)" "$(printf '%s' "$NRPLAN" | cut -c1-600)"
 fi
@@ -4989,7 +4989,7 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 1${T}
 ")
-if grep -qF 'Zły adres' "$NR/wt.log" && ! grep -q 'reboot' "$NR/zb.log"; then
+if grep -qF 'Nieprawidłowy adres' "$NR/wt.log" && ! grep -q 'reboot' "$NR/zb.log"; then
     ok "new-relation: adres ze znakami powloki = okno 'Zly adres', zaden czasownik go nie dostaje"
 else
     bad "new-relation: walidacja adresu" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log" 2>/dev/null)"
@@ -5002,7 +5002,7 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 1${T}
 ")
-if grep -qF 'Zły adres' "$NR/wt.log" && ! grep -q 'ProxyCommand' "$NR/zb.log"; then
+if grep -qF 'Nieprawidłowy adres' "$NR/wt.log" && ! grep -q 'ProxyCommand' "$NR/zb.log"; then
     ok "new-relation: adres zaczynajacy sie od '-' = okno 'Zly adres', zaden czasownik go nie dostaje"
 else
     bad "new-relation: adres z '-' na poczatku" "$(cat "$NR/wt.log" | tail -3)" "$(cat "$NR/zb.log" 2>/dev/null)"
@@ -5167,7 +5167,7 @@ RPOUT=$(rp_run "0${T}usb2
 " RP_TREE='goto:hdd/backups,space,enter'); RPRC=$?
 # Kampania pve10 2026-10-29: po bledzie okno wraca DO POLA (bylo: do menu z "auto" -- Enter dawal
 # auto po cichu), a "61 25 * * *" (poza zakresem) tez jest odrzucane.
-if [ "$(grep -cF 'Zły harmonogram' "$RP/wt.log")" = 2 ] && [ "$(grep -cF 'kiedy kopiować?' "$RP/wt.log")" = 1 ] \
+if [ "$(grep -cF 'Nieprawidłowy harmonogram' "$RP/wt.log")" = 2 ] && [ "$(grep -cF 'kiedy kopiować?' "$RP/wt.log")" = 1 ] \
    && grep -q "^add-replica usb2 .*--schedule=30 21 \* \* 1-5 " "$RP/zb.log" && ! grep -q 'zle\|61 25' "$RP/zb.log"; then
     ok "replika: zly wlasny harmonogram (znaki i zakres pol) odrzucony w oknie, ponowny wpis w TYM SAMYM polu, poprawny idzie do planu"
 else
@@ -5439,7 +5439,7 @@ RPOUT=$(rp_run "0${T}usb6
 if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb6 --source=hdd/data --dst=repl/replica .*--recursive=yes --exclude-child=^hdd/data/mail\$ .*--install --yes$' "$RP/zb.log" \
    && grep -qF 'Pomijane:   hdd/data/mail' "$RP/wt.log" \
    && grep -F 'Co kopiować z' "$RP/tree.log" | head -1 | grep -qF 'Replika usb6 -- 2/6' \
-   && ! grep -qF 'Sposób:' "$RP/tree.log" && grep -qF '[ ] mail' "$RP/tree.log"; then
+   && ! grep -qF 'Tryb:' "$RP/tree.log" && grep -qF '[ ] mail' "$RP/tree.log"; then
     ok "replica: koszyk jak w relacji -- wyjatek (odznaczony mail) daje --exclude-child=^hdd/data/mail\$, plan go wymienia, bez pozycji 'Sposob'"
 else
     bad "replica: koszyk z wyjatkiem" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(cat "$RP/tree.log" 2>/dev/null)"
@@ -5525,8 +5525,8 @@ if grep -q '^add-replica usb11 .*--keep=12 .*--install --yes$' "$RP/zb.log" && g
 else
     bad "replica: keep N (W18)" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
 fi
-# (12) Ustawienia silnika repliki (wlasciciel 2026-10-12): "Zmien replike" -> "Ustawienia
-#      silnika" -> Historia: tylko roznica, Na dysku: 6 ostatnich -> plan -> WYKONAJ; reszta
+# (12) Ustawienia kopiowania repliki (wlasciciel 2026-10-12): "Zmien replike" -> "Ustawienia
+#      silnika" -> Historia: tylko roznica, Na dysku: 6 ostatnich -> plan -> Uruchom; reszta
 #      repliki (zrodla, nosnik, harmonogram, ID dysku) bez zmian. Kontrola: wczesniej zapisana
 #      history przechodzi tez przez zwykly kreator (nie ginie).
 RPOUT=$(rp_run "0${T}silnik
@@ -5539,18 +5539,18 @@ RPOUT=$(rp_run "0${T}silnik
 0${T}zapisz
 0${T}
 " 'RP_REPS={"replicas":[{"name":"usb12","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"],"media_guids":"4242","on_insert":"no","history":"all"}]}' RP_NAME=usb12)
-RP12="$(grep -F 'Ustawienia silnika: replika usb12' "$RP/wt.log" | head -1)"
+RP12="$(grep -F 'Ustawienia kopiowania: replika usb12' "$RP/wt.log" | head -1)"
 # X10 (2026-10-14): wybor "6 ostatnich" kasuje wczesniejsze "tylko roznica" (sprzeczne) --
 # do add-replica nie idzie --history, wiersz Historia znika, plan mowi, co naprawde idzie.
-RPLAST="$(grep -F 'Ustawienia silnika: replika usb12' "$RP/wt.log" | tail -1)"
+RPLAST="$(grep -F 'Ustawienia kopiowania: replika usb12' "$RP/wt.log" | tail -1)"
 if grep -q '^add-replica usb12 --source=hdd/data --dst=repl/replica --schedule=0 22 \* \* \* --removable --recursive=yes --exclude-child=^hdd/data/mail\$ .*--keep=6 --media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log"    && ! grep -q -- '--history=' "$RP/zb.log" && has "$RP12" 'Historia' && has "$RP12" '(fabryczne)' && ! has "$RP12" 'Kompresja'    && ! has "$RPLAST" 'Historia ' && has "$RPLAST" '6 ostatnich migawek replica_' && grep -qF 'Historia:   tylko najnowsza migawka replica_' "$RP/wt.log"; then
-    ok "replica: Ustawienia silnika -- 'na dysku' 6 ostatnich zmienione, reszta bez zmian; X10: przy N ostatnich bez wyboru Historii (sprzeczne), plan mowi co idzie"
+    ok "replica: Ustawienia kopiowania -- 'na dysku' 6 ostatnich zmienione, reszta bez zmian; X10: przy N ostatnich bez wyboru Historii (sprzeczne), plan mowi co idzie"
 else
     bad "replica: ustawienia silnika" "$RPOUT" "$(cat "$RP/zb.log")" "$(printf '%s' "$RP12" | cut -c1-300)" "$(cat "$RP/err")"
 fi
 # (13) U8 (właściciel 2026-10-18): zmiana repliki = JEDNA LISTA z obecnymi wartościami.
 #      "[ ] Po włożeniu dysku" przełącza się od razu (bez okna), "Zapisz zmiany" = plan i
-#      WYKONAJ -- żadnego innego kroku kreatora. Brak reguły udev -> plan ją zakłada.
+#      Uruchom -- żadnego innego kroku kreatora. Brak reguły udev -> plan ją zakłada.
 rm -f "$RP/rules"
 RPOUT=$(rp_run "0${T}onins
 0${T}zapisz
@@ -5793,7 +5793,7 @@ tp_grid() {   # <klawisze> <akcja> <nazwa> <odpowiedzi whiptail> -> jak tp_run
     ZFS_GRID_KEYS="$keys" tp_run "$@"
 }
 # 1. NOWY w jednym oknie: nazwa (pole na gorze), godzinowe 24 -> 48 w tabeli, opis z
-#    wyborow (dobowe w bazowym zamraza), plan, WYKONAJ.
+#    wyborow (dobowe w bazowym zamraza), plan, Uruchom.
 TPOUT=$(tp_grid "bs,bs,bs,bs,bs,bs,bs,bs,bs,m,o,j,7,down,down,right,bs,bs,4,8,enter" new d7h24 "0${T}
 "); TPRC=$?
 if [ "$TPRC" -eq 0 ] && grep -qx 'save-profile --from=d7h24 --as=moj7 --tier=hourly --keep=48 --description=48 godzinowych + 7 dobowych; zamraża: dobowych' "$TP/zb.log" \
@@ -5895,7 +5895,7 @@ else
 fi
 # 7. Drabina liczy tylko GFS: wybor zablokowany, okno mowi dlaczego, nic sie nie zmienia.
 TPOUT=$(tp_grid "down,right,space" new drab ""); TPRC=$?
-if [ "$TPRC" -ne 0 ] && ! grep -q '^save-profile' "$TP/zb.log" && printf '%s' "$TPOUT" | grep -qF '(*) GFS'    && printf '%s' "$TPOUT" | grep -qF 'MSG: Drabina na jednej rodzinie migawek liczy tylko GFS.'; then
+if [ "$TPRC" -ne 0 ] && ! grep -q '^save-profile' "$TP/zb.log" && printf '%s' "$TPOUT" | grep -qF '(*) GFS'    && printf '%s' "$TPOUT" | grep -qF 'MSG: Poziomy GFS na jednej rodzinie migawek liczą tylko GFS.'; then
     ok "template: drabina -- wybor sposobu zablokowany na GFS, okno mowi dlaczego"
 else
     bad "template: drabina, sposob" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(printf '%s' "$TPOUT" | head -14)"
@@ -6021,7 +6021,7 @@ er_run() {   # <odpowiedzi> [klawisze tabel, linia na okno] -> stdout; dzienniki
 }
 # W4 (wlasciciel 2026-10-11): "Datasety" = okno koszyka z kreatora, z obecnymi datasetami
 # relacji; dwie zmiany (dodaj hdd/iso, usun hdd/data), JEDEN plan roznic (DOJDA / ODPADNA),
-# po WYKONAJ add-source i remove-source z --yes. Bez "Sposob" i bez "Wyjatki".
+# po Uruchom add-source i remove-source z --yes. Bez "Sposob" i bez "Wyjatki".
 # X12: okno koszyka to drzewo (tui/tree.py); dawne "add hdd/iso, del 0, next" to Spacja na hdd/iso
 # (nowe miejsce), Spacja na hdd/data (obecne miejsce znika), Enter. Wstepne zaznaczenie hdd/data
 # dowodzi remove-source: Spacja na NIE zaznaczonym hdd/data zrobilaby z niego miejsce, nie usuniecie.
@@ -6031,11 +6031,11 @@ EROUT=$(ER_TREE='goto:hdd/iso,space,goto:hdd/data,space,space,enter' er_run "0${
 "); ERRC=$?
 ERB="$(cat "$ER/tree.log" 2>/dev/null)"
 if [ "$ERRC" -eq 0 ] && grep -qx 'set-datasets r1 --dataset=hdd/iso:flat --yes' "$ER/zb.log" && ! grep -qE '^(add|remove)-source' "$ER/zb.log" \
-   && grep -qF 'DOJDĄ' "$ER/wt.log" && ! grep -qF 'od razu' "$ER/wt.log" && grep -qF 'ODPADNĄ' "$ER/wt.log" && has "$ERB" 'Co kopiować z' && has "$ERB" '[ ] data' && has "$ERB" '[x] iso' \
+   && grep -qF 'BĘDĄ DODANE' "$ER/wt.log" && ! grep -qF 'od razu' "$ER/wt.log" && grep -qF 'PRZESTANĄ BYĆ OBJĘTE' "$ER/wt.log" && has "$ERB" 'Co kopiować z' && has "$ERB" '[ ] data' && has "$ERB" '[x] iso' \
    && ! has "$ERB" 'Wyjątki' && ! has "$ERB" 'Sposób'; then
     ok "edit-relation: Datasety -- koszyk z configu (relation-sources), kilka zmian, jeden plan DOJDA/ODPADNA, JEDNO set-datasets --yes ze stanem docelowym; bez Sposob"
 else
-    bad "edit-relation: Datasety (W4)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Co kopiować|DOJD|ODPAD' "$ER/wt.log" | cut -c1-250)" "$(tail -3 "$ER/err")"
+    bad "edit-relation: Datasety (W4)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Co kopiować|BĘDĄ DODANE|PRZESTANĄ BYĆ' "$ER/wt.log" | cut -c1-250)" "$(tail -3 "$ER/err")"
 fi
 # RELACJA = CONFIG (właściciel 2026-10-25): jedna reguła drzewa dla każdego rodzaju relacji --
 # [x] = DS:flat, [-] = DS:no + zaznaczone dzieci osobno, [ ] = nic. Pozycje z configu
@@ -6102,19 +6102,19 @@ if ! grep -qE 'add-source|remove-source|needs_rerender|dataset_steps' "$REPO/tui
 else
     bad "okno zmiany: zostały warianty" "$(grep -nE 'add-source|remove-source|needs_rerender|dataset_steps|BASKET_NO_EXC' "$REPO/tui/edit-relation.sh")"
 fi
-# X21 (wlasciciel 2026-10-14): zmiana datasetow sprawdzona PRZED WYKONAJ -- odmowa czasownika
+# X21 (wlasciciel 2026-10-14): zmiana datasetow sprawdzona PRZED Uruchom -- odmowa czasownika
 # (plan bez --yes) pokazana od razu, zadnego --yes, powrot do listy.
 # X12: drzewo woli sie dwa razy (po odmowie wraca lista); druga linia ER_TREE brak = Esc.
 EROUT=$(ER_TREE='goto:hdd/vm,space,enter' er_run "0${T}dane
 0${T}
 "); ERRC=$?
-if grep -q '^set-datasets r1 .*--dataset=hdd/vm:flat' "$ER/zb.log" && ! grep -q -- '--yes' <(grep -E '^set-datasets' "$ER/zb.log")    && grep -qF 'Tej zmiany nie da się zrobić' "$ER/wt.log" && grep -qF "overlaps 'hdd/vm'" "$ER/wt.log" && ! grep -qF 'DOJDĄ' "$ER/wt.log"; then
-    ok "edit-relation: X21 -- Datasety: odmowa czasownika pokazana PRZED WYKONAJ, nic nie wykonane"
+if grep -q '^set-datasets r1 .*--dataset=hdd/vm:flat' "$ER/zb.log" && ! grep -q -- '--yes' <(grep -E '^set-datasets' "$ER/zb.log")    && grep -qF 'Tej zmiany nie da się zrobić' "$ER/wt.log" && grep -qF "overlaps 'hdd/vm'" "$ER/wt.log" && ! grep -qF 'BĘDĄ DODANE' "$ER/wt.log"; then
+    ok "edit-relation: X21 -- Datasety: odmowa czasownika pokazana PRZED Uruchom, nic nie wykonane"
 else
-    bad "edit-relation: X21 Datasety sprawdzane przed WYKONAJ" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Tej zmiany|DOJD' "$ER/wt.log" | cut -c1-200)"
+    bad "edit-relation: X21 Datasety sprawdzane przed Uruchom" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Tej zmiany|BĘDĄ DODANE' "$ER/wt.log" | cut -c1-200)"
 fi
-# W16: "Ustawienia silnika" -- obecne wartosci z show-config (kompresja none = "nie", bez
-# "(fabryczne)"), zmiana historii -> set-transfer --plan, po WYKONAJ ten sam z --yes.
+# W16: "Ustawienia kopiowania" -- obecne wartosci z show-config (kompresja none = "nie", bez
+# "(fabryczne)"), zmiana historii -> set-transfer --plan, po Uruchom ten sam z --yes.
 EROUT=$(er_run "0${T}silnik
 0${T}hist
 0${T}newest
@@ -6122,17 +6122,17 @@ EROUT=$(er_run "0${T}silnik
 0${T}wykonaj
 0${T}
 "); ERRC=$?
-ERS="$(grep -F 'Ustawienia silnika: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)"
+ERS="$(grep -F 'Ustawienia kopiowania: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)"
 if [ "$ERRC" -eq 0 ] && grep -qx 'set-transfer r1 --history=newest --plan' "$ER/zb.log" && grep -qx 'set-transfer r1 --history=newest --yes' "$ER/zb.log" \
    && has "$ERS" 'Kompresja        nie ~ ' && ! has "$ERS" 'Kompresja        nie (fabryczne)' \
    && has "$ERS" 'Szyfr SSH'; then
-    ok "edit-relation: Ustawienia silnika (W16) -- obecne wartosci z show-config, zmiana historii -> set-transfer --plan, po WYKONAJ --yes"
+    ok "edit-relation: Ustawienia kopiowania (W16) -- obecne wartosci z show-config, zmiana historii -> set-transfer --plan, po Uruchom --yes"
 else
-    bad "edit-relation: Ustawienia silnika (W16)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$ERS" "$(tail -3 "$ER/err")"
+    bad "edit-relation: Ustawienia kopiowania (W16)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$ERS" "$(tail -3 "$ER/err")"
 fi
 # LISTA ZMIAN (wlasciciel 2026-10-19: "nie mozna zmienic wiele ustawien i na koncu
 # zaimplementowac, tylko po jednym kroku"): adres + silnik w jednym oknie, JEDEN plan z oboma,
-# jedno WYKONAJ; czasowniki po kolei (adres pierwszy), nic przed WYKONAJ.
+# jedno Uruchom; czasowniki po kolei (adres pierwszy), nic przed Uruchom.
 EROUT=$(er_run "0${T}adres
 0${T}10.99.0.9
 0${T}silnik
@@ -6145,9 +6145,9 @@ EROUT=$(er_run "0${T}adres
 ERP=$(sed -n '/plan wszystkich zmian/,$p' "$ER/wt.log")
 ERM=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 3p)
 if [ "$ERRC" -eq 0 ] && [ "$(grep -E -e '--yes$' "$ER/zb.log" | tr '\n' '|')" = 'activate r1 --host=10.99.0.9 --skip-final-catchup --yes|set-transfer r1 --history=newest --yes|' ] \
-   && has "$ERP" 'Adres źródła: 10.99.0.9' && has "$ERP" 'Ustawienia silnika:' && has "$ERM" 'ZAPISZ ZMIANY (2)' \
+   && has "$ERP" 'Adres źródła: 10.99.0.9' && has "$ERP" 'Ustawienia kopiowania:' && has "$ERM" 'ZAPISZ ZMIANY (2)' \
    && hasE "$ERM" 'Źródło +pve9 \(192\.168\.28\.99\) -> 10\.99\.0\.9 \[zmiana\]' && hasE "$ERM" 'Silnik +historia: tylko różnica do najnowszej \[zmiana\]'; then
-    ok "edit-relation: lista zmian -- adres i silnik czekaja ([zmiana] w wierszach Źródło i Silnik karty), jeden plan obu, jedno WYKONAJ, activate potem set-transfer"
+    ok "edit-relation: lista zmian -- adres i silnik czekaja ([zmiana] w wierszach Źródło i Silnik karty), jeden plan obu, jedno Uruchom, activate potem set-transfer"
 else
     bad "edit-relation: lista zmian (adres + silnik)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(printf '%s' "$ERM" | cut -c1-400)" "$(tail -3 "$ER/err")"
 fi
@@ -6155,13 +6155,13 @@ fi
 # (raw) bez wiersza Kompresja, lustro (passive) bez wiersza Historia; kontrola: zwykla relacja ma oba.
 EROUT=$(ER_RAW=1 er_run "0${T}silnik
 1${T}
-"); ERW=$(grep -F 'Ustawienia silnika: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)
+"); ERW=$(grep -F 'Ustawienia kopiowania: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)
 EROUT=$(ER_MIRROR=1 er_run "0${T}silnik
 1${T}
-"); ERM=$(grep -F 'Ustawienia silnika: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)
+"); ERM=$(grep -F 'Ustawienia kopiowania: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)
 EROUT=$(er_run "0${T}silnik
 1${T}
-"); ERN=$(grep -F 'Ustawienia silnika: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)
+"); ERN=$(grep -F 'Ustawienia kopiowania: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)
 if has "$ERW" 'Szyfrowane' && ! has "$ERW" 'Kompresja' && ! has "$ERM" 'Historia ' && has "$ERM" 'Kompresja'    && has "$ERN" 'Historia ' && has "$ERN" 'Kompresja'; then
     ok "edit-relation: X10 -- raw bez Kompresji, lustro bez Historii; zwykla relacja ma oba"
 else
@@ -6174,7 +6174,7 @@ else
     bad "edit-relation: list-profiles bez --no-render" "$(grep list-profiles "$ER/zb.log")"
 fi
 # ADRES HOSTA (wlasciciel 2026-10-17): kolektor wyniesiony za VPN -- na karcie wiersz "Źródło"
-# (tag adres, U25), jedno pole (wypelnione zapisanym adresem), jedno WYKONAJ, potem JEDNO
+# (tag adres, U25), jedno pole (wypelnione zapisanym adresem), jedno Uruchom, potem JEDNO
 # `activate r1 --host=NOWY --skip-final-catchup --yes`. Bez domkniecia kopii starym adresem.
 EROUT=$(er_run "0${T}adres
 0${T}10.99.0.9
@@ -6187,7 +6187,7 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'activate r1 --host=10.99.0.9 --skip-final-catc
    && [ "$(grep -c '^activate' "$ER/zb.log")" -eq 1 ] && ! grep -qE '^(final-catchup|set-endpoint|verify-endpoint|activate-client)' "$ER/zb.log" \
    && has "$ERA" 'Zapisany: 192.168.28.99:22' && has "$ERA" '~ 192.168.28.99:22 ~' && has "$ERA" 'po przeniesieniu kolektora' \
    && hasE "$ERC1" 'Źródło +pve9 \(192\.168\.28\.99\) ~'; then
-    ok "edit-relation: Adres hosta -- pole z zapisanym adresem, WYKONAJ = jedno activate --host= --skip-final-catchup --yes"
+    ok "edit-relation: Adres hosta -- pole z zapisanym adresem, Uruchom = jedno activate --host= --skip-final-catchup --yes"
 else
     bad "edit-relation: Adres hosta" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(printf '%s' "$ERA" | cut -c1-300)" "$(printf '%s' "$ERC1" | cut -c1-300)" "$(tail -3 "$ER/err")"
 fi
@@ -6232,7 +6232,7 @@ EROUT=$(er_run "0${T}adres
 1${T}
 1${T}
 "); ERRC=$?
-if ! grep -q '^activate' "$ER/zb.log" && grep -qF 'Zły adres' "$ER/wt.log"; then
+if ! grep -q '^activate' "$ER/zb.log" && grep -qF 'Nieprawidłowy adres' "$ER/wt.log"; then
     ok "edit-relation: Adres hosta -- adres ze zlym znakiem odrzucony, nic nie uruchomione"
 else
     bad "edit-relation: Adres hosta -- zly znak" "rc=$ERRC" "$(cat "$ER/zb.log")"
@@ -6482,7 +6482,7 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'show-tiers r1 --json' "$ER/zb.log" \
    && ! grep -qE '^(save-profile|delete-profile|edit-relation)' "$ER/zb.log" \
    && [ "$(cat "$ER/grid.n")" = 1 ] \
    && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qE 'Datasety +1'; then
-    ok "edit-relation: Retencja zrodla (srcret) -- szczeble z configu (show-tiers), jedna tabela (zrodlo), jeden set-tiers --plan, WYKONAJ = --yes; bez ukrytego szablonu"
+    ok "edit-relation: Retencja zrodla (srcret) -- szczeble z configu (show-tiers), jedna tabela (zrodlo), jeden set-tiers --plan, Uruchom = --yes; bez ukrytego szablonu"
 else
     bad "edit-relation: harmonogram przez set-tiers" "rc=$ERRC" "$(cat "$ER/zb.log")" "grid.n=$(cat "$ER/grid.n" 2>/dev/null)" "$(tail -3 "$ER/err")"
 fi
@@ -6564,7 +6564,7 @@ if [ "$ERRC" -eq 0 ] && printf '%s' "$ERSRC" | grep -q 'tygodniowe' \
 else
     bad "edit-relation: X15 nowy szczebel w oknie zrodla" "rc=$ERRC" "$(grep '^set-tiers' "$ER/zb.log")" "$(printf '%s' "$ERSRC" | grep -E 'godzin|dobow|tygod')"
 fi
-# Zmiana retencji zrodla (srcret) sprawdzona planem i czeka na liscie; Wstecz z planu WYKONAJ
+# Zmiana retencji zrodla (srcret) sprawdzona planem i czeka na liscie; Wstecz z planu Uruchom
 # wraca na karte, Wstecz z karty + Porzuc = nic nie zainstalowane, zadnego pliku szablonu.
 EROUT=$(er_run "0${T}srcret
 0${T}wykonaj
@@ -6646,7 +6646,7 @@ EROUT=$(ER_NEWREL=1 er_run "0${T}harmon
 1${T}
 1${T}
 " "enter"); ERRC=$?
-if grep -o -e '--title ~ [^~]*' "$ER/wt.log" | tr '\n' ';' | grep -qF 'odmówił -- nic nie zmieniono ;--title ~ Zmień relację r1 -- użyj szablonu' \
+if grep -o -e '--title ~ [^~]*' "$ER/wt.log" | tr '\n' ';' | grep -qF 'odmówiło -- nic nie zmieniono ;--title ~ Zmień relację r1 -- użyj szablonu' \
    && grep -q -- '^edit-relation r1 --profile=d30h24 .*--plan$' "$ER/zb.log" \
    && ! grep -qE '^edit-relation .*--yes' "$ER/zb.log"; then
     ok "edit-relation: odmowa 'NOWA relacja' po wyborze szablonu wraca do listy szablonow (nie w kolko ostrzezenie -> tabela)"
@@ -6654,7 +6654,7 @@ else
     bad "edit-relation: odmowa NEW relationship" "rc=$ERRC" "$(grep -o -e '--title ~ [^~]*' "$ER/wt.log" | tr '\n' ';')"
 fi
 # X6 (wlasciciel 2026-10-12): reczna zmiana configu relacji -- plan mowi to na GORZE,
-# zanim WYKONAJ ja nadpisze; bez recznych zmian ostrzezenia nie ma (kontrola).
+# zanim Uruchom ja nadpisze; bez recznych zmian ostrzezenia nie ma (kontrola).
 EROUT=$(ER_HAND=1 er_run "0${T}harmon
 0${T}d30h24
 0${T}
@@ -6671,7 +6671,7 @@ EROUT=$(er_run "0${T}harmon
 ERP0=$(cat "$ER/wt.log")
 if has "$ERP" 'UWAGA: relacja ma ustawienia inne niż jej szablon' && has "$ERP" 'dobowe, godzina sprzątania:  29 1 * * * -> 31 1 * * *' \
    && has "$ERP" 'zamiast zmieniać szablon' && ! has "$ERP0" 'inne niż jej szablon'; then
-    ok "edit-relation: X6 -- reczna zmiana configu (29 -> 31) na gorze planu przed WYKONAJ; bez recznych zmian -- bez ostrzezenia"
+    ok "edit-relation: X6 -- reczna zmiana configu (29 -> 31) na gorze planu przed Uruchom; bez recznych zmian -- bez ostrzezenia"
 else
     bad "edit-relation: X6 ostrzezenie o recznej zmianie" "$(printf '%s' "$ERP" | cut -c1-400)" "$(printf '%s' "$ERP0" | cut -c1-200)"
 fi
@@ -6816,10 +6816,10 @@ else
     bad "restore U109: kolejnosc i nazwa migawki" "z kiedy=$RWKD dokad=$RWDK" "$(printf '%s' "$RWSUM" | head -12)"
 fi
 # U14: zgoda jest (atrapa: create rewind) -- podsumowanie mowi, jaka, i nie straszy brakiem.
-# 2026-10-29: to okno jest jedynym "Na pewno?" -- przycisk Wykonaj i zdanie, ze polecenie idzie od razu (bez dalszych pytań).
+# 2026-10-29: to okno jest jedynym "Na pewno?" -- przycisk Uruchom i zdanie, ze polecenie idzie od razu (bez dalszych pytań).
 if has "$RWSUM" 'Zgoda 10.0.0.9: create rewind' && has "$RWSUM" '--defaultno' && ! has "$RWSUM" 'Wymaga zgody' && ! grep -qF 'brak zgody' "$RW/wt.log" \
-   && has "$RWSUM" '--yes-button ~ Wykonaj ~ --no-button ~ Wstecz' && has "$RWSUM" '<Wykonaj> uruchamia to od razu, bez dalszych pytań.'; then
-    ok "restore: okno podsumowania ('na pewno?') ma domyslne 'Nie' (--defaultno), Wykonaj/Wstecz, zdanie 'uruchamia to od razu' i mowi, jaka zgode wydal cel (U14)"
+   && has "$RWSUM" '--yes-button ~ Uruchom ~ --no-button ~ Wstecz' && has "$RWSUM" '<Uruchom> uruchamia to od razu, bez dalszych pytań.'; then
+    ok "restore: okno podsumowania ('na pewno?') ma domyslne 'Nie' (--defaultno), Uruchom/Wstecz, zdanie 'uruchamia to od razu' i mowi, jaka zgode wydal cel (U14)"
 else
     bad "restore: okno podsumowania" "$(printf '%s' "$RWSUM" | cut -c1-300)"
 fi
@@ -6963,11 +6963,11 @@ if grep -qF "\"roots\": [\"$RWCP\"]" "$RW/last-spec.json" 2>/dev/null && grep -q
 else
     bad "restore --from-copy: spec drzewa / okno nadpisania" "spec: $(cut -c1-300 "$RW/last-spec.json" 2>/dev/null)" "wt: $(grep -c 'ISTNIEJ' "$RW/wt.log")"
 fi
-# 2026-10-29: podsumowanie z dysku to jedyne "Na pewno?" -- tytul, Wykonaj/Wstecz i zdanie, ze polecenie idzie od razu.
+# 2026-10-29: podsumowanie z dysku to jedyne "Na pewno?" -- tytul, Uruchom/Wstecz i zdanie, ze polecenie idzie od razu.
 RWCS="$(grep -F -A 30 'Przywróć z dysku: na pewno?' "$RW/wt.log" | head -40)"
-if has "$RWCS" '--yes-button ~ Wykonaj ~ --no-button ~ Wstecz' && has "$RWCS" '--defaultno' \
-   && has "$RWCS" '<Wykonaj> uruchamia to od razu, bez dalszych pytań; zaszyfrowana kopia -- zapyta tylko o klucz albo plik klucza.'; then
-    ok "restore --from-copy: okno 'Przywróć z dysku: na pewno?' ma Wykonaj/Wstecz (--defaultno) i zdanie 'uruchamia to od razu, bez dalszych pytań'"
+if has "$RWCS" '--yes-button ~ Uruchom ~ --no-button ~ Wstecz' && has "$RWCS" '--defaultno' \
+   && has "$RWCS" '<Uruchom> uruchamia to od razu, bez dalszych pytań; zaszyfrowana kopia -- zapyta tylko o klucz albo plik klucza.'; then
+    ok "restore --from-copy: okno 'Przywróć z dysku: na pewno?' ma Uruchom/Wstecz (--defaultno) i zdanie 'uruchamia to od razu, bez dalszych pytań'"
 else
     bad "restore --from-copy: okno 'na pewno?'" "$(printf '%s' "$RWCS" | cut -c1-300)"
 fi
@@ -7151,11 +7151,11 @@ rl_left="$(grep -n -- '--radiolist' "$REPO"/tui/*.sh | grep -v '^\s*#' | head -3
 YN="$(mktemp -d)"; mkdir -p "$YN/bin"
 printf '#!/bin/bash\nprintf "%%s\\n" "$(printf "%%s ~ " "$@")" >> "%s/wt.log"; exit 0\n' "$YN" > "$YN/bin/wt"; chmod +x "$YN/bin/wt"
 seq 1 200 > "$YN/long.txt"; printf 'krotki plan\n' > "$YN/short.txt"
-( WHIPTAIL="$YN/bin/wt" bash -c '. "$1/tui/wt-lib.sh"; yesno_text "$2/long.txt" "Plan" "WYKONAJ" "Wstecz" --defaultno; echo "rc=$?"; yesno_text "$2/short.txt" "Plan2" "WYKONAJ" "Wstecz"; echo "rc=$?"' x "$REPO" "$YN" ) > "$YN/out" 2>&1
+( WHIPTAIL="$YN/bin/wt" bash -c '. "$1/tui/wt-lib.sh"; yesno_text "$2/long.txt" "Plan" "Uruchom" "Wstecz" --defaultno; echo "rc=$?"; yesno_text "$2/short.txt" "Plan2" "Uruchom" "Wstecz"; echo "rc=$?"' x "$REPO" "$YN" ) > "$YN/out" 2>&1
 if [ "$(grep -c 'rc=0' "$YN/out")" -eq 2 ] \
    && grep -q -- '--title ~ Plan  \[strzałki przewijają, Tab -> Dalej, Esc wraca\] ~ --ok-button ~ Dalej ~ --scrolltext ~ --textbox' "$YN/wt.log" \
    && ! grep -- '--title ~ Plan2 ' "$YN/wt.log" | grep -q -- '--scrolltext' \
-   && grep -q -- '--title ~ Plan ~ --yes-button ~ WYKONAJ ~ --no-button ~ Wstecz ~ --defaultno ~ --yesno' "$YN/wt.log" \
+   && grep -q -- '--title ~ Plan ~ --yes-button ~ Uruchom ~ --no-button ~ Wstecz ~ --defaultno ~ --yesno' "$YN/wt.log" \
    && [ "$(grep -c -- '--title ~ Plan2 ' "$YN/wt.log")" -eq 1 ]; then
     ok "yesno_text: dlugi plan = okno tekstu z przewijaniem (Tab -> Dalej w tytule) + krotkie pytanie; krotki = jedno okno"
 else

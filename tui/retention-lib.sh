@@ -56,7 +56,7 @@ for line in open(sys.argv[1], encoding="utf-8"):
                  "zero_ok": _os.environ.get("SRC_ZERO_OK") == "1"})
 json.dump({"title": sys.argv[3], "head": [_(u"SZCZEBEL"), _(u"TUTAJ (cel)"), _(u"U ŹRÓDŁA")], "rows": rows,
            "note": [_(u"W źródle zostaje mniej migawek niż w celu kopii."),
-                    _(u"Bez zmian = źródło jak cel. Kratka = szczebel u źródła w ogóle.")]
+                    _(u"Bez zmian = źródło jak cel. Pole wyboru = szczebel na źródle w ogóle.")]
                    + ([_(u"0 = po skopiowaniu nic z tego szczebla u źródła (baza kopii to inne szczeble).")]
                       if _os.environ.get("SRC_ZERO_OK") == "1" else [])},
           open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)

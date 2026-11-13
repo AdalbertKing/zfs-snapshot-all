@@ -67,7 +67,7 @@ describe() {    # <indeks> -> jedno zdanie o pozycji koszyka
     elif [ -z "$short" ]; then Tv 'dziś $k pod nim; nowe wejdą same' '$k' "$k"; echo
     else Tv 'dziś $k pod nim; BEZ: $short' '$k' "$k" '$short' "$short"; echo; fi
 }
-mode_words() { [ "$RECURSION" = atomic ] && T 'cała gałąź atomowo (-r)' || T 'każdy dataset osobno (-R)'; echo; }
+mode_words() { [ "$RECURSION" = atomic ] && T 'całe drzewo datasetów atomowo' || T 'każdy dataset osobno'; echo; }
 any_excl() { local i; [ -n "${B_CLOSED:-}" ] && return 0; for i in "${!B_ROOT[@]}"; do [ -n "${B_EXCL[$i]}" ] && return 0; done; return 1; }
 
 # basket_step -> 0 = Dalej z niepustym wyborem, 1 = Wstecz. X12 (właściciel 2026-10-12): JEDNO

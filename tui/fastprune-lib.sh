@@ -30,7 +30,7 @@ fp_ask() {
         v="${WT_OUT// /}"
         case "$v" in
             ''|0) FP_ANS=""; return 0 ;;
-            *[!0-9]*) wt --title "$(T 'Zła liczba')" --msgbox "$bad" 8 "$W"; continue ;;
+            *[!0-9]*) wt --title "$(T 'Nieprawidłowa liczba')" --msgbox "$bad" 8 "$W"; continue ;;
         esac
         v=$((10#$v))
         if [ "$v" -lt 4 ]; then

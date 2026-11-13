@@ -5,7 +5,7 @@
 #   1. Datasety -- drzewo z kratkami (X12), zapis jednym set-datasets (relacja = config)
 #   2. Użyj szablonu -- gotowy szablon dla celu  (edit-relation --profile)
 #   3. Harmonogram i retencja kopii w celu i źródle -- tabela    (show-tiers/set-tiers, config relacji)
-#   4. Ustawienia silnika -- jak przesyłane są kopie (set-transfer; W16: historia,
+#   4. Ustawienia kopiowania -- jak przesyłane są kopie (set-transfer; W16: historia,
 #      kompresja, szyfr SSH, autodobór łącza)
 #   5. Ręczna edycja konfigu                     (edit-config)
 #   6. Zapisz ustawienia relacji jako szablon    (save-profile, zwykły szablon na F5)
@@ -15,7 +15,7 @@
 # (tui/retention-lib.sh; uwaga 10: dla źródła nigdy druga lista szablonów).
 #
 # Okno NIE ma własnej logiki: pokazuje PLAN czasownika (--plan: generacja, gen-cron,
-# próba pobrania, sprawdzenie praw -- bez zmian) i po "WYKONAJ" uruchamia go z --yes.
+# próba pobrania, sprawdzenie praw -- bez zmian) i po "Uruchom" uruchamia go z --yes.
 # Czego czasownik odmawia, odmawia tu tak samo, tymi samymi słowami.
 #
 # HARMONOGRAM I RETENCJA (REV-20261104-187): tabela startuje z configu relacji
@@ -27,10 +27,10 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
-. "$HERE/tui/wt-lib.sh" || { echo "edit-relation: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
-. "$HERE/tui/retention-lib.sh" || { echo "edit-relation: brak $HERE/tui/retention-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
-. "$HERE/tui/basket-lib.sh" || { echo "edit-relation: brak $HERE/tui/basket-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
-. "$HERE/tui/fastprune-lib.sh" || { echo "edit-relation: brak $HERE/tui/fastprune-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/wt-lib.sh" || { echo "edit-relation: brak $HERE/tui/wt-lib.sh -- katalog programu jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/retention-lib.sh" || { echo "edit-relation: brak $HERE/tui/retention-lib.sh -- katalog programu jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/basket-lib.sh" || { echo "edit-relation: brak $HERE/tui/basket-lib.sh -- katalog programu jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/fastprune-lib.sh" || { echo "edit-relation: brak $HERE/tui/fastprune-lib.sh -- katalog programu jest niekompletny" >&2; exit 1; }
 NAME="${1:-}"
 [ -n "$NAME" ] || { echo "usage: edit-relation.sh NAME" >&2; exit 2; }
 WT_BACKTITLE="$(Tv 'Zmiana relacji $NAME -- kolektor $(hostname)' '$NAME' "$NAME" '$(hostname)' "$(hostname)")"
@@ -102,12 +102,12 @@ PYEOF
 geom
 info "$T_CHG" "$(T 'Czytam relację i szablony...')"
 "$ZB" status "$NAME" --json >"$TMPD/st.json" 2>/dev/null
-load_lists || { wt --title "$(T 'Szablony niedostępne')" --msgbox "$(T 'list-profiles nie odpowiedział:\n')$(tail -3 "$TMPD/prof.err")" 12 "$W"; exit 1; }
+load_lists || { wt --title "$(T 'Szablony niedostępne')" --msgbox "$(T 'Lista szablonów nie odpowiedziała:\n')$(tail -3 "$TMPD/prof.err")" 12 "$W"; exit 1; }
 IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS MIRROR TGT RMODE ACCT_U <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; MIRROR=0; TGT=-; RMODE=-; ACCT_U=-; }
 ACCT_U="${ACCT_U%$'\r'}"
 # MIGAWKI ZDALNIE (snaponly, REV-20261017-152 runda 3; właściciel 2026-10-18: ta sama
 # ścieżka 'e' co każda relacja). Szablon JEST tu retencją źródła (celu nie ma), więc
-# po szablonie nie ma drugiego okna "w źródle kopii", a "Ustawienia silnika" (łącze,
+# po szablonie nie ma drugiego okna "w źródle kopii", a "Ustawienia kopiowania" (łącze,
 # kompresja, szyfr) nie dotyczą -- nic nie jest przesyłane.
 SNAPONLY=0; [ "${RMODE:-}" = snaponly ] && SNAPONLY=1
 # Relacja lokalna (bez peera): źródłem jest ten host -- lista datasetów bez adresu.
@@ -120,7 +120,7 @@ FP_CUR_N=""; P_FP=""
 if [ "${RMODE:-}" = snaponly ] && "$ZB" show-tiers "$NAME" --json >"$TMPD/fp.json" 2>/dev/null; then FP_CUR_N="$(fp_cfg "$TMPD/fp.json")"; fi
 fp_words() { if [ -n "$1" ] && [ "$1" != off ]; then Tv '$FASTPRUNE godz. -- wszystkie szczeble' '$FASTPRUNE' "$1"; else T 'nie'; fi; }
 # ADRES HOSTA (właściciel 2026-10-17): kolektor wyniesiony za VPN, źródło widać pod
-# innym IP. Jedno pole, jedno WYKONAJ, potem zwykłe `activate --host=NOWY
+# innym IP. Jedno pole, jedno Uruchom, potem zwykłe `activate --host=NOWY
 # --skip-final-catchup --yes`: zapis adresu, sprawdzenie, że odpowiada TEN SAM host
 # (klucz przypięty do aliasu, wspólna migawka), przestawienie crona. Domknięcie kopii
 # starym adresem jest wcześniejszym krokiem admina (F3, F7 Uruchom teraz) -- okno za niego
@@ -139,14 +139,14 @@ address_flow() {
         new="${WT_OUT// /}"
         [ -n "$new" ] || continue
         case "$new" in
-            *[!A-Za-z0-9.:_-]*) wt --title "$(T 'Zły adres')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- tylko litery, cyfry, kropka, myślnik, podkreślenie i :port.' '$WT_OUT' "$WT_OUT")" 8 "$W"; continue ;;
+            *[!A-Za-z0-9.:_-]*) wt --title "$(T 'Nieprawidłowy adres')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- tylko litery, cyfry, kropka, myślnik, podkreślenie i :port.' '$WT_OUT' "$WT_OUT")" 8 "$W"; continue ;;
         esac
         # LISTA ZMIAN (właściciel 2026-10-19: "nie można zmienić wiele ustawień i na końcu
-        # zaimplementować, tylko po jednym kroku"): adres czeka na liście, WYKONAJ jest jedno,
+        # zaimplementować, tylko po jednym kroku"): adres czeka na liście, Uruchom jest jedno,
         # w "Zapisz zmiany". Ten sam adres co zapisany = brak zmiany.
         if [ "$new" = "$cur" ] || [ "$new" = "${cur%:22}" ]; then P_HOST=""; return 0; fi
         # E-1/E-2 (kampania na żywo, pve10 2026-10-21): adres, pod którym nic nie odpowiada,
-        # szedł na listę zmian bez słowa, a po WYKONAJ activate zapisał go w rekordzie
+        # szedł na listę zmian bez słowa, a po Uruchom activate zapisał go w rekordzie
         # (endpoint_change_pending) i padł z komunikatem o pliku zakresu. Tu, zanim cokolwiek
         # trafi na listę: czy na host:port w ogóle ktoś odpowiada (TCP, 5 s). To NIE jest
         # sprawdzenie tożsamości -- to robi activate (klucz hosta, wspólna migawka).
@@ -176,7 +176,7 @@ if { [ "$STATE" = endpoint_change_pending ] || [ "$STATE" = endpoint_verified ];
     P_HOST=""
     address_flow
     [ -n "${P_HOST:-}" ] || exit 0
-    wt --title "$T_ADR" --yes-button "$(T WYKONAJ)" --no-button "$(T Wstecz)" --defaultno \
+    wt --title "$T_ADR" --yes-button "$(T Uruchom)" --no-button "$(T Wstecz)" --defaultno \
        --yesno "$(Tv 'Relacja $NAME: nowy adres źródła $P_HOST.\nSprawdzenie, że to ten sam host, potem cron przez nowy adres.\n\nKomenda:' '$NAME' "$NAME" '$P_HOST' "$P_HOST") $(shq "$ZB") activate $NAME --host=$P_HOST --skip-final-catchup --yes" 12 "$W" || exit 1
     clear 2>/dev/null
     address_apply; rc=$?
@@ -402,7 +402,7 @@ harm_flow() {
         ARGV=("$ZB" set-tiers "$NAME" ${RARGS[@]+"${RARGS[@]}"} ${SARGS[@]+"${SARGS[@]}"})
         info "$T_CHG" "$(T 'Liczę plan (cały config przez generator)...')"
         if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
-            wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)))" 12 "$W"
+            wt --title "$(T 'Polecenie odmówiło -- nic nie zmieniono')" --msgbox "$(verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)))" 12 "$W"
             [ -n "$only_src" ] && hs=2 || hs=1; continue
         fi
         { echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione:')"; echo
@@ -423,7 +423,7 @@ harm_flow() {
 
 # USTAWIENIA SILNIKA (W16, właściciel 2026-10-11): historia, kompresja, szyfr SSH i autodobór
 # łącza jednej relacji. Obecne wartości z show-config; zmiany czekają w zmiennych p_*,
-# dopiero "Gotowe" składa set-transfer (--plan, potem WYKONAJ = --yes). Wstecz = bez zmian.
+# dopiero "Gotowe" składa set-transfer (--plan, potem Uruchom = --yes). Wstecz = bez zmian.
 eng_hist_words() {
     case "$1" in
         default|all) echo "$(T 'wszystkie migawki pomiędzy')" ;;
@@ -541,9 +541,9 @@ PYEOF
 }
 engine_settings() {
     local c_h c_c c_x c_a c_r p_h p_c p_x p_a items n d v N out fab
-    info "$(T 'Ustawienia silnika')" "$(T 'Czytam ustawienia relacji...')"
+    info "$(T 'Ustawienia kopiowania')" "$(T 'Czytam ustawienia relacji...')"
     if ! "$ZB" show-config "$NAME" --json >"$TMPD/sc.json" 2>"$TMPD/sc.err"; then
-        wt --title "$(T 'Ustawienia silnika')" --msgbox "$(T 'show-config nie odpowiedział:\n')$(tail -3 "$TMPD/sc.err")" 12 "$W"
+        wt --title "$(T 'Ustawienia kopiowania')" --msgbox "$(T 'show-config nie odpowiedział:\n')$(tail -3 "$TMPD/sc.err")" 12 "$W"
         return 0
     fi
     # Brak pola = ustawienie fabryczne ("default"); pierwsza sekcja dataset tej relacji.
@@ -597,7 +597,7 @@ PYEOF
         # zmiana = nowa kopia od zera (silniki odmawiają mieszania trybów).
         case "${c_r:-default}" in yes|1|true) items+=(raw "$(eng_lbl "$(T Szyfrowane)")$(T 'wysyłka zaszyfrowana (raw)')") ;; esac
         items+=(__reset__ "$(T 'Przywróć fabryczne')" __done__ "$(T Gotowe)")
-        wt --title "$(Tv 'Ustawienia silnika: $NAME' '$NAME' "$NAME")" --ok-button "$(T Wybierz)" --cancel-button "$(T Wstecz)" --notags --default-item __done__ \
+        wt --title "$(Tv 'Ustawienia kopiowania: $NAME' '$NAME' "$NAME")" --ok-button "$(T Wybierz)" --cancel-button "$(T Wstecz)" --notags --default-item __done__ \
            --menu "$(T 'Jak przesyłane są kopie tej relacji.')" "$(fit $((${#items[@]} / 2 + 2)))" "$W" "$(lhfit $((${#items[@]} / 2)) 2)" "${items[@]}" || return 0
         case "$WT_OUT" in
             raw)
@@ -617,7 +617,7 @@ PYEOF
                                --inputbox "$(T 'Po ilu zgubionych przebiegach przejść na migawkę różnicową?')" 9 "$W" "$N" || continue 2
                             v="${WT_OUT// /}"
                             case "$v" in ''|*[!0-9]*) ;; *) [ "${#v}" -le 3 ] && [ "$((10#$v))" -ge 1 ] && { p_h="auto:$((10#$v))"; break; } ;; esac
-                            wt --title "$(T 'Zła liczba')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- podaj liczbę całkowitą od 1 do 999.' '$WT_OUT' "$WT_OUT")" 8 "$W"
+                            wt --title "$(T 'Nieprawidłowa liczba')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- podaj liczbę całkowitą od 1 do 999.' '$WT_OUT' "$WT_OUT")" 8 "$W"
                         done ;;
                     *) p_h="$WT_OUT" ;;
                 esac ;;
@@ -636,7 +636,7 @@ PYEOF
                 p_x="$WT_OUT" ;;
             auto)
                 d="$p_a"; [ "$d" = default ] && d=yes
-                eng_pick "$(T 'Autodobór łącza')" "$(T 'Czy silnik ma sam mierzyć łącze.')" "$d" \
+                eng_pick "$(T 'Autodobór łącza')" "$(T 'Czy kopiowanie ma samo mierzyć łącze.')" "$d" \
                     yes "$(T 'Tak -- mierzy łącze i sam decyduje o kompresji')" \
                     no  "$(T Nie)" || continue
                 p_a="$WT_OUT" ;;
@@ -650,11 +650,11 @@ PYEOF
                     [ "$p_a" = "$c_a" ] || ARGV+=("--autotune=$p_a")
                 fi
                 [ "${#ARGV[@]}" -gt 3 ] || { P_TRANSFER=(); return 0; }
-                info "$(T 'Ustawienia silnika')" "$(T 'Liczę plan...')"
+                info "$(T 'Ustawienia kopiowania')" "$(T 'Liczę plan...')"
                 if ! "${ARGV[@]}" --plan >"$TMPD/stplan.txt" 2>&1; then
                     out="$(verb_refusal "$TMPD/stplan.txt")"
                     [ -n "$out" ] || out="$(tail -3 "$TMPD/stplan.txt")"
-                    wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(printf '%s' "$out" | fold -s -w $((W - 6)))" 12 "$W"
+                    wt --title "$(T 'Polecenie odmówiło -- nic nie zmieniono')" --msgbox "$(printf '%s' "$out" | fold -s -w $((W - 6)))" 12 "$W"
                     continue
                 fi
                 {
@@ -687,13 +687,13 @@ pending_count() {
     [ "${#P_TRANSFER[@]}" -gt 0 ] && n=$((n + 1))
     echo "$n"
 }
-# ZAPISZ ZMIANY: jeden plan wszystkich czekających zmian, jedno WYKONAJ, potem po kolei:
+# ZAPISZ ZMIANY: jeden plan wszystkich czekających zmian, jedno Uruchom, potem po kolei:
 # adres, datasety, szablon albo tabela szczebli, ustawienia silnika. Każdy krok to zwykły
 # czasownik z --yes; pierwszy, który odmówi, zatrzymuje resztę (to, co przed nim, zostaje).
 save_all() {
     local n rc=0 a k=0
     {
-        echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione. Po WYKONAJ, po kolei:')"
+        echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione. Po Uruchom, po kolei:')"
         echo
         [ -n "$P_HOST" ] && { k=$((k + 1)); echo "$(Tv '$k. Adres źródła: $P_HOST  (activate --host, sprawdzenie, że to ten sam host)' '$k' "$k" '$P_HOST' "$P_HOST")"; echo; }
         if [ -n "$P_ENT" ]; then
@@ -702,11 +702,11 @@ save_all() {
             # tu została -- "pierwsza pełna kopia" wprowadzała w błąd.
             # Słowa z rodzaju relacji (2026-10-26): relacja bez kopii mówi o migawkach, nie o kopiach.
             if [ "${RMODE:-}" = snaponly ] || { [ "${RMODE:-}" = local ] && { [ -z "${TGT:-}" ] || [ "$TGT" = - ]; }; }; then
-                for n in $P_ADDED; do echo "$(Tv '   DOJDĄ:    $n  (pierwsza migawka przy najbliższym biegu z crona)' '$n' "$n")"; done
-                for n in $P_REMOVED; do echo "$(Tv '   ODPADNĄ:  $n  (jego migawki ZOSTAJĄ, nikt ich nie przycina)' '$n' "$n")"; done
+                for n in $P_ADDED; do echo "$(Tv '   BĘDĄ DODANE:           $n  (pierwsza migawka przy najbliższym przebiegu z crona)' '$n' "$n")"; done
+                for n in $P_REMOVED; do echo "$(Tv '   PRZESTANĄ BYĆ OBJĘTE:  $n  (jego migawki ZOSTAJĄ, nikt ich nie czyści)' '$n' "$n")"; done
             else
-            for n in $P_ADDED; do echo "$(Tv '   DOJDĄ:    $n  (pierwsza kopia przy najbliższym biegu z crona; przyrostowo, gdy kopia już tu jest)' '$n' "$n")"; done
-            for n in $P_REMOVED; do echo "$(Tv '   ODPADNĄ:  $n  (kopie na tym hoście ZOSTAJĄ)' '$n' "$n")"; done
+            for n in $P_ADDED; do echo "$(Tv '   BĘDĄ DODANE:           $n  (pierwsza kopia przy najbliższym przebiegu z crona; przyrostowo, gdy kopia już tu jest)' '$n' "$n")"; done
+            for n in $P_REMOVED; do echo "$(Tv '   PRZESTANĄ BYĆ OBJĘTE:  $n  (kopie na tym hoście ZOSTAJĄ)' '$n' "$n")"; done
             fi
             echo "$(T '   Po zmianie relacja obejmuje:')"
             printf '%s\n' "$P_ENT" | while IFS=$'\t' read -r n r; do
@@ -717,7 +717,7 @@ save_all() {
         fi
         if [ "${#P_EDIT[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(T '%s. Szablon: %s -> %s' "$k" "$(cur_words)" "$P_EDIT_WORDS")"; sed -n '3,$p' "$TMPD/p_edit.txt" | grep -v '^Komenda:' | plan_words | sed 's/^/   /'; echo; fi
         if [ "${#P_TIERS[@]}" -gt 0 ]; then k=$((k + 1)); if [ -n "$P_FP" ]; then echo "$(T '%s. Krótka retencja źródła:' "$k")"; else echo "$(T '%s. Harmonogram i retencja (tabela):' "$k")"; fi; sed -n '3,$p' "$TMPD/p_tiers.txt" | grep -v '^Komenda:' | plan_words | sed 's/^/   /'; echo; fi
-        if [ "${#P_TRANSFER[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(Tv '$k. Ustawienia silnika:' '$k' "$k")"; grep "^Relation '" "$TMPD/p_transfer.txt" | sed 's/^/   /'; echo; fi
+        if [ "${#P_TRANSFER[@]}" -gt 0 ]; then k=$((k + 1)); echo "$(Tv '$k. Ustawienia kopiowania:' '$k' "$k")"; grep "^Relation '" "$TMPD/p_transfer.txt" | sed 's/^/   /'; echo; fi
         echo "$(T 'Komendy:')"
         [ -n "$P_HOST" ] && echo "  $(shq "$ZB") activate $NAME --host=$P_HOST --skip-final-catchup --yes"
         [ -n "$P_ENT" ] && echo "  $(shq "$ZB") set-datasets $NAME $(ds_args | tr '\n' ' ')--yes"
@@ -731,17 +731,17 @@ save_all() {
     { cat "$TMPD/saveplan.txt"; for f in p_edit p_tiers p_transfer; do [ -s "$TMPD/$f.txt" ] && cat "$TMPD/$f.txt"; done; } >"$planf"
     if [ -n "${ZFS_TUI_LOG:-}" ]; then cp -f "$planf" "${ZFS_TUI_LOG%.log}-plan.txt" 2>/dev/null && planf="${ZFS_TUI_LOG%.log}-plan.txt"; fi
     { echo; echo "$(Tv 'Pełny plan (z liniami crona): $planf' '$planf' "$planf")"; } >>"$TMPD/saveplan.txt"
-    # Enter = WYKONAJ, jak w kreatorze (U25: jedno zachowanie). Plan dłuższy niż ekran: okno
+    # Enter = Uruchom, jak w kreatorze (U25: jedno zachowanie). Plan dłuższy niż ekran: okno
     # z przewijaniem trzyma fokus na tekście i Enter nic nie robi (zmierzone na pve10,
     # 2026-10-19) -- więc najpierw sam plan do przewinięcia (textbox_read: Tab -> Dalej na ramce),
     # potem krótkie pytanie.
     geom
     if [ "$(fold -s -w $((W - 4)) "$TMPD/saveplan.txt" | grep -c '')" -gt $((H - 6)) ]; then
         textbox_read "$(Tv 'Zmień relację $NAME -- plan wszystkich zmian' '$NAME' "$NAME")" "$TMPD/saveplan.txt" "$(T Dalej)" || return 1
-        wt --title "$T_CHG" --yes-button "$(T WYKONAJ)" --no-button "$(T Wstecz)" \
+        wt --title "$T_CHG" --yes-button "$(T Uruchom)" --no-button "$(T Wstecz)" \
            --yesno "$(Tv 'Wykonać zmiany z planu ($(pending_count))?\nWstecz = lista zmian, nic nie zmienione.' '$(pending_count)' "$(pending_count)")" 9 "$W" || return 1
     else
-        yesno_text "$TMPD/saveplan.txt" "$(Tv 'Zmień relację $NAME -- plan wszystkich zmian' '$NAME' "$NAME")" "$(T WYKONAJ)" "$(T Wstecz)" || return 1
+        yesno_text "$TMPD/saveplan.txt" "$(Tv 'Zmień relację $NAME -- plan wszystkich zmian' '$NAME' "$NAME")" "$(T Uruchom)" "$(T Wstecz)" || return 1
     fi
     # U64 (właściciel 2026-10-21: "czarny ekran ponad 15 sekund"): kroki biegną za oknem
     # postępu (wt-lib run_progress), wynik w oknie. Kroki idą w podpowłoce, więc to, że
@@ -911,13 +911,13 @@ while :; do
                 wt --title "$(T 'Szablon zapisany')" --msgbox "$(Tv 'Szablon '\''$n'\'' zapisany -- jest na F5 i w kreatorze nowej relacji.' '$n' "$n")" 8 "$W"
                 load_lists
             else
-                wt --title "$(T 'Czasownik odmówił -- nic nie zapisano')" --msgbox "$(printf '%s' "$out" | tail -6 | fold -s -w $((W - 6)))" 14 "$W"
+                wt --title "$(T 'Polecenie odmówiło -- nic nie zapisano')" --msgbox "$(printf '%s' "$out" | tail -6 | fold -s -w $((W - 6)))" 14 "$W"
             fi
             continue ;;
         dane)
             # DATASETY = TO SAMO OKNO CO W KREATORZE (W4, właściciel 2026-10-11): koszyk
             # z obecnymi datasetami relacji (z configu), dowolnie wiele zmian, potem JEDEN
-            # plan i WYKONAJ (set-datasets). Bez "Sposób" (to inna relacja).
+            # plan i Uruchom (set-datasets). Bez "Sposób" (to inna relacja).
             info "$(T Datasety)" "$(Tv 'Czytam datasety z $SRCHOST...' '$SRCHOST' "$SRCHOST")"
             if ! "$ZB" list-datasets ${LDS_ARGS[@]+"${LDS_ARGS[@]}"} --json --own-snapshots >"$TMPD/ds.json" 2>"$TMPD/ds.err" \
                || ! basket_tree_from_json "$TMPD/ds.json"; then
@@ -946,8 +946,8 @@ while :; do
                 # Do pokazania na liście: co dochodzi, co odpada, co zmienia rekurencję.
                 P_ADDED="$(comm -13 <(printf '%s\n' "$CUR_ENT" | cut -f1) <(printf '%s\n' "$NEW_ENT" | cut -f1) | grep .)"
                 P_REMOVED="$(comm -23 <(printf '%s\n' "$CUR_ENT" | cut -f1) <(printf '%s\n' "$NEW_ENT" | cut -f1) | grep .)"
-                # X21: sprawdzone PRZED WYKONAJ -- plan czasownika (bez --yes) albo jego odmowa.
-                info "$(T Datasety)" "$(T 'Sprawdzam zmiany (plan czasownika, nic nie zmienia)...')"
+                # X21: sprawdzone PRZED Uruchom -- plan czasownika (bez --yes) albo jego odmowa.
+                info "$(T Datasety)" "$(T 'Sprawdzam zmiany (plan polecenia, nic nie zmienia)...')"
                 P_ENT="$NEW_ENT"
                 _da=(); mapfile -t _da < <(ds_args)
                 if ! "$ZB" set-datasets "$NAME" "${_da[@]}" >"$TMPD/dschk.txt" 2>&1; then
@@ -969,7 +969,7 @@ while :; do
         items=(__manual__ "$(clip_label "$(printf '%-9s%s' '' "$(T 'Ręcznie…  tabela szczebli: sposób, szczeble, liczby, zamrażanie')")" $((W - 10)))")
         while IFS=$'\t' read -r n t; do
             [ -n "$n" ] || continue
-            mark="         "; [ "$n" = "$CUR_P" ] && mark="$(T '[obecny]') "
+            mark="         "; [ "$n" = "$CUR_P" ] && mark="$(T '[bieżący]') "
             items+=("$n" "$(clip_label "$mark$t" $((W - 10)))")
         done <"$TMPD/prof.tsv"
         def="$PROFILE"; awk -F'\t' -v n="$def" '$1==n{f=1} END{exit !f}' "$TMPD/prof.tsv" || def="${items[2]:-${items[0]}}"
@@ -995,7 +995,7 @@ while :; do
             continue 2
         fi
         "$ZB" show-tiers "$NAME" --json >"$TMPD/fp.json" 2>"$TMPD/fp.err" || {
-            wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(tail -3 "$TMPD/fp.err")" 10 "$W"; continue 2; }
+            wt --title "$(T 'Polecenie odmówiło -- nic nie zmieniono')" --msgbox "$(tail -3 "$TMPD/fp.err")" 10 "$W"; continue 2; }
         mapfile -t RARGS < <(fp_ops "$TMPD/fp.json" "$FP_ANS")
         if [ "${#RARGS[@]}" -eq 0 ]; then
             wt --title "$(T 'Krótka retencja źródła')" --msgbox "$(T 'Relacja nie ma szczebla z migawkami -- nic do zmiany.')" 8 "$W"; continue 2
@@ -1003,7 +1003,7 @@ while :; do
         ARGV=("$ZB" set-tiers "$NAME" "${RARGS[@]}")
         info "$T_CHG" "$(T 'Liczę plan (cały config przez generator)...')"
         if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
-            wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)))" 12 "$W"
+            wt --title "$(T 'Polecenie odmówiło -- nic nie zmieniono')" --msgbox "$(verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)))" 12 "$W"
             continue 2
         fi
         { echo "$(T 'PLAN -- nic jeszcze nie zostało zmienione:')"; echo
@@ -1050,7 +1050,7 @@ while :; do
     if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
         verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)) >"$TMPD/why.txt"
         [ -s "$TMPD/why.txt" ] || tail -5 "$TMPD/plan.txt" >"$TMPD/why.txt"
-        wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
+        wt --title "$(T 'Polecenie odmówiło -- nic nie zmieniono')" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
         # Kampania 2026-10-22: szablon z INNĄ rodziną migawek to nowa relacja -- żadna liczba
         # w oknie źródła tego nie zmieni, a Wstecz o jeden krok kręcił w kółko ostrzeżenie ->
         # tabela -> odmowa. Taka odmowa wraca do listy szablonów.
@@ -1078,7 +1078,7 @@ for l in lines:
         print(l)
 # Tylko NOWE zadania (+) i liczba zastępowanych (-): pełne -/+ nie mieściło się w
 # oknie, a okno z przewijaniem trzyma fokus na tekście i Enter nie trafia w
-# WYKONAJ (zmierzone jazdą po pty na pve10, 2026-10-07). Monitory bez zmian
+# Uruchom (zmierzone jazdą po pty na pve10, 2026-10-07). Monitory bez zmian
 # rytmu (*/15) nie są wypisywane.
 crontab = False
 gone = 0
@@ -1122,7 +1122,7 @@ PYEOF
     # X6 (właściciel 2026-10-12): RĘCZNA ZMIANA CONFIGU przepadała bez słowa -- sekcje
     # relacji powstają od nowa z jej szablonu. Plan z OBECNYMI ustawieniami relacji (nic
     # nie zmienione w oknie) powinien nie zmieniać crona; to, co zmienia, to ręczne zmiany
-    # w configu, które WYKONAJ nadpisze. Mówimy to na górze planu, przed WYKONAJ.
+    # w configu, które Uruchom nadpisze. Mówimy to na górze planu, przed Uruchom.
     # (2.0: GUI czyta config i aktualizuje szablon relacji -- w obie strony.)
     : >"$TMPD/hand.txt"
     # U136: szablon fastprune przepisany pod ten plan -- porównanie z nim pokazałoby naszą własną

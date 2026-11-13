@@ -27,7 +27,7 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
-. "$HERE/tui/wt-lib.sh" || { echo "restore: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/wt-lib.sh" || { echo "restore: brak $HERE/tui/wt-lib.sh -- katalog programu jest niekompletny" >&2; exit 1; }
 REL="${1:-}"
 [ -n "$REL" ] || { echo "usage: restore.sh RELATION | restore.sh --from-copy [DATASET]" >&2; exit 2; }
 # --dataset=DS / --snapshot=NAME (GUI F4 Kopie, 2026-10-28): kopia i migawka juz wybrane w GUI;
@@ -73,7 +73,7 @@ run_cmd() {
     else
         # Sprawdź ponownie (właściciel 2026-10-26): odmowa przed zmianą (zajęty dataset, działający
         # gość) zwykle znika po zatrzymaniu usługi -- to samo polecenie jeszcze raz, bez wracania.
-        echo "$(Tv '=== NIE WYSZŁO (rc=$RC) -- komunikat polecenia powyżej. Enter = powrót do GUI, p + Enter = sprawdź ponownie (to samo polecenie)' '$RC' "$RC")"
+        echo "$(Tv '=== BŁĄD (rc=$RC) -- komunikat polecenia powyżej. Enter = powrót do GUI, p + Enter = sprawdź ponownie (to samo polecenie)' '$RC' "$RC")"
         local _a=""; read -r _a </dev/tty 2>/dev/null || true
         case "$_a" in p|P) run_cmd ;; esac
     fi
@@ -337,9 +337,9 @@ $(Tv 'Pule tutaj: $POOLS' '$POOLS' "$(zpool list -H -o name 2>/dev/null | tr '\n
                 echo "$(T 'Polecenie:')"
                 echo "  $CMDTXT"
                 echo
-                echo "$(T '<Wykonaj> uruchamia to od razu, bez dalszych pytań; zaszyfrowana kopia -- zapyta tylko o klucz albo plik klucza.')"
+                echo "$(T '<Uruchom> uruchamia to od razu, bez dalszych pytań; zaszyfrowana kopia -- zapyta tylko o klucz albo plik klucza.')"
             } >"$TMPD/summary.txt"
-            yesno_text "$TMPD/summary.txt" "$(T 'Przywróć z dysku: na pewno?')" "$(T Wykonaj)" "$(T Wstecz)" --defaultno || { step=2; continue; }
+            yesno_text "$TMPD/summary.txt" "$(T 'Przywróć z dysku: na pewno?')" "$(T Uruchom)" "$(T Wstecz)" --defaultno || { step=2; continue; }
             run_cmd ;;
         esac
     done
@@ -569,7 +569,7 @@ PYEOF
                     */?*) BASE="$WT_OUT"; break ;;
                     "") ;;
                     *) BASE="$WT_OUT"; geom
-                       wt --title "$(Tv 'Przywróć $REL: zła nazwa' '$REL' "$REL")" --msgbox "$(Tv ''\''$WT_OUT'\'' nie ma postaci <pula>/<katalog>, np. ${ORIG[0]%%/*}/restore.' '$WT_OUT' "$WT_OUT" '${ORIG[0]%%/*}' "${ORIG[0]%%/*}")" 8 "$W" ;;
+                       wt --title "$(Tv 'Przywróć $REL: zła nazwa' '$REL' "$REL")" --msgbox "$(Tv ''\''$WT_OUT'\'' nie ma postaci <pula>/<dataset>, np. ${ORIG[0]%%/*}/restore.' '$WT_OUT' "$WT_OUT" '${ORIG[0]%%/*}' "${ORIG[0]%%/*}")" 8 "$W" ;;
                 esac
             done
             [ -n "$BASE" ] || continue            # Wstecz z pola -> znów wybór "dokąd"
@@ -688,10 +688,10 @@ PYEOF
                 echo "$(Tv 'Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL (z --replace, gdy nie ma wspólnego punktu).' '$TARGET' "$TARGET" '$GRANT_LABEL' "$GRANT_LABEL")"
             fi
             [ "$TARGET" = "ten host" ] || echo "$(Tv '($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)' '$GRANT_LABEL' "$GRANT_LABEL" '$TARGET' "$TARGET")"
-            echo "$(T '<Wykonaj> uruchamia to od razu, bez dalszych pytań.')"
+            echo "$(T '<Uruchom> uruchamia to od razu, bez dalszych pytań.')"
             [ "$DEST" = srodowisko ] && echo "$(T 'Przywrócenie w miejscu, pod działającym systemem: tylko z linii poleceń (zfs-backup.sh restore ... --in-place-live-root).')"
         } >"$TMPD/summary.txt"
-        yesno_text "$TMPD/summary.txt" "$(Tv 'Przywróć $REL: na pewno?' '$REL' "$REL")" "$(T Wykonaj)" "$(T Wstecz)" --defaultno || { step=2; continue; }
+        yesno_text "$TMPD/summary.txt" "$(Tv 'Przywróć $REL: na pewno?' '$REL' "$REL")" "$(T Uruchom)" "$(T Wstecz)" --defaultno || { step=2; continue; }
         run_cmd ;;
     esac
 done

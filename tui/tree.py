@@ -497,8 +497,8 @@ class Tree(object):
         more_up = _(u" ↑ więcej ") if self.top > 0 else u""
         left.append(u" " + u"─" * (iw - 2 - len(more_up)) + more_up)
         if self.show_mode:
-            left.append(_(u" Sposób: cała gałąź atomowo (-r)") if self.recursion == "atomic"
-                        else _(u" Sposób: każdy dataset osobno (-R)"))
+            left.append(_(u" Tryb: całe drzewo datasetów atomowo") if self.recursion == "atomic"
+                        else _(u" Tryb: każdy dataset osobno"))
         first = len(left)
         for n in rows[self.top:self.top + lh]:
             left.append(self.wide_row(n, chk, nw, cw))
@@ -622,8 +622,8 @@ class Tree(object):
         # "legend" w SPEC: okno odzysku (tui/restore.sh) nic nie kopiuje -- odtwarza.
         body = list(llines)
         if self.show_mode:
-            body.append(_(u" Sposób: cała gałąź atomowo (-r)") if self.recursion == "atomic"
-                        else _(u" Sposób: każdy dataset osobno (-R)"))  # klawisz S tylko na ramce (E88)
+            body.append(_(u" Tryb: całe drzewo datasetów atomowo") if self.recursion == "atomic"
+                        else _(u" Tryb: każdy dataset osobno"))  # klawisz S tylko na ramce (E88)
         body.append(_(u" ↑ więcej") if self.top > 0 else u"")
         first = len(body)
         for n in rows[self.top:self.top + lh]:
