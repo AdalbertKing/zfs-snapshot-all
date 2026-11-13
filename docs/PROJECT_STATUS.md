@@ -6,7 +6,7 @@
 > zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
-<!-- status-covers-digest: f2cf04e2b9571614 -->
+<!-- status-covers-digest: c1b405438dad3947 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -78,8 +78,11 @@
   takimi migawkami odmawia); `-m` nazywający jedną z tych rodzin (np. `-e -m __replicate_`)
   wyłącza ją z tego wykluczenia. REV-20261112-197 (recenzent, CHANGES-REQUIRED): przy dwóch
   nośnikach jednej repliki przycinanie jednego mogło zabrać bazę drugiemu, gdy jego zakładka
-  nie powstała; poprawione (gałąź `fix/rev-197-anchor`, implementacja `5cb8f591`, odpowiedź IMPLEMENTED, czeka na recenzenta): przycinane są tylko migawki, które
-  dany nośnik sam ma (po GUID), `--source-keep` wymaga `-i`. Pomiar
+  nie powstała; runda 1 (`5cb8f591`, przycinanie tylko migawek, które nośnik ma po GUID, plus wymóg `-i`)
+  odrzucona: wcześniejsza wspólna historia albo zasiew `-H` wnosi bazę jednego nośnika na drugi.
+  Runda 2 (gałąź `fix/rev-197-r2`, implementacja `e6d7a410`, odpowiedź IMPLEMENTED, czeka na
+  recenzenta): przebieg oznacza swoją migawkę na źródle (`zfsbackup:srckeep-owner`), przycinane
+  są tylko migawki z własnym znacznikiem, które nośnik ma; nieoznaczone zostają. Pomiar
   ponowny 2026-11-12 (przed F1 z REV-197) na kontenerze laboratoryjnym w klastrze dwuwęzłowym z pvesr, trzy fazy (gość
   na węźle 1, po `pct migrate` na węzeł 2, z powrotem): 6 biegów rc 0, przyrosty z zakładki,
   węzeł, z którego job kopiuje, trzyma dokładnie 1 migawkę repliki, nośnik 3 wersje, pvesr

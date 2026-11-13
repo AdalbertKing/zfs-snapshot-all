@@ -1098,7 +1098,8 @@ notify       = pulled
   przesunięciu przechodzi przez północ, przesuwa też dzień tygodnia albo miesiąca.
 - **Replika aktywna z `keep` i migawki Proxmoxa.** Replika aktywna z `keep = N` trzyma na źródle
   tylko najnowszą własną migawkę (`--source-keep=1`), po jednej na nośnik, gdy replika ma ich
-  kilka: starsze znikają po udanej kopii, każdy nośnik usuwa tylko migawki, które sam ma, a
+  kilka: starsze znikają po udanej kopii, każdy nośnik usuwa tylko migawki zrobione przez jego własne przebiegi (oznaczone na źródle,
+  `zfsbackup:srckeep-owner`) i które sam ma; nieoznaczone zostają, a
   zakładka `#tgt-` niesie następny przyrost. `--source-keep` odrzuca `-e` i `-s` oraz uruchomienie bez `-m` albo
   bez `-i`; przy `history = all` lub `auto:N` generator go nie używa. Replika
   pasywna (`-e`) nigdy nie przyjmuje migawek samego Proxmoxa (`__replicate_`, `vzdump`,
