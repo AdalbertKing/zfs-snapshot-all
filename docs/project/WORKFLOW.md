@@ -122,11 +122,14 @@ stale release checkout (1.0.21) is now refused by `publish.sh --push` before the
 
 1. "publikuj" -> one PR with the release notes: CHANGELOG, `docs/pl`, `docs/en`, `--help`
    and `docs/STAN.md` (state before the host read-back), `text-checker` on all of it.
-2. Merge on green, then `publish.sh <fresh main> <fresh clone of zfsbackup> --push`. A
-   checkout behind its origin is refused by `publish.sh` itself.
+2. Merge on green, then `release/publish-via-pve9.sh`: pve9 runs `publish.sh --push` with
+   every gate into a staging repository (about 50 s; the name list goes over stdin and is
+   deleted there), this PC fetches the commit as a bundle, checks it is one commit on top of
+   the published main with the right `RELEASE-OF`, and pushes. `--dry-run` stops before the
+   push. A checkout behind its origin is refused by `publish.sh` itself.
 3. Lab hosts update at once (`update-control.sh --self-update`); production follows its
    update cron (default :15). The host read-back goes into `docs/STAN.md` with the next
    release's notes PR, not in a PR of its own.
-4. A tool whose gates take minutes on Windows (`publish.sh`) still runs here until pve9
-   can push to GitHub and holds the private name list (measured 2026-11-13: it cannot,
-   no key, no list). Moving it to pve9 is an Owner decision (token on a lab host).
+4. pve9 holds no GitHub credentials and keeps no copy of the private name list (Owner,
+   2026-11-13: "z PC"); only the push runs here. Running `publish.sh` here directly still
+   works but costs 10+ minutes.
