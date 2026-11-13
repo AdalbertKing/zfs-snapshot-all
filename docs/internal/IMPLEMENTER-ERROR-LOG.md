@@ -161,12 +161,15 @@ Owner, 2026-11-06 ("100 linii kodu i 3 godziny -- niedopuszczalne"). Order, no l
    status, `reviewctl --generate` / `impact.sh --refresh-status` / `--verify` run on pve9 with
    `REVIEWCTL_PUBREF=HEAD`, not here (5+ min on this box). One push, one CI read.
 4. Code edits through the Edit tool only; never a Python/heredoc patch or sed replacement with a backslash in it (E53, E122, E124, E128).
+5. A suite slower than its checks explain is a defect: time one engine call first. While
+   working, run `only=<word>` sections. The whole suite runs once, on the final head. A
+   docs-only commit never restarts it (E131).
 
 A guard in front of an irreversible step refuses on its own failure, and a value
 written into a cron line is checked against a whitelist of characters, from the first
 version -- not after the review.
 
-*Evidence: E123, E124.*
+*Evidence: E123, E124, E131.*
 
 ### R17 — On production a test has no lasting effect; on the lab it does not nest ZFS
 
@@ -2155,6 +2158,25 @@ check. On this box it costs as much as one.
 
 *Rule.* R9 now names `reviewctl --generate`/`--derive`/`--verify` explicitly. A check that runs
 the whole generator goes to pve9 or CI with the suites.
+
+### E131 — a night of waiting on a suite nobody measured (2026-11-13, R16, repeat of E120/E123)
+**2026-11-12/13, REV-20261112-197, PRs #1207, #1209, #1211.**
+
+*Genesis.* Three rounds of REV-197 took from 23:49 to 08:18. The code took about 1 h. The
+snapsend suite started 9 times on pve9 (three were killed when the head moved), at 25-40 min
+each. Two negative controls were whole-suite runs on the old commit. The Owner: "cała noc
+minęła ... nie do przyjęcia".
+
+*Cause.* I took the suite's length as a given and never measured it. One `snapget` call took
+9.7 s: `progress_reap` greps and stats every progress record, and the suites had left 2999
+records in pve9's real `/var/lib/zfs-snapshot-all/progress`. With its own directory the same
+call takes 0.4 s. On top of that: no section selector, the whole suite restarted after commits
+that changed only text, and the destructive change was designed without listing first how data
+reaches a medium. That gap cost two review rounds (F1a/F1b, then F1c/F2).
+
+*Rule.* R16 point 5; CLAUDE.md "Owner, 2026-11-13". Fixed in the suites: `ZFS_PROGRESS_DIR` is
+isolated in snapsend and in every `remote-suite.sh` run, and `SUITE_ONLY` / `only=<word>` select
+sections.
 
 ### E128 — the heredoc ate the backslashes three more times (2026-11-11, R16 point 4, repeat of E124)
 **2026-11-11, batch 1.0.18 (`batch/gui-1-0-18`).**

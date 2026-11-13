@@ -142,6 +142,24 @@ So:
 - when a negative control needs the same suite three times, that is a signal the
   suite needs a section selector, not a signal to run it three times.
 
+**Owner, 2026-11-13 (the REV-197 night: about 1 h of code, more than 5 h waiting for suites):**
+
+- **A slow suite is a defect. Measure it before you wait on it.** Snapsend took 25-40
+  minutes because the suites left 2999 progress records on pve9, and every engine call
+  read all of them (9.7 s instead of 0.4 s). If a suite runs longer than its checks
+  explain, time one engine call before running anything else.
+- **During a round, run only the sections the change touches:**
+  `./test/remote-suite.sh snapsend origin/<branch> only=<word>`. The whole suite runs
+  once, on the final head, before the PR.
+- **A commit that touches no engine or test code** (docs, response, status, a comment)
+  never restarts a suite. Do not kill a running suite because the head moved.
+- **Negative control:** a script that reproduces the defect on real ZFS (minutes), run
+  on the rejected SHA. Not a second whole-suite run on an old commit.
+- **Before writing destructive code** (anything that destroys snapshots or data), list
+  in the response every path by which data reaches the medium, before the code. Each
+  missed path in REV-197 cost a review round, about 2 h.
+- **Two suites at once:** give them separate clones, `REMOTE_SUITE_CLONE=/tmp/tt2/...`.
+
 Reporting rule: report on completion, not per iteration. One message with the
 result, not a running commentary on which suite is at which line.
 
