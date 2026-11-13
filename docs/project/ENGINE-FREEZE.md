@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 705d3e2f57c06cf5c6ebe2c7bcecc84424344b76 -->
-<!-- frozen: snapget.sh 100755 ba85e45dbcb5bcafc35e5528eb2fdcc1052dfaf4 -->
+<!-- frozen: snapget.sh 100755 4d83a4dbd75c539ad1600e27a7fa7f724ef323fc -->
 <!-- frozen: delsnaps.sh 100755 f802795432763cd2e8715c8bdfc0490c92c882c4 -->
 <!-- frozen: check-snap-age.sh 100755 e365724bffe05c2a8cd5a974574e9ead99313038 -->
 <!-- frozen: lib-zfs-snap.sh 100644 4024c09b357197732632d04a24cf020c8cf92433 -->
@@ -1460,6 +1460,14 @@ Owner-authorized refreezes:
   ZFS: failed refresh, failed old-bookmark removal, failed first bookmark, B inside A's
   bookmark call, two-media control, remote source via an ssh shim, -i refusal), test/cron PRK1b.
   twin: snapsend.sh unchanged -- it refuses --source-keep (pull-only).
+- 2026-11-13 (snapget.sh): **REV-20261112-197 F1, round 2** (re-review on `5cb8f591`: a GUID on
+  the target is not ownership, earlier shared history or an `-H` seed can put another medium's
+  base there). The run that makes the snapshot for a `--source-keep` job stamps it on the source,
+  `zfsbackup:srckeep-owner=<target tag>` (`mark_source_owner`); `prune_source_family` prunes
+  only snapshots carrying this target's stamp that the target holds. Unstamped ones stay. The
+  correction to the earlier entry: "under -i another medium never loses its base" was wrong.
+  Tests: test/snapsend REV-197 r2 cases (F1a earlier history, F1b `-H -i` seed, stamp
+  retention, stamp cannot be set). twin: snapsend.sh unchanged (pull-only).
 
 ## How it is enforced
 
