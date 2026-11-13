@@ -58,6 +58,10 @@ Ustaw je tylko na datasetach, których goście to zniosą:
 - `auto` — niech `snapsend.sh` wybierze zależnie od typu gościa;
 - brak / `no` — migawka spójna na poziomie awarii (crash-consistent), polecenie bez zmian.
 
+Na zdalnym źródle szczebel z `quiesce`, w którego zakresie nie ma dysku gościa (`vm-N-disk-M`,
+`subvol-N-disk-M`), robi zwykłą migawkę i kończy się kodem 0, a konto nie potrzebuje do tego prawa
+zamrażania; zakres z dyskiem gościa jest sprawdzany jak dotąd.
+
 Ponieważ te trzy datasety dają różne `-q`, zostają trzema osobnymi liniami wysyłki
 i nie łączą się w jedną. **Nie** zamrażaj bramy sieciowej ani niczego, czego
 krótki przestój odcinałby ci własną drogę do hosta.
@@ -113,7 +117,10 @@ Zawsze obejrzyj diff przed `--install`, zwłaszcza na hoście z działającymi
 zadaniami — literówka w configu, która zmienia harmonogram albo ścieżkę, wychodzi
 tutaj, a nie o 03:00. Nieznane nazwy pól, pola obecne, ale puste, `-r`/`-R`
 przemycone w `flags` i nakładanie się wzorców w tym samym zakresie to twarde błędy
-w czasie generowania, więc config, który się wygenerował, ma już sprawdzony kształt.
+w czasie generowania, więc config, który się wygenerował, ma już sprawdzony kształt. `flags` to wyłącznie
+opcje silnika: wartość z `;`, `&`, `|`, `<`, `>`, odwrotnym apostrofem, `$(` albo końcem linii jest odmawiana,
+bo trafia do linii crontaba roota bez zmian; wartość `-E` musi być nazwą rodziny migawek (litery, cyfry,
+`_ . : -`, nie zaczyna się od `-`), więc `-E a*b` też jest odmawiane.
 
 ## 6. Świadoma ręczna modyfikacja po wygenerowaniu z profilu
 

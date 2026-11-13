@@ -51,7 +51,7 @@ zfs-backup.sh restore \
 ```
 
 The target **must exist**. A delta is applied, or just a rollback — the message
-`SAM ROLLBACK, bez transferu` means: the copy already had the replica's newest
+`ROLLBACK ONLY, no transfer` (in the plan's Strategy line) means: the copy already had the replica's newest
 point, so only the newer snapshots were removed, **zero bytes on the link**.
 
 That is why this mode exists. Landing in free space (4b) at 10 TB needs as much
@@ -76,6 +76,12 @@ By default **only the point** lands (one snapshot). `--with-history` carries all
 copy's snapshots up to that point (the oldest in full, then the increments) -- the
 restored copy of the collector then has history and retention does not start from
 zero.
+
+## 4c. The same from the GUI
+
+After `attach` (section 2): **F4 Kopie** (copies), the row "from another disk" (a disk attached to this host). Enter
+browses it (a snapshot mounted read-only, mc), F9 restores through the same windows as for a relation's copy
+(dataset, target, snapshot, plan, EXECUTE). The row says "import the pool first" until the pool is imported.
 
 ## 5. Disconnect
 

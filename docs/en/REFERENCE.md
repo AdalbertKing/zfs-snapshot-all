@@ -148,6 +148,72 @@ run: `ZFS_TUI_LANG=pl zfs-backup gui` or `--lang=pl`.
 
 Restore from a disk (the former F11 Restore window) has been inside F4 Copies since 2026-10-27: the disk's row, F9. F11 is free.
 
+Details of the windows:
+
+- The title bar shows the package version, read from the first version heading of the `CHANGELOG.md` shipped next to the program.
+- F2 lists finished runs of the last 72 hours and always lists a running one, also after F8 and when it started before that window. It opens on the newest finished run once the run history has arrived. A run with no end record whose `zfs-job.sh` process is gone is shown as INTERRUPTED (`job-stats --runs` gives it rc `-2`); where other users' processes cannot be read (`hidepid`) it stays "running". An engine killed by TERM/INT/HUP closes its own progress records as interrupted. A row finds its runs by the label of its own cron line, so the snapshot rows of a snapshot-only relation and a local prune row made of several datasets show their own runs. Idle, the screen is redrawn whole once a minute, so a console broadcast leaves no garbage.
+- F4 describes a replica dataset that has no snapshot yet as `copy running` while the copy runs and as `interrupted, will resume` when a cut-off receive left a resume token (`zfs-tree --json` carries `resume`). It lists the guest disks of a snapshot-only relation that `pvesr` replicates, and shows a replica's medium in F6's words (WRONG DISK, or CONNECTED when the pool is not imported).
+- F6 has a `Used` column and a medium line `used N% (X of Y)` while the disk's pool is imported. A running copy reads `copy running since ...` instead of the last finished run, and a disk just inserted whose copy is waiting reads `disk connected, copy in ~N s` instead of `disconnected`. The replica list is re-read every 15 s while F6 is open.
+- The replica wizard shows each dataset's snapshot count in the dataset tree (every family; `list-datasets --own-snapshots` gives it as `snapshots`) and, at zero, the note that a passive replica will not copy it. Its plan says how big the first copy is and, when the medium's pool is imported, how much is free, with `!!!` when it cannot fit. With a disk already attached it asks whether to start the first copy now (in the background, as F7).
+
+### Replicas onto removable media
+
+A replica (`add-replica`, a `[replica:<name>]` section) copies datasets this host already holds onto
+another pool, usually a disk that gets unplugged. Every run is bracketed by `zfs-media-gate.sh`:
+`attach` (imports the pool when needed; an absent medium is a quiet skip, never an alert), the copy,
+`detach` (exports only a pool this run imported). What the gate and its helpers guarantee:
+
+- **One run per replica at a time.** A copy still running when the next trigger comes (schedule or a
+  re-plug) is not started a second time: the new run ends with rc 75, says since when the copy runs
+  and leaves the medium alone; its detach does not export the disk under the running copy. If the
+  gate cannot create or lock its run record, or write and read it back, `attach` stops with rc 2 before
+  any import; a detach that finds a record it cannot read does not export the pool (it says DO NOT
+  UNPLUG when the pool is imported). `zfs-job.sh` reports rc 75 as a warning. The age monitor
+  (`zfs-media-gate.sh age`) reports a running copy as OK, and as WARNING once that copy has itself run
+  longer than the critical age.
+- **A first copy that cannot fit is refused.** Before writing, the gate adds up the sources that have
+  no copy on the medium yet (`zfs used` on the source) and compares that with the free space; when it
+  is short it refuses with rc 2 (an alert) and exports the disk. A number that cannot be read skips
+  the check. A medium imported before the run (by an interrupted run of this tool or by an operator)
+  gets the same lineage and free-space checks; on refusal an operator's import stays imported.
+- **A medium of another lineage is refused**, but only when no snapshot of the target shares a GUID
+  with a snapshot or bookmark of the source: a snapshot renamed on either side counts, and a source
+  bookmark carrying the GUID of the disk's snapshot counts too, so a disk that comes back after the
+  collector's retention pruned its snapshot still gets an increment. Unreadable evidence leads to no
+  refusal and no `zfs destroy` advice. A source name that holds `:` (`tank/data:part`) is copied as a
+  local dataset, not read as `host:dataset`.
+- **Connecting a disk starts only the replicas whose medium it is** (`run-replicas --on-insert`,
+  called by the udev rule of `install-media-trigger`). The run reads the disk's pool name and GUID
+  from `blkid` and runs a replica only when the GUID is one of its disks (`media_guids`), or, for a
+  replica without a GUID list, when the pool name matches. A ZFS disk whose name and GUID `blkid`
+  cannot read runs no replica: the insertion is logged and nothing starts. Runs by schedule or by
+  hand are unchanged; the gate still refuses a wrong disk loudly. The rule is one physical line and
+  calls `systemd-run --collect`, so a failed on-insert run does not block the next connection of a
+  disk under the same kernel name; re-run `install-media-trigger --install` on a host that installed
+  an older rule (the replica wizard treats a rule with a backslash outside a comment, or without
+  `--collect`, as old and renews it in its plan). `list-replicas --json` gives `insert_in` (seconds
+  until the waiting copy starts) and `running_since` (the gate's run record, live pid).
+- **USB disks get a deep queue.** A disk behind `usb-storage` comes up with `nr_requests=2`; the gate
+  raises it to 128 on every USB whole disk below that, just before `zpool import` (never lowered,
+  non-USB disks untouched, silent when sysfs is read-only), and `prepare-media` does so before
+  `zpool create`. The setting is lost at every unplug, so it is set at every attach.
+- **`prepare-media`** creates the pool with `ashift=12` (USB bridges report 512-byte sectors on 4 KiB
+  disks) and warns when the kernel's `physical_block_size` is smaller than what `smartctl` reports, i.e.
+  a bridge hides the sector size. A freshly formatted disk is checked before it is called ready: it
+  waits until a plain `zpool import` lists the new pool and refuses otherwise.
+- **A stopped copy still puts the disk away.** The cron line runs the gate's `detach` also when the
+  whole job's process group is killed (TERM/INT/HUP).
+- **`remove-replica --install`** has the gate (verb `forget`) delete the replica's state files in
+  `/var/lib/zfs-snapshot-all/media/`; a copy running at that moment is named in the plan and in the
+  Del window (gate verb `running`) and is not stopped, and its run records stay for its own detach.
+- **A passive replica** (`--passive`) never reports "could not record what ... now holds": it never
+  skips by design. `--exclude-family=A,B` (with `--passive`) gives it the same `-E` exclusions a
+  relationship has; the replica wizard sets `__replicate_,vzdump,__migration__` for a passive replica
+  that has none. `list-replicas --json` shows the list as `exclude_family`. The first copy of a mirror
+  replica (`snapget.sh -e -M`) sends the oldest eligible snapshot in full and then every later one up
+  to the newest; a replica made earlier keeps what it has, and only "Start over on this disk (full copy)" (F6,
+  Enter, `e`; verb `replica-restart`) fills it in. `-i` and `-H` keep their own rules.
+
 ## Core concepts
 
 These are the ideas that make the toolkit behave differently from a naive `zfs send | zfs recv`
@@ -268,8 +334,10 @@ intermediate snapshots' own history.
 It combines with `-r`: `zfs send -R -i` is valid and recursive, so base and newest land on every
 dataset in the subtree and the intermediates on none. Under `-R` (independent per-dataset jobs)
 each expanded dataset gets its own common-base lookup, so `-i` simply flips that per-dataset
-choice. It is a no-op (logged, not rejected) when there is no common snapshot to begin with: the
-bookmark-fallback path already sends a single diff.
+choice. It is a no-op (logged, not rejected) when there is neither a common snapshot nor a bookmark
+to begin with. From a bookmark, `-i` (and `-T`, once its threshold is crossed) keeps the single diff;
+without them that increment goes in two steps and carries the snapshots in between, see
+[Bookmark-backed incremental fallback](#bookmark-backed-incremental-fallback).
 
 ```bash
 # Target has been offline for a week; catch it up in one step instead of
@@ -345,9 +413,13 @@ the freeze.
 
 **What a successfully quiesced run copies.** Each dataset the window covered copies exactly the snapshot that
 window made, never a newer one another job made in the meantime. If that snapshot is missing
-(destroyed, or excluded with `-E`), that dataset fails and so does the run; under `-R` it is not
-skipped as an empty dataset. A crash-consistent fallback (`_crash_`) takes its snapshot per dataset
-and is not bound by this.
+(destroyed, excluded with `-E`, or the dataset is empty or has none of the `-m` family), that dataset
+fails and so does the run; under `-R` it is not skipped as scaffolding. The same holds when the
+snapshot disappears after it was selected, and a resumed interrupted transfer does not end the
+dataset before the window's own snapshot has been copied. `snapget.sh -s` checks that the window's
+snapshot exists, and its local snapshot-only mode takes no second, unfrozen snapshot. A
+crash-consistent fallback (`_crash_`) takes its snapshot per dataset and is not bound by this.
+Passive runs (no window) are unchanged.
 
 **Failure policy.** A failed freeze still takes the snapshot, crash-consistent, unless the tier says
 `,strict`:
@@ -495,6 +567,9 @@ has none), `target` and `resumed` (a real boolean). `delsnaps.sh` records carry
 `pattern`/`deleted`/`kept` instead, since it prunes rather than transfers. `status` is `success`,
 a failure, or a distinct non-success such as `skipped_paused` (the relation is paused),
 `skipped_lock` or `snapshot_only`, so a skipped run can never be read back as a fresh backup.
+`skipped_lock` means another run of the same job held the lock: the engine ends with rc 75, which
+`zfs-job.sh` reports as a warning (a skipped run), not as a failure; job statistics, the Runs window
+and the digest do not count it as one either.
 Logging is best-effort: an unwritable path is swallowed rather than failing a backup that already
 succeeded.
 
@@ -531,8 +606,8 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | Flag | Meaning |
 |---|---|
 | `-m <MESSAGE>` | Prefix for the new snapshot's name. Omitting it is legal but warned about, see below |
-| `-e` | Use the existing latest snapshot instead of creating a new one. A named dataset without snapshots fails the run. Under `-R` a member without snapshots is skipped; when the whole subtree has no snapshot at all, the run logs "nothing to copy" and ends rc 0, but when snapshots exist and none can be adopted (wrong family, all excluded by `-E`) the run fails |
-| `-E <PREFIX>` | Used with `-e`: never adopt a snapshot whose name starts with PREFIX as the newest/base, even when it is newer (the newest non-excluded snapshot wins). Repeatable. For passive pickups of a foreign system's snapshots. For a stream that carries children (`-r`, the first copy under `-H`) excluded snapshots are looked up in the whole subtree; when the first stream cannot start without carrying one, nothing is sent and the log says why |
+| `-e` | Use the existing latest snapshot instead of creating a new one. A named dataset without snapshots fails the run. Under `-R` a member without snapshots is skipped; when the whole subtree has no snapshot at all, the run logs "nothing to copy" and ends rc 0, but when snapshots exist and none can be adopted (wrong family, all excluded by `-E`) the run fails. The Proxmox-reserved families (`__replicate_`, `vzdump`, `__migration__`) are never adopted as the newest/base under `-e`, with or without `-E`; an `-m` that names one of them (`-e -m __replicate_`) opts that family out of this. A dataset with only reserved snapshots refuses ("Every source snapshot on '<dataset>' matches an -E exclusion"), and under `-R` it is skipped as scaffolding |
+| `-E <PREFIX>` | Used with `-e`: never adopt a snapshot whose name starts with PREFIX as the newest/base, even when it is newer (the newest non-excluded snapshot wins). Repeatable. For passive pickups of a foreign system's snapshots. For a stream that carries children (`-r`, the first copy under `-H`) excluded snapshots are looked up in the whole subtree; when the first stream cannot start without carrying one, nothing is sent and the log says why. Inside an incremental an excluded snapshot lying between the base and the newest is not carried either: the engines then send the same data as a chain of `-i` steps through the snapshots that are not excluded (snapshots copied earlier are not removed). A PREFIX is a snapshot family name: letters, digits and `_ . : -` only |
 | `-t` | The second argument is the EXACT dataset to write, not a base to append the source name under. Used by restore, where the copy has to land back at its original path. Refused with several datasets, without a base, and with `-R` |
 | `-z` / `-Z` | Compress the stream with zstd (`-Z` is a synonym for `-z`). On by default against a remote target |
 | `-g` | Compress with pigz instead (escape hatch when zstd is unavailable) |
@@ -589,13 +664,14 @@ It accepts every `snapsend.sh` flag (`-m -e -E -t -z -Z -g -N -l -v -r -R -X -S 
 remote `zfs send`, `-x` to the local receive, `-F` always destroys locally since the target is
 always local, and `-R`'s descendant listing runs over ssh when the source is remote. `-q` works as
 described under [Quiescing](#quiescing-proxmox-guests): the guest lives on the source, so the
-freeze runs there. Three flags exist only here:
+freeze runs there. Four flags exist only here:
 
 | Flag | Meaning |
 |---|---|
 | `-M` | Mirror (sync relations): after a successful pull, destroy on the target every snapshot the source no longer has (no source snapshot carries its GUID, under any name, so a renamed snapshot stays) that is OLDER than the common base, so the target holds what the source holds. Never the base or anything newer, never a Proxmox-reserved family, and nothing at all when the source list or either side's GUID list cannot be read or the source list comes back empty. Decided per dataset, so with `-R` every expanded child mirrors its own source. Not with `-r` |
-| `-s` | Snapshot-only, no transfer: takes the source snapshot(s) where the source lives (over ssh for `[user@]host:dataset`, locally for a bare dataset) and stops: nothing is sent, received, held, bookmarked, mirrored or created here. For datasets that another mechanism already copies (`pvesr` in a Proxmox cluster) and that only need this relation's own snapshot family. Takes exactly one positional argument (the source list); a target argument and every flag that only shapes a transfer are refused before any ssh or snapshot (`-e -t -M -f -F`, and `-z -Z -g -N -l -A -b -H -i -T -w -o -x -u -U -E`). `-m -j -v -n -r -R -X -S -q -Q -L -p -k -K -O -c` stay. Needs neither mbuffer nor a compressor. `-n` prints one `PLAN=SNAPSHOT-ONLY src=<dataset>` line per selected dataset. Stats status is `snapshot_only` or `snapshot_only_failed`, never `success` |
+| `-s` | Snapshot-only, no transfer: takes the source snapshot(s) where the source lives (over ssh for `[user@]host:dataset`, locally for a bare dataset) and stops: nothing is sent, received, held, bookmarked, mirrored or created here. For datasets that another mechanism already copies (`pvesr` in a Proxmox cluster) and that only need this relation's own snapshot family. Takes exactly one positional argument (the source list); a target argument and every flag that only shapes a transfer are refused before any ssh or snapshot (`-e -t -M -f -F`, and `-z -Z -g -N -l -A -b -H -i -T -w -o -x -u -U -E`). `-m -j -v -n -r -R -X -S -q -Q -L -p -k -K -O -c` stay. Needs neither mbuffer nor a compressor. `-n` prints one `PLAN=SNAPSHOT-ONLY src=<dataset>` line per selected dataset. Stats status is `snapshot_only` or `snapshot_only_failed`, never `success`. `-q` needs a remote source here (a local one is refused; use `snapsend.sh -q`) |
 | `-Q <SECONDS>` | How long the remote deadman waits before thawing unconditionally (default 120, minimum 10). Only meaningful with `-q` |
+| `--source-keep=N` | For an active replica (`-m`, `-i`): after a successful pull of the snapshot this run made, destroy on the **source** the job's own older snapshots (exact `-m` prefix plus the engine's timestamp, or its `_crash_` quiesce form) beyond the N newest. Only snapshots that a run of this same target stamped (user property `zfsbackup:srckeep-owner`, naming the target and its pool GUID, so two rotating disks of one pool name are two owners; a successful quiesce window's snapshot is stamped too) **and** that the target holds (by GUID) are pruned, so with several media each medium's head stays on the source until that medium's own next run. Unstamped snapshots (older history, an `-H` seed, one made by hand), other families and other jobs' snapshots are never touched. A failed listing or destroy is a warning, not a failed run; `-n` destroys nothing; under `-r` nothing is pruned, under `-R` each dataset on its own. N is a whole number of at least 1. Refused with `-e`, with `-s`, without `-m` and without `-i`; `snapsend.sh` refuses it (pull only). `gen-cron.sh` writes `--source-keep=1` for an active replica with `keep` that runs with `-i`, see [What the generator enforces](#what-the-generator-enforces) |
 
 ```bash
 snapget.sh -v1 pool/data backuppool/data_backup
@@ -1095,7 +1171,19 @@ notify       = pulled
   is refused with `-e`, with `-s`, without `-m` and without `-i`; with `history = all` or
   `auto:N` the generator does not use it. A passive replica (`-e`) never adopts Proxmox's own
   snapshots (`__replicate_`, `vzdump`, `__migration__`), with or without `-E`, unless its `-m`
-  names one of those families (`-e -m __replicate_`).
+  names one of those families (`-e -m __replicate_`). The mirror variant of an active replica
+  (`-m P -M`, no `keep`) gets no `--source-keep`: under `-M` the medium follows the source, so
+  pruning the source would delete the medium's copies too.
+- **Names are checked before they reach the crontab line.** A snapshot family name (`exclude_family`,
+  `-E` inside `flags`, and `--exclude-family` of `add-replica`, `add-client`, `rux`, `local-backup`)
+  accepts letters, digits and `_ . : -` only; `-E a*b` in a hand-edited `flags` is checked as written,
+  never expanded against the files of the directory `gen-cron.sh` runs in. `flags` containing `;`,
+  `&`, `|`, `<`, `>`, a backtick, `$(` or a newline is refused, because the value is copied into the
+  crontab line unchanged.
+- **Notify labels stay unique.** Two datasets of one relation with the same basename
+  (`hdd/data`, `rpool/data`) get the whole path in the label (`rel-hdd-data`, `rel-rpool-data`); a
+  label that was already unique, and a hand-written one that does not end in the basename, stay as
+  they are. Installing a relation block no longer refuses it when only such a label changed.
 - `recursive` drives all three generated lines from one declaration: `no` = this dataset,
   `flat` = `-R` on the transfer, `delsnaps -R`, `check-snap-age -R`; `atomic` = `-r` on the
   transfer with the same `-R` prune and monitor.
@@ -1261,7 +1349,7 @@ notify-fail.sh ...; [ $rc -ge 3 ] && notify-fail.sh ...`).
 | `notify-fail.sh` | Any job returning non-zero (`snapsend`/`snapget`/`delsnaps` failure), `check-snap-age.sh` CRITICAL/UNKNOWN, or a pool that is not ONLINE | `daily`: appends `epoch<TAB>ALERT<TAB>label<TAB>detail` to the queue and sends no mail. `immediate`: mails at once, rate-limited per message |
 | `notify-warn.sh` | `check-snap-age.sh` WARNING (getting stale, not yet CRITICAL) | The same queue with severity `WARN`, per `ZFS_WARN_MODE` |
 | `alert-digest.sh` | | The only backup mail a host sends in `daily` mode. Once a day it mails one message whose subject is `[ZFS][REPORT] <host> <date> STAN: OK\|UWAGA -- N alert / M warn`. The first block is the state *now* (pools, and a table of the jobs over the `ZFS_DIGEST_DAYS` window); the second is what *happened*: ALERT findings first, then WARNING findings, each followed by what the finding actually said. A quiet day uses a different subject (`... cisza, kanal sprawny (raport okresowy)`) so it cannot be mistaken for a findings mail. If `mail` fails, the findings are put back on the queue and it exits non-zero |
-| `check-pool-capacity.sh` | A pool, or a dataset with a refquota, approaching full, ahead of any job failing from it. Reports through `notify-fail.sh` and so arrives in the same digest | Cron, default threshold 90% (`ZFS_CAPACITY_THRESHOLD`) |
+| `check-pool-capacity.sh` | A pool, or a dataset with a refquota, approaching full, ahead of any job failing from it. Reports through `notify-fail.sh` and so arrives in the same digest. It also checks the transfer progress records: one still "running" with no update for 30 minutes whose process is gone is reported as an orphan (and closed as dead), not as a hung copy | Cron, default threshold 90% (`ZFS_CAPACITY_THRESHOLD`) |
 | `capacity-guard.sh` | Optional (default `off`): when a pool crosses `ZFS_GUARD_AT` (default 89%), deletes only snapshots that are safe to delete: ones this host's own local `delsnaps` lines own, never held, never the newest snapshot of a dataset. Any uncertainty means deleting nothing | `[capacity]` in `settings.ini` |
 | `growth-guard.sh` | Optional (default `off`), alert only: flags an increment that is a multiple (`ZFS_GROWTH_FACTOR`, default 5) of the dataset's recent norm while being poorly compressible, the signature of mass file encryption. Deletes and pauses nothing | `[growth]` in `settings.ini` |
 
@@ -1322,7 +1410,14 @@ bash deploy.sh --backup-user=zfsbackup  # also CREATE the delegated non-root acc
 Defaults live in a config block at the top of the script (`NOTIFY_EMAIL`, `ALERT_MODE`,
 `BACKUP_USER`, `BACKUP_USER_DATASETS`); edit them to make a choice permanent for a host, or pass a
 flag for a single run. `--email=ADDR` sets the alert address, and `--test-mail` sends a delivery
-smoke test (automatic on first setup only).
+smoke test (automatic on first setup only). A run ends with the next step (`zfs-backup gui`), not with
+hand-written cron recipes.
+
+**A 404 from apt on a dependency.** For every apt install the tool does (the dependencies of
+`deploy.sh`, `git` and `sudo` on a source host), when apt answers 404 (a Debian 11 host whose package
+list names security packages the archive no longer serves), the package and each package named in
+apt's 404 lines are pinned to their newest version outside the security archive and the install is
+retried, up to three tries, saying so out loud.
 
 **`BACKUP_USER` is about creation, not maintenance.** Left empty, an existing delegated account is
 still auto-detected and kept up to date (its notify scripts, log rotation, group membership); only

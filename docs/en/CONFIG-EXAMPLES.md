@@ -58,6 +58,10 @@ guests can take it:
 - `auto` — let `snapsend.sh` choose per guest type;
 - absent / `no` — crash-consistent snapshot, command unchanged.
 
+On a remote source, a quiesced tier whose scope holds no guest disk (`vm-N-disk-M`,
+`subvol-N-disk-M`) takes a plain snapshot and exits 0, and the account needs no quiesce right
+for it; a scope with a guest disk is checked as before.
+
 Because the three datasets resolve different `-q`, they stay three separate send
 lines rather than merging. Do **not** quiesce a network gateway or anything
 whose brief stall would cut your own path to the host.
@@ -111,7 +115,10 @@ Always look at the diff before `--install`, especially on a host with live
 jobs — a config typo that changes a schedule or a path is caught here, not at
 03:00. Unknown field names, blank-but-present fields, `-r`/`-R` smuggled into
 `flags`, and same-scope pattern overlaps are all hard errors at generate time,
-so a config that renders is a config whose shape has already been checked.
+so a config that renders is a config whose shape has already been checked. `flags` is engine options only: a value
+with `;`, `&`, `|`, `<`, `>`, a backtick, `$(` or a newline is refused, because it is copied into
+root's crontab line as written; the value of `-E` must be a snapshot family name (letters, digits,
+`_ . : -`, not starting with `-`), so `-E a*b` is refused as well.
 
 ## 6. Deliberate manual customization after preset generation
 

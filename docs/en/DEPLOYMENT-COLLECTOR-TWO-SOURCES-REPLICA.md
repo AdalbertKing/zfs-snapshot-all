@@ -172,6 +172,10 @@ it with `--base=`) and exports the pool, so the disk can be unplugged right away
 
 Such a pool fits `--dst=repl/replica` from the next section.
 
+`prepare-media` ends by checking that a plain `zpool import` lists the new pool: it waits for udev, asks once
+for the disk to be read again, and refuses if the pool still does not show (a replica run would take the disk
+for absent).
+
 The plan warns when the kernel sees a smaller physical sector than the drive reports
 (`smartctl`). Some USB bridges do that (512 B instead of 4096 B); `ashift=12` keeps the
 pool aligned regardless.
@@ -206,6 +210,27 @@ minute — once a day, so two replicas do not start together; an existing replic
 keeps its schedule. The replica is **not an online mirror**: the medium is at risk
 only while its pool is imported, so the number of runs **is** the exposure.
 
+**What the disk holds** — three shapes, chosen in the replica wizard (F6) or by flags:
+
+- **its own snapshot, a mirror of the collector** (the default; own family `replica_`): each run takes a `replica_`
+  snapshot and copies it, then the medium drops what the collector has dropped (`-M`);
+- **`--keep=N`**: the medium keeps its own N newest `replica_` snapshots, independent of the collector (no `-M`; a
+  disk put in once a month can hold 12 states). Only the replica's own snapshot travels (`-i`, unless `history` is
+  set). When the run uses `-i`, the collector too keeps only the newest own `replica_` snapshot per medium
+  (`snapget.sh --source-keep=1`): after a good copy it destroys the older ones, and the `#tgt-` bookmark carries
+  the next increment. Only snapshots that a run for this very medium stamped (`zfsbackup:srckeep-owner`: target
+  and pool GUID, so two rotating disks of one pool name are two owners) and that the medium holds are destroyed;
+  an unstamped snapshot is never touched, and a failed destroy is a warning, not a failed run. With an explicit
+  `history = all` or `auto:N` nothing is pruned on the collector;
+- **`--passive`**: no snapshots of its own; it carries the ones already there, so the disk holds the state of the
+  newest of them. The first copy of such a mirror carries the history: the oldest eligible snapshot in full, then
+  every later one up to the newest. A replica made before that keeps what it has; only F6, Enter, `e`, "Start over
+  on this disk (full copy)" fills it in. A passive replica skips snapshot families like a relation does:
+  `--exclude-family=A,B` (letters, digits, `_ . : -`) gives it the same `-E`; the wizard sets
+  `__replicate_,vzdump,__migration__` for a passive replica that has none, so the copy stands on the tool's own
+  snapshots, not on the ones Proxmox replication renames every few hours. `list-replicas --json` shows the list
+  as `exclude_family`.
+
 Running outside the schedule:
 
 ```bash
@@ -228,11 +253,37 @@ run the command once more and check that
 After a disk is connected and the delay has passed (`replica.insert_wait`, 60 s by default),
 only the replicas whose medium this disk is start: by pool GUID when the replica lists its
 disks, otherwise by pool name (the rule passes the device and `blkid` reads its pool; when it
-reads neither the name nor the GUID, no replica starts and one log line says so -- from the release after 1.0.17).
+reads neither the name nor the GUID, no replica starts and one log line says so, from 1.0.18).
 Another ZFS disk (for example one just formatted, before the wizard saves its GUID) starts
 no replica that lists its disks (GUIDs) and raises no alert; the log keeps one line per replica skipped. The rule calls `systemd-run --collect`,
 so a failed run does not block later connections. The replica wizard renews a rule without
 `--collect` in its plan.
+
+**One run at a time.** A copy still running when the next trigger comes (schedule or a re-plug) is not started a
+second time: the new run ends with rc 75 and says since when the copy runs, and its detach does not export the disk
+under the running copy. rc 75 is a skip, not a failure; the age monitor reports a running copy as OK (WARNING past
+the critical age). A run that cannot record itself does not start: when the gate cannot create its lock or write
+and read back its run record, attach stops with rc 2 before any import, and a detach that finds a record it cannot
+read does not export the pool (it says DO NOT UNPLUG if the pool is imported). A copy killed with SIGTERM still
+exports its disk.
+
+**A first copy that cannot fit is refused.** Before writing, the gate adds up the sources that have no copy on the
+medium yet and compares the sum with the medium's free space; when it is short, the gate exports the disk and
+refuses with both numbers (rc 2, an alert). `add-replica` and the replica wizard show the size of the first copy
+in the plan, before EXECUTE, with the free space when the medium's pool is imported, and `!!!` when it cannot fit.
+When the disk is already attached while a new replica is created, the wizard asks whether to start the first copy
+now (in the background, as F7; the state is in F2).
+
+A replica source whose name holds `:` (`tank/data:part`) is copied as a local dataset.
+
+**F6 in the GUI.** Columns: Replika (replica), Type (connected / disconnected / internal), Used (how full the medium
+is, while its pool is imported), Done, Last run, Schedule; `list-replicas --json` carries `medium_size` and
+`medium_alloc` in bytes (empty while the pool is not imported). A running copy reads `copy running since …`
+(`running_since`) instead of the last finished run; a disk just inserted whose copy waits (`replica.insert_wait`)
+reads `disk connected, copy in ~N s` (`insert_in`). F6 reads the list again on entry and every 15 s. In F4 a
+replica dataset with no snapshot yet says `copy running` while the copy runs, and `interrupted, will resume`
+when a cut-off receive left a resume token. The replica wizard shows the number of snapshots next to each dataset
+and, at zero, the note that a passive replica will not copy it.
 
 ## 6. Scenario A: what lands in the config
 
@@ -354,7 +405,14 @@ you mean by its id and re-run -- this will not choose for you.
 relation that no longer exists, and the collector has a new family of snapshots with
 no common ancestor, the gate names both families and presents the choice (a
 different `--dst`, or `zfs destroy -r` on the target), instead of throwing a ZFS
-error every night.
+error every night. "No common ancestor" is decided by GUID: the disk is refused only when no
+snapshot on it shares a GUID with a snapshot or a bookmark on the source. A snapshot renamed on
+either side counts as shared, and so does one the collector's retention has already pruned while
+its bookmark remains (the disk then gets an increment from the bookmark). Evidence that cannot be
+read leads to neither a refusal nor `zfs destroy` advice. The same checks (lineage, free space) run
+when the pool was imported before the run, by an interrupted run of ours or by an operator; on a
+refusal an operator's import stays imported. A source tree that cannot be listed in full does not
+count as "no new data", so the copy is not skipped on that basis.
 
 Timings and statistics — two levels, both already recorded:
 
@@ -443,6 +501,12 @@ retention of the family stays with server 1. The passive schedule is `:31` (half
 hour behind the producer), the monitor thresholds are 3h/5h (the chain's cadence).
 The activation preview states the passivity outright.
 
+A passive link never takes a Proxmox-reserved snapshot (`__replicate_`, `vzdump`, `__migration__`) as the newest
+or as the base, with or without `-E`; a dataset with only such snapshots is refused ("Every source snapshot on
+'<dataset>' matches an -E exclusion"), and under `-R` skipped as scaffolding. A subtree with no snapshot at all
+(`-e -R`) is not a failed run: it says "nothing to copy" and ends rc 0. Link B is also a mirror (`-M`): a
+snapshot renamed on the source stays on the double, because "gone from the source" is decided by GUID.
+
 Verifying the end of the chain:
 
 ```bash
@@ -498,7 +562,7 @@ medium: "unpairing ends the relationship, not the backup".
 `remove-replica --install` also removes the replica's state files in
 `/var/lib/zfs-snapshot-all/media/` (`<name>.current`, `.synced`, `.last-seen`, and the run
 records), so a new replica of the same name starts clean. A copy running at that moment is
-named in the plan and is not stopped: it runs to its end, exports the disk, and keeps its own
+named in the plan and in the Del window of F6 and is not stopped: it runs to its end, exports the disk, and keeps its own
 run records until then.
 
 **The package does not delete the copies on the medium** — there is no separate verb

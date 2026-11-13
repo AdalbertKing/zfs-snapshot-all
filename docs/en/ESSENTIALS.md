@@ -15,7 +15,7 @@ server console.
 | kinds of relation | **backup** (the collector pulls copies and keeps its own history), **mirror** (the same as on the source), **local copy** (on the same host), **local / remote snapshots** (snapshots only, no copies) |
 | **template** | how many snapshots to keep at each tier (hourly, daily, weekly…); the GUI offers `default`, `full`, `d7h24`, `d30h24`, `m12w4d7h24-gfs` |
 | **replica** | a copy of the copy on a separate medium (USB or a second pool), once a day at night |
-| **passive** (copy, replica) | carries the snapshots that already exist on the source — the state as of the newest of them, **not the current state**; a dataset without snapshots is not copied. Only the mode with its own snapshots (the copy takes a snapshot itself) gives the current state |
+| **passive** (copy, replica) | carries the snapshots that already exist on the source — the state as of the newest of them, **not the current state**; a dataset without snapshots is not copied. Only the mode with its own snapshots (the copy takes a snapshot itself) gives the current state. Proxmox-reserved snapshots (`__replicate_`, `vzdump`, `__migration__`) are never taken as the newest one |
 | **monitor** | checks the age of the newest snapshot and raises an alarm when copies stop arriving |
 
 ## First run
@@ -49,6 +49,8 @@ server console.
 
    The collector needs SSH access to the source host as root; the wizard installs the package on the source by itself.
 
+   The title bar shows the package version (e.g. `zfs-snapshot-all 1.0.21`).
+
    The GUI starts in English. For Polish: **F10** (host settings), item `language` = `pl`, or
 
    ```bash
@@ -57,7 +59,11 @@ server console.
 
    Command output stays in English.
 
-3. Check after an hour: **F2 Przebiegi (runs)** (what ran and what runs next, with errors).
+3. Check after an hour: **F2 Przebiegi (runs)**. The list reads newest first: upcoming runs of the next 6 hours
+   on top, then the `now` line, then the finished runs of the last 72 hours (result, time, reason of an error);
+   the cursor starts on the latest finished run. Cron lines of one relation, task and tier that start within
+   5 minutes of each other (one line per dataset) are one row, `N datasets`, with the worst result; Enter expands
+   it to one row per dataset. A run that died without finishing shows as INTERRUPTED.
 
 ## Day to day
 
@@ -69,6 +75,8 @@ server console.
 | restore data | F4 Kopie (copies), F9 Przywróć (restore) |
 | browse files in a snapshot | F4 Kopie, Enter (or F4 on a run in F2) |
 | add a replica on a disk | F6 Replika (replica), Ins |
+| see whether a replica disk is connected, how full it is, whether a copy is running | F6: columns Type (connected / disconnected / internal) and Used; a running copy reads `copy running since …` |
+| tell the mails apart | subject: `[ZFS][REPORT]` daily summary, `[ZFS][WARNING]` warning, pool capacity, data growth, `[ZFS][ALERT]` failed run; F10 `alerts.site` puts the installation's name in it |
 | do the same from the command line | [COMMANDS.md](COMMANDS.md) |
 
 ## Where next

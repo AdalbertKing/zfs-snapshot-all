@@ -148,6 +148,76 @@ jednorazowo: `ZFS_TUI_LANG=pl zfs-backup gui` albo `--lang=pl`.
 
 Odzysk z dysku (dawne okno F11 Odzysk) jest od 2026-10-27 w F4 Kopie: wiersz dysku, F9. F11 jest wolne.
 
+Szczegóły okien:
+
+- Pasek tytułu pokazuje wersję pakietu, czytaną z pierwszego nagłówka wersji pliku `CHANGELOG.md` dostarczanego obok programu.
+- F2 listuje wykonane przebiegi z ostatnich 72 godzin i zawsze listuje przebieg trwający, także po F8 i gdy zaczął się przed tym oknem. Po nadejściu historii przebiegów otwiera się na najnowszym wykonanym przebiegu. Przebieg bez rekordu końca, którego proces `zfs-job.sh` już nie istnieje, jest pokazany jako PRZERWANY (`job-stats --runs` daje mu rc `-2`); tam, gdzie nie da się czytać procesów innych użytkowników (`hidepid`), zostaje „trwa”. Silnik zabity przez TERM/INT/HUP sam zamyka swoje rekordy postępu jako przerwane. Wiersz znajduje swoje przebiegi po etykiecie własnej linii crona, więc wiersze migawek relacji tylko-migawki i wiersz lokalnego prune złożony z kilku datasetów pokazują własne przebiegi. W bezczynności ekran jest przerysowywany w całości raz na minutę, więc komunikat z konsoli nie zostawia śmieci.
+- F4 opisuje dataset repliki, który nie ma jeszcze migawki, jako „kopia trwa”, gdy kopia biegnie, a jako „przerwana, wznowi się”, gdy przerwany odbiór zostawił token wznowienia (`zfs-tree --json` niesie `resume`). Listuje dyski gości relacji tylko-migawki, które replikuje `pvesr`, i pokazuje nośnik repliki słowami F6 (NIE TEN DYSK albo Podłączony, gdy pula nie jest zaimportowana).
+- F6 ma kolumnę „Zajęte” i linię nośnika „zajęte N% (X z Y)”, gdy pula dysku jest zaimportowana. Trwająca kopia czyta się „kopia trwa od ...” zamiast ostatniego zakończonego przebiegu, a świeżo włożony dysk, którego kopia czeka, „dysk podłączony, kopia za ~N s” zamiast „odłączony”. Lista replik jest czytana ponownie co 15 s, gdy F6 jest otwarte.
+- Kreator repliki pokazuje w drzewie datasetów liczbę migawek każdego datasetu (wszystkie rodziny; daje ją `list-datasets --own-snapshots` jako `snapshots`), a przy zerze uwagę, że replika pasywna go nie skopiuje. Jego plan mówi, jak duża będzie pierwsza kopia, a przy zaimportowanej puli nośnika ile jest wolnego, z `!!!`, gdy się nie zmieści. Przy dysku już podłączonym pyta, czy zacząć pierwszą kopię teraz (w tle, jak F7).
+
+### Repliki na nośnikach wymiennych
+
+Replika (`add-replica`, sekcja `[replica:<nazwa>]`) kopiuje datasety, które ten host już ma, na inną
+pulę, zwykle na dysk, który się wypina. Każdy przebieg jest objęty klamrą `zfs-media-gate.sh`:
+`attach` (importuje pulę, gdy trzeba; brak nośnika to cichy skip, nigdy alert), kopia, `detach`
+(eksportuje tylko pulę zaimportowaną przez ten przebieg). Co gwarantują brama i jej pomocnicy:
+
+- **Jeden przebieg repliki naraz.** Kopia, która jeszcze trwa, gdy przychodzi następny wyzwalacz
+  (harmonogram albo ponowne wpięcie), nie startuje drugi raz: nowy przebieg kończy się z rc 75, mówi,
+  od kiedy kopia trwa, i nie rusza nośnika; jego detach nie eksportuje dysku spod trwającej kopii.
+  Gdy brama nie umie utworzyć lub zablokować swojego rekordu przebiegu albo zapisać go i odczytać,
+  `attach` kończy się z rc 2 przed jakimkolwiek importem; detach, który trafi na nieczytelny rekord,
+  nie eksportuje puli (pisze DO NOT UNPLUG, gdy pula jest zaimportowana). `zfs-job.sh` zgłasza rc 75
+  jako ostrzeżenie. Monitor wieku (`zfs-media-gate.sh age`) zgłasza trwającą kopię jako OK, a jako
+  WARNING dopiero gdy ta kopia trwa dłużej niż wiek krytyczny.
+- **Pierwsza kopia, która się nie zmieści, jest odrzucana.** Przed zapisem brama sumuje źródła, które
+  nie mają jeszcze kopii na nośniku (`zfs used` na źródle) i porównuje z wolnym miejscem; gdy go
+  brakuje, odmawia z rc 2 (alert) i eksportuje dysk. Liczba, której nie da się odczytać, pomija
+  sprawdzenie. Nośnik zaimportowany przed przebiegiem (przez przerwany przebieg tego narzędzia albo
+  przez operatora) przechodzi te same sprawdzenia rodowodu i wolnego miejsca; po odmowie import
+  operatora zostaje zaimportowany.
+- **Nośnik innego rodowodu jest odrzucany**, ale tylko gdy żadna migawka celu nie ma wspólnego GUID
+  z migawką lub zakładką źródła: liczy się migawka przemianowana po którejkolwiek stronie, liczy się
+  też zakładka źródła niosąca GUID migawki dysku, więc dysk wracający po tym, jak retencja kolektora
+  usunęła jego migawkę, nadal dostaje przyrost. Nieczytelne dowody nie prowadzą do odmowy ani do rady
+  `zfs destroy`. Nazwa źródła zawierająca `:` (`tank/data:part`) jest kopiowana jako dataset lokalny,
+  a nie czytana jako `host:dataset`.
+- **Podłączenie dysku uruchamia tylko repliki, których to nośnik** (`run-replicas --on-insert`,
+  wywoływane przez regułę udev z `install-media-trigger`). Przebieg czyta z `blkid` nazwę i GUID puli
+  dysku i uruchamia replikę tylko wtedy, gdy GUID jest jednym z jej dysków (`media_guids`), a dla
+  repliki bez listy GUID, gdy zgadza się nazwa puli. Dysk ZFS, którego nazwy i GUID `blkid` nie umie
+  odczytać, nie uruchamia żadnej repliki: wpięcie jest zapisane w logu i nic nie rusza. Przebiegi
+  z harmonogramu i ręczne są bez zmian; brama nadal głośno odrzuca zły dysk. Reguła to jedna fizyczna
+  linia i wywołuje `systemd-run --collect`, więc nieudany przebieg po włożeniu nie blokuje kolejnego
+  podłączenia dysku pod tą samą nazwą jądra; na hoście z starszą regułą uruchom ponownie
+  `install-media-trigger --install` (kreator repliki uznaje regułę z odwrotnym ukośnikiem poza
+  komentarzem albo bez `--collect` za starą i odnawia ją w planie). `list-replicas --json` podaje
+  `insert_in` (sekundy do startu czekającej kopii) i `running_since` (rekord przebiegu bramy, żywy pid).
+- **Dyski USB dostają głęboką kolejkę.** Dysk za `usb-storage` startuje z `nr_requests=2`; brama
+  podnosi je do 128 na każdym całym dysku USB poniżej tej wartości, tuż przed `zpool import` (nigdy
+  nie obniża, dysków nie-USB nie rusza, milczy, gdy sysfs jest tylko do odczytu), a `prepare-media`
+  robi to przed `zpool create`. Ustawienie ginie przy każdym wypięciu, więc jest ustawiane przy
+  każdym attach.
+- **`prepare-media`** tworzy pulę z `ashift=12` (mostki USB zgłaszają sektory 512 B na dyskach 4 KiB)
+  i ostrzega, gdy `physical_block_size` widziany przez jądro jest mniejszy niż podaje `smartctl`, czyli
+  mostek ukrywa rozmiar sektora. Świeżo sformatowany dysk jest sprawdzany, zanim zostanie uznany za
+  gotowy: czeka, aż zwykłe `zpool import` wylistuje nową pulę, a w przeciwnym razie odmawia.
+- **Zatrzymana kopia nadal odkłada dysk.** Linia crona uruchamia `detach` bramy także wtedy, gdy
+  zabito całą grupę procesów zadania (TERM/INT/HUP).
+- **`remove-replica --install`** każe bramie (czasownik `forget`) usunąć pliki stanu repliki w
+  `/var/lib/zfs-snapshot-all/media/`; kopia trwająca w tej chwili jest nazwana w planie i w oknie Del
+  (czasownik bramy `running`) i nie jest zatrzymywana, a jej rekordy przebiegu zostają dla jej
+  własnego detach.
+- **Replika pasywna** (`--passive`) nigdy nie zgłasza „could not record what ... now holds”: z
+  założenia nigdy nie pomija. `--exclude-family=A,B` (z `--passive`) daje jej te same wykluczenia `-E`
+  co relacji; kreator repliki ustawia `__replicate_,vzdump,__migration__` dla repliki pasywnej, która
+  ich nie ma. `list-replicas --json` pokazuje tę listę jako `exclude_family`. Pierwsza kopia repliki
+  lustrzanej (`snapget.sh -e -M`) wysyła najstarszą kwalifikującą się migawkę w całości, a potem każdą
+  następną aż do najnowszej; replika zrobiona wcześniej zachowuje to, co ma, a uzupełnia ją tylko
+  „Zacznij od nowa na tym dysku (pełna kopia)” (F6, Enter, `e`; czasownik `replica-restart`). `-i` i
+  `-H` mają własne reguły.
+
 ## Podstawowe pojęcia
 
 To są idee, przez które zestaw zachowuje się inaczej niż naiwna nakładka na `zfs send | zfs recv`.
@@ -268,8 +338,10 @@ własnej historii migawek pośrednich.
 Łączy się z `-r`: `zfs send -R -i` jest prawidłowe i rekurencyjne, więc baza i najnowsza migawka
 lądują w każdym datasecie poddrzewa, a pośrednie w żadnym. Przy `-R` (niezależne zadania per
 dataset) każdy rozwinięty dataset ma własne szukanie wspólnej bazy, więc `-i` po prostu przełącza
-ten wybór per dataset. Nie robi nic (jest zalogowane, nie odrzucone), gdy na początku nie ma
-żadnej wspólnej migawki: ścieżka fallbacku bookmarkowego i tak wysyła pojedynczą różnicę.
+ten wybór per dataset. Nie robi nic (jest zalogowane, nie odrzucone), gdy na początku nie ma ani
+wspólnej migawki, ani zakładki. Od zakładki `-i` (i `-T`, gdy przekroczy próg) zostawia pojedynczą
+różnicę; bez nich ten przyrost idzie dwoma krokami i niesie migawki pośrednie, zobacz
+[Przyrost oparty na zakładce](#przyrostowy-fallback-oparty-na-bookmarkach).
 
 ```bash
 # Target has been offline for a week; catch it up in one step instead of
@@ -347,9 +419,13 @@ gdy wiesz, że dane goście utrzymają zamrożenie.
 
 **Co kopiuje przebieg z udanym zamrożeniem.** Każdy dataset objęty oknem kopiuje dokładnie migawkę
 zrobioną w tym oknie, nigdy nowszą, którą w międzyczasie zrobiło inne zadanie. Jeśli tej migawki
-brakuje (usunięta albo wyłączona przez `-E`), ten dataset kończy się błędem, a przebieg też;
-pod `-R` nie jest pomijany jako pusty dataset. Migawka awaryjna (`_crash_`) jest robiona osobno
-dla każdego datasetu i tej zasady nie dotyczy.
+brakuje (usunięta, wyłączona przez `-E`, albo dataset jest pusty lub nie ma żadnej migawki rodziny
+`-m`), ten dataset kończy się błędem, a przebieg też; pod `-R` nie jest pomijany jako rusztowanie.
+To samo, gdy migawka zniknie po jej wybraniu, a wznowiony przerwany transfer nie kończy datasetu
+przed skopiowaniem migawki własnego okna. `snapget.sh -s` sprawdza, że migawka okna istnieje, a jego
+lokalny tryb tylko-migawki nie robi drugiej, niezamrożonej migawki. Migawka awaryjna (`_crash_`) jest
+robiona osobno dla każdego datasetu i tej zasady nie dotyczy. Przebiegi pasywne (bez okna) są bez
+zmian.
 
 **Polityka błędu.** Nieudane zamrożenie nadal robi migawkę, spójną po awarii, chyba że szczebel
 mówi `,strict`:
@@ -499,6 +575,9 @@ Rekordy `snapsend.sh`/`snapget.sh` niosą `label` (relację, z `-L`; pusty, gdy 
 `pattern`/`deleted`/`kept`, bo robi prune, a nie transfer. `status` to `success`, błąd albo
 odrębny niesukces, jak `skipped_paused` (relacja jest spauzowana), `skipped_lock` lub
 `snapshot_only`, dzięki czemu pominięty przebieg nigdy nie zostanie odczytany jako świeży backup.
+`skipped_lock` znaczy, że blokadę trzymał inny przebieg tego samego zadania: silnik kończy się z rc 75,
+co `zfs-job.sh` zgłasza jako ostrzeżenie (przebieg pominięty), a nie jako błąd; statystyki zadań,
+okno Przebiegi i digest też nie liczą go jako błędu.
 Logowanie jest typu best-effort: niezapisywalna ścieżka jest połykana, zamiast wywalać backup,
 który już się udał.
 
@@ -535,8 +614,8 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | Flaga | Znaczenie |
 |---|---|
 | `-m <KOMUNIKAT>` | Prefiks nazwy nowej migawki. Pominięcie jest dozwolone, ale ostrzegane, patrz niżej |
-| `-e` | Użyj istniejącej najnowszej migawki zamiast tworzyć nową. Wskazany dataset bez migawek kończy przebieg błędem. Przy `-R` element bez migawek jest pomijany; gdy w całym poddrzewie nie ma żadnej migawki, przebieg zapisuje w logu „nothing to copy” i kończy się rc 0, a gdy migawki są, ale żadnej nie da się przejąć (inna rodzina, wszystkie wykluczone przez `-E`), przebieg kończy się błędem |
-| `-E <PREFIKS>` | Z `-e`: nigdy nie przyjmuj za najnowszą/bazę migawki, której nazwa zaczyna się od PREFIKS, nawet gdy jest nowsza (wygrywa najnowsza niewykluczona). Powtarzalne. Do biernego podbierania migawek obcego systemu. Przy strumieniu niosącym potomków (`-r`, pierwsza kopia przy `-H`) wykluczone migawki są szukane w całym poddrzewie; gdy pierwszego strumienia nie da się zacząć bez wykluczonej migawki, nic nie jest wysyłane, a log mówi dlaczego |
+| `-e` | Użyj istniejącej najnowszej migawki zamiast tworzyć nową. Wskazany dataset bez migawek kończy przebieg błędem. Przy `-R` element bez migawek jest pomijany; gdy w całym poddrzewie nie ma żadnej migawki, przebieg zapisuje w logu „nothing to copy” i kończy się rc 0, a gdy migawki są, ale żadnej nie da się przejąć (inna rodzina, wszystkie wykluczone przez `-E`), przebieg kończy się błędem. Rodziny zarezerwowane przez Proxmoxa (`__replicate_`, `vzdump`, `__migration__`) nigdy nie są przyjmowane za najnowszą/bazę pod `-e`, z `-E` i bez; `-m` nazywające jedną z nich (`-e -m __replicate_`) wyłącza to dla tej rodziny. Dataset mający tylko migawki zarezerwowane odmawia („Every source snapshot on '<dataset>' matches an -E exclusion”), a pod `-R` jest pomijany jako rusztowanie |
+| `-E <PREFIKS>` | Z `-e`: nigdy nie przyjmuj za najnowszą/bazę migawki, której nazwa zaczyna się od PREFIKS, nawet gdy jest nowsza (wygrywa najnowsza niewykluczona). Powtarzalne. Do biernego podbierania migawek obcego systemu. Przy strumieniu niosącym potomków (`-r`, pierwsza kopia przy `-H`) wykluczone migawki są szukane w całym poddrzewie; gdy pierwszego strumienia nie da się zacząć bez wykluczonej migawki, nic nie jest wysyłane, a log mówi dlaczego. Wewnątrz przyrostu wykluczona migawka leżąca między bazą a najnowszą też nie jest niesiona: silniki wysyłają wtedy te same dane jako łańcuch kroków `-i` przez migawki niewykluczone (migawki skopiowane wcześniej nie są usuwane). PREFIKS to nazwa rodziny migawek: tylko litery, cyfry i `_ . : -` |
 | `-t` | Drugi argument to DOKŁADNY dataset do zapisu, a nie baza, pod którą dopisuje się nazwę źródła. Używane przez odzysk, gdzie kopia musi wrócić na swoją oryginalną ścieżkę. Odmowa przy kilku datasetach, bez bazy i z `-R` |
 | `-z` / `-Z` | Kompresuj strumień zstd (`-Z` to synonim `-z`). Domyślnie włączone wobec zdalnego celu |
 | `-g` | Kompresuj pigz zamiast tego (wyjście awaryjne, gdy zstd jest niedostępny) |
@@ -551,7 +630,7 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-H` | Wysyłka pełnej historii, jeśli nie ma wspólnej bazy (zamiast zwykłego pełnego wysłania) |
 | `-u` | Przyjmowane i ignorowane: niemontowanie jest domyślne |
 | `-U` | Zamontuj cel po odbiorze; zobacz [Montowanie celu](#montowanie-celu) |
-| `-f` | Wymuś pełne wysłanie: zniszcz dane celu, zasiej od zera |
+| `-f` | Wymuś pełne wysłanie: zniszcz dane celu, pierwsza kopia od zera |
 | `-w` | Wysyłka surowa (`zfs send -w`): przesyła zaszyfrowane źródło jako szyfrogram, żaden klucz nie jest potrzebny po żadnej stronie; praktycznie bez efektu na danych niezaszyfrowanych |
 | `-p <PORT>` | Port SSH (domyślnie 22) |
 | `-c <SPEC_SZYFRU>` | Szyfr(y) SSH do zażądania (`ssh -c`), np. `aes128-gcm@openssh.com` dla łącza ograniczonego przez CPU. Domyślnie: pozwól ssh/sshd wynegocjować. Bez efektu przy uruchomieniu lokalnym |
@@ -593,13 +672,14 @@ Przyjmuje każdą flagę `snapsend.sh` (`-m -e -E -t -z -Z -g -N -l -v -r -R -X 
 dotyczy zdalnego `zfs send`, `-x` lokalnego odbioru, `-F` zawsze niszczy lokalnie, bo cel jest
 zawsze lokalny, a listowanie potomków przy `-R` biegnie przez ssh, gdy źródło jest zdalne. `-q`
 działa tak, jak opisano w [Zamrażaniu](#zamrażanie-gości-proxmoxa): gość żyje na źródle, więc
-zamrożenie odbywa się tam. Trzy flagi istnieją tylko tutaj:
+zamrożenie odbywa się tam. Cztery flagi istnieją tylko tutaj:
 
 | Flaga | Znaczenie |
 |---|---|
 | `-M` | Lustro (relacje sync): po udanym pobraniu zniszcz na celu każdą migawkę, której źródło już nie ma (żadna migawka źródła nie ma jej GUID, pod żadną nazwą, więc migawka o zmienionej nazwie zostaje), a która jest STARSZA niż wspólna baza, żeby cel trzymał to, co źródło. Nigdy bazy ani niczego nowszego, nigdy zarezerwowanej rodziny Proxmoxa, i nic w ogóle, gdy nie daje się odczytać lista źródła albo lista GUID którejś strony, albo gdy lista źródła wraca pusta. Rozstrzygane per dataset, więc przy `-R` każde rozwinięte dziecko lustruje swoje własne źródło. Nie z `-r` |
-| `-s` | Tylko migawki, bez transferu: robi migawkę (migawki) źródła tam, gdzie źródło żyje (przez ssh dla `[user@]host:dataset`, lokalnie dla samego datasetu) i na tym kończy: nic nie jest wysyłane, odbierane, trzymane holdem, bookmarkowane, lustrowane ani tworzone tutaj. Dla datasetów, które inny mechanizm już kopiuje (`pvesr` w klastrze Proxmoxa) i które potrzebują tylko własnej rodziny migawek tej relacji. Przyjmuje dokładnie jeden argument pozycyjny (listę źródeł); argument celu i każda flaga, która tylko kształtuje transfer, są odrzucane przed jakimkolwiek ssh czy migawką (`-e -t -M -f -F` oraz `-z -Z -g -N -l -A -b -H -i -T -w -o -x -u -U -E`). `-m -j -v -n -r -R -X -S -q -Q -L -p -k -K -O -c` zostają. Nie potrzebuje ani mbuffera, ani kompresora. `-n` wypisuje jedną linię `PLAN=SNAPSHOT-ONLY src=<dataset>` na każdy wybrany dataset. Status w statystykach to `snapshot_only` lub `snapshot_only_failed`, nigdy `success` |
+| `-s` | Tylko migawki, bez transferu: robi migawkę (migawki) źródła tam, gdzie źródło żyje (przez ssh dla `[user@]host:dataset`, lokalnie dla samego datasetu) i na tym kończy: nic nie jest wysyłane, odbierane, trzymane holdem, bookmarkowane, lustrowane ani tworzone tutaj. Dla datasetów, które inny mechanizm już kopiuje (`pvesr` w klastrze Proxmoxa) i które potrzebują tylko własnej rodziny migawek tej relacji. Przyjmuje dokładnie jeden argument pozycyjny (listę źródeł); argument celu i każda flaga, która tylko kształtuje transfer, są odrzucane przed jakimkolwiek ssh czy migawką (`-e -t -M -f -F` oraz `-z -Z -g -N -l -A -b -H -i -T -w -o -x -u -U -E`). `-m -j -v -n -r -R -X -S -q -Q -L -p -k -K -O -c` zostają. Nie potrzebuje ani mbuffera, ani kompresora. `-n` wypisuje jedną linię `PLAN=SNAPSHOT-ONLY src=<dataset>` na każdy wybrany dataset. Status w statystykach to `snapshot_only` lub `snapshot_only_failed`, nigdy `success`. `-q` wymaga tu zdalnego źródła (lokalne jest odrzucane; użyj `snapsend.sh -q`) |
 | `-Q <SEKUNDY>` | Jak długo zdalny deadman czeka, zanim odmrozi bezwarunkowo (domyślnie 120, minimum 10). Ma sens tylko z `-q` |
+| `--source-keep=N` | Dla repliki aktywnej (`-m`, `-i`): po udanym pobraniu migawki zrobionej przez ten przebieg niszczy na **źródle** starsze własne migawki zadania (dokładny prefiks `-m` plus znacznik czasu silnika albo jego postać awaryjna `_crash_`) poza N najnowszymi. Usuwane są tylko migawki, które oznaczył przebieg tego samego celu (właściwość użytkownika `zfsbackup:srckeep-owner`, z nazwą celu i GUID puli, więc dwa wymienne dyski o tej samej nazwie puli to dwóch właścicieli; migawka udanego okna zamrożenia też jest oznaczana) **i** które cel ma (według GUID), więc przy kilku nośnikach głowa każdego zostaje na źródle do jego własnego następnego przebiegu. Migawki nieoznaczone (starsza historia, pierwsza kopia `-H`, zrobione ręcznie), inne rodziny i migawki innych zadań nie są nigdy ruszane. Nieudane listowanie lub usunięcie to ostrzeżenie, nie błąd przebiegu; `-n` niczego nie niszczy; pod `-r` nic nie jest usuwane, pod `-R` każdy dataset osobno. N to liczba całkowita, co najmniej 1. Odrzucane z `-e`, z `-s`, bez `-m` i bez `-i`; `snapsend.sh` je odrzuca (tylko pull). `gen-cron.sh` zapisuje `--source-keep=1` dla repliki aktywnej z `keep`, działającej z `-i`, zobacz [Co egzekwuje generator](#co-egzekwuje-generator) |
 
 ```bash
 snapget.sh -v1 pool/data backuppool/data_backup
@@ -1113,7 +1193,19 @@ notify       = pulled
   bez `-i`; przy `history = all` lub `auto:N` generator go nie używa. Replika
   pasywna (`-e`) nigdy nie przyjmuje migawek samego Proxmoxa (`__replicate_`, `vzdump`,
   `__migration__`), także bez `-E`, chyba że jej `-m` nazywa jedną z tych rodzin
-  (`-e -m __replicate_`).
+  (`-e -m __replicate_`). Wariant lustrzany repliki aktywnej (`-m P -M`, bez `keep`) nie dostaje
+  `--source-keep`: pod `-M` nośnik idzie za źródłem, więc czyszczenie źródła usunęłoby też kopie
+  na nośniku.
+- **Nazwy są sprawdzane, zanim trafią do linii crontaba.** Nazwa rodziny migawek (`exclude_family`,
+  `-E` w `flags` oraz `--exclude-family` w `add-replica`, `add-client`, `rux`, `local-backup`) przyjmuje
+  tylko litery, cyfry i `_ . : -`; `-E a*b` w ręcznie edytowanym `flags` jest sprawdzane tak, jak
+  napisano, i nigdy nie jest rozwijane do plików katalogu, z którego działa `gen-cron.sh`. `flags`
+  zawierające `;`, `&`, `|`, `<`, `>`, odwrotny apostrof, `$(` albo znak nowej linii jest odrzucane,
+  bo wartość trafia do linii crontaba bez zmian.
+- **Etykiety notify pozostają unikalne.** Dwa datasety jednej relacji o tej samej nazwie bazowej
+  (`hdd/data`, `rpool/data`) dostają w etykiecie całą ścieżkę (`rel-hdd-data`, `rel-rpool-data`);
+  etykieta, która już była unikalna, i ręcznie napisana, niekończąca się nazwą bazową, zostają bez
+  zmian. Instalacja bloku relacji nie odmawia już, gdy zmieniła się tylko taka etykieta.
 - `recursive` steruje wszystkimi trzema wygenerowanymi liniami z jednej deklaracji: `no` = ten
   dataset, `flat` = `-R` przy transferze, `delsnaps -R`, `check-snap-age -R`; `atomic` = `-r` przy
   transferze z tym samym `-R` dla prune i strażnika.
@@ -1280,7 +1372,7 @@ notify-fail.sh ...; [ $rc -ge 3 ] && notify-fail.sh ...`).
 | `notify-fail.sh` | Każde zadanie zwracające kod różny od zera (awaria `snapsend`/`snapget`/`delsnaps`), `check-snap-age.sh` CRITICAL/UNKNOWN albo pulę, która nie jest ONLINE | `daily`: dopisuje `epoch<TAB>ALERT<TAB>label<TAB>detail` do kolejki i nie wysyła maila. `immediate`: wysyła mail od razu, z limitem częstotliwości per wiadomość |
 | `notify-warn.sh` | `check-snap-age.sh` WARNING (robi się nieświeże, jeszcze nie CRITICAL) | Ta sama kolejka z poziomem `WARN`, zgodnie z `ZFS_WARN_MODE` |
 | `alert-digest.sh` | | Jedyny mail o backupie, jaki host wysyła w trybie `daily`. Raz dziennie wysyła jedną wiadomość z tematem `[ZFS][REPORT] <host> <date> STAN: OK\|UWAGA -- N alert / M warn`. Pierwszy blok to stan *teraz* (pule oraz tabela zadań z okna `ZFS_DIGEST_DAYS`); drugi to to, co *się wydarzyło*: najpierw ustalenia ALERT, potem WARNING, a po każdym to, co ustalenie faktycznie mówiło. Cichy dzień ma inny temat (`... cisza, kanal sprawny (raport okresowy)`), żeby nie dało się go pomylić z mailem z ustaleniami. Jeśli `mail` zawiedzie, ustalenia wracają do kolejki, a skrypt kończy się kodem różnym od zera |
-| `check-pool-capacity.sh` | Pulę albo dataset z refquota zbliżającą się do zapełnienia, zanim jakiekolwiek zadanie przez to zawiedzie. Zgłasza przez `notify-fail.sh`, więc trafia do tego samego digestu | Cron, domyślny próg 90% (`ZFS_CAPACITY_THRESHOLD`) |
+| `check-pool-capacity.sh` | Pulę albo dataset z refquota zbliżającą się do zapełnienia, zanim jakiekolwiek zadanie przez to zawiedzie. Zgłasza przez `notify-fail.sh`, więc trafia do tego samego digestu. Sprawdza też rekordy postępu transferów: rekord wciąż „running” bez aktualizacji od 30 minut, którego proces już nie istnieje, jest zgłaszany jako osierocony (i zamykany jako martwy), a nie jako zawieszona kopia | Cron, domyślny próg 90% (`ZFS_CAPACITY_THRESHOLD`) |
 | `capacity-guard.sh` | Opcjonalny (domyślnie `off`): gdy pula przekroczy `ZFS_GUARD_AT` (domyślnie 89%), usuwa wyłącznie migawki, które można bezpiecznie usunąć: te należące do lokalnych linii `delsnaps` tego hosta, nigdy z holdem, nigdy najnowszą migawkę datasetu. Każda wątpliwość oznacza, że nie usuwa nic | `[capacity]` w `settings.ini` |
 | `growth-guard.sh` | Opcjonalny (domyślnie `off`), tylko alert: oznacza przyrost będący wielokrotnością (`ZFS_GROWTH_FACTOR`, domyślnie 5) niedawnej normy datasetu, a przy tym słabo kompresowalny, co jest sygnaturą masowego szyfrowania plików. Niczego nie usuwa i niczego nie wstrzymuje | `[growth]` w `settings.ini` |
 
@@ -1344,7 +1436,14 @@ bash deploy.sh --backup-user=zfsbackup  # also CREATE the delegated non-root acc
 Wartości domyślne leżą w bloku konfiguracyjnym na początku skryptu (`NOTIFY_EMAIL`, `ALERT_MODE`,
 `BACKUP_USER`, `BACKUP_USER_DATASETS`); edytuj je, żeby wybór był trwały dla hosta, albo przekaż
 flagę na jedno uruchomienie. `--email=ADDR` ustawia adres alertów, a `--test-mail` wysyła
-próbny mail sprawdzający dostarczanie (automatycznie tylko przy pierwszej konfiguracji).
+próbny mail sprawdzający dostarczanie (automatycznie tylko przy pierwszej konfiguracji). Przebieg
+kończy się następnym krokiem (`zfs-backup gui`), a nie ręcznie pisanymi przepisami na cron.
+
+**404 z apta na zależności.** Przy każdej instalacji apta, którą robi narzędzie (zależności
+`deploy.sh`, `git` i `sudo` na hoście źródłowym), gdy apt odpowie 404 (host Debian 11, którego lista
+pakietów wskazuje pakiety security, których archiwum już nie serwuje), pakiet i każdy pakiet
+wymieniony w liniach 404 apta są przypinane do najnowszej wersji spoza archiwum security, a instalacja
+jest ponawiana, do trzech prób, z głośnym komunikatem.
 
 **`BACKUP_USER` dotyczy tworzenia, nie utrzymania.** Pozostawione puste, istniejące delegowane
 konto jest nadal wykrywane automatycznie i utrzymywane w aktualnym stanie (jego skrypty notify,

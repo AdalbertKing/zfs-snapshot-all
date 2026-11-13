@@ -69,8 +69,10 @@ git clone https://github.com/AdalbertKing/zfsbackup.git /root/scripts/zfs-snapsh
 > **Debian 11 (Proxmox 7):** `security.debian.org` nie ma już pakietów bullseye, które wskazują
 > listy apt, więc `apt-get install -y git` kończy się `404 Not Found`. Wtedy weź `git` i `git-man`
 > z archiwum głównego, w tej samej wersji (pokazuje ją `apt-cache madison git git-man`, wiersz bez
-> `security`), np. `apt-get install -y git=1:2.30.2-1+deb11u2 git-man=1:2.30.2-1+deb11u2`.
-> Dalsze pakiety (sudo, git na źródle) narzędzie instaluje samo i wersje przypina automatycznie.
+> `security`), np. `apt-get install -y git=<wersja> git-man=<wersja>` z wersją podaną w linii 404.
+> Dalsze pakiety (sudo, git na źródle) narzędzie instaluje samo. Gdy apt odpowie 404, przypina do najnowszej
+> wersji spoza archiwum bezpieczeństwa każdy pakiet wymieniony w liniach 404 apta (do trzech prób), więc
+> `git-man` i podobne też są objęte.
 
 > **Nigdy nie kopiuj skryptów przez `scp`/`pscp` na hosty.** Aktualizacje
 > chodzą przez `git pull --ff-only` co godzinę. Plik podmieniony ręcznie
@@ -94,6 +96,8 @@ cd /root/scripts/zfs-snapshot-all
 Co się dzieje: instalują się zależności, powstaje konto delegowane
 `zfsbackup` i wpis crona z automatyczną aktualizacją. Dataset na kopię (np.
 `rpool/backups`) wybierasz przy zakładaniu relacji (kreator: pole Cel, CLI: `--target=`).
+Wypisuje następny krok, `zfs-backup gui`: relacje, repliki i ich harmonogram tworzy sam pakiet,
+więc linii crona nie pisze się ręcznie.
 
 `--backup-user=zfsbackup` znaczy: **zadania backupu nie będą chodzić z roota.**
 Warto — to ogranicza szkody, gdyby cokolwiek poszło nie tak.
@@ -370,12 +374,32 @@ szczeblami zachowuje odstępy między nimi — każdy szczebel jest przesunięty
 minutę relacji. Dzięki temu relacje nie startują w jednej minucie na tym samym
 łączu i dyskach. Faktyczne godziny zobaczysz w wygenerowanych liniach crona.
 
+**Źródło, które sprzątnęło, gdy kolektora nie było.** Kolektor zostawia na źródle zakładkę `tgt-` przy najnowszej
+migawce, jaką trzyma. Gdy tej migawki już nie ma na źródle, pojedynczy dataset (bez `-r`) idzie dalej od zakładki:
+przyrost od zakładki do pierwszej następnej migawki, której `-E` nie wyklucza, potem reszta do najnowszej, więc
+migawki zrobione po drodze też dochodzą (z `-i`: tylko jedna różnica). Dawniej bieg wracał do starszej wspólnej
+migawki, a `zfs recv -F` kasował na kopii migawki nowsze. Migawki Proxmoksa `__replicate_` nigdy nie są pierwszym
+krokiem. Ta droga zachowuje pozostałe zabezpieczenia: wysyłka na ścieżkę sync albo dokładną (`-t`), której kopię
+zapisano po jej najnowszej migawce, jest odmawiana, a gdy migawek między zakładką a najnowszą nie da się wylistować
+w całości, bieg odmawia i następny próbuje od nowa.
+
 Alerty idą mailem. Domyślnie jeden zbiorczy raport dziennie na host; na czas
 wdrażania warto przełączyć na natychmiastowe:
 
 ```bash
 ./deploy.sh --alerts=immediate
 ```
+
+Temat mówi, czym jest mail: `[ZFS][REPORT]` raport dzienny, `[ZFS][WARNING]` ostrzeżenie, pojemność puli albo
+przyrost danych, `[ZFS][ALERT]` nieudany bieg. Reguła pocztowa łapiąca `[ZFS]` działa dalej; reguła na stare
+`[ZFS CAPACITY]` albo `[ZFS GROWTH]` wymaga nowego tematu. Bez nazwy instalacji temat niesie pełną nazwę hosta.
+Gdy jedna osoba dostaje maile z kilku instalacji, nazwij każdą: F10 (ustawienia hosta), albo
+
+```bash
+./zfs-backup.sh settings set alerts.site=Site-A --yes
+```
+
+Temat alertu brzmi wtedy `[ZFS][ALERT] Site-A pve-backup: …`.
 
 ### Poczta na czystym Debianie (nie-Proxmox)
 
@@ -437,7 +461,10 @@ Różnica jest jedna, ale zasadnicza: **ścieżki są odtwarzane jeden do jedneg
 Tak samo **migawki**: relacja `sync` jest lustrem. Każde ściągnięcie niesie
 `snapget.sh -M`, więc to, co źródło usunie ze swojej retencji, znika tu przy
 następnym przebiegu, a cel nie ma własnej retencji. Historia dłuższa niż
-retencja źródła to zadanie relacji `backup`, nie `sync`.
+retencja źródła to zadanie relacji `backup`, nie `sync`. „Zniknęła ze źródła” rozstrzyga GUID: migawka
+przemianowana na źródle zostaje, a migawka, która tylko dzieli nazwę z migawką źródła, ale ma inny GUID, liczy się
+jako nieobecna na źródle. Gdy lista GUID-ów którejś strony nie daje się odczytać albo nie zgadza się z jej listą
+nazw, nic nie jest kasowane.
 
 Relacja `backup` z kolei sprząta na swoim celu także migawki **obce** tak jak
 własne. Każde ściągnięcie niesie `-I`, więc wszystko, co źródło trzyma
@@ -514,7 +541,8 @@ maszyna wirtualna żyje na zdalnym hoście, a konto kolektora nie ma prawa jej
 zamrozić. Zamrażanie jest opcją do świadomego włączenia: na źródle
 `deploy.sh --join=… --allow-quiesce` daje kontu parowanej relacji prawo
 zamrażania gości, których dyski leżą pod nadanymi datasetami (decyzja należy do
-źródła — paczka parująca o to nie prosi). Bez tego snapshot odpowiada stanowi
+źródła — paczka parująca o to nie prosi). Szczebel z zamrażaniem, w którego zakresie nie ma dysku gościa
+(`vm-N-disk-M`, `subvol-N-disk-M`), robi zwykłą migawkę i nie potrzebuje tego prawa. Bez tego snapshot odpowiada stanowi
 „jakby wyciągnięto wtyczkę": systemy plików odtworzą się z dziennika, ale baza
 danych w trakcie transakcji może wymagać własnego odzyskiwania.
 

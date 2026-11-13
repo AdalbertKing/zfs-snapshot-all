@@ -17138,7 +17138,7 @@ relation_copy_sources() {
 # key|built-in default|kind|applies to|help (Polish -- shown in the window)
 SETTINGS_REGISTRY='gui.language|en|enum:en,pl|-|język okien GUI (en, pl); komunikaty poleceń zostają po angielsku
 alerts.email|root|email|-|kto dostaje maile o kopiach
-alerts.site|-|name|-|nazwa instalacji (firmy) w temacie maili, np. Site-A -> "[ZFS] Site-A pve2 ..."; "-" = pełna nazwa hosta
+alerts.site|-|name|-|nazwa instalacji (firmy) w temacie maili, np. Site-A -> "[ZFS][ALERT] Site-A pve2: ..."; "-" = pełna nazwa hosta
 alerts.errors|daily|enum:daily,immediate|-|błędy: zbiorczo raz na dobę albo od razu
 alerts.warnings|daily|enum:daily,immediate|-|ostrzeżenia: zbiorczo raz na dobę albo od razu
 alerts.repeat_after|4h|dur|-|tryb "od razu": ten sam alert znowu po tym czasie

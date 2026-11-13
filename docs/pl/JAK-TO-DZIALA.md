@@ -15,7 +15,10 @@ Wszystko inne to szczegóły tych czterech czynności.
 Kopia i replika **pasywna** nie robią migawek: przenoszą te, które już są na źródle.
 Kopia ma więc stan z chwili ostatniej migawki źródła, nie stan bieżący — jeśli
 najnowsza ma miesiąc, kopia ma stan sprzed miesiąca. Dataset bez migawek nie jest
-kopiowany wcale. Bieżący stan daje tylko tryb z własnymi migawkami.
+kopiowany wcale. Bieżący stan daje tylko tryb z własnymi migawkami. Kopia pasywna nigdy
+nie bierze za najnowszą migawki zarezerwowanej przez Proxmoksa (`__replicate_`, `vzdump`,
+`__migration__`): Proxmox wymienia je bez przerwy. Dataset, który ma tylko takie migawki,
+jest odmawiany (przy `-R` pomijany).
 
 ## Silniki: cztery skrypty, które dotykają snapshotów
 
@@ -48,8 +51,10 @@ argumenty i robią jedną rzecz.
 ## GUI
 
 `zfs-backup gui` otwiera ekran w terminalu (whiptail), obsługiwany klawiszami
-funkcyjnymi: F2 Przebiegi, F3 Relacje (Ins nowa, Enter okno, `e` zmień), F4 Kopie
-(F7 albo Enter na migawce przegląda pliki, F9 przywraca, także z dysku), F6 Replika, F10 Ustawienia. To te same operacje co w CLI `zfs-backup.sh`, tylko w oknach —
+funkcyjnymi: F2 Przebiegi (od najnowszych: na górze najbliższe 6 godzin, pod spodem biegi zakończone),
+F3 Relacje (Ins nowa, Enter okno, `e` zmień), F4 Kopie (F7 albo Enter na migawce przegląda pliki, F9 przywraca;
+wiersz „z innego dysku” bierze dysk repliki podłączony do tego hosta), F5 Szablony, F6 Replika (czy dysk jest
+podłączony, jak jest pełny, czy kopia trwa), F10 Ustawienia, F12 wyjście. To te same operacje co w CLI `zfs-backup.sh`, tylko w oknach —
 GUI woła te same czasowniki, więc config i crontab wychodzą identyczne.
 
 ## Skrypt, który pisze crontab

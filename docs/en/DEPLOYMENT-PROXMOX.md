@@ -69,8 +69,10 @@ git clone https://github.com/AdalbertKing/zfsbackup.git /root/scripts/zfs-snapsh
 > **Debian 11 (Proxmox 7):** `security.debian.org` no longer serves the bullseye packages the apt
 > lists name, so `apt-get install -y git` ends in `404 Not Found`. Then take `git` and `git-man`
 > from the main archive at the same version (`apt-cache madison git git-man`, the line without
-> `security`), e.g. `apt-get install -y git=1:2.30.2-1+deb11u2 git-man=1:2.30.2-1+deb11u2`.
-> Later packages (sudo, git on the source) the tool installs itself and pins the versions on its own.
+> `security`), e.g. `apt-get install -y git=<version> git-man=<version>` with the version the 404 line names.
+> Later packages (sudo, git on the source) the tool installs itself. When apt answers 404, it pins to
+> the newest version outside the security archive every package named in apt's 404 lines (up to three
+> tries), so `git-man` and the like are covered too.
 
 > **Never copy scripts to the hosts with `scp`/`pscp`.** Updates arrive through
 > `git pull --ff-only` every hour. A file replaced manually will dirty the tree
@@ -94,6 +96,8 @@ cd /root/scripts/zfs-snapshot-all
 What happens: dependencies are installed, the delegated account `zfsbackup` is
 created, and a cron entry with automatic updating is added. You pick the
 dataset for the copies (e.g. `rpool/backups`) when you create a relation (wizard: the Cel (target) field, CLI: `--target=`).
+It prints the next step, `zfs-backup gui`: relations, replicas and their schedule are made by
+the package itself, so do not write cron lines by hand.
 
 `--backup-user=zfsbackup` means: **backup jobs will not run as root.** Worth
 it — it limits the damage if anything goes wrong.
@@ -375,12 +379,33 @@ each tier is shifted by the relation's minute. Thanks to this, relations do not
 start in the same minute on the same link and disks. You will see the actual
 times in the generated cron lines.
 
+**A source that pruned while the collector was away.** The collector leaves a `tgt-` bookmark on the source at
+the newest snapshot it holds. When that snapshot is gone from the source, a single dataset (not `-r`) continues
+from the bookmark: an increment from the bookmark to the first snapshot after it that `-E` does not exclude, then
+the rest up to the newest, so the snapshots made in between arrive too (with `-i`: the single diff only). Before,
+the run fell back to an older common snapshot and `zfs recv -F` discarded the newer snapshots on the copy.
+Proxmox `__replicate_` snapshots are never the first step. This path keeps the other safety checks: a push onto a
+sync or exact (`-t`) path whose copy was written to after its newest snapshot is refused, and when the snapshots
+between the bookmark and the newest cannot be listed in full, the run refuses and the next one tries again.
+
 Alerts go by mail. By default there is one summary report per day per host;
 during the deployment it is worth switching to immediate ones:
 
 ```bash
 ./deploy.sh --alerts=immediate
 ```
+
+The subject says what the mail is: `[ZFS][REPORT]` the daily summary, `[ZFS][WARNING]` a warning, pool
+capacity or data growth, `[ZFS][ALERT]` a failed run. A mail rule matching `[ZFS]` keeps working; a rule
+matching the old `[ZFS CAPACITY]` or `[ZFS GROWTH]` needs the new subject. Without a site name the subject
+carries the host's full name. When one person gets mail from several installations, name each of them:
+F10 (host settings), or
+
+```bash
+./zfs-backup.sh settings set alerts.site=Site-A --yes
+```
+
+An alert's subject then reads `[ZFS][ALERT] Site-A pve-backup: …`.
 
 ### Mail on plain Debian (non-Proxmox)
 
@@ -445,7 +470,9 @@ The same goes for **snapshots**: a `sync` relation is a mirror. Every pull
 carries `snapget.sh -M`, so whatever the source removes from its retention
 disappears here on the next run, and the target has no retention of its own. A
 history longer than the source's retention is the job of a `backup` relation,
-not `sync`.
+not `sync`. "Gone from the source" is decided by GUID: a snapshot renamed on the source stays, and a
+snapshot that only shares a name with a source snapshot but has another GUID counts as not on the source.
+When either side's GUID list cannot be read, or does not match its list of names, nothing is deleted.
 
 A `backup` relation, in turn, prunes **foreign** snapshots on its target the
 same way as its own. Every pull carries `-I`, so everything the source keeps
@@ -522,7 +549,8 @@ machine lives on a remote host, and the collector's account has no right to
 freeze it. Quiesce is an option to enable deliberately: on the source,
 `deploy.sh --join=… --allow-quiesce` gives the account of the paired relation
 the right to quiesce guests whose disks lie under the granted datasets (the
-decision belongs to the source — the pairing package does not ask for it).
+decision belongs to the source — the pairing package does not ask for it). A quiesced tier whose scope holds
+no guest disk (`vm-N-disk-M`, `subvol-N-disk-M`) takes a plain snapshot and needs no such right.
 Without it a snapshot corresponds to a state as if the plug had been pulled:
 filesystems recover from the journal, but a database in the middle of a
 transaction may need its own recovery.
